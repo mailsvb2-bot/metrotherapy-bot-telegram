@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+import pytest
+
+from runtime import health_server
+
+
+@pytest.mark.asyncio
+async def test_health_handler_reports_ok(tmp_path, monkeypatch):
+    class DummyCursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+        def fetchall(self):
+            return list(self._rows)
+
+    class DummyConn:
+        def execute(self, query: str):
+            if query == 'SELECT 1':
+                return DummyCursor([(1,)])
+            if 'sqlite_master' in query:
+                return DummyCursor([('users',), ('jobs',)])
+            raise AssertionError(query)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(health_server, 'get_connection', lambda: DummyConn())
+    monkeypatch.setattr(health_server, 'DB_PATH', tmp_path / 'data.db')
+    monkeypatch.setattr(health_server, 'ROOT', tmp_path)
+    monkeypatch.setattr(health_server, '_scheduler_snapshot', lambda: {'scheduler_loop_task_running': True, 'precise_scheduler_running': True, 'precise_scheduler_task_running': True, 'precise_scheduler_queue_size': 2})
+    monkeypatch.setattr(health_server, '_webhook_configured', lambda: True)
+
+    response = await health_server._health(None)  # type: ignore[arg-type]
+    assert response.status == 200
+    assert response.text
+    assert 'metrotherapy' in response.text
+    assert 'schema_ready' in response.text
+    assert 'precise_scheduler_queue_size' in response.text
+    assert 'messenger_webhook_enabled' in response.text
+
+
+@pytest.mark.asyncio
+async def test_health_handler_reports_db_failure(tmp_path, monkeypatch):
+    def _boom():
+        raise health_server.sqlite3.OperationalError('broken')
+
+    monkeypatch.setattr(health_server, 'get_connection', _boom)
+    monkeypatch.setattr(health_server, 'DB_PATH', tmp_path / 'data.db')
+    monkeypatch.setattr(health_server, 'ROOT', tmp_path)
+    monkeypatch.setattr(health_server, '_scheduler_snapshot', lambda: {'scheduler_loop_task_running': False, 'precise_scheduler_running': False, 'precise_scheduler_task_running': False, 'precise_scheduler_queue_size': 0})
+
+    response = await health_server._health(None)  # type: ignore[arg-type]
+    assert response.status == 500
+    assert 'db:broken' in response.text
+
+
+def test_build_health_payload_reports_schema_missing(monkeypatch, tmp_path):
+    class DummyCursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+        def fetchall(self):
+            return list(self._rows)
+
+    class DummyConn:
+        def execute(self, query: str):
+            if 'sqlite_master' in query:
+                return DummyCursor([('users',)])
+            return DummyCursor([(1,)])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(health_server, 'get_connection', lambda: DummyConn())
+    monkeypatch.setattr(health_server, 'DB_PATH', tmp_path / 'data.db')
+    monkeypatch.setattr(health_server, 'ROOT', tmp_path)
+    monkeypatch.setattr(health_server, '_scheduler_snapshot', lambda: {'scheduler_loop_task_running': True, 'precise_scheduler_running': True, 'precise_scheduler_task_running': True, 'precise_scheduler_queue_size': 0})
+
+    payload, status = health_server.build_health_payload()
+    assert status == 500
+    assert payload['db_ready'] is True
+    assert payload['schema_ready'] is False
+    assert 'schema_missing:jobs' in payload['error']

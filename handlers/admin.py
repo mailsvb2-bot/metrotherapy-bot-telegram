@@ -1,0 +1,40 @@
+import logging
+from aiogram.exceptions import TelegramAPIError
+
+from aiogram import Router
+from aiogram.filters import Command
+from aiogram.types import Message
+
+from services.admin import is_admin
+from services.db import db
+
+router = Router()
+
+
+@router.message(Command("admin"))
+async def admin_cmd(message: Message):
+    uid = message.from_user.id if message.from_user else None
+    if not is_admin(uid):
+        try:
+            await message.answer("Недоступно.")
+        except TelegramAPIError:
+            logging.getLogger(__name__).exception("admin: failed to send deny message")
+        return
+
+    await message.answer(
+        "🛠 Админ\n\n"
+        "Команды:\n"
+        "• /stats — базовая статистика\n"
+        "• /users — количество пользователей\n"
+        "• /state_last — последние состояния (лог)\n\n"
+        "Подсказка: удобнее пользоваться кнопкой \"🛠 Панель\" в главном меню."
+    )
+
+@router.message(Command("users"))
+async def users(message: Message):
+    uid = message.from_user.id if message.from_user else None
+    if not is_admin(uid):
+        return
+    with db() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    await message.answer(f"👤 Пользователей: {count}")

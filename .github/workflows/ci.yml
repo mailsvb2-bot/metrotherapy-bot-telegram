@@ -1,0 +1,39 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Release hygiene
+        run: python scripts/check_release_hygiene.py
+
+      - name: Compile
+        run: python -m compileall .
+
+      - name: Validator (strict)
+        env:
+          APP_ENV: prod
+          VALIDATOR_RELEASE_MODE: '1'
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python scripts/validate_project.py
+
+      - name: Smoke (no polling)
+        env:
+          APP_ENV: prod
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python scripts/smoke.py

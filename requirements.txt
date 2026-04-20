@@ -1,0 +1,8 @@
+python-dotenv==1.0.1
+aiogram==3.4.1; python_version < "3.13"
+aiogram>=3.19,<4; python_version >= "3.13"
+aiohttp>=3.9,<4
+matplotlib==3.8.4; python_version < "3.13"
+matplotlib>=3.10,<3.11; python_version >= "3.13"
+
+psycopg[binary]>=3.2,<3.3
