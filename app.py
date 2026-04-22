@@ -23,6 +23,17 @@ log = logging.getLogger(__name__)
 
 from config.settings import settings
 
+
+def _telegram_transport() -> str:
+    transport = (getattr(settings, 'TELEGRAM_TRANSPORT', 'polling') or 'polling').strip().lower()
+    if transport in {'webhook', 'polling'}:
+        return transport
+    if transport in {'telegram', 'longpoll', 'long-polling'}:
+        return 'polling'
+    if bool(getattr(settings, 'TELEGRAM_WEBHOOK_ENABLED', False) or False):
+        return 'webhook'
+    return 'polling'
+
 from core.ai.decision_core import DecisionCore
 
 from services.schema import init_db
@@ -93,7 +104,7 @@ async def create_application():
         nonlocal webhook_runtime
         start_scheduler(bot)
         try:
-            webhook_runtime = await start_messenger_webhook_runtime()
+            webhook_runtime = await start_messenger_webhook_runtime(bot=bot, dispatcher=dp)
         except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
             webhook_runtime = None
             log.exception('Messenger webhook runtime failed to start; continuing without webhook runtime')
@@ -194,6 +205,29 @@ async def create_application():
     dp.include_router(gift_flow.router)
     dp.include_router(kb_debug.router)
     dp.include_router(messenger_audio.router)
+
+    transport = _telegram_transport()
+    if transport == 'webhook':
+        log.info('Telegram transport selected: webhook')
+        try:
+            await _on_startup(bot)
+            await asyncio.Event().wait()
+        finally:
+            try:
+                await bot.delete_webhook(drop_pending_updates=False)
+            except TelegramNetworkError:
+                log.warning('Failed to clear Telegram webhook during webhook shutdown', exc_info=True)
+            await _on_shutdown(bot)
+            try:
+                await bot.session.close()
+            except (RuntimeError, AttributeError):
+                log.debug('bot.session.close final close failed', exc_info=True)
+        return
+
+    try:
+        await bot.delete_webhook(drop_pending_updates=False)
+    except TelegramNetworkError:
+        log.warning('Failed to clear Telegram webhook before polling start; continuing with polling', exc_info=True)
 
     # Telegram API connectivity can be temporarily unavailable (DNS issues, network hiccups,
     # captive portal, ISP blocks, etc.). aiogram may raise TelegramNetworkError during the

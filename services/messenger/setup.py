@@ -36,11 +36,17 @@ def build_setup_status() -> MessengerSetupStatus:
         and _strip(getattr(settings, 'VK_GROUP_TOKEN', ''))
         and _strip(getattr(settings, 'VK_CONFIRMATION_TOKEN', ''))
     )
-    webhook_runtime_ok = bool(
+    messenger_runtime_ok = bool(
         getattr(settings, 'MESSENGER_WEBHOOK_ENABLED', False)
         and public_base
         and (max_ok or vk_ok)
     )
+    telegram_transport = (getattr(settings, 'TELEGRAM_TRANSPORT', 'polling') or 'polling').strip().lower()
+    telegram_webhook_ok = bool(
+        telegram_transport == 'webhook'
+        and _strip(getattr(settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', ''))
+    )
+    webhook_runtime_ok = bool(messenger_runtime_ok or telegram_webhook_ok)
 
     missing: list[str] = []
     warnings: list[str] = []
@@ -58,12 +64,17 @@ def build_setup_status() -> MessengerSetupStatus:
         missing.append('VK_CONFIRMATION_TOKEN')
     if not public_base:
         missing.append('MESSENGER_PUBLIC_BASE_URL')
-    if not getattr(settings, 'MESSENGER_WEBHOOK_ENABLED', False):
-        missing.append('MESSENGER_WEBHOOK_ENABLED=1')
+    if not getattr(settings, 'MESSENGER_WEBHOOK_ENABLED', False) and not telegram_webhook_ok:
+        missing.append('MESSENGER_WEBHOOK_ENABLED=1 or TELEGRAM_TRANSPORT=webhook')
     if _strip(getattr(settings, 'MAX_BOT_LINK_BASE', '')) and '{payload}' not in _strip(getattr(settings, 'MAX_BOT_LINK_BASE', '')):
         warnings.append('MAX_BOT_LINK_BASE не содержит {payload}; проект добавит ?start=..., но шаблон с {payload} надёжнее.')
     if public_base and not (public_base.startswith('https://') or public_base.startswith('http://')):
         warnings.append('MESSENGER_PUBLIC_BASE_URL должен быть полным URL, например https://your-domain.tld')
+    telegram_public = _strip(getattr(settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', ''))
+    if telegram_transport == 'webhook' and not telegram_public:
+        missing.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL')
+    if telegram_public and not (telegram_public.startswith('https://') or telegram_public.startswith('http://')):
+        warnings.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL должен быть полным URL, например https://your-domain.tld')
 
     vk_webhook_url = f'{public_base}/webhooks/vk' if public_base else ''
     max_webhook_url = f'{public_base}/webhooks/max' if public_base else ''

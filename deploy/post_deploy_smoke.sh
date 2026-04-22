@@ -26,7 +26,7 @@ fi
 source "$VENV_PATH/bin/activate"
 python scripts/smoke_runtime.py
 
-if [[ "${MESSENGER_WEBHOOK_ENABLED:-0}" == "1" ]]; then
+if [[ "${MESSENGER_WEBHOOK_ENABLED:-0}" == "1" || "${TELEGRAM_TRANSPORT:-polling}" == "webhook" || "${TELEGRAM_WEBHOOK_ENABLED:-0}" == "1" ]]; then
   python - <<'PY'
 import os, urllib.request
 host = (os.getenv('MESSENGER_WEBHOOK_HOST', '127.0.0.1') or '127.0.0.1').strip()

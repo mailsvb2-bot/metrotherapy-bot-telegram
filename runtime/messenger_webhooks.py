@@ -4,9 +4,12 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from aiohttp import web
+
+if TYPE_CHECKING:
+    from aiogram import Bot, Dispatcher
 
 from config.settings import settings
 from runtime.messenger_senders import MaxBotSender, VkBotSender, MessengerTransportError
@@ -64,10 +67,81 @@ def _max_event_key(payload: dict[str, Any]) -> str:
 class MessengerWebhookRuntime:
     runner: web.AppRunner
     site: web.TCPSite
+    telegram_public_url: str = ""
 
     async def stop(self) -> None:
         await self.runner.cleanup()
 
+
+
+
+def _telegram_transport() -> str:
+    transport = (getattr(settings, 'TELEGRAM_TRANSPORT', 'polling') or 'polling').strip().lower()
+    if transport in {'webhook', 'polling'}:
+        return transport
+    if transport in {'telegram', 'longpoll', 'long-polling'}:
+        return 'polling'
+    if bool(getattr(settings, 'TELEGRAM_WEBHOOK_ENABLED', False) or False):
+        return 'webhook'
+    return 'polling'
+
+
+def _telegram_webhook_prefix() -> str:
+    prefix = (getattr(settings, 'TELEGRAM_WEBHOOK_PREFIX', '/telegram-webhook') or '/telegram-webhook').strip()
+    if not prefix.startswith('/'):
+        prefix = '/' + prefix
+    return prefix.rstrip('/') or '/telegram-webhook'
+
+
+def _telegram_webhook_path() -> str:
+    return _telegram_webhook_prefix() + '/{bot_token}'
+
+
+def _telegram_public_webhook_url() -> str:
+    base = (getattr(settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', '') or '').strip().rstrip('/')
+    token = (getattr(settings, 'BOT_TOKEN', '') or '').strip()
+    if not base or not token:
+        return ''
+    return base + _telegram_webhook_prefix() + '/' + token
+
+
+def _telegram_secret_ok(request: web.Request) -> bool:
+    expected = (getattr(settings, 'TELEGRAM_WEBHOOK_SECRET_TOKEN', '') or '').strip()
+    if not expected:
+        return True
+    actual = (request.headers.get('X-Telegram-Bot-Api-Secret-Token') or '').strip()
+    if not actual:
+        return False
+    import hmac
+    return hmac.compare_digest(actual, expected)
+
+
+async def _telegram_webhook(request: web.Request) -> web.Response:
+    from aiogram.types import Update
+
+    bot = request.app.get('telegram_bot')
+    dispatcher = request.app.get('telegram_dispatcher')
+    if bot is None or dispatcher is None:
+        raise web.HTTPServiceUnavailable(text='telegram webhook runtime is not configured')
+
+    route_token = (request.match_info.get('bot_token') or '').strip()
+    expected_token = (getattr(settings, 'BOT_TOKEN', '') or '').strip()
+    if not expected_token or route_token != expected_token:
+        raise web.HTTPForbidden(text='bad token')
+
+    if not _telegram_secret_ok(request):
+        raise web.HTTPForbidden(text='bad telegram secret')
+
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise web.HTTPBadRequest(text='invalid telegram json')
+    try:
+        update = Update.model_validate(payload, context={'bot': bot})
+    except AttributeError:
+        update = Update(**payload)
+    await dispatcher.feed_webhook_update(bot, update)
+    return web.json_response({'ok': True})
 
 def _extract_vk_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     obj = payload.get('object') or {}
@@ -250,24 +324,67 @@ async def _audio_access(request: web.Request) -> web.StreamResponse:
     return web.FileResponse(grant.file_path)
 
 
-async def start_messenger_webhook_runtime() -> MessengerWebhookRuntime | None:
-    enabled = (getattr(settings, 'MESSENGER_WEBHOOK_ENABLED', False) or False)
-    if not enabled:
+async def start_messenger_webhook_runtime(bot: 'Bot | None' = None, dispatcher: 'Dispatcher | None' = None) -> MessengerWebhookRuntime | None:
+    messenger_enabled = bool(getattr(settings, 'MESSENGER_WEBHOOK_ENABLED', False) or False)
+    telegram_enabled = _telegram_transport() == 'webhook'
+    if not messenger_enabled and not telegram_enabled:
         return None
+
     app = web.Application()
+    app.router.add_get('/', _health)
     app.router.add_get('/health', _health)
     app.router.add_get('/healthz', _health)
-    app.router.add_post('/webhooks/vk', _vk_webhook)
-    app.router.add_post('/webhooks/max', _max_webhook)
-    app.router.add_get(f'{AUDIO_MEDIA_PREFIX}{{filename}}', _audio_media)
-    app.router.add_get(f'{AUDIO_ACCESS_PREFIX}{{token}}', _audio_access)
+
+    if messenger_enabled:
+        app.router.add_post('/webhooks/vk', _vk_webhook)
+        app.router.add_post('/webhooks/max', _max_webhook)
+        app.router.add_get(f'{AUDIO_MEDIA_PREFIX}{{filename}}', _audio_media)
+        app.router.add_get(f'{AUDIO_ACCESS_PREFIX}{{token}}', _audio_access)
+
+    telegram_public_url = ''
+    if telegram_enabled:
+        if bot is None or dispatcher is None:
+            raise RuntimeError('Telegram webhook transport requires bot and dispatcher')
+        app['telegram_bot'] = bot
+        app['telegram_dispatcher'] = dispatcher
+        app.router.add_post(_telegram_webhook_path(), _telegram_webhook)
+        telegram_public_url = _telegram_public_webhook_url()
+        if not telegram_public_url:
+            raise RuntimeError('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL is required for telegram webhook transport')
+
+    messenger_host = getattr(settings, 'MESSENGER_WEBHOOK_HOST', '127.0.0.1')
+    messenger_port = int(getattr(settings, 'MESSENGER_WEBHOOK_PORT', 8081))
+    telegram_host = getattr(settings, 'TELEGRAM_WEBHOOK_HOST', messenger_host)
+    telegram_port = int(getattr(settings, 'TELEGRAM_WEBHOOK_PORT', messenger_port))
+
+    if messenger_enabled and telegram_enabled and (str(messenger_host) != str(telegram_host) or int(messenger_port) != int(telegram_port)):
+        raise RuntimeError('Telegram and messenger webhook runtimes must share the same ingress host/port')
+
+    if telegram_enabled:
+        host = telegram_host
+        port = telegram_port
+    else:
+        host = messenger_host
+        port = messenger_port
+
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(
-        runner,
-        host=getattr(settings, 'MESSENGER_WEBHOOK_HOST', '0.0.0.0'),
-        port=int(getattr(settings, 'MESSENGER_WEBHOOK_PORT', 8081)),
-    )
-    await site.start()
-    log.info('Messenger webhook runtime started on %s:%s', getattr(settings, 'MESSENGER_WEBHOOK_HOST', '0.0.0.0'), int(getattr(settings, 'MESSENGER_WEBHOOK_PORT', 8081)))
-    return MessengerWebhookRuntime(runner=runner, site=site)
+    try:
+        site = web.TCPSite(runner, host=host, port=port)
+        await site.start()
+
+        if telegram_enabled:
+            await bot.set_webhook(
+                url=telegram_public_url,
+                secret_token=(getattr(settings, 'TELEGRAM_WEBHOOK_SECRET_TOKEN', '') or '') or None,
+                drop_pending_updates=bool(getattr(settings, 'TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES', False) or False),
+            )
+            log.info('Telegram webhook runtime started on %s:%s, public_url=%s', host, port, telegram_public_url)
+
+        if messenger_enabled:
+            log.info('Messenger webhook runtime started on %s:%s', host, port)
+
+        return MessengerWebhookRuntime(runner=runner, site=site, telegram_public_url=telegram_public_url)
+    except Exception:
+        await runner.cleanup()
+        raise
