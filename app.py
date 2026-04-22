@@ -22,17 +22,8 @@ from core.task_manager import TaskManager
 log = logging.getLogger(__name__)
 
 from config.settings import settings
+from runtime.telegram_transport import telegram_transport
 
-
-def _telegram_transport() -> str:
-    transport = (getattr(settings, 'TELEGRAM_TRANSPORT', 'polling') or 'polling').strip().lower()
-    if transport in {'webhook', 'polling'}:
-        return transport
-    if transport in {'telegram', 'longpoll', 'long-polling'}:
-        return 'polling'
-    if bool(getattr(settings, 'TELEGRAM_WEBHOOK_ENABLED', False) or False):
-        return 'webhook'
-    return 'polling'
 
 from core.ai.decision_core import DecisionCore
 
@@ -206,7 +197,7 @@ async def create_application():
     dp.include_router(kb_debug.router)
     dp.include_router(messenger_audio.router)
 
-    transport = _telegram_transport()
+    transport = telegram_transport()
     if transport == 'webhook':
         log.info('Telegram transport selected: webhook')
         try:

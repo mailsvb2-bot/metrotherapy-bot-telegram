@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from config.settings import settings
+from runtime.telegram_transport import telegram_transport
 from .bridge import issue_bridge_token
 from .links import build_switch_targets, build_messenger_targets
 
@@ -41,9 +42,9 @@ def build_setup_status() -> MessengerSetupStatus:
         and public_base
         and (max_ok or vk_ok)
     )
-    telegram_transport = (getattr(settings, 'TELEGRAM_TRANSPORT', 'polling') or 'polling').strip().lower()
+    resolved_telegram_transport = telegram_transport()
     telegram_webhook_ok = bool(
-        telegram_transport == 'webhook'
+        resolved_telegram_transport == 'webhook'
         and _strip(getattr(settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', ''))
     )
     webhook_runtime_ok = bool(messenger_runtime_ok or telegram_webhook_ok)
@@ -71,7 +72,7 @@ def build_setup_status() -> MessengerSetupStatus:
     if public_base and not (public_base.startswith('https://') or public_base.startswith('http://')):
         warnings.append('MESSENGER_PUBLIC_BASE_URL должен быть полным URL, например https://your-domain.tld')
     telegram_public = _strip(getattr(settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', ''))
-    if telegram_transport == 'webhook' and not telegram_public:
+    if resolved_telegram_transport == 'webhook' and not telegram_public:
         missing.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL')
     if telegram_public and not (telegram_public.startswith('https://') or telegram_public.startswith('http://')):
         warnings.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL должен быть полным URL, например https://your-domain.tld')
