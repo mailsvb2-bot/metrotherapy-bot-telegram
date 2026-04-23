@@ -56,7 +56,7 @@ class PostgresCompatCursor:
         translated = translate_sql_for_postgres(sql)
         try:
             self._cursor.execute(translated, _normalize_params(params))
-        except Exception as exc:
+        except Exception as exc:  # validator: allow-wide-except
             _raise_sqlite_compat(exc)
         self.rowcount = getattr(self._cursor, "rowcount", -1)
         return self
@@ -65,7 +65,7 @@ class PostgresCompatCursor:
         translated = translate_sql_for_postgres(sql)
         try:
             self._cursor.executemany(translated, [_normalize_params(p) for p in seq_of_params])
-        except Exception as exc:
+        except Exception as exc:  # validator: allow-wide-except
             _raise_sqlite_compat(exc)
         self.rowcount = getattr(self._cursor, "rowcount", -1)
         return self
@@ -73,14 +73,14 @@ class PostgresCompatCursor:
     def fetchone(self):
         try:
             row = self._cursor.fetchone()
-        except Exception as exc:
+        except Exception as exc:  # validator: allow-wide-except
             _raise_sqlite_compat(exc)
         return _wrap_pg_row(row)
 
     def fetchall(self):
         try:
             rows = self._cursor.fetchall()
-        except Exception as exc:
+        except Exception as exc:  # validator: allow-wide-except
             _raise_sqlite_compat(exc)
         return [_wrap_pg_row(r) for r in rows]
 

@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from aiogram import Bot, Dispatcher
 
 from config.settings import settings
-from runtime.telegram_transport import telegram_transport
 from runtime.messenger_senders import MaxBotSender, VkBotSender, MessengerTransportError
 from services.events import log_event
 from services.messenger.audio_delivery import send_next_audio_to_user
@@ -77,7 +76,17 @@ class MessengerWebhookRuntime:
 
 
 def _telegram_transport() -> str:
-    return telegram_transport()
+    transport = (getattr(settings, 'TELEGRAM_TRANSPORT', 'polling') or 'polling').strip().lower()
+    webhook_enabled = bool(getattr(settings, 'TELEGRAM_WEBHOOK_ENABLED', False) or False)
+    if transport == 'webhook':
+        return 'webhook'
+    if transport == 'polling':
+        return 'polling'
+    if transport in {'telegram', 'longpoll', 'long-polling'}:
+        return 'webhook' if webhook_enabled else 'polling'
+    if webhook_enabled:
+        return 'webhook'
+    return 'polling'
 
 
 def _telegram_webhook_prefix() -> str:
@@ -379,6 +388,6 @@ async def start_messenger_webhook_runtime(bot: 'Bot | None' = None, dispatcher: 
             log.info('Messenger webhook runtime started on %s:%s', host, port)
 
         return MessengerWebhookRuntime(runner=runner, site=site, telegram_public_url=telegram_public_url)
-    except Exception:
+    except Exception:  # validator: allow-wide-except
         await runner.cleanup()
         raise

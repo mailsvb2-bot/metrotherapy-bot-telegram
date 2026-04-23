@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import Protocol, Any
 from pathlib import Path
 
-from .platforms import normalize_platform, MessengerPlatform
-from .preferences import resolve_delivery_platform, get_channel_snapshot
+from services.messenger.platforms import normalize_platform, MessengerPlatform
+from services.messenger.preferences import resolve_delivery_platform, get_channel_snapshot
 
 
 class UnsupportedMessengerDelivery(RuntimeError):

@@ -4,7 +4,7 @@ import urllib.parse
 
 from config.settings import settings
 
-from .platforms import MessengerPlatform
+from services.messenger.platforms import MessengerPlatform
 
 
 def _strip(v: str | None) -> str:

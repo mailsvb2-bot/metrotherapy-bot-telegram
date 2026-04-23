@@ -27,7 +27,6 @@ async def cmd_subscribe(message: Message) -> None:
 
 
 async def sub_menu(cb: CallbackQuery) -> None:
-    await cb.answer()
     preface = await asyncio.to_thread(get_preface, int(cb.from_user.id), 'sub')
     text = f"{preface}💳 Выберите тариф:"
     await cb.message.edit_text(text, reply_markup=kb_tariffs(cb.from_user.id))
@@ -40,7 +39,6 @@ async def sub_pick(cb: CallbackQuery) -> None:
 
     В callback передаём ожидаемую цену: sub:buy:<plan_id>:<expected_price>
     """
-    await cb.answer()
     try:
         _, _, plan_id_s, expected_s = (cb.data or "").split(":")
         plan_id = int(plan_id_s)
@@ -92,7 +90,6 @@ async def sub_pick(cb: CallbackQuery) -> None:
 
 
 async def pay_selected(cb: CallbackQuery) -> None:
-    await cb.answer()
 
     token = (settings.PAY_PROVIDER_TOKEN or "").strip()
     if not token:

@@ -12,13 +12,13 @@ from services.delivery_preferences import (
     build_delivery_policy_decision,
 )
 
-from .bridge import issue_bridge_token
-from .entrypoints import register_user_entry
-from .links import build_messenger_targets, build_switch_targets
-from .platforms import normalize_platform, platform_title
-from .preferences import get_channel_snapshot, set_preferred_platform
-from .audio_progress import get_progress_snapshot, SEQUENCE_FULL_SERIES, confirm_pending_audio_delivery
-from .timeline import get_recent_audio_timeline
+from services.messenger.bridge import issue_bridge_token
+from services.messenger.entrypoints import register_user_entry
+from services.messenger.links import build_messenger_targets, build_switch_targets
+from services.messenger.platforms import normalize_platform, platform_title
+from services.messenger.preferences import get_channel_snapshot, set_preferred_platform
+from services.messenger.audio_progress import get_progress_snapshot, SEQUENCE_FULL_SERIES, confirm_pending_audio_delivery
+from services.messenger.timeline import get_recent_audio_timeline
 from services.mood_text_flow import parse_score_text, find_pending_pre_session_id, find_pending_post_session_id
 
 

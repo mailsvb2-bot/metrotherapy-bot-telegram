@@ -13,7 +13,6 @@ from config.settings import settings
 from core.paths import DB_PATH, ROOT
 from services.db.runtime import CONFIG, redacted_db_target
 from services.db import get_connection
-from runtime.telegram_transport import telegram_transport
 from services.scheduler import scheduler_health_snapshot
 
 log = logging.getLogger(__name__)
@@ -44,7 +43,8 @@ def _scheduler_snapshot() -> dict[str, bool | int]:
 def _webhook_configured() -> bool:
     try:
         messenger_enabled = bool(getattr(settings, 'MESSENGER_WEBHOOK_ENABLED', False) or False)
-        telegram_enabled = telegram_transport() == 'webhook'
+        telegram_transport = (getattr(settings, 'TELEGRAM_TRANSPORT', 'polling') or 'polling').strip().lower()
+        telegram_enabled = telegram_transport == 'webhook' or bool(getattr(settings, 'TELEGRAM_WEBHOOK_ENABLED', False) or False)
         return bool(messenger_enabled or telegram_enabled)
     except (AttributeError, RuntimeError):
         return False

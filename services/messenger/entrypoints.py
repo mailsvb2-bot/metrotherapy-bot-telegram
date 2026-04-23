@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from services.store import store
 from services.referrals import set_referral
 from services.events import log_event
-from .preferences import record_channel_identity, record_channel_touch, prefer_current_platform
-from .bridge import consume_bridge_token
-from .platforms import normalize_platform
+from services.messenger.preferences import record_channel_identity, record_channel_touch, prefer_current_platform
+from services.messenger.bridge import consume_bridge_token
+from services.messenger.platforms import normalize_platform
 
 
 @dataclass(frozen=True)

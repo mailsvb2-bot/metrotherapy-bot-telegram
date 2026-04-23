@@ -4,7 +4,8 @@ import json
 import logging
 from decimal import Decimal, ROUND_HALF_UP
 
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramNetworkError
 
 from config.settings import settings
 
@@ -53,3 +54,13 @@ def invoice_link_kb(url: str, back_cb: str = "menu:main") -> InlineKeyboardMarku
         [InlineKeyboardButton(text="💳 Открыть оплату", url=url)],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb)],
     ])
+
+
+async def safe_answer_callback(cb: CallbackQuery, *args, **kwargs) -> bool:
+    """Best-effort callback ack without turning an expired query into 500."""
+    try:
+        await cb.answer(*args, **kwargs)
+        return True
+    except (TelegramBadRequest, TelegramNetworkError, TelegramAPIError):
+        logger.debug("Callback answer failed", exc_info=True)
+        return False

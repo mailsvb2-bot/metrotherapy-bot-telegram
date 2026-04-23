@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 
 async def gift_menu(cb: CallbackQuery) -> None:
-    await cb.answer()
     # Сначала выбираем получателя, потом тариф и оплата
     set_pending(int(cb.from_user.id), "gift_target", {"from_name": (cb.from_user.full_name or "").strip()})
     log_event(int(cb.from_user.id), "gift_menu", {})
@@ -42,7 +41,6 @@ async def gift_menu(cb: CallbackQuery) -> None:
 
 
 async def gift_pick_target(cb: CallbackQuery) -> None:
-    await cb.answer()
     uid = int(cb.from_user.id)
     kb_r = pick_user_keyboard()
     if kb_r is None:
@@ -134,7 +132,6 @@ async def gift_users_shared(message: Message, state: FSMContext) -> None:
 
 
 async def gift_buy(cb: CallbackQuery) -> None:
-    await cb.answer()
 
     try:
         _, _, plan_id_s, expected_s = (cb.data or "").split(":", 3)

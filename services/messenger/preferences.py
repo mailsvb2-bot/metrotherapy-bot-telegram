@@ -5,7 +5,7 @@ from typing import Any
 from core.time_utils import utc_now
 from services.db import db, tx
 
-from .platforms import MessengerPlatform, normalize_platform, parse_platform
+from services.messenger.platforms import MessengerPlatform, normalize_platform, parse_platform
 
 
 def _iso_now() -> str:

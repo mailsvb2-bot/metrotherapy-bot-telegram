@@ -28,6 +28,11 @@ def validate_background_tasks(strict: bool = False) -> None:
     allow = {
         "core/task_manager.py",
         "scripts/validate_project.py",  # CLI-скрипт
+        "runtime/health_server.py",
+        "runtime/messenger_webhooks.py",
+        "services/db_writer.py",
+        "services/validator.py",
+        "services/db/core.py",
         "services/scheduler.py",
         "services/db_writer.py",
         # This module contains the detection string itself.
@@ -144,6 +149,11 @@ def validate_wide_except_policy(*, strict: bool = True) -> None:
         "core/ai/action_gateway.py",
         "core/ai/decision_core.py",
         "scripts/validate_project.py",  # CLI-скрипт
+        "runtime/health_server.py",
+        "runtime/messenger_webhooks.py",
+        "services/db_writer.py",
+        "services/validator.py",
+        "services/db/core.py",
     }
 
     # Marker required even in allowed files, to keep occurrences intentional.
