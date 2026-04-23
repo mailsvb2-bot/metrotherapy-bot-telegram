@@ -23,10 +23,6 @@ log = logging.getLogger(__name__)
 
 from config.settings import settings
 
-
-def _telegram_transport() -> str:
-    return resolve_telegram_transport()
-
 from core.ai.decision_core import DecisionCore
 
 from services.schema import init_db
@@ -35,7 +31,8 @@ from services.scheduler import start_scheduler
 from services.prewarm import prewarm_audio_cache, prewarm_matplotlib_cache
 from services.scheduler import stop_scheduler
 from services.db_writer import start_db_writer, stop_db_writer
-from runtime.messenger_webhooks import start_messenger_webhook_runtime, _telegram_transport as resolve_telegram_transport
+from runtime.messenger_webhooks import start_messenger_webhook_runtime
+from runtime.telegram_transport import telegram_transport
 from runtime.health_server import start_health_runtime
 from services.messenger.setup import build_setup_status
 
@@ -199,7 +196,7 @@ async def create_application():
     dp.include_router(kb_debug.router)
     dp.include_router(messenger_audio.router)
 
-    transport = _telegram_transport()
+    transport = telegram_transport()
     if transport == 'webhook':
         log.info('Telegram transport selected: webhook')
         try:

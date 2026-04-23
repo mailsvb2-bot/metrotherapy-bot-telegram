@@ -15,6 +15,12 @@ def test_telegram_transport_backcompat_flag_enables_webhook(monkeypatch):
     assert _telegram_transport() == 'webhook'
 
 
+def test_telegram_transport_polling_flag_enables_webhook(monkeypatch):
+    monkeypatch.setattr(settings, 'TELEGRAM_TRANSPORT', 'polling')
+    monkeypatch.setattr(settings, 'TELEGRAM_WEBHOOK_ENABLED', True)
+    assert _telegram_transport() == 'webhook'
+
+
 def test_health_runtime_reports_any_webhook(monkeypatch):
     monkeypatch.setattr(health_server.settings, 'MESSENGER_WEBHOOK_ENABLED', False)
     monkeypatch.setattr(health_server.settings, 'TELEGRAM_TRANSPORT', 'webhook')
