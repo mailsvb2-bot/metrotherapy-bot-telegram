@@ -8,7 +8,7 @@ _MPLCFG = (Path(__file__).resolve().parent / "data" / "mplcache").resolve()
 os.environ.setdefault("MPLCONFIGDIR", str(_MPLCFG))
 
 from aiogram import Bot, Dispatcher
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramNetworkError, TelegramAPIError
 from core.logging import setup_logging
 setup_logging()
 
@@ -91,13 +91,7 @@ async def create_application():
         if messenger_setup.warnings:
             log.warning('Messenger setup warnings: %s', ' | '.join(messenger_setup.warnings))
         start_db_writer()
-        nonlocal webhook_runtime
         start_scheduler(bot)
-        try:
-            webhook_runtime = await start_messenger_webhook_runtime(bot=bot, dispatcher=dp)
-        except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
-            webhook_runtime = None
-            log.exception('Messenger webhook runtime failed to start; continuing without webhook runtime')
 
         nonlocal health_runtime
         try:
@@ -105,6 +99,13 @@ async def create_application():
         except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
             health_runtime = None
             log.exception('Health runtime failed to start; continuing without health endpoint')
+
+        nonlocal webhook_runtime
+        try:
+            webhook_runtime = await start_messenger_webhook_runtime(bot=bot, dispatcher=dp)
+        except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError, TelegramNetworkError, TelegramAPIError, asyncio.TimeoutError):  # validator: allow-wide-except
+            webhook_runtime = None
+            log.exception('Messenger webhook runtime failed to start; continuing without webhook runtime')
 
         # Prewarm caches (best-effort). These are one-off startup tasks and should not crash the bot.
         try:

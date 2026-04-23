@@ -78,3 +78,29 @@ async def test_send_reply_bundle_does_not_duplicate_audio_link_message(monkeypat
 
     await _send_reply_bundle('vk', 'vk-1', 1, [MessengerReply(kind='next_audio')])
     assert sent == [('vk-1', 'LINK_MESSAGE')]
+
+
+@pytest.mark.asyncio
+async def test_start_messenger_webhook_runtime_tolerates_set_webhook_network_error(monkeypatch):
+    from runtime import messenger_webhooks
+
+    monkeypatch.setattr(messenger_webhooks.settings, 'TELEGRAM_TRANSPORT', 'webhook', raising=False)
+    monkeypatch.setattr(messenger_webhooks.settings, 'TELEGRAM_WEBHOOK_ENABLED', True, raising=False)
+    monkeypatch.setattr(messenger_webhooks.settings, 'TELEGRAM_WEBHOOK_HOST', '127.0.0.1', raising=False)
+    monkeypatch.setattr(messenger_webhooks.settings, 'TELEGRAM_WEBHOOK_PORT', 18081, raising=False)
+    monkeypatch.setattr(messenger_webhooks.settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', 'https://example.test', raising=False)
+    monkeypatch.setattr(messenger_webhooks.settings, 'BOT_TOKEN', '123:abc', raising=False)
+    monkeypatch.setattr(messenger_webhooks.settings, 'MESSENGER_WEBHOOK_ENABLED', False, raising=False)
+
+    class FakeBot:
+        async def set_webhook(self, **kwargs):
+            raise RuntimeError('timeout')
+
+    class FakeDispatcher:
+        async def feed_webhook_update(self, bot, update):
+            return None
+
+    runtime = await messenger_webhooks.start_messenger_webhook_runtime(bot=FakeBot(), dispatcher=FakeDispatcher())
+    assert runtime is not None
+    assert runtime.telegram_public_url == 'https://example.test/telegram-webhook/123:abc'
+    await runtime.stop()
