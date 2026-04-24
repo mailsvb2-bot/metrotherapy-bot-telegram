@@ -1,24 +1,24 @@
 from config.settings import settings
 from runtime import health_server
-from runtime.messenger_webhooks import _telegram_transport
+from runtime.telegram_transport import telegram_transport
 
 
 def test_telegram_transport_defaults_to_polling(monkeypatch):
     monkeypatch.setattr(settings, 'TELEGRAM_TRANSPORT', 'polling')
     monkeypatch.setattr(settings, 'TELEGRAM_WEBHOOK_ENABLED', False)
-    assert _telegram_transport() == 'polling'
+    assert telegram_transport() == 'polling'
 
 
 def test_telegram_transport_backcompat_flag_enables_webhook(monkeypatch):
     monkeypatch.setattr(settings, 'TELEGRAM_TRANSPORT', 'telegram')
     monkeypatch.setattr(settings, 'TELEGRAM_WEBHOOK_ENABLED', True)
-    assert _telegram_transport() == 'webhook'
+    assert telegram_transport() == 'webhook'
 
 
 def test_telegram_transport_polling_flag_enables_webhook(monkeypatch):
     monkeypatch.setattr(settings, 'TELEGRAM_TRANSPORT', 'polling')
     monkeypatch.setattr(settings, 'TELEGRAM_WEBHOOK_ENABLED', True)
-    assert _telegram_transport() == 'webhook'
+    assert telegram_transport() == 'webhook'
 
 
 def test_health_runtime_reports_any_webhook(monkeypatch):

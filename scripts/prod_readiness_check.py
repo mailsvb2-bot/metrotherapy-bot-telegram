@@ -13,6 +13,8 @@ import re
 import sys
 from pathlib import Path
 
+SKIP_DIRS = {'.git', '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache'}
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
