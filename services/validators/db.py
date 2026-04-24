@@ -142,6 +142,8 @@ def validate_schema_decomposition(strict: bool = True) -> None:
     bad: list[str] = []
     for p in base_dir.rglob("*.py"):
         rel = str(p.relative_to(base_dir)).replace("\\", "/")
+        if set(Path(rel).parts) & EXCLUDED_SCAN_DIR_NAMES:
+            continue
         if rel.startswith("services/validators/") or rel.startswith("tests/"):
             continue
         if rel in allow_importers:
@@ -175,6 +177,8 @@ def validate_schema_decomposition(strict: bool = True) -> None:
     bad_sql: list[str] = []
     for p in base_dir.rglob("*.py"):
         rel = str(p.relative_to(base_dir)).replace("\\", "/")
+        if set(Path(rel).parts) & EXCLUDED_SCAN_DIR_NAMES:
+            continue
         if rel.startswith("services/validators/") or rel.startswith("tests/"):
             continue
         if rel in allow_sql or rel.startswith("services/migrations/") or rel.startswith(allow_sql_prefixes):
