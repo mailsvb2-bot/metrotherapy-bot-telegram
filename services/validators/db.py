@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 EXCLUDED_SCAN_DIR_NAMES = {
     ".git",
@@ -19,7 +20,6 @@ EXCLUDED_SCAN_DIR_NAMES = {
     "logs",
 }
 
-from __future__ import annotations
 
 import logging
 import compileall
