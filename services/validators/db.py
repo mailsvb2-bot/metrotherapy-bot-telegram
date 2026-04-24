@@ -21,6 +21,14 @@ EXCLUDED_SCAN_DIR_NAMES = {
 }
 
 
+def _is_excluded_scan_path(path: Path, project_root: Path) -> bool:
+    try:
+        rel = path.relative_to(project_root)
+    except ValueError:
+        rel = path
+    return bool(set(rel.parts) & EXCLUDED_SCAN_DIR_NAMES)
+
+
 import logging
 import compileall
 import os
