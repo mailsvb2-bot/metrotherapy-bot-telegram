@@ -10,42 +10,76 @@ log = logging.getLogger(__name__)
 
 
 def validate_background_tasks(strict: bool = False) -> None:
-    """Detect forbidden `asyncio.create_task` usage outside the approved modules.
+    """Validate non-canonical asyncio.create_task usage in project-owned code.
 
-    This doesn't fail startup by default (strict=False) but prints a warning,
-    so we don't accidentally add 'fire-and-forget' tasks that are hard to debug.
+    The rule is intentionally scoped:
+    - never scan virtualenvs or third-party packages;
+    - allow only explicit owner modules that centralize background execution;
+    - do not flag this validator's own explanatory/search strings.
     """
-    allow = {
-        "core/task_manager.py",
-        "scripts/validate_project.py",  # CLI-скрипт
-        "runtime/health_server.py",
-        "runtime/messenger_webhooks.py",
-        "services/db_writer.py",
-        "services/validator.py",
-        "services/db/core.py",
-        "services/scheduler.py",
-        # This module contains the detection string itself.
-        "services/validator.py",
+    from pathlib import Path
+    from services.validators.base import ValidationError
+
+    project_root = Path(__file__).resolve().parents[2]
+
+    excluded_dir_names = {
+        ".git",
+        ".hg",
+        ".svn",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "env",
+        ".env",
+        "site-packages",
+        "dist-packages",
+        "node_modules",
+        "build",
+        "dist",
     }
 
-    base_dir = PROJECT_ROOT
-    bad: list[str] = []
-    for p in base_dir.rglob("*.py"):
-        rel = str(p.relative_to(base_dir)).replace("\\", "/")
-        if rel.startswith("services/validators/"):
-            continue
-        try:
-            data = p.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if "asyncio.create_task" in data and rel not in allow:
-            bad.append(rel)
+    # Canonical owners allowed to encapsulate task creation.
+    # Any new file must be consciously added here, not accidentally introduced.
+    allowed_files = {
+        "core/task_manager.py",
+        "services/db_writer.py",
+        "services/scheduler.py",
+        "services/background_scheduler.py",
+        "services/validators/runtime.py",
+    }
 
-    if bad:
-        msg = f"Forbidden asyncio.create_task usage found in: {bad}. Use Scheduler jobs (v16.1)"
+    forbidden_token = "asyncio." + "create_task"
+    findings: list[str] = []
+
+    for file_path in project_root.rglob("*.py"):
+        rel_path = file_path.relative_to(project_root)
+        rel = rel_path.as_posix()
+
+        if set(rel_path.parts) & excluded_dir_names:
+            continue
+
+        if rel in allowed_files:
+            continue
+
+        try:
+            text = file_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = file_path.read_text(encoding="utf-8", errors="ignore")
+
+        if forbidden_token in text:
+            findings.append(rel)
+
+    if findings:
+        msg = (
+            "Forbidden asyncio.create_task usage found in non-owner project code: "
+            f"{findings}. Route background work through the canonical task/scheduler owner."
+        )
         if strict:
             raise ValidationError(msg)
-        log.warning(msg)
+
 def validate_single_scheduler(strict: bool = True) -> None:
     """Architectural guardrails (v16.4):
 

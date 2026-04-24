@@ -1,3 +1,24 @@
+
+EXCLUDED_SCAN_DIR_NAMES = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    ".env",
+    "site-packages",
+    "dist-packages",
+    "node_modules",
+    "build",
+    "dist",
+    "logs",
+}
+
 from __future__ import annotations
 
 import logging
