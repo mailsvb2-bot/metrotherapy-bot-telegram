@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-
+import os
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,7 +12,7 @@ from services.db import db, tx
 from services.subscription import is_active, get_scope
 from services.events import log_event
 
-LOG_FILE = LOGS_DIR / "store.log"
+LOG_FILE = Path(os.getenv("STORE_LOG_PATH") or (LOGS_DIR / "store.log"))
 
 
 def _log(msg: str):

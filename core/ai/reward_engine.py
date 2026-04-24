@@ -20,7 +20,8 @@ def compute_and_store_rewards(window_sec: int = 3600, *, lookback_hours: int = 2
 
     Baseline implementation (production-safe):
     - Money reward: sum of payments.amount within [decision_ts, decision_ts+window].
-    - State/Retention rewards are left as 0.0 placeholders (wired for future).
+    - State reward: post-pre mood delta plus explicit state ratings in the window.
+    - Retention reward: later user activity/progress after the decision.
     Writes into decision_rewards table.
 
     Returns number of rewards written.
@@ -87,9 +88,68 @@ def compute_and_store_rewards(window_sec: int = 3600, *, lookback_hours: int = 2
             except (TypeError, ValueError, IndexError):
                 money = 0.0
 
-            # TODO: state/retention signals (progress, mood, return next day)
             state = 0.0
+            try:
+                mood_row = conn.execute(
+                    """
+                    SELECT COALESCE(SUM(CASE
+                        WHEN pre_score IS NOT NULL AND post_score IS NOT NULL
+                        THEN post_score - pre_score ELSE 0 END), 0)
+                    FROM mood_sessions
+                    WHERE user_id=? AND updated_at_utc >= ? AND updated_at_utc <= ?
+                    """,
+                    (user_id, t0.isoformat(), t1),
+                ).fetchone()
+                state += float(mood_row[0] or 0.0) if mood_row else 0.0
+            except sqlite3.Error:
+                state += 0.0
+            except (TypeError, ValueError, IndexError):
+                state += 0.0
+            try:
+                rating_row = conn.execute(
+                    """
+                    SELECT COALESCE(AVG(rating), 0) FROM state_ratings
+                    WHERE user_id=? AND created_at_utc >= ? AND created_at_utc <= ?
+                    """,
+                    (user_id, t0.isoformat(), t1),
+                ).fetchone()
+                avg_rating = float(rating_row[0] or 0.0) if rating_row else 0.0
+                if avg_rating:
+                    # Normalize 1..10 around zero; keep bounded so money remains dominant.
+                    state += max(-1.0, min(1.0, (avg_rating - 5.0) / 5.0))
+            except sqlite3.Error:
+                state += 0.0
+            except (TypeError, ValueError, IndexError):
+                state += 0.0
+
             retention = 0.0
+            try:
+                activity = conn.execute(
+                    """
+                    SELECT COUNT(*) FROM events
+                    WHERE user_id=? AND COALESCE(timestamp_utc, ts, created_at) > ?
+                      AND COALESCE(timestamp_utc, ts, created_at) <= ?
+                    """,
+                    (user_id, t0.isoformat(), t1),
+                ).fetchone()
+                retention += min(1.0, float(activity[0] or 0) / 3.0) if activity else 0.0
+            except sqlite3.Error:
+                retention += 0.0
+            except (TypeError, ValueError, IndexError):
+                retention += 0.0
+            try:
+                progress = conn.execute(
+                    """
+                    SELECT COALESCE(MAX(idx), 0) FROM progress
+                    WHERE user_id=? AND updated_at >= ? AND updated_at <= ?
+                    """,
+                    (user_id, t0.isoformat(), t1),
+                ).fetchone()
+                retention += min(1.0, float(progress[0] or 0) / 10.0) if progress else 0.0
+            except sqlite3.Error:
+                retention += 0.0
+            except (TypeError, ValueError, IndexError):
+                retention += 0.0
 
             reward = money + state + retention
             meta = json.dumps({"money": money, "state": state, "retention": retention}, ensure_ascii=False)

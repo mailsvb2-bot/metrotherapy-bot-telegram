@@ -8,7 +8,7 @@ _MPLCFG = (Path(__file__).resolve().parent / "data" / "mplcache").resolve()
 os.environ.setdefault("MPLCONFIGDIR", str(_MPLCFG))
 
 from aiogram import Bot, Dispatcher
-from aiogram.exceptions import TelegramNetworkError, TelegramAPIError
+from aiogram.exceptions import TelegramConflictError, TelegramNetworkError
 from core.logging import setup_logging
 setup_logging()
 
@@ -18,6 +18,7 @@ logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.WARNING)
 
 from core.task_manager import TaskManager
+from core.telegram_bot import build_bot
 
 log = logging.getLogger(__name__)
 
@@ -91,21 +92,34 @@ async def create_application():
         if messenger_setup.warnings:
             log.warning('Messenger setup warnings: %s', ' | '.join(messenger_setup.warnings))
         start_db_writer()
+        nonlocal webhook_runtime
         start_scheduler(bot)
+        try:
+            webhook_runtime = await start_messenger_webhook_runtime(bot=bot, dispatcher=dp)
+        except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
+            webhook_runtime = None
+            selected_transport = telegram_transport()
+            log.exception('Messenger/Telegram webhook runtime failed to start')
+            # Canonical safety rule:
+            # - if Telegram is configured for webhook, there is no polling fallback here;
+            #   continuing would leave the process alive but unreachable.
+            # - in prod, a failed ingress runtime is an unhealthy deployment and must
+            #   be fixed explicitly instead of hidden behind a degraded boot.
+            if selected_transport == 'webhook' or app_env == 'prod':
+                raise
+            log.warning('Continuing without optional messenger webhook runtime in non-prod polling mode')
 
         nonlocal health_runtime
         try:
             health_runtime = await start_health_runtime()
         except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
             health_runtime = None
-            log.exception('Health runtime failed to start; continuing without health endpoint')
-
-        nonlocal webhook_runtime
-        try:
-            webhook_runtime = await start_messenger_webhook_runtime(bot=bot, dispatcher=dp)
-        except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError, TelegramNetworkError, TelegramAPIError, asyncio.TimeoutError):  # validator: allow-wide-except
-            webhook_runtime = None
-            log.exception('Messenger webhook runtime failed to start; continuing without webhook runtime')
+            log.exception('Health runtime failed to start')
+            # In production, readiness/health is part of the deployment contract.
+            # Continuing without it makes server mixups and port conflicts invisible.
+            if app_env == 'prod':
+                raise
+            log.warning('Continuing without health endpoint in non-prod mode')
 
         # Prewarm caches (best-effort). These are one-off startup tasks and should not crash the bot.
         try:
@@ -141,7 +155,7 @@ async def create_application():
     if sovereign_enabled:
         DecisionCore.instance()
 
-    bot = Bot(token=token)
+    bot = build_bot(token)
     # Prewarm caches on startup hook (no TaskManager.create in v16.1)
     dp = Dispatcher()
     dp.workflow_data["task_manager"] = tm
@@ -231,6 +245,12 @@ async def create_application():
             try:
                 await dp.start_polling(bot)
                 break
+            except TelegramConflictError as e:
+                log.exception('Telegram polling conflict: another bot instance is already consuming updates')
+                raise SystemExit(
+                    'Telegram polling conflict: another instance is already running. '
+                    'Stop the old systemd/local process or switch this deployment to webhook mode.'
+                ) from e
             except TelegramNetworkError as e:
                 attempt += 1
                 msg = str(e)

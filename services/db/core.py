@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
-from services.db_writer import enqueue as _enqueue
 from services.db.runtime import CONFIG, is_postgres_enabled, postgres_driver_error_hint
 
 log = logging.getLogger(__name__)
@@ -395,9 +395,18 @@ async def write(
 ):
     if _is_write_sql(query):
         try:
+            # Lazy import keeps services.db.core as the canonical DB surface without
+            # importing the async writer at module import time. This avoids a hidden
+            # infrastructure cycle and makes boot failures easier to diagnose.
+            from services.db_writer import enqueue as _enqueue
+
             return await _enqueue(query, params, fetchone=fetchone, fetchall=fetchall)
         except Exception:  # validator: allow-wide-except
-            logging.getLogger(__name__).exception("DB writer enqueue failed, using sync fallback")
+            prod = (os.getenv("APP_ENV", "dev") or "dev").strip().lower() in {"prod", "production"}
+            if prod:
+                logging.getLogger(__name__).exception("DB writer enqueue failed in prod; refusing hidden sync fallback")
+                raise
+            logging.getLogger(__name__).exception("DB writer enqueue failed, using sync fallback in non-prod only")
             return execute(query, params, fetchone=fetchone, fetchall=fetchall)
     return execute(query, params, fetchone=fetchone, fetchall=fetchall)
 

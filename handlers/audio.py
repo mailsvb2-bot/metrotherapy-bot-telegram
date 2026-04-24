@@ -31,13 +31,13 @@ async def full(cb: CallbackQuery):
     async def _send_all() -> None:
         import asyncio
         import logging
-        from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramNetworkError, RetryAfter
+        from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter
 
         log = logging.getLogger(__name__)
         for f in files:
             try:
                 await send_audio_cached(bot, chat_id, key=f"full:{Path(f).name}", file_path=str(f))
-            except RetryAfter as e:
+            except TelegramRetryAfter as e:
                 # Telegram rate-limit: подождём и продолжим.
                 await asyncio.sleep(float(getattr(e, "timeout", 1.0)))
                 try:

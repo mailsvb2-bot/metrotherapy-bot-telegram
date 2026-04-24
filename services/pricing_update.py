@@ -13,6 +13,19 @@ MAX_PRICE_RUB = 1_000_000
 log = logging.getLogger(__name__)
 
 
+def _norm_title(value: str) -> str:
+    """Canonical tariff-title normalization for admin price updates.
+
+    Admin input may contain mixed case, extra spaces, NBSPs, punctuation variants,
+    or visually similar separators. Keep this helper local and deterministic so
+    all title-to-plan matching paths use exactly one normalization contract.
+    """
+    text = str(value or "").replace("\xa0", " ").strip().lower()
+    text = re.sub(r"[ё]", "е", text)
+    text = re.sub(r"[^0-9a-zа-я]+", " ", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _table_missing(e: Exception) -> bool:
     msg = str(e).lower()
     return "no such table" in msg or "does not exist" in msg

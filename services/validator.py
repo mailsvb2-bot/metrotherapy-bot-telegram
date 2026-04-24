@@ -30,6 +30,7 @@ from services.validators.release import (
     validate_release_hygiene,
     validate_compileall,
 )
+from services.validators.architecture import validate_architecture_contracts
 
 def _row_scalar(row):
     if row is None:
@@ -73,6 +74,9 @@ def validate_all(strict: bool = True) -> None:
         validate_release_hygiene(strict=True)
         validate_compileall(strict=True)
         validate_wide_except_policy(strict=True)
+        validate_architecture_contracts(strict=True)
+    elif guardrails_strict:
+        validate_architecture_contracts(strict=True)
 
     try:
         from pathlib import Path

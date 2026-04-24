@@ -92,12 +92,14 @@ class QuickAckCallbackMiddleware(BaseMiddleware):
             nonlocal answered
             if answered:
                 return None
+            # Mark as answered before the network call so duplicate handler-level
+            # cb.answer() calls do not create extra Telegram round-trips during
+            # the same callback lifecycle when the network is flaky.
+            answered = True
             try:
-                result = await original_answer(*args, **kwargs)
+                return await original_answer(*args, **kwargs)
             except (TelegramBadRequest, TelegramNetworkError, TelegramAPIError, asyncio.TimeoutError):  # validator: allow-wide-except
                 return None
-            answered = True
-            return result
 
         if hasattr(original_answer, "calls"):
             _safe_answer.calls = original_answer.calls  # type: ignore[attr-defined]

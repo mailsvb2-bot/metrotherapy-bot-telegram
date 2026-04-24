@@ -87,12 +87,6 @@ def main() -> int:
     from services.schema import init_db
     from services.validator import validate_all
 
-    # Smoke must validate a clean release contour rather than fail on stale local
-    # runtime artifacts bundled into a working tree snapshot.
-    _cleanup_release_artifacts()
-    _cleanup_temp_db(ROOT / 'data' / 'data.db')
-    _cleanup_temp_db(ROOT / 'data.db')
-
     init_db()
     validate_all(strict=True)
 
@@ -117,7 +111,7 @@ def main() -> int:
         start, menu, text_input, payments, demo, audio,
         admin, admin_stats, admin_inline, share, weather,
         info, micro, settings as settings_router, mood,
-        diagnostics, gift_flow, kb_debug, messenger_audio,
+        diagnostics, gift_flow, kb_debug,
     )
 
     dp.include_router(start.router)
@@ -138,7 +132,6 @@ def main() -> int:
     dp.include_router(diagnostics.router)
     dp.include_router(gift_flow.router)
     dp.include_router(kb_debug.router)
-    dp.include_router(messenger_audio.router)
 
     # Close aiohttp session to avoid warnings.
     try:

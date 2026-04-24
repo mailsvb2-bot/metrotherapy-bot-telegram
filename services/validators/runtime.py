@@ -1,23 +1,13 @@
 from __future__ import annotations
 
 import logging
-import compileall
-import os
 import re
-from pathlib import Path
 
-IGNORED_SUBPATHS = {str(Path('services') / 'validators')}
-from typing import Iterable
-
-import sqlite3
-
-from services.db import get_connection, DB_PATH
 from core.paths import ROOT as PROJECT_ROOT
+from services.validators.base import ValidationError
 
 log = logging.getLogger(__name__)
 
-
-from services.validators.base import ValidationError
 
 def validate_background_tasks(strict: bool = False) -> None:
     """Detect forbidden `asyncio.create_task` usage outside the approved modules.
@@ -34,7 +24,6 @@ def validate_background_tasks(strict: bool = False) -> None:
         "services/validator.py",
         "services/db/core.py",
         "services/scheduler.py",
-        "services/db_writer.py",
         # This module contains the detection string itself.
         "services/validator.py",
     }

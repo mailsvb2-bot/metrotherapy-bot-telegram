@@ -30,3 +30,18 @@ from services.db.core import (  # noqa: F401
 
 # Schema split package (DDL-only)
 from services.db import schema  # noqa: F401
+
+# Make the package itself callable for legacy ``from services import db``
+# compatibility without shadowing the ``services.db`` package namespace.
+# This preserves canonical submodule imports such as ``services.db.core``.
+import sys as _sys
+import types as _types
+
+
+class _CallableDbPackage(_types.ModuleType):
+    def __call__(self, *args, **kwargs):
+        return db(*args, **kwargs)
+
+
+_sys.modules[__name__].__class__ = _CallableDbPackage
+

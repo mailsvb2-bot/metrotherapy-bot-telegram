@@ -17,7 +17,7 @@ from aiogram.types import CallbackQuery, BufferedInputFile
 from aiogram.types import FSInputFile
 
 from keyboards.inline import kb_mood_scale, kb_mood_done, kb_body_question, kb_after_post_actions, kb_post_show_chart
-from services.db import mark_delivery_once, was_delivered
+from services.db import mark_delivery_once, unmark_delivery, was_delivered
 from services.idempotency import wall_key
 from services.idempotency_keys import for_demo_click, for_session
 from services.mood import set_pre, set_post, get_session, mark_audio_sent, last_delta

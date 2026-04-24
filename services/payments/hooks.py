@@ -13,7 +13,7 @@ from keyboards.inline import kb_main
 from services.db import db
 from services.plan_store import get_plan_id, clear_plan
 from services.plans import get_plan_by_id
-from services.subscription import grant_tx
+from services.subscription import grant, grant_tx
 from services.jobs import cancel_funnel, add_job, cancel_jobs
 from services.events import log_event
 from services.referrals import get_referrer, reward_already_given, mark_reward_given, can_reward_referrer

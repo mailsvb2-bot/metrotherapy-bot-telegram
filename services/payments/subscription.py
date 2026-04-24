@@ -4,7 +4,7 @@ import asyncio
 import logging
 import sqlite3
 
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import Message, CallbackQuery, LabeledPrice
 
 from config.settings import settings

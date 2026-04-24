@@ -45,12 +45,6 @@ _queue: asyncio.Queue[DbJob] | None = None
 _task: asyncio.Task | None = None
 
 
-def _is_write(sql: str) -> bool:
-    s = (sql or "").lstrip().upper()
-    return s.startswith("INSERT") or s.startswith("UPDATE") or s.startswith("DELETE") or s.startswith(
-        "REPLACE"
-    ) or s.startswith("CREATE") or s.startswith("DROP") or s.startswith("ALTER")
-
 
 def start_db_writer() -> None:
     """Start single-writer task for SQLite.

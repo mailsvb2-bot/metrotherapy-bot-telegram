@@ -29,6 +29,10 @@ EXCLUDED_DIR_NAMES = {
 }
 
 EXCLUDED_FILE_NAMES = {
+    ".env",
+    ".env.local",
+    ".env.prod",
+    ".env.production",
     "data.db",
     "data.db-journal",
     "data.db-wal",
@@ -37,7 +41,7 @@ EXCLUDED_FILE_NAMES = {
     ".coverage",
 }
 
-EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".sqlite"}
+EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".sqlite", ".db-wal", ".db-shm", ".db-journal"}
 EXCLUDED_TOP_LEVEL_FILES = {".DS_Store", "Thumbs.db", ".coverage"}
 
 
@@ -49,6 +53,8 @@ def _should_skip(path: Path, project_root: Path) -> bool:
     if path.name in EXCLUDED_FILE_NAMES or path.name in EXCLUDED_TOP_LEVEL_FILES:
         return True
     if path.suffix in EXCLUDED_SUFFIXES:
+        return True
+    if path.name.startswith('.env'):
         return True
     if path.suffix == '.db' and path.name != '.keep':
         return True

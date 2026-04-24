@@ -179,24 +179,41 @@ settings = Settings()
 
 
 def _fail_fast_prod_config() -> None:
-    """Fail fast in prod if critical env vars are missing.
+    """Fail fast in prod if critical env vars are missing or inconsistent.
 
-    In production we do not allow quiet defaults for secrets.
+    In production we do not allow quiet defaults for secrets, webhook ingress,
+    or partially configured payments. This catches server mixups before the bot
+    starts accepting users from ads.
     """
-    if APP_ENV != "prod":
+    if APP_ENV not in {"prod", "production"}:
         return
 
     missing: list[str] = []
     if not (settings.BOT_TOKEN or '').strip():
         missing.append('BOT_TOKEN')
-    # Payments can be disabled, but if you plan to sell inside Telegram you must set it.
     if not (settings.PAY_PROVIDER_TOKEN or '').strip():
         missing.append('PAY_PROVIDER_TOKEN')
+    if not (os.getenv('ADMIN_IDS') or os.getenv('ADMIN_ID') or '').strip():
+        missing.append('ADMIN_IDS')
+
+    telegram_webhook = (settings.TELEGRAM_TRANSPORT == 'webhook') or bool(settings.TELEGRAM_WEBHOOK_ENABLED)
+    if telegram_webhook:
+        if not (settings.TELEGRAM_WEBHOOK_PUBLIC_BASE_URL or '').strip():
+            missing.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL')
+        if not (settings.TELEGRAM_WEBHOOK_SECRET_TOKEN or '').strip():
+            missing.append('TELEGRAM_WEBHOOK_SECRET_TOKEN')
+        if not (settings.TELEGRAM_WEBHOOK_PUBLIC_BASE_URL or '').strip().startswith('https://'):
+            raise SystemExit('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL must start with https:// in prod webhook mode')
+        if not (settings.TELEGRAM_WEBHOOK_PREFIX or '').strip().startswith('/'):
+            raise SystemExit('TELEGRAM_WEBHOOK_PREFIX must start with / in prod webhook mode')
+
+    if not bool(settings.HEALTHCHECK_ENABLED):
+        raise SystemExit('HEALTHCHECK_ENABLED must be 1 in prod')
 
     if missing:
         raise SystemExit(
             "Missing required environment variables for prod: "
-            + ", ".join(missing)
+            + ", ".join(sorted(set(missing)))
             + "\nSet them as system environment variables (recommended). .env is loaded only in dev/stage (or LOAD_DOTENV=1)."
         )
 

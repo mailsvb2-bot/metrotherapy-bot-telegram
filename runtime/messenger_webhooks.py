@@ -26,14 +26,6 @@ from services.messenger.webhook_dedupe import register_inbound_event
 log = logging.getLogger(__name__)
 
 
-if TYPE_CHECKING:
-    TELEGRAM_BOT_APP_KEY: web.AppKey[Bot]
-    TELEGRAM_DISPATCHER_APP_KEY: web.AppKey[Dispatcher]
-
-TELEGRAM_BOT_APP_KEY = web.AppKey('telegram_bot')
-TELEGRAM_DISPATCHER_APP_KEY = web.AppKey('telegram_dispatcher')
-
-
 def _stable_payload_key(platform: str, payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8', 'ignore')
     return f'{platform}:sha256:' + hashlib.sha256(encoded).hexdigest()
@@ -85,10 +77,6 @@ class MessengerWebhookRuntime:
 
 
 
-def _telegram_transport() -> str:
-    return telegram_transport()
-
-
 def _telegram_webhook_prefix() -> str:
     prefix = (getattr(settings, 'TELEGRAM_WEBHOOK_PREFIX', '/telegram-webhook') or '/telegram-webhook').strip()
     if not prefix.startswith('/'):
@@ -122,8 +110,9 @@ def _telegram_secret_ok(request: web.Request) -> bool:
 async def _telegram_webhook(request: web.Request) -> web.Response:
     from aiogram.types import Update
 
-    bot = request.app.get(TELEGRAM_BOT_APP_KEY)
-    dispatcher = request.app.get(TELEGRAM_DISPATCHER_APP_KEY)
+    bot = request.app.get('telegram_bot')
+    dispatcher = request.app.get('telegram_dispatcher')
+    task_manager = request.app.get('task_manager')
     if bot is None or dispatcher is None:
         raise web.HTTPServiceUnavailable(text='telegram webhook runtime is not configured')
 
@@ -143,7 +132,14 @@ async def _telegram_webhook(request: web.Request) -> web.Response:
         update = Update.model_validate(payload, context={'bot': bot})
     except AttributeError:
         update = Update(**payload)
-    await dispatcher.feed_webhook_update(bot, update)
+
+    async def _process_update() -> None:
+        await dispatcher.feed_webhook_update(bot, update)
+
+    if task_manager is not None:
+        task_manager.create(_process_update(), name='telegram-webhook-update')
+    else:
+        await _process_update()
     return web.json_response({'ok': True})
 
 def _extract_vk_message(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -329,7 +325,7 @@ async def _audio_access(request: web.Request) -> web.StreamResponse:
 
 async def start_messenger_webhook_runtime(bot: 'Bot | None' = None, dispatcher: 'Dispatcher | None' = None) -> MessengerWebhookRuntime | None:
     messenger_enabled = bool(getattr(settings, 'MESSENGER_WEBHOOK_ENABLED', False) or False)
-    telegram_enabled = _telegram_transport() == 'webhook'
+    telegram_enabled = telegram_transport() == 'webhook'
     if not messenger_enabled and not telegram_enabled:
         return None
 
@@ -348,8 +344,9 @@ async def start_messenger_webhook_runtime(bot: 'Bot | None' = None, dispatcher: 
     if telegram_enabled:
         if bot is None or dispatcher is None:
             raise RuntimeError('Telegram webhook transport requires bot and dispatcher')
-        app[TELEGRAM_BOT_APP_KEY] = bot
-        app[TELEGRAM_DISPATCHER_APP_KEY] = dispatcher
+        app['telegram_bot'] = bot
+        app['telegram_dispatcher'] = dispatcher
+        app['task_manager'] = dispatcher.workflow_data.get('task_manager')
         app.router.add_post(_telegram_webhook_path(), _telegram_webhook)
         telegram_public_url = _telegram_public_webhook_url()
         if not telegram_public_url:
@@ -377,14 +374,11 @@ async def start_messenger_webhook_runtime(bot: 'Bot | None' = None, dispatcher: 
         await site.start()
 
         if telegram_enabled:
-            try:
-                await bot.set_webhook(
-                    url=telegram_public_url,
-                    secret_token=(getattr(settings, 'TELEGRAM_WEBHOOK_SECRET_TOKEN', '') or '') or None,
-                    drop_pending_updates=bool(getattr(settings, 'TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES', False) or False),
-                )
-            except Exception:  # validator: allow-wide-except
-                log.exception('Telegram webhook registration failed; ingress is up, but Telegram may still point to an old or empty webhook')
+            await bot.set_webhook(
+                url=telegram_public_url,
+                secret_token=(getattr(settings, 'TELEGRAM_WEBHOOK_SECRET_TOKEN', '') or '') or None,
+                drop_pending_updates=bool(getattr(settings, 'TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES', False) or False),
+            )
             log.info('Telegram webhook runtime started on %s:%s, public_url=%s', host, port, telegram_public_url)
 
         if messenger_enabled:

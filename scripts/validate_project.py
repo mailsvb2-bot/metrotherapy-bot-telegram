@@ -13,10 +13,13 @@ if str(ROOT) not in sys.path:
 
 # During validation, never create/ship a real SQLite DB inside the repo.
 # Use a temporary DB outside the project tree so release hygiene checks stay stable.
-if os.getenv("VALIDATOR_RELEASE_MODE") == "1" and not os.getenv("METRO_DB_PATH"):
+if os.getenv("VALIDATOR_RELEASE_MODE") == "1":
     import tempfile
-    _tmp_db = Path(tempfile.gettempdir()) / "metro_validator_data.db"
-    os.environ["METRO_DB_PATH"] = str(_tmp_db)
+    _tmp_dir = Path(tempfile.gettempdir())
+    if not os.getenv("METRO_DB_PATH"):
+        os.environ["METRO_DB_PATH"] = str(_tmp_dir / "metro_validator_data.db")
+    os.environ.setdefault("LOG_PATH", str(_tmp_dir / "metro_validator_app.log"))
+    os.environ.setdefault("STORE_LOG_PATH", str(_tmp_dir / "metro_validator_store.log"))
 
 
 # In release validation mode, use dummy secrets for import-time prod fail-fast checks.

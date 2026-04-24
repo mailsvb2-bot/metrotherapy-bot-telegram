@@ -24,7 +24,7 @@ class TextSender(Protocol):
         ...
 
     async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any) -> Any:
-        raise NotImplementedError
+        ...
 
 
 @dataclass

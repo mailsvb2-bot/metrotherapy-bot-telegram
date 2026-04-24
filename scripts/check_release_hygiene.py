@@ -42,6 +42,7 @@ ALLOWED_ROOT_FILES = {
     "check_db.py",
     "requirements.txt",
     "requirements-dev.txt",
+    "pytest.ini",
     "release.sh",
     "release.ps1",
 }
@@ -86,7 +87,8 @@ def main() -> int:
     for p in root.iterdir():
         if not p.is_file():
             continue
-        if p.name.startswith("."):
+        if p.name.startswith(".") and p.name not in ALLOWED_ROOT_FILES:
+            bad.append(str(p.relative_to(root)).replace("\\", "/"))
             continue
         if p.name in ALLOWED_ROOT_FILES:
             continue

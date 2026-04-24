@@ -24,6 +24,7 @@ if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q "
 fi
 
 source "$VENV_PATH/bin/activate"
+python scripts/prod_readiness_check.py
 python scripts/smoke_runtime.py
 
 if [[ "${MESSENGER_WEBHOOK_ENABLED:-0}" == "1" || "${TELEGRAM_TRANSPORT:-polling}" == "webhook" || "${TELEGRAM_WEBHOOK_ENABLED:-0}" == "1" ]]; then

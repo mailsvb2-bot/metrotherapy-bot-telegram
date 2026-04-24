@@ -7,13 +7,13 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from uuid import uuid4
 
-try:
+if TYPE_CHECKING:  # pragma: no cover
     from aiogram import Bot
-except ImportError:  # pragma: no cover
-    Bot = object  # type: ignore[misc,assignment]
+else:
+    Bot = Any
 
 from config.settings import settings
 from services.messenger.media_assets import get_cached_media_token, store_media_token
