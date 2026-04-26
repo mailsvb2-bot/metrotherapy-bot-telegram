@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sqlite3
 
+from core.callback_utils import safe_answer_callback
 try:
     # Canonical source
     from core.callbacks import ADMIN_TARIFFS as ADMIN_TARIFFS  # type: ignore
@@ -60,7 +61,7 @@ async def tariffs_edit(cb: CallbackQuery, state: FSMContext) -> None:
     )
     await state.set_state(AdminManageState.waiting_tariffs_text)
     try:
-        await cb.answer()
+        await safe_answer_callback(cb)
     except (TelegramAPIError, asyncio.TimeoutError):
         pass
 
@@ -87,7 +88,7 @@ async def tariffs_pick(cb: CallbackQuery, state: FSMContext, code: str) -> None:
         "Просто отправьте число (например 990)."
     )
     try:
-        await cb.answer()
+        await safe_answer_callback(cb)
     except (TelegramAPIError, asyncio.TimeoutError):
         pass
 
@@ -154,7 +155,7 @@ async def tariffs_dynamics(cb: CallbackQuery, state: FSMContext, ctx: TariffsCtx
 
     # Telegram не любит edit_text + photo, отправляем отдельным сообщением
     try:
-        await cb.answer("Строю график…")
+        await safe_answer_callback(cb, "Строю график…")
     except (TelegramAPIError, asyncio.TimeoutError):
         pass
 
@@ -169,7 +170,7 @@ async def tariffs_dynamics(cb: CallbackQuery, state: FSMContext, ctx: TariffsCtx
 async def handle_tariffs_callback(cb: CallbackQuery, state: FSMContext, data: str, ctx: TariffsCtx) -> bool:
     if data == ADMIN_TARIFFS or data == "admin:tariffs:show":
         if not ctx.can_manage_tariffs:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         await render_tariffs_menu(cb, state)
         return True
@@ -186,7 +187,7 @@ async def handle_tariffs_callback(cb: CallbackQuery, state: FSMContext, data: st
         if code:
             await tariffs_pick(cb, state, code)
         else:
-            await cb.answer("Некорректный тариф.", show_alert=True)
+            await safe_answer_callback(cb, "Некорректный тариф.", show_alert=True)
         return True
 
     if data == "admin:tariffs:history":

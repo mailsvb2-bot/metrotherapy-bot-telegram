@@ -20,6 +20,7 @@ from services.db import db
 from services.personalization import should_offer_micro_question, get_micro_question
 from keyboards.inline import kb_micro_question
 
+from core.callback_utils import safe_answer_callback
 router = Router()
 UTC = ZoneInfo("UTC")
 
@@ -32,7 +33,7 @@ async def demo_send_other(cb: CallbackQuery):
     - отправляется только по запросу пользователя
     - без дубликатов (на всякий случай убираем старые demo_send)
     """
-    await cb.answer()
+    await safe_answer_callback(cb)
 
     parts = (cb.data or "").split(":")
     if len(parts) != 3:
@@ -84,7 +85,7 @@ def _get_demo_sent_at_utc(user_id: int, kind: str, message_id: int) -> str | Non
 
 @router.callback_query(F.data.startswith("demo:ack:"))
 async def demo_ack(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
 
     # ожидаем: demo:ack:{kind}:{message_id}
     parts = (cb.data or "").split(":")

@@ -33,6 +33,7 @@ from services.pending import set_pending, peek_pending, pop_pending
 from config.settings import settings
 
 
+from core.callback_utils import safe_answer_callback
 router = Router()
 
 
@@ -54,7 +55,7 @@ async def safe_edit(message: Message, text: str, reply_markup=None, parse_mode=N
 async def settings_state(cb: CallbackQuery):
     # Не строим графики сразу — сначала даём выбор периода (без лишних пунктов)
     try:
-        await cb.answer()
+        await safe_answer_callback(cb)
     except (TelegramAPIError, TelegramBadRequest, asyncio.TimeoutError):
         logging.getLogger(__name__).debug("cb.answer failed", exc_info=True)
 
@@ -73,7 +74,7 @@ async def settings_state(cb: CallbackQuery):
 @router.callback_query(F.data == "state:rate")
 async def state_rate_menu(cb: CallbackQuery):
     try:
-        await cb.answer()
+        await safe_answer_callback(cb)
     except (TelegramAPIError, TelegramBadRequest, asyncio.TimeoutError):
         logging.getLogger(__name__).debug("cb.answer failed", exc_info=True)
 
@@ -90,7 +91,7 @@ async def state_rate_menu(cb: CallbackQuery):
 @router.callback_query(F.data.regexp(r"^state:rate:\d+$"))
 async def state_rate_click(cb: CallbackQuery):
     try:
-        await cb.answer("Сохранено")
+        await safe_answer_callback(cb, "Сохранено")
     except (TelegramAPIError, TelegramBadRequest, TelegramNetworkError):
         logging.getLogger(__name__).debug("cb.answer failed", exc_info=True)
     except asyncio.TimeoutError:
@@ -125,7 +126,7 @@ async def state_rate_click(cb: CallbackQuery):
 async def state_period(cb: CallbackQuery):
     # Быстро подтверждаем нажатие (важно: иначе query устаревает при долгой отрисовке)
     try:
-        await cb.answer("Готовлю графики…")
+        await safe_answer_callback(cb, "Готовлю графики…")
     except (TelegramAPIError, TelegramBadRequest, TelegramNetworkError):
         logging.getLogger(__name__).debug("cb.answer failed", exc_info=True)
     except asyncio.TimeoutError:

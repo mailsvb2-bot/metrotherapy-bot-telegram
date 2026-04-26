@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery
 
 from services.personalization import get_micro_question, save_micro_answer
 
+from core.callback_utils import safe_answer_callback
 router = Router()
 
 
@@ -17,30 +18,30 @@ async def cb_micro_answer(cb: CallbackQuery):
 
     callback_data: micro:<q_key>:<idx>
     """
-    await cb.answer()
+    await safe_answer_callback(cb)
     data = (cb.data or "")
     parts = data.split(":", 2)
     if len(parts) != 3:
-        return await cb.answer()
+        return await safe_answer_callback(cb)
 
     _, q_key, idx_s = parts
     if not idx_s.isdigit():
-        return await cb.answer()
+        return await safe_answer_callback(cb)
     idx = int(idx_s)
 
     q = get_micro_question(q_key)
     if not q:
-        return await cb.answer()
+        return await safe_answer_callback(cb)
 
     options = q.get("options") or []
     if idx < 0 or idx >= len(options):
-        return await cb.answer()
+        return await safe_answer_callback(cb)
 
     answer = str(options[idx])
     save_micro_answer(int(cb.from_user.id), q_key, answer)
 
     # UX: коротко, без аналитики, только поддержка.
-    await cb.answer("✅ Спасибо.", show_alert=False)
+    await safe_answer_callback(cb, "✅ Спасибо.", show_alert=False)
     try:
         await cb.message.answer(
             "Спасибо. Возможно, сейчас Вам важно двигаться именно в таком темпе. Я подстроюсь под Ваш ритм."

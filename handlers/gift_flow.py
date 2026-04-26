@@ -9,6 +9,7 @@ from services.events import log_event
 from handlers.payments import kb_after_paid  # reuse existing keyboard
 from services.time_trace import mark as _mark_time  # optional
 
+from core.callback_utils import safe_answer_callback
 router = Router()
 
 def _kb_intro(code: str) -> InlineKeyboardMarkup:
@@ -53,13 +54,13 @@ async def send_gift_intro(message: Message, code: str) -> None:
 
 @router.callback_query(F.data.startswith("gift:how:"))
 async def gift_how(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     code = cb.data.split(":", 2)[2].strip()
     await cb.message.answer(GIFT_EXPLAIN, reply_markup=_kb_intro(code), parse_mode="Markdown")
 
 @router.callback_query(F.data.startswith("gift:accept:"))
 async def gift_accept(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     code = cb.data.split(":", 2)[2].strip()
     uid = int(cb.from_user.id)
 
@@ -84,13 +85,13 @@ async def gift_accept(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("gift:later:"))
 async def gift_later(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     code = cb.data.split(":", 2)[2].strip()
     await cb.message.answer("Хорошо. Когда будете готовы — просто нажмите «Принять подарок» по этой ссылке снова.", reply_markup=None)
 
 @router.callback_query(F.data.startswith("gift:time:"))
 async def gift_time(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     code = cb.data.split(":", 2)[2].strip()
     uid = int(cb.from_user.id)
 

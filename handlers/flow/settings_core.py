@@ -48,6 +48,7 @@ from services.delivery_preferences import (
 )
 
 
+from core.callback_utils import safe_answer_callback
 router = Router()
 
 
@@ -71,7 +72,7 @@ async def safe_edit(message: Message, text: str, reply_markup=None, parse_mode=N
 
 @router.callback_query(F.data == "settings:menu")
 async def settings_menu(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     await safe_edit(
         cb.message,
         "⚙️ Мои настройки Метротерапии\n\n"
@@ -84,7 +85,7 @@ async def settings_menu(cb: CallbackQuery):
 
 @router.callback_query(F.data == "settings:platform:menu")
 async def settings_platform_menu(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
     snapshot, targets = await asyncio.gather(
         _to_thread(get_channel_snapshot, uid),
@@ -108,7 +109,7 @@ async def settings_platform_menu(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("settings:platform:set:"))
 async def settings_platform_set(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
     platform = cb.data.rsplit(':', 1)[-1]
     await _to_thread(set_preferred_platform, uid, platform)
@@ -134,7 +135,7 @@ async def settings_platform_set(cb: CallbackQuery):
 
 @router.callback_query(F.data == "settings:time:work")
 async def settings_time_work(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
     # Полный доступ к настройке времени — только по подписке (scope: morning)
     if not await _to_thread(has_access, uid, "morning"):
@@ -156,7 +157,7 @@ async def settings_time_work(cb: CallbackQuery):
 
 @router.callback_query(F.data == "settings:time:home")
 async def settings_time_home(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
     # Полный доступ к настройке времени — только по подписке (scope: evening)
     if not await _to_thread(has_access, uid, "evening"):
@@ -178,7 +179,7 @@ async def settings_time_home(cb: CallbackQuery):
 
 @router.callback_query(F.data == "settings:delivery:tz")
 async def settings_delivery_tz(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
     set_pending(uid, "set_timezone", ttl_sec=600)
     await cb.message.answer("🌍 Укажите свой timezone, например Europe/Amsterdam.", reply_markup=kb_back_main())
@@ -186,7 +187,7 @@ async def settings_delivery_tz(cb: CallbackQuery):
 
 @router.callback_query(F.data == "settings:delivery:quiet")
 async def settings_delivery_quiet(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
     set_pending(uid, "set_quiet_hours", ttl_sec=600)
     await cb.message.answer("🌙 Укажите quiet hours в формате HH:MM-HH:MM, например 22:00-08:00, или off.", reply_markup=kb_back_main())
@@ -196,7 +197,7 @@ async def settings_delivery_quiet(cb: CallbackQuery):
 
 @router.callback_query(F.data == "settings:delivery:menu")
 async def settings_delivery_menu(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
     await safe_edit(
         cb.message,
@@ -209,7 +210,7 @@ async def settings_delivery_menu(cb: CallbackQuery):
 
 @router.callback_query(F.data == "settings:delivery:channels")
 async def settings_delivery_channels(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
     prefs, snapshot = await asyncio.gather(
         _to_thread(get_delivery_preferences, uid),
@@ -225,7 +226,7 @@ async def settings_delivery_channels(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("settings:delivery:slot:") & ~F.data.startswith("settings:delivery:slot:set:"))
 async def settings_delivery_slot_menu(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
     slot = cb.data.rsplit(':', 1)[-1]
     prefs, snapshot = await asyncio.gather(
@@ -242,7 +243,7 @@ async def settings_delivery_slot_menu(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("settings:delivery:slot:set:"))
 async def settings_delivery_slot_set(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
     parts = cb.data.split(':')
     slot = parts[4]
@@ -396,7 +397,7 @@ async def settings_time_input(message: Message):
 
 @router.callback_query(F.data == "settings:ref")
 async def settings_ref(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
 
     n_paid, n_gifts, gift_days, stats = await asyncio.gather(

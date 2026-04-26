@@ -22,6 +22,7 @@ from services.admin import is_admin
 from services.roles import ROLE_ADMIN
 
 
+from core.callback_utils import safe_answer_callback
 router = Router()
 
 
@@ -30,14 +31,14 @@ async def admin_gate(cb: CallbackQuery, state: FSMContext):
     uid = cb.from_user.id if cb.from_user else None
     if not is_admin(uid):
         try:
-            await cb.answer("Недоступно.", show_alert=True)
+            await safe_answer_callback(cb, "Недоступно.", show_alert=True)
         except (TelegramAPIError, asyncio.TimeoutError):
             logging.getLogger(__name__).exception("Unhandled exception")
         return
 
     roles = get_staff_roles(int(uid))
     if not roles:
-        return await cb.answer("", show_alert=False)
+        return await safe_answer_callback(cb, "", show_alert=False)
 
     from services.admin_permissions import get_allowed_perms
 
@@ -87,7 +88,7 @@ async def admin_gate(cb: CallbackQuery, state: FSMContext):
         )
         return
 
-    await cb.answer("", show_alert=False)
+    await safe_answer_callback(cb, "", show_alert=False)
 
 
 @router.message(AdminManageState.waiting_tariffs_text)

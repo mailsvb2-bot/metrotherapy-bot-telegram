@@ -4,6 +4,8 @@ from runtime.telegram_transport import telegram_transport
 
 
 def test_telegram_transport_defaults_to_polling(monkeypatch):
+    monkeypatch.delenv('TELEGRAM_TRANSPORT', raising=False)
+    monkeypatch.delenv('TELEGRAM_WEBHOOK_ENABLED', raising=False)
     monkeypatch.setattr(settings, 'TELEGRAM_TRANSPORT', 'polling')
     monkeypatch.setattr(settings, 'TELEGRAM_WEBHOOK_ENABLED', False)
     assert telegram_transport() == 'polling'

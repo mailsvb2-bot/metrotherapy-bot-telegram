@@ -13,11 +13,12 @@ from handlers.text_input_parts.common import tzinfo, parse_hhmm, add_job
 from handlers.text_input_parts.states import InputState
 from services.events import log_event
 
+from core.callback_utils import safe_answer_callback
 router = Router()
 
 @router.callback_query(lambda c: c.data in ("demo_kind_work", "demo_kind_home"))
 async def pick_demo_kind(cb: CallbackQuery, state: FSMContext):
-    await cb.answer()
+    await safe_answer_callback(cb)
     kind = "work" if cb.data == "demo_kind_work" else "home"
 
     await state.update_data(demo_kind=kind)

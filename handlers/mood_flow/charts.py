@@ -35,13 +35,14 @@ from services.support_ai import decide_support_pre
 from services.subscription import register_touch
 
 
+from core.callback_utils import safe_answer_callback
 router = Router()
 
 
 @router.callback_query(F.data.regexp(r"^post:chart:\d+$"))
 async def post_show_chart(cb: CallbackQuery):
     try:
-        await cb.answer('Готовлю график…')
+        await safe_answer_callback(cb, 'Готовлю график…')
     except (TelegramAPIError, TelegramBadRequest, TelegramNetworkError):
         logging.getLogger(__name__).debug("cb.answer failed", exc_info=True)
     except asyncio.TimeoutError:

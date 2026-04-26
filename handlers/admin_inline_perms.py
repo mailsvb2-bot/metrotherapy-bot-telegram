@@ -20,12 +20,13 @@ from handlers.admin_inline_common import AdminCtx, safe_edit_admin
 from handlers.admin_inline_states import AdminManageState
 
 
+from core.callback_utils import safe_answer_callback
 async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx) -> bool:
     log = logging.getLogger(__name__)
 
     if data == "admin:perms":
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
 
         from services.admin_permissions import list_admin_ids
@@ -48,12 +49,12 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
 
     if data.startswith("admin:perms:user:"):
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         try:
             target_id = int(data.split(":")[-1])
         except ValueError:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
 
         from services.admin_permissions import PERMS, get_allowed_perms
@@ -84,16 +85,16 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
 
     if data.startswith("admin:perms:toggle:"):
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         parts = data.split(":", 4)
         if len(parts) < 5:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         try:
             target_id = int(parts[3])
         except ValueError:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         perm = parts[4]
 
@@ -110,7 +111,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
 
     if data == "admin:add_admin":
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
 
         await state.clear()
@@ -143,17 +144,17 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
 
     if data.startswith("admin:add_admin_role:"):
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         parts = data.split(":")
         if len(parts) != 4:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         role = parts[2]
         try:
             target_id = int(parts[3])
         except ValueError:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
 
         try:
@@ -161,11 +162,11 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             grant_role(target_id, role)
         except ImportError:
             log.exception("Не удалось выдать роль")
-            await cb.answer("Ошибка", show_alert=True)
+            await safe_answer_callback(cb, "Ошибка", show_alert=True)
             return True
         except (sqlite3.Error, ValueError, TypeError):
             log.exception("Не удалось выдать роль")
-            await cb.answer("Ошибка", show_alert=True)
+            await safe_answer_callback(cb, "Ошибка", show_alert=True)
             return True
 
         await state.clear()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 
+
 from aiogram import Router, F
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter, TelegramNetworkError
 from aiogram.types import (
@@ -10,6 +11,7 @@ from aiogram.types import (
 )
 import asyncio
 
+from core.callback_utils import safe_answer_callback
 try:
     from aiogram.types import KeyboardButtonRequestUser
 except (ImportError, AttributeError):  # pragma: no cover
@@ -55,7 +57,7 @@ def _build_share_payload(cb: CallbackQuery) -> tuple[str, str, str]:
 
 @router.callback_query(F.data == 'share:menu')
 async def share_menu(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
 
     uid = int(cb.from_user.id)
     link, from_name, share_text = _build_share_payload(cb)
@@ -69,7 +71,7 @@ async def share_menu(cb: CallbackQuery):
 
 @router.callback_query(F.data == 'share:pick')
 async def share_pick(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
 
     uid = int(cb.from_user.id)
     link, from_name, share_text = _build_share_payload(cb)

@@ -72,7 +72,7 @@ async def successful_payment(message: Message) -> None:
     # Scheduling/notifications can be done after commit.
     with db() as conn:
         try:
-            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("BEGIN")
             if charge_id:
                 conn.execute(
                     "INSERT OR IGNORE INTO payments(user_id, telegram_charge_id, provider_charge_id, payload, amount, currency, created_at, decision_id, correlation_id) "

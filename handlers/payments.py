@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from core.callback_utils import safe_answer_callback
 """Handlers оплаты.
 
 Этот файл intentionally thin: только маршрутизация aiogram -> services.payments.*

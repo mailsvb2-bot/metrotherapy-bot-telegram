@@ -22,6 +22,7 @@ from services.personalization import get_preface, set_funnel_stage
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from core.callback_utils import safe_answer_callback
 router = Router()
 
 
@@ -105,7 +106,7 @@ async def send_main_menu(target: CallbackQuery | Message):
 
 @router.callback_query(lambda c: c.data == "menu_main")
 async def cb_menu_main(cb: CallbackQuery, state: FSMContext | None = None):
-    await cb.answer()
+    await safe_answer_callback(cb)
     try:
         if state is not None:
             await state.clear()
@@ -117,7 +118,7 @@ async def cb_menu_main(cb: CallbackQuery, state: FSMContext | None = None):
 # Совместимость: в проекте встречается callback "menu:main"
 @router.callback_query(lambda c: c.data == "menu:main")
 async def cb_menu_main_v2(cb: CallbackQuery, state: FSMContext | None = None):
-    await cb.answer()
+    await safe_answer_callback(cb)
     try:
         if state is not None:
             await state.clear()
@@ -128,7 +129,7 @@ async def cb_menu_main_v2(cb: CallbackQuery, state: FSMContext | None = None):
 
 @router.callback_query(lambda c: c.data in ("demo_menu", "demo", "demo:menu"))
 async def cb_demo_menu(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     await asyncio.to_thread(set_funnel_stage, int(cb.from_user.id), "d0")
     preface = await asyncio.to_thread(get_preface, int(cb.from_user.id), "demo")
     text = (
@@ -144,7 +145,7 @@ async def cb_demo_menu(cb: CallbackQuery):
 
 @router.callback_query(lambda c: c.data in ("back_main", "back"))
 async def cb_back_main(cb: CallbackQuery, state: FSMContext | None = None):
-    await cb.answer()
+    await safe_answer_callback(cb)
     try:
         if state is not None:
             await state.clear()
@@ -160,7 +161,7 @@ async def cb_remind_continue_tomorrow(cb: CallbackQuery):
     UX не меняем: это дополнительная кнопка на экране «Полный доступ».
     Детерминированность: перед постановкой задачи удаляем предыдущие remind_*.
     """
-    await cb.answer()
+    await safe_answer_callback(cb)
 
     user_id = int(cb.from_user.id)
     tz = _tz()

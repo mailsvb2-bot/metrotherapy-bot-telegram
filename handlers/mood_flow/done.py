@@ -33,13 +33,14 @@ from services.support_ai import decide_support_pre
 from services.subscription import register_touch
 
 
+from core.callback_utils import safe_answer_callback
 router = Router()
 
 
 @router.callback_query(F.data.regexp(r"^mood:done:\d+$"))
 async def mood_done(cb: CallbackQuery):
     """Пользователь нажал 'Прослушал'. Пост-оценка всегда через +1 секунду."""
-    await cb.answer()
+    await safe_answer_callback(cb)
     data = (cb.data or "").split(":")
     if len(data) != 3:
         return

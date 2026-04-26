@@ -1,82 +1,105 @@
 from __future__ import annotations
 
-import json
 import logging
-import sqlite3
-from datetime import datetime, timezone
+import os
 
-from services.idempotency_keys import for_job_run_at
-from services.migrations._helpers import migration_applied, mark_migration
+from services.migrations._helpers import is_migration_applied, mark_migration
+
+log = logging.getLogger(__name__)
 
 NAME = "scheduled_jobs_to_jobs_v1"
 
 
-def apply(conn: sqlite3.Connection) -> None:
-    """Migrate legacy scheduled_jobs (unix timebase) -> jobs (UTC ISO).
+def _is_postgres() -> bool:
+    return os.getenv("METRO_DB_ENGINE", "").strip().lower() == "postgres"
 
-    Safety:
-    - runs once via schema_migrations marker
-    - INSERT OR IGNORE by UNIQUE(job_key)
-    - deletes legacy rows to avoid duplicates if some old worker is still around
+
+def _table_exists(conn, table_name: str) -> bool:
     """
-    log = logging.getLogger(__name__)
-    try:
-        if migration_applied(conn, NAME):
-            return
-    except sqlite3.Error:
-        # If schema_migrations can't be inspected - do nothing; schema will create it later.
+    Backend-safe table existence check.
+
+    Critical for Postgres:
+    selecting from a missing table aborts the whole transaction, so we must
+    check catalog existence before touching optional legacy tables.
+    """
+    if _is_postgres():
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name = ?
+            LIMIT 1
+            """,
+            (table_name,),
+        ).fetchone()
+        return bool(row)
+
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name = ?
+        LIMIT 1
+        """,
+        (table_name,),
+    ).fetchone()
+    return bool(row)
+
+
+def apply(conn) -> None:
+    if is_migration_applied(conn, NAME):
         return
 
-    try:
-        legacy_rows = conn.execute(
-            """
-            SELECT job_id, user_id, kind, run_at, payload
-            FROM scheduled_jobs
-            WHERE status IN ('pending','running') AND kind='post_prompt'
-            """.strip()
-        ).fetchall()
-    except sqlite3.Error:
-        # no table -> nothing to migrate
+    # Fresh Postgres installs will not have the old SQLite legacy table.
+    # That is not an error. Mark migration as applied and continue.
+    if not _table_exists(conn, "scheduled_jobs"):
+        log.info("Migration skipped: legacy scheduled_jobs table does not exist")
         mark_migration(conn, NAME)
         return
 
-    moved = 0
-    for job_id, user_id, kind, run_at, payload_json in legacy_rows:
-        try:
-            run_at_i = int(run_at)
-        except (TypeError, ValueError):
-            continue
+    # If the new table is not present yet, create the minimal canonical table.
+    # Existing schema_core may also create/extend it later.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER,
+            kind TEXT,
+            payload TEXT,
+            run_at_utc TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at_utc TEXT
+        )
+        """
+    )
 
-        run_at_iso = datetime.fromtimestamp(run_at_i, tz=timezone.utc).replace(microsecond=0).isoformat()
+    rows = conn.execute(
+        """
+        SELECT id, user_id, kind, payload, run_at_utc, status, created_at_utc
+        FROM scheduled_jobs
+        """
+    ).fetchall()
 
-        try:
-            payload = json.loads(payload_json or "{}")
-            if not isinstance(payload, dict):
-                payload = {}
-        except (json.JSONDecodeError, TypeError):
-            payload = {}
-
-        payload.setdefault("legacy_job_id", str(job_id))
-        payload.setdefault("run_at", run_at_i)
-        p = json.dumps(payload, ensure_ascii=False)
-
-        ref = str(payload.get("session_id") or payload.get("legacy_job_id") or job_id)
-        job_key = f"{for_job_run_at('post_prompt', ref, int(run_at_i))}:a0"
-
-        try:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO jobs(
-                    user_id, job_type, run_at_utc, payload,
-                    job_key, retries, locked_at, lock_token, done_at, last_error
-                ) VALUES(?,?,?,?,?, 0, NULL, NULL, NULL, NULL)
-                """.strip(),
-                (int(user_id), "post_prompt", run_at_iso, p, job_key),
-            )
-            conn.execute("DELETE FROM scheduled_jobs WHERE job_id=?", (str(job_id),))
-            moved += 1
-        except sqlite3.Error:
-            log.exception("scheduled_jobs -> jobs: failed to migrate job_id=%s", job_id)
+    for row in rows:
+        data = dict(row) if not isinstance(row, dict) else row
+        conn.execute(
+            """
+            INSERT INTO jobs(id, user_id, kind, payload, run_at_utc, status, created_at_utc)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (
+                data.get("id"),
+                data.get("user_id"),
+                data.get("kind"),
+                data.get("payload"),
+                data.get("run_at_utc"),
+                data.get("status") or "pending",
+                data.get("created_at_utc"),
+            ),
+        )
 
     mark_migration(conn, NAME)
-    log.info("scheduled_jobs -> jobs migration applied: moved=%s", moved)
+    log.info("Migration applied: %s, migrated_rows=%s", NAME, len(rows))

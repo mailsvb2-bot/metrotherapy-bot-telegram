@@ -5,10 +5,51 @@ from services.db import db
 log = logging.getLogger(__name__)
 
 
-def _row_to_plan(row: tuple) -> dict:
-    plan_id, code, title, plan_type, touches, price, is_active = row
+def _row_get(row, key: str, index: int, default=None):
+    """Read DB rows safely across sqlite Row, psycopg dict_row, dict, and tuples."""
+    if row is None:
+        return default
+    if hasattr(row, "keys"):
+        try:
+            return row[key]
+        except (KeyError, TypeError, IndexError):
+            pass
+    try:
+        return row[index]
+    except (TypeError, IndexError, KeyError):
+        return default
+
+
+def _parse_int(value, *, field: str, plan_id=None, default: int = 0) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    raw = str(value).strip()
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        log.warning(
+            "Invalid integer plan field",
+            extra={"field": field, "raw_value": repr(value), "plan_id": plan_id},
+            exc_info=True,
+        )
+        return default
+
+
+def _row_to_plan(row) -> dict:
+    plan_id = _row_get(row, "id", 0)
+    code = _row_get(row, "code", 1)
+    title = _row_get(row, "title", 2)
+    plan_type = _row_get(row, "plan_type", 3)
+    touches = _row_get(row, "touches", 4)
+    price = _row_get(row, "price", 5)
+    is_active = _row_get(row, "is_active", 6)
+
     scope = plan_type  # historical name in the project
-    days = int(touches)
+    days = _parse_int(touches, field="touches", plan_id=plan_id)
     # Цена в проекте хранится в рублях.
     # В старых БД могли оказаться цены в копейках (например, 99000 вместо 990).
     # Эвристика: если значение >= 100000 и делится на 100 — считаем, что это копейки.
@@ -21,7 +62,7 @@ def _row_to_plan(row: tuple) -> dict:
     if price_int >= 50000 and price_int % 100 == 0:
         price_int = price_int // 100
     return {
-        "id": int(plan_id),
+        "id": _parse_int(plan_id, field="id", plan_id=plan_id),
         # В проекте исторически встречаются оба ключа:
         # - code (в таблице plans)
         # - plan_code (в selected_plan/подарках/платежах)

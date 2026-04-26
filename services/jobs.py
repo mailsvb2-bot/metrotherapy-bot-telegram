@@ -102,7 +102,7 @@ def cancel_post_prompt(user_id: int, session_id: int | str) -> None:
 def claim_due_jobs(now_utc_iso: str, *, limit: int = 50, lock_ttl_sec: int = 120) -> list[ClaimedJob]:
     """Claim due jobs with a DB lock.
 
-    - short transaction (BEGIN IMMEDIATE)
+    - short transaction
     - claims by setting locked_at+lock_token
     - returns only not-done jobs claimed by this token
     """
@@ -113,7 +113,7 @@ def claim_due_jobs(now_utc_iso: str, *, limit: int = 50, lock_ttl_sec: int = 120
 
     with db() as conn:
         with tx(conn):
-            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("BEGIN")
             rows = conn.execute(
                 """
                 SELECT id, user_id, job_type, run_at_utc, payload, job_key, retries

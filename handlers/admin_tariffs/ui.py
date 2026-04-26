@@ -14,6 +14,7 @@ from services.db import get_connection
 from services.plans import get_active_plans
 
 
+from core.callback_utils import safe_answer_callback
 def _kb_tariffs_nav() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -55,7 +56,7 @@ async def render_tariffs_menu(cb: CallbackQuery, state: FSMContext | None = None
     # Rule: every entry callback handler must acknowledge the callback first.
     # This prevents “hanging buttons” if some nested helper forgets to answer.
     try:
-        await cb.answer()
+        await safe_answer_callback(cb)
     except (TelegramAPIError, asyncio.TimeoutError):
         pass
     text = "💳 Тарифы\n\n" + _prices_text()
@@ -71,7 +72,7 @@ async def render_tariffs_menu(cb: CallbackQuery, state: FSMContext | None = None
 async def tariffs_history(cb: CallbackQuery, ctx: TariffsCtx) -> None:
     # Entry handler: always answer callback first to avoid UI spinner.
     try:
-        await cb.answer()
+        await safe_answer_callback(cb)
     except (TelegramAPIError, asyncio.TimeoutError):
         pass
     # Источник истины: plan_price_history (создаётся при init_db).

@@ -7,11 +7,12 @@ from keyboards.inline import kb_full_access_menu
 from services.audio_guard import get_full_files_guarded
 from pathlib import Path
 
+from core.callback_utils import safe_answer_callback
 router = Router()
 
 @router.callback_query(lambda c: c.data == "full")
 async def full(cb: CallbackQuery):
-    await cb.answer()
+    await safe_answer_callback(cb)
     user_id = cb.from_user.id
 
     res = get_full_files_guarded(user_id)

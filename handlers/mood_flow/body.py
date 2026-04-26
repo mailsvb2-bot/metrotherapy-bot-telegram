@@ -33,6 +33,7 @@ from services.support_ai import decide_support_pre
 from services.subscription import register_touch
 
 
+from core.callback_utils import safe_answer_callback
 router = Router()
 
 
@@ -43,7 +44,7 @@ async def body_answer(cb: CallbackQuery):
     callback_data:
       body:<session_id>:<q_key>:<idx>
     """
-    await cb.answer()
+    await safe_answer_callback(cb)
     parts = (cb.data or "").split(":")
     if len(parts) != 4:
         return

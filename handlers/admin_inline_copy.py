@@ -16,11 +16,12 @@ from core.ai.action_gateway import execute as sovereign_execute
 from core.ai.decision_types import WorldState
 
 
+from core.callback_utils import safe_answer_callback
 async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx) -> bool:
     if data == "admin:copy:menu":
         # Доступ: marketing/admin/superadmin
         if not (ROLE_MARKETING in ctx.roles or ROLE_ADMIN in ctx.roles or ctx.is_superadmin):
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
 
         await state.clear()
@@ -45,7 +46,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
     if data == "admin:ai:prices":
         # Доступ: marketing/admin/superadmin
         if not (ROLE_MARKETING in ctx.roles or ROLE_ADMIN in ctx.roles or ctx.is_superadmin):
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
 
         # Sovereign execution: DecisionCore decides the action; handler only executes.

@@ -13,10 +13,11 @@ from services.admin_permissions import list_admin_ids
 from services.roles import ALL_ROLES, grant_role, revoke_role, user_roles, list_role_holders
 
 
+from core.callback_utils import safe_answer_callback
 async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx) -> bool:
     if data == "admin:roles:menu":
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
 
         kb = InlineKeyboardMarkup(
@@ -40,7 +41,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
 
     if data in {"admin:roles:list", "admin:roles:pick"}:
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
 
         ids = set(int(x) for x in (ADMIN_IDS or []))
@@ -61,12 +62,12 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
 
     if data.startswith("admin:roles:user:"):
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         try:
             target_id = int(data.split(":")[-1])
         except ValueError:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
 
         current = user_roles(target_id)
@@ -86,16 +87,16 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
 
     if data.startswith("admin:roles:toggle:"):
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         parts = data.split(":")
         if len(parts) < 5:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         try:
             target_id = int(parts[3])
         except ValueError:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         role = str(parts[4]).strip().lower()
 
@@ -107,14 +108,14 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
                 grant_role(target_id, role)
         except (sqlite3.Error, TypeError, ValueError):
             logging.getLogger(__name__).exception("Role toggle failed")
-            await cb.answer("Ошибка", show_alert=True)
+            await safe_answer_callback(cb, "Ошибка", show_alert=True)
             return True
 
         return await handle(cb, state, f"admin:roles:user:{target_id}", ctx)
 
     if data == "admin:roles:by_role":
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         rows: list[list[InlineKeyboardButton]] = []
         for role in ALL_ROLES:
@@ -125,7 +126,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
 
     if data.startswith("admin:roles:role:"):
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         role = str(data.split(":")[-1]).strip().lower()
         holders = list_role_holders(role)
@@ -145,7 +146,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
 
     if data == "admin:roles:grant":
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         await state.clear()
         await state.set_state(RolesInputState.grant)
@@ -158,7 +159,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
 
     if data == "admin:roles:revoke":
         if not ctx.is_superadmin:
-            await cb.answer("", show_alert=False)
+            await safe_answer_callback(cb, "", show_alert=False)
             return True
         await state.clear()
         await state.set_state(RolesInputState.revoke)
