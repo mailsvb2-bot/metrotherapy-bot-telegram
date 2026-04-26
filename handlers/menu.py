@@ -18,12 +18,21 @@ from config.settings import settings
 from services.db import db
 from services.jobs import add_job, cancel_jobs
 from services.personalization import get_preface, set_funnel_stage
+from services.events import log_event
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from core.callback_utils import safe_answer_callback
 router = Router()
+
+def _log_funnel_safe(user_id: int, event: str, payload: dict | None = None) -> None:
+    try:
+        log_event(int(user_id), event, payload or {})
+    except Exception:
+        logging.getLogger(__name__).debug("funnel event skipped", exc_info=True)
+
+
 
 
 def _tz() -> ZoneInfo:
@@ -80,6 +89,7 @@ def _is_admin(uid: int) -> bool:
 
 async def send_main_menu(target: CallbackQuery | Message):
     user_id = target.from_user.id
+    _log_funnel_safe(user_id, "funnel_main_menu_opened", {"source": type(target).__name__})
     preface = await asyncio.to_thread(get_preface, int(user_id), "menu")
     text = (
         f"{preface}"
@@ -130,6 +140,7 @@ async def cb_menu_main_v2(cb: CallbackQuery, state: FSMContext | None = None):
 @router.callback_query(lambda c: c.data in ("demo_menu", "demo", "demo:menu"))
 async def cb_demo_menu(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    _log_funnel_safe(cb.from_user.id, "funnel_demo_clicked", {"source": "main_or_start_landing"})
     await asyncio.to_thread(set_funnel_stage, int(cb.from_user.id), "d0")
     preface = await asyncio.to_thread(get_preface, int(cb.from_user.id), "demo")
     text = (
