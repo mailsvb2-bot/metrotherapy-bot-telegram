@@ -40,3 +40,6 @@ data/mplcache/
 .coverage
 .idea/
 .vscode/
+
+# Local generated artifacts
+artifacts/
