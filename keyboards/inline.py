@@ -15,25 +15,6 @@ def kb_menu_only() -> InlineKeyboardMarkup:
 def _kb(rows):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def kb_start_landing(user_id: int | None = None) -> InlineKeyboardMarkup:
-    """Стартовая воронка для платного трафика.
-
-    Контракты callback_data используют уже существующие обработчики:
-    - demo -> handlers/menu.py demo menu
-    - sub:menu -> тарифы
-    - gift:menu -> подарок
-    - settings:menu -> настройки
-    """
-    return _kb([
-        [InlineKeyboardButton(text="🟢 Начать бесплатную практику", callback_data="demo")],
-        [InlineKeyboardButton(text="🎧 Выбрать маршрут", callback_data="demo")],
-        [InlineKeyboardButton(text="💳 Тарифы и доступ", callback_data="sub:menu")],
-        [
-            InlineKeyboardButton(text="🎁 Подарить", callback_data="gift:menu"),
-            InlineKeyboardButton(text="🧠 Настройки", callback_data="settings:menu"),
-        ],
-    ])
-
 
 @lru_cache()
 def kb_main(user_id: int | None = None):
