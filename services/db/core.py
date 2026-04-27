@@ -46,31 +46,62 @@ class PgRow(dict):
         return super().__getitem__(key)
 
 
+def _is_select_changes_sql(sql: str) -> bool:
+    """SQLite compatibility: SELECT changes() [AS c].
+
+    Some legacy service code uses SQLite's changes() function after INSERT OR
+    IGNORE / UPDATE to detect whether exactly one row was changed. Postgres has
+    no such SQL function; the canonical DB compatibility layer owns this bridge.
+    """
+    return bool(re.match(r"(?is)^\s*SELECT\s+changes\s*\(\s*\)\s*(?:AS\s+\w+)?\s*$", sql or ""))
+
+
+def _is_dml_sql(sql: str) -> bool:
+    s = (sql or "").lstrip().upper()
+    return s.startswith("INSERT") or s.startswith("UPDATE") or s.startswith("DELETE") or s.startswith("REPLACE")
+
+
 class PostgresCompatCursor:
     def __init__(self, cursor, conn: "PostgresCompatConnection"):
         self._cursor = cursor
         self._conn = conn
+        self._synthetic_rows: list[PgRow] | None = None
         self.rowcount = -1
 
     def execute(self, sql: str, params: Sequence[Any] = ()):
+        if _is_select_changes_sql(sql):
+            self._synthetic_rows = [PgRow({"c": int(getattr(self._conn, "last_rowcount", 0) or 0)})]
+            self.rowcount = 1
+            return self
+
+        self._synthetic_rows = None
         translated = translate_sql_for_postgres(sql)
         try:
             self._cursor.execute(translated, _normalize_params(params))
         except Exception as exc:  # validator: allow-wide-except
             _raise_sqlite_compat(exc)
         self.rowcount = getattr(self._cursor, "rowcount", -1)
+        if _is_dml_sql(sql):
+            self._conn.last_rowcount = max(int(self.rowcount or 0), 0)
         return self
 
     def executemany(self, sql: str, seq_of_params):
+        self._synthetic_rows = None
         translated = translate_sql_for_postgres(sql)
         try:
             self._cursor.executemany(translated, [_normalize_params(p) for p in seq_of_params])
         except Exception as exc:  # validator: allow-wide-except
             _raise_sqlite_compat(exc)
         self.rowcount = getattr(self._cursor, "rowcount", -1)
+        if _is_dml_sql(sql):
+            self._conn.last_rowcount = max(int(self.rowcount or 0), 0)
         return self
 
     def fetchone(self):
+        if self._synthetic_rows is not None:
+            if not self._synthetic_rows:
+                return None
+            return self._synthetic_rows.pop(0)
         try:
             row = self._cursor.fetchone()
         except Exception as exc:  # validator: allow-wide-except
@@ -78,6 +109,10 @@ class PostgresCompatCursor:
         return _wrap_pg_row(row)
 
     def fetchall(self):
+        if self._synthetic_rows is not None:
+            rows = self._synthetic_rows
+            self._synthetic_rows = []
+            return rows
         try:
             rows = self._cursor.fetchall()
         except Exception as exc:  # validator: allow-wide-except
@@ -91,6 +126,7 @@ class PostgresCompatCursor:
 class PostgresCompatConnection:
     def __init__(self, conn):
         self._conn = conn
+        self.last_rowcount = 0
 
     def __enter__(self):
         return self
@@ -127,6 +163,7 @@ class PostgresCompatConnection:
 
     def rollback(self):
         self._conn.rollback()
+        self.last_rowcount = 0
 
     def close(self):
         self._conn.close()
@@ -198,6 +235,9 @@ def translate_sql_for_postgres(sql: str) -> str:
     s = (sql or '').strip()
     if not s:
         return sql
+
+    if re.match(r"(?is)^BEGIN\s+IMMEDIATE\s*$", s):
+        return 'BEGIN'
 
     pragma_match = re.match(r"(?is)^PRAGMA\s+table_info\(([^)]+)\)\s*$", s)
     if pragma_match:
