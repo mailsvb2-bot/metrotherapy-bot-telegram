@@ -18,20 +18,20 @@ def _kb(rows):
 
 @lru_cache()
 def kb_main(user_id: int | None = None):
-    # UX: делаем меню компактнее (2 кнопки в строке), чтобы оно не "убегало" вверх.
-    # Контракты callback_data не меняем.
+    # UX: главное меню теперь является входной рекламной воронкой.
+    # Контракты callback_data не меняем, чтобы не ломать обработчики.
     rows = [
         [
-            InlineKeyboardButton(text="🎧 Демо", callback_data="demo"),
-            InlineKeyboardButton(text="🔐 Полный доступ", callback_data="full"),
+            InlineKeyboardButton(text="🌿 Попробовать бесплатно", callback_data="demo"),
+            InlineKeyboardButton(text="🔐 Полный маршрут", callback_data="full"),
         ],
         [
             InlineKeyboardButton(text="💳 Тарифы", callback_data="sub:menu"),
             InlineKeyboardButton(text="🎁 Подарить", callback_data="gift:menu"),
         ],
         [
+            InlineKeyboardButton(text="📈 Мой прогресс", callback_data="settings:state"),
             InlineKeyboardButton(text="🧠 Настройки", callback_data="settings:menu"),
-            InlineKeyboardButton(text="📈 Анализ", callback_data="settings:state"),
         ],
         [
             InlineKeyboardButton(text="📣 Посоветовать", callback_data="share:menu"),
@@ -43,7 +43,6 @@ def kb_main(user_id: int | None = None):
     if is_admin:
         rows.append([InlineKeyboardButton(text="🛠 Панель", callback_data="admin:menu")])
 
-    # Поддержка — отдельной большой кнопкой внизу (просили сделать заметнее).
     return _kb(rows)
 
 
@@ -168,10 +167,10 @@ def kb_weather():
 
 @lru_cache()
 def kb_demo_kind():
-    """Выбор демо: дорога на работу / домой."""
+    """Выбор бесплатной практики: дорога на работу / домой."""
     return _kb([
-        [InlineKeyboardButton(text="🚗 Дорога на работу", callback_data="demo_kind_work")],
-        [InlineKeyboardButton(text="🌙 Дорога домой", callback_data="demo_kind_home")],
+        [InlineKeyboardButton(text="🚗 Практика на утро / дорогу", callback_data="demo_kind_work")],
+        [InlineKeyboardButton(text="🌙 Практика на вечер / домой", callback_data="demo_kind_home")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
     ])
 
@@ -205,16 +204,15 @@ def kb_sales_offer(user_id: int):
 
     UX-правило: ничего не ломаем, просто даём удобные кнопки.
     Контракты callback_data:
-      - trial:start (handlers/payments.py)
       - sub:menu (handlers/payments.py)
       - menu:main (handlers/menu.py)
     """
 
     # ВАЖНО: пробный доступ отключён по ТЗ ("убери везде").
     return _kb([
-        [InlineKeyboardButton(text="💳 Подписка", callback_data="sub:menu")],
+        [InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")],
+        [InlineKeyboardButton(text="🎧 Ещё одна бесплатная практика", callback_data="demo")],
         [InlineKeyboardButton(text="🎁 Подарить подписку другу", callback_data="gift:menu")],
-        [InlineKeyboardButton(text="📣 Посоветовать Метротерапию", callback_data="share:menu")],
         [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu:main")],
     ])
 
@@ -223,7 +221,7 @@ def kb_sales_offer(user_id: int):
 def kb_full_access_menu():
     """Клавиатура для окна 'Полный доступ' — добавили кнопку 'Подписка' по ТЗ."""
     return _kb([
-        [InlineKeyboardButton(text="💳 Подписка", callback_data="sub:menu")],
+        [InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")],
         [InlineKeyboardButton(text="⏰ Напомнить завтра утром", callback_data="remind:continue_tomorrow")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")],
     ])
@@ -233,7 +231,7 @@ def kb_full_access_menu():
 def kb_settings_locked():
     """Окно блокировки настроек времени: полный доступ по подписке."""
     return _kb([
-        [InlineKeyboardButton(text="💳 Подписка / тарифы", callback_data="sub:menu")],
+        [InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")],
         [
             InlineKeyboardButton(text="🎁 Передать ритм", callback_data="gift:menu"),
             InlineKeyboardButton(text="⬅️ Назад", callback_data="settings:menu"),
@@ -339,9 +337,9 @@ def kb_after_post_actions():
     UX: сразу дать анализ и аккуратные действия.
     """
     return _kb([
-        [InlineKeyboardButton(text="📈 Анализ моего состояния", callback_data="settings:state")],
-        [InlineKeyboardButton(text="🎧 Другой транс", callback_data="demo")],
-        [InlineKeyboardButton(text="💳 Подписка", callback_data="sub:menu")],
+        [InlineKeyboardButton(text="📈 Посмотреть изменение состояния", callback_data="settings:state")],
+        [InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")],
+        [InlineKeyboardButton(text="🎧 Ещё одна бесплатная практика", callback_data="demo")],
         [InlineKeyboardButton(text="🎁 Подарить подписку", callback_data="gift:menu")],
         [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main")],
     ])
@@ -351,7 +349,7 @@ def kb_after_post_actions():
 def kb_ref_bonus_actions():
     """Кнопки на экране бонусов."""
     return _kb([
-        [InlineKeyboardButton(text="💳 Подписка", callback_data="sub:menu")],
+        [InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")],
         [InlineKeyboardButton(text="🎁 Подарить подписку другу", callback_data="gift:menu")],
         [InlineKeyboardButton(text="📈 Анализ моего состояния", callback_data="settings:state")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="settings:menu")],
@@ -383,8 +381,8 @@ def kb_mood_scale(session_id: int, *, stage: str):
 def kb_post_show_chart(session_id: int):
     return _kb([
         [InlineKeyboardButton(text="📈 Посмотреть график изменения моего состояния", callback_data=f"post:chart:{int(session_id)}")],
-        [InlineKeyboardButton(text="🎧 Другой транс", callback_data="demo")],
-        [InlineKeyboardButton(text="💳 Подписка", callback_data="sub:menu")],
+        [InlineKeyboardButton(text="🎧 Другая практика", callback_data="demo")],
+        [InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")],
         [InlineKeyboardButton(text="🏠 Меню", callback_data="menu:main")],
     ])
 
@@ -406,8 +404,8 @@ def kb_state_period_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🗓 За всё время", callback_data="state:all"),
         ],
         [
-            InlineKeyboardButton(text="💳 Продлить подписку", callback_data="sub:menu"),
-            InlineKeyboardButton(text="🎁 Подарить подписку", callback_data="gift:menu"),
+            InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu"),
+            InlineKeyboardButton(text="🎁 Подарить", callback_data="gift:menu"),
         ],
         [
             InlineKeyboardButton(text="⬅️ Меню", callback_data="menu:main"),
