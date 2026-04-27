@@ -94,7 +94,7 @@ async def send_main_menu(target: CallbackQuery | Message):
     text = (
         f"{preface}"
         "Главное меню\n\n"
-        "Выберите, что Вас интересует:"
+        "Выберите маршрут: можно начать с бесплатной практики, открыть полный доступ или посмотреть свой прогресс."
     )
 
     if isinstance(target, CallbackQuery):
@@ -140,16 +140,17 @@ async def cb_menu_main_v2(cb: CallbackQuery, state: FSMContext | None = None):
 @router.callback_query(lambda c: c.data in ("demo_menu", "demo", "demo:menu"))
 async def cb_demo_menu(cb: CallbackQuery):
     await safe_answer_callback(cb)
-    _log_funnel_safe(cb.from_user.id, "funnel_demo_clicked", {"source": "main_or_start_landing"})
+    _log_funnel_safe(cb.from_user.id, "funnel_demo_clicked", {"source": "main_menu"})
     await asyncio.to_thread(set_funnel_stage, int(cb.from_user.id), "d0")
     preface = await asyncio.to_thread(get_preface, int(cb.from_user.id), "demo")
     text = (
         f"{preface}"
-        "🎧 Демо\n\n"
-        "Выберите, какой демо-транс Вам прислать:\n"
-        "— «Дорога на работу»\n"
-        "— «Дорога домой»\n\n"
-        "После выбора я попрошу Вас указать время отправки."
+        "🌿 Бесплатная практика\n\n"
+        "Выберите короткий маршрут. Бот пришлёт аудиопрактику и поможет зафиксировать состояние до/после, "
+        "чтобы Вы увидели личный эффект, а не просто послушали файл.\n\n"
+        "🚗 Утро / дорога — мягко включиться в день.\n"
+        "🌙 Вечер / домой — снять напряжение и завершить день спокойнее.\n\n"
+        "После выбора я попрошу указать удобное время отправки."
     )
     await safe_edit(cb.message, text, reply_markup=kb_demo_kind(), parse_mode=None)
 
