@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import sqlite3
 from aiogram import Router
@@ -37,13 +38,7 @@ def _log_safe(user_id: int, event: str, payload: dict | None = None) -> None:
         logging.getLogger(__name__).debug("funnel event skipped", exc_info=True)
 
 
-@router.message(CommandStart())
-async def start_cmd(message: Message):
-    payload = ""
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) == 2:
-        payload = parts[1].strip()
-
+def _register_user_entry_safe(message: Message, payload: str) -> None:
     try:
         register_user_entry(
             message.from_user.id,
@@ -59,8 +54,24 @@ async def start_cmd(message: Message):
             "Bad start payload",
             extra={"payload": payload, "user_id": message.from_user.id},
         )
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Failed to register start entry",
+            extra={"payload": payload, "user_id": getattr(message.from_user, "id", None)},
+        )
 
+
+@router.message(CommandStart())
+async def start_cmd(message: Message):
+    payload = ""
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) == 2:
+        payload = parts[1].strip()
+
+    # Gift/referral/bridge payloads still need entry registration before special handling.
+    # Plain /start is a hot path: show the menu first, then write analytics/identity best-effort.
     if payload.startswith("gift_"):
+        await asyncio.to_thread(_register_user_entry_safe, message, payload)
         code = payload.replace("gift_", "").strip()
         # Variant A: не активируем автоматически. Сначала — принятие подарка.
         try:
@@ -84,13 +95,14 @@ async def start_cmd(message: Message):
         await send_main_menu(message)
         return
 
-    _log_safe(message.from_user.id, "funnel_start_command", {"payload": payload})
     await send_main_menu(message)
+    await asyncio.to_thread(_register_user_entry_safe, message, payload)
+    await asyncio.to_thread(_log_safe, message.from_user.id, "funnel_start_command", {"payload": payload})
 
 
 @router.message(Command("programs"))
 async def programs_cmd(message: Message):
-    _log_safe(message.from_user.id, "funnel_programs_command", {})
+    await asyncio.to_thread(_log_safe, message.from_user.id, "funnel_programs_command", {})
     await message.answer(
         "🎧 Выберите бесплатную практику. После неё можно будет открыть полный маршрут.",
         reply_markup=kb_demo_kind(),
@@ -99,7 +111,7 @@ async def programs_cmd(message: Message):
 
 @router.message(Command("tariffs"))
 async def tariffs_cmd(message: Message):
-    _log_safe(message.from_user.id, "funnel_tariffs_command", {})
+    await asyncio.to_thread(_log_safe, message.from_user.id, "funnel_tariffs_command", {})
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="💳 Открыть тарифы", callback_data="sub:menu")],
@@ -116,7 +128,7 @@ async def tariffs_cmd(message: Message):
 
 @router.message(Command("progress"))
 async def progress_cmd(message: Message):
-    _log_safe(message.from_user.id, "funnel_progress_command", {})
+    await asyncio.to_thread(_log_safe, message.from_user.id, "funnel_progress_command", {})
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📈 Открыть анализ", callback_data="settings:state")],
@@ -128,17 +140,17 @@ async def progress_cmd(message: Message):
 
 @router.message(Command("help"))
 async def help_cmd(message: Message):
-    _log_safe(message.from_user.id, "funnel_help_command", {})
+    await asyncio.to_thread(_log_safe, message.from_user.id, "funnel_help_command", {})
     await message.answer(HELP_TEXT, reply_markup=kb_main(user_id=message.from_user.id))
 
 
 @router.message(Command("site"))
 async def site_cmd(message: Message):
-    _log_safe(message.from_user.id, "funnel_site_command", {})
+    await asyncio.to_thread(_log_safe, message.from_user.id, "funnel_site_command", {})
     await message.answer(SITE_TEXT)
 
 
 @router.message(Command("privacy"))
 async def privacy_cmd(message: Message):
-    _log_safe(message.from_user.id, "funnel_privacy_command", {})
+    await asyncio.to_thread(_log_safe, message.from_user.id, "funnel_privacy_command", {})
     await message.answer(PRIVACY_TEXT)
