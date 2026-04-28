@@ -21,15 +21,15 @@ from keyboards.inline import kb_main
 from services.pending import set_pending, pop_pending, peek_pending
 from services.events import log_event
 from services.promo_texts import get_share_template
-from services.messenger.links import build_messenger_targets
+from services.messenger.links import build_share_targets
 from services.bg import tm
 
 router = Router()
 
 
-def _share_kb(referrer_user_id: int, back_cb: str = 'menu:main') -> InlineKeyboardMarkup:
+def _share_kb(referrer_user_id: int, text: str, back_cb: str = 'menu:main') -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    for item in build_messenger_targets(referrer_user_id):
+    for item in build_share_targets(referrer_user_id, text=text):
         rows.append([InlineKeyboardButton(text=f"📨 Поделиться в {item['title']}", url=item['url'])])
     rows.append([InlineKeyboardButton(text='⬅️ Назад', callback_data=back_cb)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -48,11 +48,9 @@ def _pick_user_keyboard() -> ReplyKeyboardMarkup:
 
 def _build_share_payload(cb: CallbackQuery) -> tuple[str, str, str]:
     uid = int(cb.from_user.id)
-    bot_username = ((cb.bot.username if getattr(cb.bot, 'username', None) else None) or '').strip()
-    link = f'https://t.me/{bot_username}?start=ref_{uid}' if bot_username else ''
     from_name = (cb.from_user.full_name or '').strip() or 'друг'
-    share_text = get_share_template().format(link=link, from_name=from_name)
-    return link, from_name, share_text
+    share_text = get_share_template().format(link='', from_name=from_name).strip()
+    return '', from_name, share_text
 
 
 @router.callback_query(F.data == 'share:menu')
@@ -60,23 +58,29 @@ async def share_menu(cb: CallbackQuery):
     await safe_answer_callback(cb)
 
     uid = int(cb.from_user.id)
-    link, from_name, share_text = _build_share_payload(cb)
-    set_pending(uid, 'share', {'link': link, 'text': share_text, 'from_name': from_name})
-    log_event(uid, 'share_menu', {'mode': 'direct_pick'})
+    _, from_name, share_text = _build_share_payload(cb)
+    set_pending(uid, 'share', {'text': share_text, 'from_name': from_name})
+    log_event(uid, 'share_menu', {'mode': 'platform_choice'})
     await cb.message.answer(
-        'Выберите друга в Telegram, чтобы отправить ему рекомендацию.',
-        reply_markup=_pick_user_keyboard(),
+        '📣 Куда хотите посоветовать «Метротерапию»?\n\n'
+        'Выберите мессенджер — ссылка откроется именно там. Если канал не отображается, проверьте настройки TELEGRAM_BOT_USERNAME, MAX_BOT_LINK_BASE/MAX_BOT_NAME и VK_GROUP_ID.',
+        reply_markup=_share_kb(uid, share_text),
     )
 
 
 @router.callback_query(F.data == 'share:pick')
 async def share_pick(cb: CallbackQuery):
+    # Backward-compatible Telegram-only direct delivery. Kept for old callback contracts,
+    # but the main UX now routes through share:menu platform choice.
     await safe_answer_callback(cb)
 
     uid = int(cb.from_user.id)
-    link, from_name, share_text = _build_share_payload(cb)
+    bot_username = ((cb.bot.username if getattr(cb.bot, 'username', None) else None) or '').strip()
+    link = f'https://t.me/{bot_username}?start=ref_{uid}' if bot_username else ''
+    from_name = (cb.from_user.full_name or '').strip() or 'друг'
+    share_text = get_share_template().format(link=link, from_name=from_name)
     set_pending(uid, 'share', {'link': link, 'text': share_text, 'from_name': from_name})
-    log_event(uid, 'share_pick', {})
+    log_event(uid, 'share_pick', {'mode': 'telegram_user_picker_legacy'})
     await cb.message.answer(
         'Выберите друга в Telegram, чтобы отправить ему рекомендацию.',
         reply_markup=_pick_user_keyboard(),
@@ -131,8 +135,6 @@ async def users_shared(message: Message):
     except (AttributeError, TypeError, ValueError):
         picked_ids = []
 
-    from keyboards.inline import kb_menu_only
-
     link = p.data.get('link') or ''
     from_name = (p.data.get('from_name') or (message.from_user.full_name or '') or 'друг').strip() or 'друг'
     txt = (p.data.get('text') or '')
@@ -155,7 +157,6 @@ async def users_shared(message: Message):
 @router.message(F.text == '❌ Отмена')
 async def cancel(message: Message):
     pop_pending(int(message.from_user.id))
-    from keyboards.inline import kb_menu_only
 
     await message.answer('Ок.', reply_markup=ReplyKeyboardRemove())
     await message.answer(
