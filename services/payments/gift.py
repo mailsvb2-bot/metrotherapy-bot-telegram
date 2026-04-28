@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-import urllib.parse
 
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
@@ -20,33 +19,41 @@ from services.gift_store import set_target, get_target, clear_target
 from services.events import log_event
 from core.runtime.sovereignty.enforcement import get_current_token
 from services.promo_texts import get_gift_template
+from services.messenger.links import build_gift_share_targets
 
 
 logger = logging.getLogger(__name__)
 
 
+def _gift_share_keyboard(code: str, text: str):
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in build_gift_share_targets(code, text=text):
+        rows.append([InlineKeyboardButton(text=f"🎁 Отправить в {item['title']}", url=item['url'])])
+    rows.append([InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")])
+    return kb(rows)
+
+
 async def gift_menu(cb: CallbackQuery) -> None:
-    # Сначала выбираем получателя, потом тариф и оплата
-    set_pending(int(cb.from_user.id), "gift_target", {"from_name": (cb.from_user.full_name or "").strip()})
-    log_event(int(cb.from_user.id), "gift_menu", {})
+    # Canonical flow: gift is a universal code/link. Recipient channel is selected after payment.
+    set_pending(int(cb.from_user.id), "gift_universal", {"from_name": (cb.from_user.full_name or "").strip()})
+    log_event(int(cb.from_user.id), "gift_menu", {"mode": "universal_link"})
 
     await cb.message.edit_text(
         "🎁 Подарить подписку\n\n"
-        "Сначала выберите, кому Вы хотите подарить подписку (через Telegram).",
-        reply_markup=kb([
-            [InlineKeyboardButton(text="👤 Выбрать получателя", callback_data="gift:pick_target")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
-        ]),
+        "Сначала выберите тариф и оплатите подарок. После оплаты проект даст ссылки для отправки подарка в Telegram, ВКонтакте или MAX.\n\n"
+        "Получатель откроет подарок в выбранном мессенджере и войдёт в тот же маршрут Метротерапии.",
+        reply_markup=kb_gift_tariffs(back_cb="menu:main"),
     )
 
 
 async def gift_pick_target(cb: CallbackQuery) -> None:
+    # Legacy Telegram direct-target flow. Kept for old callback contracts, but no longer the main UX.
     uid = int(cb.from_user.id)
     kb_r = pick_user_keyboard()
     if kb_r is None:
         await cb.message.answer(
             "⚠️ Ваш клиент Telegram не поддерживает выбор пользователя кнопкой.\n"
-            "Вы можете подарить подписку вручную: Выберите тариф и после оплаты отправьте ссылку другу.",
+            "Выберите тариф и после оплаты отправьте универсальную ссылку подарка в нужный мессенджер.",
             reply_markup=kb_gift_tariffs(back_cb="menu:main"),
         )
         return
@@ -64,13 +71,12 @@ async def gift_pick_cancel(message: Message) -> None:
     if not uid:
         return
     peek = peek_pending(uid)
-    if peek and peek.kind == "gift_target":
+    if peek and peek.kind in {"gift_target", "gift_universal"}:
         pop_pending(uid)
         clear_target(uid)
-        from keyboards.inline import kb_menu_only
 
         await message.answer(
-            "✅ Хорошо. Выбор получателя отменён.",
+            "✅ Хорошо. Выбор подарка отменён.",
             reply_markup=ReplyKeyboardRemove(),
         )
         await message.answer('Главное меню:', reply_markup=kb_main(user_id=message.from_user.id))
@@ -117,8 +123,6 @@ async def gift_users_shared(message: Message, state: FSMContext) -> None:
             ]),
         )
         return
-
-    from keyboards.inline import kb_menu_only
 
     await message.answer("✅ Получатель выбран.", reply_markup=ReplyKeyboardRemove())
 
@@ -169,11 +173,9 @@ async def gift_buy(cb: CallbackQuery) -> None:
         return
 
     tgt = get_target(int(cb.from_user.id))
-    if not tgt:
-        await cb.message.answer("Сначала выберите получателя.", reply_markup=kb_back("gift:menu"))
-        return
+    recipient_id = int(tgt.to_id) if tgt else None
 
-    code = create_gift(int(plan.get('plan_id') or plan.get('id') or 0), cb.from_user.id, recipient_id=tgt.to_id)
+    code = create_gift(int(plan.get('plan_id') or plan.get('id') or 0), cb.from_user.id, recipient_id=recipient_id)
     payload = f"gift:{code}"
     tok = get_current_token()
     if tok is not None:
@@ -185,14 +187,15 @@ async def gift_buy(cb: CallbackQuery) -> None:
         "days": days,
         "price": int(current_price),
         "code": code,
-        "to_id": tgt.to_id,
+        "to_id": recipient_id,
     })
     log_event(cb.from_user.id, "gift_invoice_created", {
         "scope": scope,
         "days": days,
         "price": int(current_price),
         "code": code,
-        "to_id": tgt.to_id,
+        "to_id": recipient_id,
+        "mode": "direct_target" if recipient_id else "universal_link",
     })
 
     price_rub = int(current_price)
@@ -265,17 +268,19 @@ async def gift_buy(cb: CallbackQuery) -> None:
 
 
 async def deliver_gift_message(message: Message, code: str) -> None:
-    """Попробовать отправить сообщение получателю; если не получается — дать ссылку дарителю."""
-    me = await message.bot.get_me()
-    link = f"https://t.me/{me.username}?start=gift_{code}"
+    """Show sender platform choices for a paid gift; legacy direct Telegram target is best-effort."""
     from_name = (message.from_user.full_name or "").strip() or "друг"
-    txt = get_gift_template().format(link=link, from_name=from_name)
+    template = get_gift_template()
+    txt = template.format(link='', from_name=from_name).strip()
 
     sent_ok = 0
     tgt = get_target(message.from_user.id)
     if tgt:
+        me = await message.bot.get_me()
+        telegram_link = f"https://t.me/{me.username}?start=gift_{code}"
+        direct_txt = template.format(link=telegram_link, from_name=from_name)
         try:
-            await message.bot.send_message(int(tgt.to_id), txt)
+            await message.bot.send_message(int(tgt.to_id), direct_txt)
             sent_ok = 1
         except (TelegramAPIError, asyncio.TimeoutError):
             logger.info("gift delivery send_message failed", exc_info=True)
@@ -284,20 +289,16 @@ async def deliver_gift_message(message: Message, code: str) -> None:
     if sent_ok:
         log_event(message.from_user.id, "gift_delivered_ok", {"code": code, "to_id": int(tgt.to_id) if tgt else None})
         await message.answer(
-            "✅ Оплата прошла. Подарок оплачен и отправлен получателю.",
-            reply_markup=kb([[InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")]]),
+            "✅ Оплата прошла. Подарок оплачен и отправлен получателю в Telegram.\n\n"
+            "Также можно отправить универсальную ссылку в другой мессенджер:",
+            reply_markup=_gift_share_keyboard(code, txt),
         )
     else:
-        log_event(message.from_user.id, "gift_delivered_fail", {"code": code, "to_id": int(tgt.to_id) if tgt else None})
-        share_url = "https://t.me/share/url?" + urllib.parse.urlencode({"url": link, "text": txt})
+        log_event(message.from_user.id, "gift_delivery_platform_choice", {"code": code, "to_id": int(tgt.to_id) if tgt else None})
         await message.answer(
             "✅ Оплата прошла. Подарок готов.\n\n"
-            "⚠️ Не удалось отправить сообщение выбранному пользователю (обычно это значит, что он ещё не запускал бота).\n"
-            "Отправьте ссылку вручную:\n" + link,
-            reply_markup=kb([
-                [InlineKeyboardButton(text="📨 Поделиться в Telegram", url=share_url)],
-                [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
-            ]),
+            "Куда отправить подарок? Выберите мессенджер — получатель откроет ссылку именно там:",
+            reply_markup=_gift_share_keyboard(code, txt),
         )
         await message.answer(
             "Главное меню:",
@@ -305,4 +306,3 @@ async def deliver_gift_message(message: Message, code: str) -> None:
         )
 
     clear_target(message.from_user.id)
-
