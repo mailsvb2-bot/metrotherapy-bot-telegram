@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import mimetypes
+import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -185,9 +186,12 @@ class VkBotSender:
         if not token:
             raise MessengerTransportError('VK_GROUP_TOKEN is empty')
         version = (self.api_version or getattr(settings, 'VK_API_VERSION', '') or '5.199').strip()
+        random_id = kwargs.get('random_id')
+        if random_id is None:
+            random_id = int(time.time_ns() % 2147483647)
         params = {
             'user_id': str(external_user_id),
-            'random_id': int(kwargs.get('random_id') or 0),
+            'random_id': int(random_id),
             'message': text,
             'access_token': token,
             'v': version,

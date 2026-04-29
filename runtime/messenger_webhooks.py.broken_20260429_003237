@@ -33,7 +33,95 @@ from services.messenger.webhook_dedupe import register_inbound_event
 log = logging.getLogger(__name__)
 
 def _vk_default_keyboard_json() -> str:
-    """Persistent VK keyboard aligned with the canonical text-command UI."""
+
+def _normalise_messenger_text(text: str) -> str:
+
+def _vk_text_send_kwargs(platform: str, text: str = "") -> dict[str, Any]:
+    if platform != "vk":
+        return {}
+    return {"keyboard_json": _vk_default_keyboard_json()}
+
+    raw = (text or "").strip()
+    compact = raw.casefold().replace("ё", "е")
+
+    aliases = {
+        # Menu / start
+        "🌿 начать": "start",
+        "начать": "start",
+        "старт": "start",
+        "/start": "start",
+        "start": "start",
+        "меню": "start",
+        "главное меню": "start",
+
+        # Audio delivery
+        "🎧 получить аудио": "continue",
+        "получить аудио": "continue",
+        "аудио": "continue",
+        "продолжить": "continue",
+        "continue": "continue",
+        "next": "continue",
+        "следующее": "continue",
+
+        # Done / progress
+        "✅ прослушал": "done",
+        "прослушал": "done",
+        "готово": "done",
+        "done": "done",
+        "📊 прогресс": "progress",
+        "прогресс": "progress",
+        "progress": "progress",
+        "история": "history",
+        "history": "history",
+
+        # Payment / gift
+        "💳 оплатить": "pay",
+        "оплатить": "pay",
+        "оплата": "pay",
+        "купить": "pay",
+        "pay": "pay",
+        "payment": "pay",
+        "🎁 подарить": "gift",
+        "подарить": "gift",
+        "подарок": "gift",
+        "gift": "gift",
+
+        # Settings / delivery rules
+        "⚙️ настройки": "settings",
+        "настройки": "settings",
+        "settings": "settings",
+        "🕒 время": "time",
+        "время": "time",
+        "правила отправки": "time",
+        "time": "time",
+
+        # Share / switch / help
+        "↗️ поделиться": "share",
+        "поделиться": "share",
+        "share": "share",
+        "🔁 другой мессенджер": "switch",
+        "другой мессенджер": "switch",
+        "сменить мессенджер": "switch",
+        "перейти в другой мессенджер": "switch",
+        "switch": "switch",
+        "❓ помощь": "help",
+        "помощь": "help",
+        "help": "help",
+        "/help": "help",
+
+        # Demo
+        "демо": "demo",
+        "demo": "demo",
+    }
+
+    return aliases.get(compact, raw)
+
+    """Persistent VK keyboard aligned with Telegram actions.
+
+    VK text buttons send their label as message text. Therefore every visible
+    button must be mapped by _normalise_messenger_text() to the same canonical
+    command vocabulary that Telegram/text UI uses.
+    """
     return json.dumps(
         {
             "one_time": False,
@@ -146,70 +234,113 @@ def _vk_default_keyboard_json() -> str:
     )
 
 
-def _normalise_messenger_text(text: str) -> str:
-    """Normalize human/mobile button labels to canonical text commands."""
-    raw = (text or "").strip()
-    compact = raw.casefold().replace("ё", "е")
-    compact = " ".join(compact.split())
 
-    aliases = {
-        "/start": "start",
-        "start": "start",
-        "старт": "start",
-        "начать": "start",
-        "🌿 начать": "start",
-        "меню": "start",
-        "главное меню": "start",
+def _vk_default_keyboard_json() -> str:
+    """Persistent VK keyboard for the main Metrotherapy flow.
 
-        "🎧 получить аудио": "continue",
-        "получить аудио": "continue",
-        "продолжить": "continue",
-        "continue": "continue",
-
-        "✅ прослушал": "done",
-        "прослушал": "done",
-        "готово": "done",
-        "done": "done",
-
-        "💳 оплатить": "pay",
-        "оплатить": "pay",
-        "оплата": "pay",
-        "тарифы": "pay",
-        "pay": "pay",
-
-        "🎁 подарить": "gift",
-        "подарить": "gift",
-        "подарок": "gift",
-        "gift": "gift",
-
-        "↗️ поделиться": "share",
-        "поделиться": "share",
-        "посоветовать": "share",
-        "share": "share",
-
-        "⚙️ настройки": "settings",
-        "настройки": "settings",
-        "settings": "settings",
-
-        "📊 прогресс": "progress",
-        "прогресс": "progress",
-        "progress": "progress",
-
-        "🔁 другой мессенджер": "switch",
-        "другой мессенджер": "switch",
-        "switch": "switch",
-
-        "❓ помощь": "help",
-        "помощь": "help",
-        "help": "help",
-    }
-
-    return aliases.get(compact, raw)
-
-def _vk_text_send_kwargs(platform: str, text: str = "") -> dict[str, Any]:
-    if platform != "vk":
-        return {}
-    return {"keyboard_json": _vk_default_keyboard_json()}
+    VK has tighter keyboard limits than Telegram, so this is the canonical
+    compact VK menu: every critical user action is present, while deep
+    settings remain available by text commands from the help/settings screens.
+    """
+    return json.dumps(
+        {
+            "one_time": False,
+            "inline": False,
+            "buttons": [
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "🌿 Начать",
+                            "payload": "{\"cmd\":\"start\"}",
+                        },
+                        "color": "positive",
+                    },
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "🎧 Получить аудио",
+                            "payload": "{\"cmd\":\"continue\"}",
+                        },
+                        "color": "primary",
+                    },
+                ],
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "✅ Дослушал",
+                            "payload": "{\"cmd\":\"done\"}",
+                        },
+                        "color": "positive",
+                    },
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "📍 Прогресс",
+                            "payload": "{\"cmd\":\"progress\"}",
+                        },
+                        "color": "secondary",
+                    },
+                ],
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "💳 Оплатить",
+                            "payload": "{\"cmd\":\"pay\"}",
+                        },
+                        "color": "primary",
+                    },
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "🎁 Подарить",
+                            "payload": "{\"cmd\":\"gift\"}",
+                        },
+                        "color": "secondary",
+                    },
+                ],
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "↗️ Поделиться",
+                            "payload": "{\"cmd\":\"share\"}",
+                        },
+                        "color": "secondary",
+                    },
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "🔁 Другой мессенджер",
+                            "payload": "{\"cmd\":\"switch\"}",
+                        },
+                        "color": "secondary",
+                    },
+                ],
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "⚙️ Настройки",
+                            "payload": "{\"cmd\":\"settings\"}",
+                        },
+                        "color": "secondary",
+                    },
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "❓ Помощь",
+                            "payload": "{\"cmd\":\"help\"}",
+                        },
+                        "color": "secondary",
+                    },
+                ],
+            ],
+        },
+        ensure_ascii=False,
+    )
 
 
 def _with_vk_keyboard(platform: str, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -218,6 +349,46 @@ def _with_vk_keyboard(platform: str, kwargs: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(kwargs)
     enriched.setdefault("keyboard_json", _vk_default_keyboard_json())
     return enriched
+
+
+def _normalise_messenger_text(text: str) -> str:
+    raw = (text or "").strip()
+    lowered = raw.casefold()
+    compact = lowered.replace("ё", "е")
+
+    aliases = {
+        "start": "start",
+        "/start": "start",
+        "старт": "start",
+        "начать": "start",
+        "🌿 начать": "start",
+        "меню": "start",
+        "главное меню": "start",
+        "продолжить": "continue",
+        "continue": "continue",
+        "🎧 получить аудио": "continue",
+        "получить аудио": "continue",
+        "💳 оплатить": "pay",
+        "оплатить": "pay",
+        "оплата": "pay",
+        "купить": "pay",
+        "🎁 подарить": "gift",
+        "подарить": "gift",
+        "подарок": "gift",
+        "аудио": "continue",
+        "получить аудио": "continue",
+        "прогресс": "progress",
+        "📍 прогресс": "progress",
+        "настройки": "settings",
+        "⚙️ настройки": "settings",
+        "поделиться": "share",
+        "↗️ поделиться": "share",
+        "подарить": "gift",
+        "🎁 подарить": "gift",
+    }
+    return aliases.get(compact, raw or "start")
+
+
 
 def _stable_payload_key(platform: str, payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8', 'ignore')
@@ -230,40 +401,6 @@ def _safe_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
 
-
-
-
-def _text_from_vk_payload(raw: Any) -> str:
-    """Extract a command-like text from VK mobile/button payloads.
-
-    Some VK clients, especially mobile entry buttons, may send an empty text
-    with message.payload instead of a plain "Начать" message. We normalize
-    that to the same text-command path as ordinary messenger messages.
-    """
-    if raw in (None, "", b""):
-        return ""
-
-    payload: Any = raw
-    if isinstance(raw, str):
-        value = raw.strip()
-        if not value:
-            return ""
-        try:
-            payload = json.loads(value)
-        except json.JSONDecodeError:
-            return value
-
-    if isinstance(payload, dict):
-        for key in ("command", "cmd", "action", "button", "value", "text", "payload"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-            if isinstance(value, dict):
-                nested = _text_from_vk_payload(value)
-                if nested:
-                    return nested
-
-    return ""
 
 def _vk_event_key(payload: dict[str, Any]) -> str:
     obj = payload.get('object') or {}
@@ -370,40 +507,22 @@ async def _telegram_webhook(request: web.Request) -> web.Response:
     return web.json_response({'ok': True})
 
 def _extract_vk_message(payload: dict[str, Any]) -> dict[str, Any] | None:
-    obj = payload.get("object") or {}
-    message = obj.get("message") or obj
-
-    from_id = (
-        message.get("from_id")
-        or message.get("user_id")
-        or message.get("peer_id")
-        or obj.get("from_id")
-        or obj.get("user_id")
-    )
-
-    text = (message.get("text") or obj.get("text") or "").strip()
-
-    if not text:
-        text = _text_from_vk_payload(
-            message.get("payload")
-            or obj.get("payload")
-            or payload.get("payload")
-        )
-
-    text = _normalise_messenger_text(text)
-
+    obj = payload.get('object') or {}
+    message = obj.get('message') or obj
+    from_id = message.get('from_id') or message.get('user_id')
+    text = (message.get('text') or '').strip()
     safe_user_id = _safe_int(from_id)
     if safe_user_id is None:
         return None
-
     return {
-        "user_id": safe_user_id,
-        "external_user_id": str(from_id),
-        "username": None,
-        "display_name": None,
-        "first_name": None,
-        "text": text or "start",
+        'user_id': safe_user_id,
+        'external_user_id': str(from_id),
+        'username': None,
+        'display_name': None,
+        'first_name': None,
+        'text': text or 'start',
     }
+
 
 def _extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     message = payload.get('message') or {}
@@ -423,6 +542,81 @@ def _extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
         'first_name': sender.get('first_name') or sender.get('name'),
         'text': text or 'start',
     }
+
+
+
+def _vk_group_dialog_url() -> str:
+    group_id = str(getattr(settings, "VK_GROUP_ID", "") or "").strip()
+    if group_id:
+        return f"https://vk.com/im?sel=-{group_id}"
+    return "https://vk.com/metrotherapy"
+
+
+def _vk_public_site_url() -> str:
+    base = (
+        getattr(settings, "SITE_PUBLIC_URL", "")
+        or getattr(settings, "PAYMENT_RETURN_URL", "")
+        or "https://metrotherapy.ru"
+    )
+    return str(base).strip().rstrip("/") or "https://metrotherapy.ru"
+
+
+def _vk_telegram_link() -> str:
+    username = (
+        getattr(settings, "TELEGRAM_BOT_USERNAME", "")
+        or "metrotherapybot"
+    )
+    username = str(username).strip().lstrip("@") or "metrotherapybot"
+    return f"https://t.me/{username}?start=vk_share"
+
+
+def _vk_share_keyboard_json() -> str:
+    return json.dumps(
+        {
+            "inline": True,
+            "buttons": [
+                [
+                    {
+                        "action": {
+                            "type": "open_link",
+                            "label": "💬 Открыть VK-бота",
+                            "link": _vk_group_dialog_url(),
+                        }
+                    }
+                ],
+                [
+                    {
+                        "action": {
+                            "type": "open_link",
+                            "label": "📨 Открыть Telegram",
+                            "link": _vk_telegram_link(),
+                        }
+                    }
+                ],
+                [
+                    {
+                        "action": {
+                            "type": "open_link",
+                            "label": "🌐 Открыть сайт",
+                            "link": _vk_public_site_url(),
+                        }
+                    }
+                ],
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "🎧 Получить аудио",
+                            "payload": "{\"command\":\"continue\"}",
+                        },
+                        "color": "positive",
+                    }
+                ],
+            ],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 async def _send_reply_bundle(platform: str, external_user_id: str, canonical_user_id: int, replies: list[MessengerReply]) -> None:

@@ -68,15 +68,15 @@ async def mood_answer(cb: CallbackQuery):
         logging.getLogger(__name__).exception("Unhandled exception")
         return
 
-    s = await asyncio.to_thread(get_session, sid)
+    s = get_session(sid)
     if not s:
         return
 
     ok = False
     if stage == "pre":
-        ok = await asyncio.to_thread(set_pre, sid, val)
+        ok = set_pre(sid, val)
     elif stage == "post":
-        ok = await asyncio.to_thread(set_post, sid, val)
+        ok = set_post(sid, val)
 
     if not ok:
         return await cb.message.answer("⚠️ Не удалось сохранить оценку. Попробуйте ещё раз.")

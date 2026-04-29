@@ -1,7 +1,8 @@
 import asyncio
 import logging
 import sqlite3
-from aiogram import Router
+from aiogram.filters import CommandStart
+from aiogram import Router, F
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, Command
@@ -154,3 +155,35 @@ async def site_cmd(message: Message):
 async def privacy_cmd(message: Message):
     await asyncio.to_thread(_log_safe, message.from_user.id, "funnel_privacy_command", {})
     await message.answer(PRIVACY_TEXT)
+
+from keyboards.inline import kb_main
+
+
+# --- Canonical safe start fallback ---
+# Purpose: if /start or text Start/Старт/Начать reaches the bot but older handlers
+# do not answer because of state/router drift, this handler still opens the main menu.
+# It is intentionally simple: no hidden business logic, no payment logic, no alternate decision path.
+@router.message(CommandStart())
+async def safe_start_command_fallback(message):
+    try:
+        user_id = int(message.from_user.id) if message.from_user else None
+    except (TypeError, ValueError):
+        user_id = None
+    await message.answer(
+        "🌿 Добро пожаловать в Метротерапию.\n\n"
+        "Выберите действие в меню ниже. Если Вы впервые здесь — нажмите «🌿 Попробовать бесплатно» или «🎧 Получить аудио», если такая кнопка есть в вашем мессенджере.",
+        reply_markup=kb_main(user_id=user_id),
+    )
+
+
+@router.message(F.text.casefold().in_({"start", "/start", "старт", "начать", "начать заново", "меню", "menu"}))
+async def safe_start_text_fallback(message):
+    try:
+        user_id = int(message.from_user.id) if message.from_user else None
+    except (TypeError, ValueError):
+        user_id = None
+    await message.answer(
+        "🌿 Главное меню Метротерапии.\n\n"
+        "Выберите действие:",
+        reply_markup=kb_main(user_id=user_id),
+    )

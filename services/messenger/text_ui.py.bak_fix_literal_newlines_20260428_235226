@@ -34,17 +34,118 @@ class MessengerReply:
 def _menu_text(user_id: int) -> str:
     preface = get_preface(int(user_id), context="menu")
     return (
-        f"{preface}🌿 Добро пожаловать в Метротерапию.\n\n"
-        "Метротерапия — это короткие аудиопрактики, которые помогают мягко перенастраивать состояние через ритм повседневности.\n\n"
-        "Что можно сделать сейчас:\n"
-        "• 🎧 Получить аудио — начать или продолжить практику\n"
-        "• 💳 Оплатить — открыть оплату доступа\n"
-        "• 🎁 Подарить — подарить практику другому человеку\n"
-        "• ⚙️ Настройки — выбрать канал и правила отправки\n"
-        "• 📊 Прогресс — посмотреть, где вы остановились\n"
-        "• ↗️ Поделиться — отправить ссылку другу\n\n"
+        f"{preface}🌿 Добро пожаловать в Метротерапию.\\n\\n"
+        "Метротерапия — это короткие аудиопрактики, которые помогают мягко перенастраивать состояние через ритм повседневности.\\n\\n"
+        "Что можно сделать сейчас:\\n"
+        "• 🎧 Получить аудио — начать или продолжить практику\\n"
+        "• 💳 Оплатить — открыть оплату доступа\\n"
+        "• 🎁 Подарить — подарить практику другому человеку\\n"
+        "• ⚙️ Настройки — выбрать канал и правила отправки\\n"
+        "• 📊 Прогресс — посмотреть, где вы остановились\\n"
+        "• ↗️ Поделиться — отправить ссылку другу\\n\\n"
         "Если вы впервые здесь — нажмите «🎧 Получить аудио». Бот сам поведёт дальше."
     )
+
+def _public_payment_base_url() -> str:
+    base = (
+        getattr(settings, "PAYMENT_PUBLIC_BASE_URL", "")
+        or getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "")
+        or getattr(settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "")
+        or "https://metrotherapy-bot.metrotherapy.ru"
+    )
+    return str(base).strip().rstrip("/")
+
+
+def _public_site_url() -> str:
+    return str(getattr(settings, "SITE_PUBLIC_URL", "") or "https://metrotherapy.ru").strip().rstrip("/")
+
+
+def _payment_link(*, source: str, external_user_id: str | None, kind: str) -> str:
+    base = _public_payment_base_url()
+    params = {
+        "source": source or "vk",
+        "user_id": external_user_id or "",
+        "kind": kind or "subscription",
+    }
+    return base + "/pay/yookassa?" + urllib.parse.urlencode(params)
+
+
+def _payment_text(platform: str, external_user_id: str | None) -> str:
+    url = _payment_link(source=platform, external_user_id=external_user_id, kind="subscription")
+    return (
+        "💳 Оплата доступа к Метротерапии\n\n"
+        "Нажмите на ссылку ниже — откроется безопасная страница оплаты YooKassa:\n"
+        f"{url}\n\n"
+        "После оплаты вернитесь сюда и нажмите «🎧 Получить аудио»."
+    )
+
+
+def _gift_text(platform: str, external_user_id: str | None) -> str:
+    gift_url = _payment_link(source=platform, external_user_id=external_user_id, kind="gift")
+    site_url = _public_site_url()
+    vk_share = "https://vk.com/share.php?" + urllib.parse.urlencode(
+        {
+            "url": site_url,
+            "title": "Метротерапия",
+            "comment": "Подарок: короткие аудиопрактики для восстановления состояния.",
+        }
+    )
+    return (
+        "🎁 Подарить Метротерапию\n\n"
+        "1. Оплатите подарочный доступ по ссылке:\n"
+        f"{gift_url}\n\n"
+        "2. После оплаты отправьте человеку ссылку на проект:\n"
+        f"{site_url}\n\n"
+        "Поделиться во ВКонтакте:\n"
+        f"{vk_share}"
+    )
+
+
+def _normalised_command(text: str) -> str:
+    value = (text or "").strip().casefold().replace("ё", "е")
+    aliases = {
+        "🌿 начать": "start",
+        "начать": "start",
+        "старт": "start",
+        "/start": "start",
+        "start": "start",
+
+        "🎧 получить аудио": "continue",
+        "получить аудио": "continue",
+        "аудио": "continue",
+        "continue": "continue",
+
+        "💳 оплатить": "pay",
+        "оплатить": "pay",
+        "оплата": "pay",
+        "купить": "pay",
+        "pay": "pay",
+        "/pay": "pay",
+
+        "🎁 подарить": "gift",
+        "подарить": "gift",
+        "подарок": "gift",
+        "gift": "gift",
+
+        "⚙️ настройки": "settings",
+        "настройки": "settings",
+        "settings": "settings",
+
+        "📊 прогресс": "progress",
+        "прогресс": "progress",
+        "progress": "progress",
+
+        "↗️ поделиться": "share",
+        "поделиться": "share",
+        "share": "share",
+
+        "🔁 другой мессенджер": "switch",
+        "другой мессенджер": "switch",
+        "switch": "switch",
+    }
+    return aliases.get(value, value)
+
+
 
 def _settings_text(user_id: int) -> str:
     snapshot = get_channel_snapshot(int(user_id))
@@ -70,92 +171,17 @@ def _settings_text(user_id: int) -> str:
 
 def _share_text(user_id: int) -> str:
     targets = build_messenger_targets(int(user_id))
-
-    lines = [
-        "↗️ Поделиться Метротерапией",
-        "",
-        "В VK нельзя надёжно открыть системный выбор друзей прямо из кнопки бота.",
-        "Поэтому я подготовил готовый текст: его можно скопировать и отправить человеку в VK, Telegram или любом другом мессенджере.",
-        "",
-        "Текст для пересылки:",
-        "",
-        "🌿 Попробуй Метротерапию — короткие аудиопрактики для спокойствия, сна и восстановления.",
-        "Начать можно здесь: https://vk.com/im?sel=-238191212",
-        "",
-        "Кнопки ниже открывают VK-бота, Telegram и сайт.",
-    ]
-
-    if targets:
-        lines.append("")
-        lines.append("Дополнительные ссылки:")
-        for item in targets:
-            lines.append(f"• {item['title']}: {item['url']}")
-
-    return "\n".join(lines)
-
-
-def _payment_public_base_url() -> str:
-    base = (
-        getattr(settings, "PAYMENT_PUBLIC_BASE_URL", "")
-        or getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "")
-        or "https://metrotherapy-bot.metrotherapy.ru"
-    )
-    return str(base).strip().rstrip("/")
-
-
-def _payment_url(user_id: int, *, platform: str, external_user_id: str | None, kind: str) -> str:
-    public_id = (external_user_id or "").strip() or str(user_id)
-    params = urllib.parse.urlencode(
-        {
-            "source": platform or "messenger",
-            "user_id": public_id,
-            "kind": kind,
-        }
-    )
-    return f"{_payment_public_base_url()}/pay/yookassa?{params}"
-
-
-def _payment_text(user_id: int, *, platform: str, external_user_id: str | None) -> str:
-    url = _payment_url(
-        int(user_id),
-        platform=platform,
-        external_user_id=external_user_id,
-        kind="subscription",
-    )
-    return (
-        "💳 Оплата доступа к Метротерапии\n\n"
-        "Нажмите ссылку ниже, чтобы открыть безопасную оплату YooKassa:\n"
-        f"{url}\n\n"
-        "После оплаты вернитесь сюда и нажмите «🎧 Получить аудио»."
-    )
-
-
-def _gift_text(user_id: int, *, platform: str, external_user_id: str | None) -> str:
-    gift_payment_url = _payment_url(
-        int(user_id),
-        platform=platform,
-        external_user_id=external_user_id,
-        kind="gift",
-    )
-    share_url = (
-        "https://vk.com/share.php?"
-        + urllib.parse.urlencode(
-            {
-                "url": "https://metrotherapy.ru",
-                "title": "Метротерапия",
-                "comment": "Дарю тебе короткую аудиопрактику Метротерапии.",
-            }
+    if not targets:
+        return (
+            "📣 Ссылки для рекомендаций пока не настроены.\n\n"
+            "Проверьте TELEGRAM_BOT_USERNAME, MAX_BOT_LINK_BASE/MAX_BOT_NAME и VK_GROUP_ID в окружении."
         )
-    )
-    return (
-        "🎁 Подарить Метротерапию\n\n"
-        "1. Сначала оплатите подарок по ссылке:\n"
-        f"{gift_payment_url}\n\n"
-        "2. Потом отправьте человеку ссылку на проект:\n"
-        f"{share_url}\n\n"
-        "Позже можно усилить это до полноценного выбора друга внутри VK, "
-        "но сейчас это рабочий безопасный контур: оплата + ссылка для передачи."
-    )
+    lines = ["📣 Поделиться Метротерапией можно так:"]
+    for item in targets:
+        lines.append(f"• {item['title']}: {item['url']}")
+    lines.append("")
+    lines.append("Проект запомнит, какой мессенджер выбрал человек, и дальше будет считать его приоритетным.")
+    return "\n".join(lines)
 
 
 def _switch_text(user_id: int) -> str:
@@ -363,50 +389,6 @@ def handle_incoming_text(
         start_payload=payload,
     )
     canonical_user_id = int(entry.user_id)
-
-    command_text = (text or "").strip()
-    command_norm = command_text.casefold().replace("ё", "е")
-
-    payment_aliases = {
-        "pay",
-        "payment",
-        "оплата",
-        "оплатить",
-        "платеж",
-        "платёж",
-        "💳 оплатить",
-        "💳 оплата",
-    }
-    gift_aliases = {
-        "gift",
-        "подарить",
-        "подарок",
-        "🎁 подарить",
-        "🎁 подарок",
-    }
-
-    if command_norm in payment_aliases:
-        return canonical_user_id, [
-            MessengerReply(
-                text=_payment_text(
-                    canonical_user_id,
-                    platform=platform,
-                    external_user_id=external_user_id,
-                )
-            )
-        ]
-
-    if command_norm in gift_aliases:
-        return canonical_user_id, [
-            MessengerReply(
-                text=_gift_text(
-                    canonical_user_id,
-                    platform=platform,
-                    external_user_id=external_user_id,
-                )
-            )
-        ]
-
 
     if action in {"start", "menu"}:
         replies: list[MessengerReply] = []

@@ -70,28 +70,18 @@ def _settings_text(user_id: int) -> str:
 
 def _share_text(user_id: int) -> str:
     targets = build_messenger_targets(int(user_id))
-
-    lines = [
-        "↗️ Поделиться Метротерапией",
-        "",
-        "В VK нельзя надёжно открыть системный выбор друзей прямо из кнопки бота.",
-        "Поэтому я подготовил готовый текст: его можно скопировать и отправить человеку в VK, Telegram или любом другом мессенджере.",
-        "",
-        "Текст для пересылки:",
-        "",
-        "🌿 Попробуй Метротерапию — короткие аудиопрактики для спокойствия, сна и восстановления.",
-        "Начать можно здесь: https://vk.com/im?sel=-238191212",
-        "",
-        "Кнопки ниже открывают VK-бота, Telegram и сайт.",
-    ]
-
-    if targets:
-        lines.append("")
-        lines.append("Дополнительные ссылки:")
-        for item in targets:
-            lines.append(f"• {item['title']}: {item['url']}")
-
+    if not targets:
+        return (
+            "📣 Ссылки для рекомендаций пока не настроены.\n\n"
+            "Проверьте TELEGRAM_BOT_USERNAME, MAX_BOT_LINK_BASE/MAX_BOT_NAME и VK_GROUP_ID в окружении."
+        )
+    lines = ["📣 Поделиться Метротерапией можно так:"]
+    for item in targets:
+        lines.append(f"• {item['title']}: {item['url']}")
+    lines.append("")
+    lines.append("Проект запомнит, какой мессенджер выбрал человек, и дальше будет считать его приоритетным.")
     return "\n".join(lines)
+
 
 
 def _payment_public_base_url() -> str:
