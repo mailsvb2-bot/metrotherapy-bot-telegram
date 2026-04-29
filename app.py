@@ -22,6 +22,26 @@ from core.telegram_bot import build_bot
 
 log = logging.getLogger(__name__)
 
+async def _safe_answer_callback(cb, *args, **kwargs) -> None:
+    """Best-effort callback acknowledgement.
+
+    Telegram callback queries must be answered quickly. Business logic can fail,
+    but the UI button must not look frozen for the user.
+    """
+    try:
+        await cb.answer(*args, **kwargs)
+    except Exception as exc:
+        logging.getLogger(__name__).debug(
+            "callback answer skipped",
+            extra={
+                "err": str(exc),
+                "callback_data": getattr(cb, "data", None),
+                "from_user": getattr(getattr(cb, "from_user", None), "id", None),
+            },
+        )
+
+
+
 from config.settings import settings
 
 from core.ai.decision_core import DecisionCore
@@ -49,6 +69,7 @@ from core.middlewares import (
 )
 
 # Важно: не называем модуль handlers.settings как `settings`, чтобы не затереть config.settings.settings
+from handlers import start
 from handlers import (
     start,
     menu,

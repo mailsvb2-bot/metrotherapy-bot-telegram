@@ -22,6 +22,29 @@ from core.time_utils import utcnow_iso
 from services.db import db
 
 
+def _write_changed_count(conn, cursor=None, *, table: str = "", id_column: str = "id", row_id=None) -> int:
+    """Return number of changed rows in a DB-engine-neutral way.
+
+    SQLite-only SELECT changes() breaks under Postgres wrappers. Prefer cursor.rowcount,
+    then fall back to an existence check so callbacks do not crash after a successful UPDATE.
+    """
+    rowcount = getattr(cursor, "rowcount", None)
+    try:
+        if rowcount is not None and int(rowcount) >= 0:
+            return int(rowcount)
+    except (TypeError, ValueError):
+        pass
+
+    if table and row_id is not None:
+        try:
+            row = conn.execute(f"SELECT 1 FROM {table} WHERE {id_column}=? LIMIT 1", (row_id,)).fetchone()
+            return 1 if row else 0
+        except Exception:
+            return 0
+
+    return 0
+
+
 
 
 @dataclass
@@ -80,7 +103,7 @@ def set_pre(session_id: int, score: int) -> bool:
             "UPDATE mood_sessions SET pre_score=?, updated_at_utc=? WHERE id=?",
             (int(score), utcnow_iso(), int(session_id)),
         )
-        n = conn.execute("SELECT changes() AS n").fetchone()["n"]
+        n = _write_changed_count(conn, None, table="mood_sessions", id_column="id", row_id=session_id)
     return int(n) == 1
 
 
@@ -93,7 +116,7 @@ def set_post(session_id: int, score: int) -> bool:
             "UPDATE mood_sessions SET post_score=?, updated_at_utc=? WHERE id=?",
             (int(score), utcnow_iso(), int(session_id)),
         )
-        n = conn.execute("SELECT changes() AS n").fetchone()["n"]
+        n = _write_changed_count(conn, None, table="mood_sessions", id_column="id", row_id=session_id)
     return int(n) == 1
 
 
