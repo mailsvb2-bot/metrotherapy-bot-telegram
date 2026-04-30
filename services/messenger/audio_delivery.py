@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any
 
 from services.messenger.outbound import SenderRegistry, build_delivery_plan, UnsupportedMessengerDelivery
@@ -42,12 +43,94 @@ def _platform_name(platform: str) -> str:
     return platform
 
 
+def _score_scale_text() -> str:
+    return (
+        'Шкала оценки после прослушивания:\n'
+        '−10 — стало сильно хуже, 0 — без изменений, +10 — стало сильно лучше.\n'
+        'Можно отправить любое число от −10 до +10, например: −2, 0, 4 или 8.'
+    )
+
+
+def _vk_post_audio_keyboard_json() -> str:
+    """Inline VK controls for the canonical post-audio flow.
+
+    This keyboard is intentionally local to the VK post-audio reply so the audio
+    delivery surface does not depend on Telegram inline callbacks and does not
+    redirect users to Telegram.
+    """
+    return json.dumps(
+        {
+            'one_time': False,
+            'inline': False,
+            'buttons': [
+                [
+                    {
+                        'action': {
+                            'type': 'text',
+                            'label': '✅ Прослушал',
+                            'payload': '{"command":"done"}',
+                        },
+                        'color': 'positive',
+                    },
+                    {
+                        'action': {
+                            'type': 'text',
+                            'label': '📊 Прогресс',
+                            'payload': '{"command":"progress"}',
+                        },
+                        'color': 'primary',
+                    },
+                ],
+                [
+                    {
+                        'action': {
+                            'type': 'text',
+                            'label': '🧾 История',
+                            'payload': '{"command":"history"}',
+                        },
+                        'color': 'secondary',
+                    },
+                    {
+                        'action': {
+                            'type': 'text',
+                            'label': '🎧 Получить аудио',
+                            'payload': '{"command":"continue"}',
+                        },
+                        'color': 'secondary',
+                    },
+                ],
+            ],
+        },
+        ensure_ascii=False,
+        separators=(',', ':'),
+    )
+
+
+def _post_audio_control_kwargs(platform: str) -> dict[str, Any]:
+    if platform == MessengerPlatform.VK.value:
+        return {'keyboard_json': _vk_post_audio_keyboard_json()}
+    return {}
+
+
 def _pending_caption(platform: str, item: AudioProgressItem) -> str:
     return (
         f'🎧 Аудио №{item.anchor}: {item.title}\n\n'
         f'Отправил файл прямо в {_platform_name(platform)}.\n'
         'Когда дослушаете, нажмите «✅ Прослушал» или отправьте done / готово / прослушал.\n'
         'После этого отправьте оценку от -10 до 10.'
+    )
+
+
+def _post_audio_controls_text(platform: str, item: AudioProgressItem) -> str:
+    return (
+        f'✅ Аудио №{item.anchor} — {item.title} отправлено прямо в {_platform_name(platform)}.\n\n'
+        'Что делать дальше:\n'
+        '1. Дослушайте аудио.\n'
+        '2. Нажмите «✅ Прослушал» или отправьте done / готово / прослушал.\n'
+        '3. Затем отправьте оценку состояния.\n\n'
+        f'{_score_scale_text()}\n\n'
+        'Для проверки результата можно нажать «📊 Прогресс» или «🧾 История». '
+        'Telegram для этого не нужен — этот сценарий исполняется внутри текущего мессенджера.'
     )
 
 
@@ -67,6 +150,7 @@ async def _send_non_telegram_native(
             external_user_id,
             item.path,
             caption=_pending_caption(platform, item),
+            **_post_audio_control_kwargs(platform),
         )
     except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery):
         log_audio_timeline_event(int(user_id), event_type="native_audio_fallback", sequence_key="full_series", anchor=int(item.anchor), title=item.title, platform=platform)
@@ -74,6 +158,13 @@ async def _send_non_telegram_native(
     if pending is None:
         mark_pending_audio_delivery(int(user_id), item=item, platform=platform, token=None)
     log_audio_timeline_event(int(user_id), event_type="native_audio_sent", sequence_key="full_series", anchor=int(item.anchor), title=item.title, platform=platform)
+
+    await sender.send_text(
+        external_user_id,
+        _post_audio_controls_text(platform, item),
+        **_post_audio_control_kwargs(platform),
+    )
+
     return AudioDeliveryResult(
         user_id=int(user_id),
         platform=platform,
@@ -161,7 +252,12 @@ async def send_next_audio_to_user(
         'После прослушивания нажмите «✅ Прослушал» или отправьте done / готово / прослушал.\n'
         'Затем отправьте оценку от -10 до 10 — например: -2, 0, 4 или 8.'
     )
-    await sender.send_text(plan.external_user_id, text, disable_link_preview=False)
+    await sender.send_text(
+        plan.external_user_id,
+        text,
+        disable_link_preview=False,
+        **_post_audio_control_kwargs(plan.platform),
+    )
     if pending is None:
         mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=access_token)
     log_audio_timeline_event(int(user_id), event_type="link_sent", sequence_key="full_series", anchor=int(item.anchor), title=item.title, platform=plan.platform, token=access_token)
