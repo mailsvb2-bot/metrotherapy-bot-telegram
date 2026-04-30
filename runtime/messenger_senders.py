@@ -224,50 +224,93 @@ class VkBotSender:
 
     @staticmethod
     def _doc_attachment_from_save_response(data: dict[str, Any]) -> str:
+        """
+        VK docs.save can return either a normal doc or an audio_message object.
+
+        For messages.send the stable attachment reference is still doc<owner_id>_<id>
+        with optional access_key. This lets VK deliver .opus/.ogg as a native
+        audio message instead of forcing a Telegram/web fallback.
+        """
         response = data.get('response')
         doc: dict[str, Any] | None = None
+
+        def pick(candidate: Any) -> dict[str, Any] | None:
+            if not isinstance(candidate, dict):
+                return None
+
+            if isinstance(candidate.get('doc'), dict):
+                return candidate['doc']
+
+            if isinstance(candidate.get('audio_message'), dict):
+                return candidate['audio_message']
+
+            if candidate.get('type') in {'doc', 'audio_message'}:
+                nested = candidate.get(str(candidate.get('type')))
+                if isinstance(nested, dict):
+                    return nested
+                return candidate
+
+            if candidate.get('owner_id') is not None and candidate.get('id') is not None:
+                return candidate
+
+            return None
+
         if isinstance(response, dict):
-            if isinstance(response.get('doc'), dict):
-                doc = response['doc']
-            elif response.get('type') == 'doc' and isinstance(response.get('doc'), dict):
-                doc = response['doc']
+            doc = pick(response)
         elif isinstance(response, list) and response:
-            first = response[0]
-            if isinstance(first, dict):
-                if isinstance(first.get('doc'), dict):
-                    doc = first['doc']
-                elif first.get('type') == 'doc':
-                    doc = first
+            for item in response:
+                doc = pick(item)
+                if doc is not None:
+                    break
+
         if not doc:
             raise MessengerTransportError(f'Unexpected VK docs.save response: {data}')
+
         owner_id = doc.get('owner_id')
         doc_id = doc.get('id')
         access_key = str(doc.get('access_key') or '').strip()
+
         if owner_id is None or doc_id is None:
             raise MessengerTransportError(f'VK saved doc has no owner_id/id: {data}')
+
         attachment = f'doc{owner_id}_{doc_id}'
         if access_key:
             attachment += f'_{access_key}'
+
         return attachment
 
+    @staticmethod
+    def _vk_upload_type_for_audio(file_path: Path) -> str:
+        suffix = file_path.suffix.lower()
+        if suffix in {'.opus', '.ogg'}:
+            return 'audio_message'
+        return 'doc'
+
     async def _ensure_doc_attachment(self, external_user_id: str, file_path: Path) -> str:
-        cached = get_cached_media_token('vk', file_path, media_type='audio')
+        upload_type = self._vk_upload_type_for_audio(file_path)
+        cache_media_type = f'audio:{upload_type}'
+
+        cached = get_cached_media_token('vk', file_path, media_type=cache_media_type)
         if cached is not None:
             return cached.remote_token
+
         upload_meta = await self._vk_method(
             'docs.getMessagesUploadServer',
             {
                 'peer_id': str(external_user_id),
-                'type': 'doc',
+                'type': upload_type,
             },
         )
+
         upload_url = str((upload_meta.get('response') or {}).get('upload_url') or '').strip()
         if not upload_url:
             raise MessengerTransportError(f'Unexpected VK docs.getMessagesUploadServer response: {upload_meta}')
+
         uploaded = await asyncio.to_thread(_multipart_upload, upload_url, field_name='file', path=file_path)
         uploaded_file = str(uploaded.get('file') or '').strip()
         if not uploaded_file:
-            raise MessengerTransportError(f'Unexpected VK upload response: {uploaded}')
+            raise MessengerTransportError(f'Unexpected VK upload response for type={upload_type}: {uploaded}')
+
         saved = await self._vk_method(
             'docs.save',
             {
@@ -276,8 +319,9 @@ class VkBotSender:
                 'tags': 'metrotherapy,audio',
             },
         )
+
         attachment = self._doc_attachment_from_save_response(saved)
-        store_media_token('vk', file_path, attachment, media_type='audio')
+        store_media_token('vk', file_path, attachment, media_type=cache_media_type)
         return attachment
 
     async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
