@@ -31,6 +31,13 @@ class MessengerReply:
     meta: dict[str, str] = field(default_factory=dict)
 
 
+def _score_scale_text() -> str:
+    return (
+        'Шкала оценки: -10 — стало сильно хуже, 0 — без изменений, +10 — стало сильно лучше.\n'
+        'Можно отправить любое число от -10 до 10, например: -2, 0, 4 или 8.'
+    )
+
+
 def _menu_text(user_id: int) -> str:
     preface = get_preface(int(user_id), context="menu")
     return (
@@ -38,13 +45,16 @@ def _menu_text(user_id: int) -> str:
         "Метротерапия — это короткие аудиопрактики, которые помогают мягко перенастраивать состояние через ритм повседневности.\n\n"
         "Что можно сделать сейчас:\n"
         "• 🎧 Получить аудио — начать или продолжить практику\n"
+        "• ✅ Прослушал — подтвердить аудио и перейти к оценке\n"
+        "• 📊 Прогресс — посмотреть, где вы остановились\n"
+        "• 🧾 История — последние аудио и переходы\n"
         "• 💳 Оплатить — открыть оплату доступа\n"
         "• 🎁 Подарить — подарить практику другому человеку\n"
         "• ⚙️ Настройки — выбрать канал и правила отправки\n"
-        "• 📊 Прогресс — посмотреть, где вы остановились\n"
         "• ↗️ Поделиться — отправить ссылку другу\n\n"
         "Если вы впервые здесь — нажмите «🎧 Получить аудио». Бот сам поведёт дальше."
     )
+
 
 def _settings_text(user_id: int) -> str:
     snapshot = get_channel_snapshot(int(user_id))
@@ -239,6 +249,8 @@ def _history_text(user_id: int) -> str:
         'native_audio_sent': 'аудио отправлено как вложение',
         'native_audio_fallback': 'native-вложение недоступно, использована ссылка',
         'manual_confirmed': 'аудио подтверждено вручную',
+        'pre_score_received': 'оценка до прослушивания сохранена',
+        'post_score_received': 'оценка после прослушивания сохранена',
     }
     lines = ["🧾 Последние шаги по общей аудио-очереди:", ""]
     for event in events:
@@ -263,7 +275,8 @@ def _help_text() -> str:
         "• share — получить ссылки для рекламы и рекомендаций\n"
         "• switch — привязать другой мессенджер к этому же профилю\n"
         "• continue — прислать текущее/следующее аудио общей очереди\n"
-        "• done — подтвердить, что текущее аудио дослушано, и перейти дальше\n"
+        "• done — подтвердить, что текущее аудио дослушано\n"
+        "• число от -10 до 10 — сохранить оценку до/после прослушивания\n"
         "• progress — показать, где вы остановились\n"
         "• history — показать недавнюю историю переходов и аудио\n"
         "• time — показать время отправки, часовой пояс и тихие часы\n"
@@ -271,7 +284,8 @@ def _help_text() -> str:
         "• quiet 22:00-08:00 — задать тихие часы, quiet off — выключить\n"
         "• channel morning max — выбрать канал для утренних отправок\n"
         "• channel evening auto — вернуть авто-выбор\n\n"
-        "Очередь аудио общая для Telegram, MAX и ВКонтакте, если мессенджеры привязаны к одному профилю через switch-ссылки. Для native-аудио можно явно написать done / готово / прослушал, когда трек дослушан, а затем отправить число от -10 до 10 как оценку после прослушивания."
+        "Очередь аудио общая для Telegram, MAX и ВКонтакте, если мессенджеры привязаны к одному профилю через switch-ссылки. "
+        "Для VK и MAX можно явно написать done / готово / прослушал, когда трек дослушан, а затем отправить число от -10 до 10 как оценку после прослушивания."
     )
 
 
@@ -311,7 +325,7 @@ def _parse_command(text: str) -> tuple[str, str | None]:
         return "done", None
     if lowered in {"progress", "/progress", "где остановился", "прогресс"}:
         return "progress", None
-    if lowered in {"history", "/history", "timeline", "/timeline", "история"}:
+    if lowered in {"history", "/history", "timeline", "/timeline", "история", "🧾 история"}:
         return "history", None
     if lowered in {"time", "/time", "schedule", "/schedule", "время", "расписание"}:
         return "time", None
@@ -407,7 +421,6 @@ def handle_incoming_text(
             )
         ]
 
-
     if action in {"start", "menu"}:
         replies: list[MessengerReply] = []
         if entry.linked_via_bridge:
@@ -439,8 +452,8 @@ def handle_incoming_text(
             return canonical_user_id, [
                 MessengerReply(text=(
                     f'✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\n\n'
-                    'Теперь оцените состояние после прослушивания числом от -10 до 10. '
-                    'Просто отправьте, например: 4 или -2.'
+                    'Теперь оцените состояние после прослушивания.\n'
+                    f'{_score_scale_text()}'
                 )),
             ]
         return canonical_user_id, [
@@ -508,9 +521,4 @@ def handle_incoming_text(
             return canonical_user_id, [MessengerReply(text="Используйте: /platform telegram | /platform max | /platform vk.")]
         norm = normalize_platform(raw_platform)
         return canonical_user_id, [MessengerReply(text=_platform_changed_text(canonical_user_id, norm)), MessengerReply(text=_settings_text(canonical_user_id))]
-    command = _normalised_command(text)
-    if command == "pay":
-        return canonical_user_id, [MessengerReply(text=_payment_text(platform, external_user_id))]
-    if command == "gift":
-        return canonical_user_id, [MessengerReply(text=_gift_text(platform, external_user_id))]
     return canonical_user_id, [MessengerReply(text=_menu_text(canonical_user_id))]
