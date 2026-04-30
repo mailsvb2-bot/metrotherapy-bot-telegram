@@ -60,18 +60,20 @@ def _multipart_bytes(field_name: str, filename: str, content: bytes, *, content_
 
 
 
-def _multipart_upload(url: str, *, token: str, field_name: str, path: Path) -> dict[str, Any]:
+def _multipart_upload(url: str, *, token: str | None = None, field_name: str, path: Path) -> dict[str, Any]:
     mime_type = mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
     content = path.read_bytes()
     body, boundary = _multipart_bytes(field_name, path.name, content, content_type=mime_type)
+    headers = {
+        'Content-Type': f'multipart/form-data; boundary={boundary}',
+        'Content-Length': str(len(body)),
+    }
+    if token:
+        headers['Authorization'] = token
     request = urllib.request.Request(
         url,
         data=body,
-        headers={
-            'Authorization': token,
-            'Content-Type': f'multipart/form-data; boundary={boundary}',
-            'Content-Length': str(len(body)),
-        },
+        headers=headers,
         method='POST',
     )
     with urllib.request.urlopen(request, timeout=120) as response:
@@ -181,11 +183,30 @@ class VkBotSender:
     token: str | None = None
     api_version: str | None = None
 
-    async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
+    def _token(self) -> str:
         token = (self.token or settings.VK_GROUP_TOKEN or '').strip()
         if not token:
             raise MessengerTransportError('VK_GROUP_TOKEN is empty')
-        version = (self.api_version or getattr(settings, 'VK_API_VERSION', '') or '5.199').strip()
+        return token
+
+    def _api_version(self) -> str:
+        return (self.api_version or getattr(settings, 'VK_API_VERSION', '') or '5.199').strip()
+
+    async def _vk_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        data = await asyncio.to_thread(
+            _form_request,
+            f'https://api.vk.com/method/{method}',
+            {
+                **params,
+                'access_token': self._token(),
+                'v': self._api_version(),
+            },
+        )
+        if isinstance(data, dict) and data.get('error'):
+            raise MessengerTransportError(str(data['error']))
+        return data
+
+    async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         random_id = kwargs.get('random_id')
         if random_id is None:
             random_id = int(time.time_ns() % 2147483647)
@@ -193,15 +214,77 @@ class VkBotSender:
             'user_id': str(external_user_id),
             'random_id': int(random_id),
             'message': text,
-            'access_token': token,
-            'v': version,
         }
         if kwargs.get('keyboard_json'):
             params['keyboard'] = kwargs['keyboard_json']
-        data = await asyncio.to_thread(_form_request, 'https://api.vk.com/method/messages.send', params)
-        if isinstance(data, dict) and data.get('error'):
-            raise MessengerTransportError(str(data['error']))
+        if kwargs.get('attachment'):
+            params['attachment'] = kwargs['attachment']
+        data = await self._vk_method('messages.send', params)
         return data.get('response', data)
 
+    @staticmethod
+    def _doc_attachment_from_save_response(data: dict[str, Any]) -> str:
+        response = data.get('response')
+        doc: dict[str, Any] | None = None
+        if isinstance(response, dict):
+            if isinstance(response.get('doc'), dict):
+                doc = response['doc']
+            elif response.get('type') == 'doc' and isinstance(response.get('doc'), dict):
+                doc = response['doc']
+        elif isinstance(response, list) and response:
+            first = response[0]
+            if isinstance(first, dict):
+                if isinstance(first.get('doc'), dict):
+                    doc = first['doc']
+                elif first.get('type') == 'doc':
+                    doc = first
+        if not doc:
+            raise MessengerTransportError(f'Unexpected VK docs.save response: {data}')
+        owner_id = doc.get('owner_id')
+        doc_id = doc.get('id')
+        access_key = str(doc.get('access_key') or '').strip()
+        if owner_id is None or doc_id is None:
+            raise MessengerTransportError(f'VK saved doc has no owner_id/id: {data}')
+        attachment = f'doc{owner_id}_{doc_id}'
+        if access_key:
+            attachment += f'_{access_key}'
+        return attachment
+
+    async def _ensure_doc_attachment(self, external_user_id: str, file_path: Path) -> str:
+        cached = get_cached_media_token('vk', file_path, media_type='audio')
+        if cached is not None:
+            return cached.remote_token
+        upload_meta = await self._vk_method(
+            'docs.getMessagesUploadServer',
+            {
+                'peer_id': str(external_user_id),
+                'type': 'doc',
+            },
+        )
+        upload_url = str((upload_meta.get('response') or {}).get('upload_url') or '').strip()
+        if not upload_url:
+            raise MessengerTransportError(f'Unexpected VK docs.getMessagesUploadServer response: {upload_meta}')
+        uploaded = await asyncio.to_thread(_multipart_upload, upload_url, field_name='file', path=file_path)
+        uploaded_file = str(uploaded.get('file') or '').strip()
+        if not uploaded_file:
+            raise MessengerTransportError(f'Unexpected VK upload response: {uploaded}')
+        saved = await self._vk_method(
+            'docs.save',
+            {
+                'file': uploaded_file,
+                'title': file_path.stem[:128],
+                'tags': 'metrotherapy,audio',
+            },
+        )
+        attachment = self._doc_attachment_from_save_response(saved)
+        store_media_token('vk', file_path, attachment, media_type='audio')
+        return attachment
+
     async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
-        raise MessengerTransportError('VK native audio delivery is not configured in this project build')
+        attachment = await self._ensure_doc_attachment(str(external_user_id), file_path)
+        return await self.send_text(
+            external_user_id,
+            caption or f'🎧 Аудио: {file_path.stem}',
+            attachment=attachment,
+            **kwargs,
+        )
