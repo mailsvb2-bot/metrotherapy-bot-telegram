@@ -112,10 +112,13 @@ async def send_next_audio_to_user(
         raise UnsupportedMessengerDelivery(
             'MESSENGER_PUBLIC_BASE_URL is empty; cannot deliver cross-messenger audio link for non-Telegram platforms'
         )
+    platform_hint = 'ВКонтакте' if plan.platform == MessengerPlatform.VK.value else plan.platform
     text = (
         f'🎧 Следующее аудио по вашей общей очереди: №{item.anchor} — {item.title}\n\n'
         f'Слушать: {public_url}\n\n'
-        'Прогресс обновится после открытия этого файла, и следующее аудио уже придёт после него.'
+        f'Для {platform_hint} это безопасная ссылка на файл: VK-native отправка аудио пока не включена в этом контуре.\n'
+        'После прослушивания нажмите «✅ Прослушал» или отправьте done / готово / прослушал.\n'
+        'Затем отправьте оценку от -10 до 10 — например: -2, 0, 4 или 8.'
     )
     await sender.send_text(plan.external_user_id, text, disable_link_preview=False)
     if pending is None:
