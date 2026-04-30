@@ -4,7 +4,6 @@ import logging
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
 
 from services.db import db
@@ -37,8 +36,13 @@ def pick_body_question(force_key: str | None = None) -> BodyQuestion:
                 (force_key,),
             ).fetchone()
         else:
+            # Keep the LIKE pattern as a bound value. The DB compatibility layer translates
+            # SQLite-style '?' placeholders for Postgres, and literal '%' inside SQL can be
+            # misread by psycopg as an invalid placeholder. Parameterization works for both
+            # SQLite and Postgres and keeps the query injection-safe.
             row = conn.execute(
-                "SELECT key, question, options FROM micro_questions WHERE is_active=1 AND key LIKE 'body_%' ORDER BY RANDOM() LIMIT 1"
+                "SELECT key, question, options FROM micro_questions WHERE is_active=1 AND key LIKE ? ORDER BY RANDOM() LIMIT 1",
+                ("body_%",),
             ).fetchone()
     if not row:
         return BodyQuestion(
@@ -91,7 +95,7 @@ def quick_technique(area: str) -> str:
 
     # Fallback (безопасный, универсальный)
     area_low = area.lower()
-    lead = f"Мини‑техника на 60 секунд для зоны: {area}." if area else "Мини‑техника на 60 секунд." 
+    lead = f"Мини‑техника на 60 секунд для зоны: {area}." if area else "Мини‑техника на 60 секунд."
     if "ше" in area_low or "плеч" in area_low:
         steps = [
             "1) Слегка опустите плечи на 1–2 мм — не вниз, а как будто " +
