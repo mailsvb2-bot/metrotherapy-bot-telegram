@@ -230,7 +230,7 @@ async def send_next_audio_to_user(
             user_id=int(user_id),
             platform=plan.platform,
             item=None,
-            transport='audio_queue_finished',
+            transport='none',
             message=_queue_finished_message(plan.platform, snapshot),
         )
 
