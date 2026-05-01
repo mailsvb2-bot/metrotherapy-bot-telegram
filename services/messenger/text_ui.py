@@ -218,19 +218,28 @@ def _progress_text(user_id: int) -> str:
         )
     if snapshot.last_anchor is None:
         if snapshot.next_item is None:
-            return "🎧 Аудиосерия пока не найдена в каталоге."
-        return (
-            "🎧 Вы ещё не запускали общую очередь аудио.\n\n"
-            f"Следующим будет №{snapshot.next_item.anchor} — {snapshot.next_item.title}."
-            f"{pending_tail}"
+            audio_part = "🎧 Аудиосерия пока не найдена в каталоге."
+        else:
+            audio_part = (
+                "🎧 Вы ещё не запускали общую очередь аудио.\n\n"
+                f"Следующим будет №{snapshot.next_item.anchor} — {snapshot.next_item.title}."
+                f"{pending_tail}"
+            )
+    else:
+        tail = f"Следующим будет №{snapshot.next_item.anchor} — {snapshot.next_item.title}." if snapshot.next_item else "Серия уже дослушана до конца."
+        channel = platform_title(snapshot.last_platform)
+        audio_part = (
+            "🎧 Общий прогресс аудио\n\n"
+            f"Последнее подтверждённое аудио: №{snapshot.last_anchor} — {snapshot.last_title}\n"
+            f"Подтверждено в канале: {channel}\n\n"
+            f"{tail}{pending_tail}"
         )
-    tail = f"Следующим будет №{snapshot.next_item.anchor} — {snapshot.next_item.title}." if snapshot.next_item else "Серия уже дослушана до конца."
-    channel = platform_title(snapshot.last_platform)
     return (
-        "🎧 Общий прогресс аудио\n\n"
-        f"Последнее подтверждённое аудио: №{snapshot.last_anchor} — {snapshot.last_title}\n"
-        f"Подтверждено в канале: {channel}\n\n"
-        f"{tail}{pending_tail}"
+        f"{audio_part}\n\n"
+        "📈 Анализ состояния\n\n"
+        "Сейчас пришлю графики по тем же данным, что используются в Telegram: "
+        "быстрая шкала состояния, дорога на работу, дорога домой и общая динамика — если по ним уже есть данные.\n\n"
+        "Чтобы добавить новую оценку состояния, отправьте число от -10 до 10 после прослушивания аудио."
     )
 
 
@@ -461,7 +470,10 @@ def handle_incoming_text(
             MessengerReply(kind='next_audio'),
         ]
     if action == "progress":
-        return canonical_user_id, [MessengerReply(text=_progress_text(canonical_user_id))]
+        return canonical_user_id, [
+            MessengerReply(text=_progress_text(canonical_user_id)),
+            MessengerReply(kind='progress_charts'),
+        ]
     if action == "history":
         return canonical_user_id, [MessengerReply(text=_history_text(canonical_user_id))]
     if action == "time":
