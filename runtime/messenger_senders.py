@@ -286,9 +286,9 @@ class VkBotSender:
             return 'audio_message'
         return 'doc'
 
-    async def _ensure_doc_attachment(self, external_user_id: str, file_path: Path) -> str:
+    async def _ensure_doc_attachment(self, external_user_id: str, file_path: Path, *, media_type: str | None = None) -> str:
         upload_type = self._vk_upload_type_for_audio(file_path)
-        cache_media_type = f'audio:{upload_type}'
+        cache_media_type = media_type or f'audio:{upload_type}'
 
         cached = get_cached_media_token('vk', file_path, media_type=cache_media_type)
         if cached is not None:
@@ -323,6 +323,19 @@ class VkBotSender:
         attachment = self._doc_attachment_from_save_response(saved)
         store_media_token('vk', file_path, attachment, media_type=cache_media_type)
         return attachment
+
+    async def send_document_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
+        attachment = await self._ensure_doc_attachment(
+            str(external_user_id),
+            file_path,
+            media_type=f'doc:{file_path.suffix.lower() or "file"}',
+        )
+        return await self.send_text(
+            external_user_id,
+            caption or file_path.stem,
+            attachment=attachment,
+            **kwargs,
+        )
 
     async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
         attachment = await self._ensure_doc_attachment(str(external_user_id), file_path)
