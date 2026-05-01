@@ -91,54 +91,62 @@ def _queue_finished_message(platform: str, snapshot: Any) -> str:
 
 
 def _vk_post_audio_keyboard_json() -> str:
-    """Inline VK controls for the canonical post-audio flow.
+    """VK post-audio controls with score-scale parity to Telegram.
 
-    This keyboard is intentionally local to the VK post-audio reply so the audio
-    delivery surface does not depend on Telegram inline callbacks and does not
-    redirect users to Telegram.
+    After native VK audio delivery the user must not be dropped back to the
+    main menu. The active keyboard is the post-audio surface: done/progress and
+    the full -10..+10 score scale. Numeric buttons intentionally send plain text
+    values because the canonical text parser already validates and stores scores.
     """
+
+    def button(label: str, command: str, color: str = 'secondary') -> dict[str, Any]:
+        return {
+            'action': {
+                'type': 'text',
+                'label': label,
+                'payload': json.dumps({'command': command}, ensure_ascii=False),
+            },
+            'color': color,
+        }
+
+    rows: list[list[dict[str, Any]]] = [
+        [
+            button('✅ Прослушал', 'done', 'positive'),
+            button('📊 Прогресс', 'progress', 'primary'),
+        ],
+        [
+            button('🧾 История', 'history', 'secondary'),
+            button('🎧 Получить аудио', 'continue', 'secondary'),
+        ],
+    ]
+
+    for row in [
+        [-10, -9, -8],
+        [-7, -6, -5],
+        [-4, -3, -2],
+        [-1, 0, 1],
+        [2, 3, 4],
+        [5, 6, 7],
+        [8, 9, 10],
+    ]:
+        rows.append([
+            button(
+                ('+' if value > 0 else '') + str(value),
+                str(value),
+                'primary' if value == 0 else 'secondary',
+            )
+            for value in row
+        ])
+
+    rows.append([
+        button('⬅️ Меню', 'start', 'secondary'),
+    ])
+
     return json.dumps(
         {
             'one_time': False,
             'inline': False,
-            'buttons': [
-                [
-                    {
-                        'action': {
-                            'type': 'text',
-                            'label': '✅ Прослушал',
-                            'payload': '{"command":"done"}',
-                        },
-                        'color': 'positive',
-                    },
-                    {
-                        'action': {
-                            'type': 'text',
-                            'label': '📊 Прогресс',
-                            'payload': '{"command":"progress"}',
-                        },
-                        'color': 'primary',
-                    },
-                ],
-                [
-                    {
-                        'action': {
-                            'type': 'text',
-                            'label': '🧾 История',
-                            'payload': '{"command":"history"}',
-                        },
-                        'color': 'secondary',
-                    },
-                    {
-                        'action': {
-                            'type': 'text',
-                            'label': '🎧 Получить аудио',
-                            'payload': '{"command":"continue"}',
-                        },
-                        'color': 'secondary',
-                    },
-                ],
-            ],
+            'buttons': rows,
         },
         ensure_ascii=False,
         separators=(',', ':'),
@@ -174,6 +182,7 @@ def _post_audio_controls_text(platform: str, item: AudioProgressItem, *, replay:
         '2. Нажмите «✅ Прослушал» или отправьте done / готово / прослушал.\n'
         '3. Затем отправьте оценку состояния.\n\n'
         f'{_score_scale_text()}\n\n'
+        'Ниже есть кнопки оценки от −10 до +10 — можно нажать число сразу после прослушивания.\n\n'
         'Для проверки результата можно нажать «📊 Прогресс» или «🧾 История». '
         'Telegram для этого не нужен — этот сценарий исполняется внутри текущего мессенджера.'
     )
