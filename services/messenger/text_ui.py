@@ -41,18 +41,18 @@ def _score_scale_text() -> str:
 def _menu_text(user_id: int) -> str:
     preface = get_preface(int(user_id), context="menu")
     return (
-        f"{preface}🌿 Добро пожаловать в Метротерапию.\n\n"
-        "Метротерапия — это короткие аудиопрактики, которые помогают мягко перенастраивать состояние через ритм повседневности.\n\n"
-        "Что можно сделать сейчас:\n"
-        "• 🎧 Получить аудио — начать или продолжить практику\n"
-        "• ✅ Прослушал — подтвердить аудио и перейти к оценке\n"
-        "• 📊 Прогресс — посмотреть, где вы остановились\n"
-        "• 🧾 История — последние аудио и переходы\n"
-        "• 💳 Оплатить — открыть оплату доступа\n"
-        "• 🎁 Подарить — подарить практику другому человеку\n"
-        "• ⚙️ Настройки — выбрать канал и правила отправки\n"
-        "• ↗️ Поделиться — отправить ссылку другу\n\n"
-        "Если вы впервые здесь — нажмите «🎧 Получить аудио». Бот сам поведёт дальше."
+        f"{preface}"
+        "Главное меню\n\n"
+        "Выберите маршрут: можно начать с бесплатной практики, открыть полный доступ или посмотреть свой прогресс.\n\n"
+        "Кнопки ВКонтакте соответствуют главному меню Telegram:\n"
+        "• 🌿 Попробовать бесплатно\n"
+        "• 🔐 Полный маршрут\n"
+        "• 💳 Тарифы\n"
+        "• 🎁 Подарить\n"
+        "• 📈 Мой прогресс\n"
+        "• 🧠 Настройки\n"
+        "• 📣 Посоветовать\n"
+        "• 🌤 Погода"
     )
 
 
@@ -300,8 +300,41 @@ def _help_text() -> str:
 
 def _demo_text() -> str:
     return (
-        "🎧 Демо-режим сейчас полностью раскрыт в Telegram-ветке проекта.\n\n"
-        "В MAX и ВКонтакте уже работает вход, меню, настройки канала, переход между мессенджерами и продолжение общей очереди аудио. Для rich-media сценариев Telegram остаётся самым полным каналом."
+        "🌿 Бесплатная практика\n\n"
+        "Выберите короткий маршрут. В VK сейчас доступен тот же смысловой вход, что и в Telegram: "
+        "бот выдаёт аудио, фиксирует прослушивание и принимает оценку после практики.\n\n"
+        "Чтобы начать прямо здесь, нажмите «🎧 Получить аудио».\n"
+        "После прослушивания нажмите «✅ Прослушал», затем отправьте оценку от -10 до 10.\n\n"
+        "Telegram для этого не нужен — сценарий исполняется внутри ВКонтакте."
+    )
+
+
+def _full_route_text(user_id: int) -> str:
+    snapshot = get_progress_snapshot(int(user_id))
+    if snapshot.pending_item is not None:
+        current = f"Сейчас ожидает подтверждения аудио №{snapshot.pending_item.anchor} — {snapshot.pending_item.title}."
+    elif snapshot.next_item is not None:
+        current = f"Следующим будет аудио №{snapshot.next_item.anchor} — {snapshot.next_item.title}."
+    else:
+        current = "Основная серия уже дослушана до конца."
+
+    return (
+        "🔐 Полный маршрут\n\n"
+        "В Telegram эта кнопка открывает полный доступ и список треков. "
+        "Во ВКонтакте маршрут исполняется через ту же общую аудио-очередь, чтобы прогресс не расходился между каналами.\n\n"
+        f"{current}\n\n"
+        "Нажмите «🎧 Получить аудио», чтобы продолжить полный маршрут во ВКонтакте. "
+        "После прослушивания нажмите «✅ Прослушал» и отправьте оценку от -10 до 10."
+    )
+
+
+def _weather_text() -> str:
+    return (
+        "🌤 Погода\n\n"
+        "В Telegram этот раздел показывает погоду и позволяет менять город. "
+        "Во ВКонтакте текстовый контур уже принимает команды, но полноценный ввод города отдельной кнопкой ещё нужно довести до parity.\n\n"
+        "Сейчас это безопасный экран-заглушка без перехода в Telegram. "
+        "Следующий шаг parity: добавить VK-команду смены города и общий weather-сервис для VK."
     )
 
 
@@ -349,8 +382,12 @@ def _parse_command(text: str) -> tuple[str, str | None]:
         if len(parts) >= 3:
             return "channel", f"{parts[1].strip()} {parts[2].strip()}"
         return "channel", ""
-    if lowered in {"demo", "/demo", "демо"}:
+    if lowered in {"demo", "/demo", "демо", "попробовать бесплатно", "🌿 попробовать бесплатно", "бесплатная практика"}:
         return "demo", None
+    if lowered in {"full", "/full", "полный маршрут", "🔐 полный маршрут", "полный доступ"}:
+        return "full", None
+    if lowered in {"weather", "/weather", "погода", "🌤 погода"}:
+        return "weather", None
     if lowered.startswith("/platform") or lowered.startswith("platform "):
         parts = raw.replace("/platform", "platform", 1).split(maxsplit=1)
         value = parts[1].strip() if len(parts) == 2 else ""
@@ -527,6 +564,10 @@ def handle_incoming_text(
         return canonical_user_id, [MessengerReply(text=f"✅ Канал для {label} отправок обновлён: {selected_text}.\n\n{describe_delivery_preferences(canonical_user_id)}{note}")]
     if action == "demo":
         return canonical_user_id, [MessengerReply(text=_demo_text())]
+    if action == "full":
+        return canonical_user_id, [MessengerReply(text=_full_route_text(canonical_user_id))]
+    if action == "weather":
+        return canonical_user_id, [MessengerReply(text=_weather_text())]
     if action == "platform":
         raw_platform = (value or "").strip().lower()
         if raw_platform not in {"telegram", "max", "vk"}:

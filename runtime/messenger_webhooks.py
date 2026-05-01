@@ -33,7 +33,7 @@ from services.messenger.webhook_dedupe import register_inbound_event
 log = logging.getLogger(__name__)
 
 def _vk_default_keyboard_json() -> str:
-    """Persistent VK keyboard aligned with the canonical text-command UI."""
+    """Persistent VK keyboard aligned 1:1 with Telegram kb_main()."""
     return json.dumps(
         {
             "one_time": False,
@@ -43,16 +43,16 @@ def _vk_default_keyboard_json() -> str:
                     {
                         "action": {
                             "type": "text",
-                            "label": "🌿 Начать",
-                            "payload": "{\"command\":\"start\"}",
+                            "label": "🌿 Попробовать бесплатно",
+                            "payload": "{\"command\":\"demo\"}",
                         },
                         "color": "positive",
                     },
                     {
                         "action": {
                             "type": "text",
-                            "label": "🎧 Получить аудио",
-                            "payload": "{\"command\":\"continue\"}",
+                            "label": "🔐 Полный маршрут",
+                            "payload": "{\"command\":\"full\"}",
                         },
                         "color": "primary",
                     },
@@ -61,25 +61,7 @@ def _vk_default_keyboard_json() -> str:
                     {
                         "action": {
                             "type": "text",
-                            "label": "✅ Прослушал",
-                            "payload": "{\"command\":\"done\"}",
-                        },
-                        "color": "positive",
-                    },
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "📊 Прогресс",
-                            "payload": "{\"command\":\"progress\"}",
-                        },
-                        "color": "secondary",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "💳 Оплатить",
+                            "label": "💳 Тарифы",
                             "payload": "{\"command\":\"pay\"}",
                         },
                         "color": "primary",
@@ -97,16 +79,16 @@ def _vk_default_keyboard_json() -> str:
                     {
                         "action": {
                             "type": "text",
-                            "label": "⚙️ Настройки",
-                            "payload": "{\"command\":\"settings\"}",
+                            "label": "📈 Мой прогресс",
+                            "payload": "{\"command\":\"progress\"}",
                         },
-                        "color": "secondary",
+                        "color": "primary",
                     },
                     {
                         "action": {
                             "type": "text",
-                            "label": "🕒 Время",
-                            "payload": "{\"command\":\"time\"}",
+                            "label": "🧠 Настройки",
+                            "payload": "{\"command\":\"settings\"}",
                         },
                         "color": "secondary",
                     },
@@ -115,7 +97,7 @@ def _vk_default_keyboard_json() -> str:
                     {
                         "action": {
                             "type": "text",
-                            "label": "↗️ Поделиться",
+                            "label": "📣 Посоветовать",
                             "payload": "{\"command\":\"share\"}",
                         },
                         "color": "secondary",
@@ -123,8 +105,8 @@ def _vk_default_keyboard_json() -> str:
                     {
                         "action": {
                             "type": "text",
-                            "label": "🔁 Другой мессенджер",
-                            "payload": "{\"command\":\"switch\"}",
+                            "label": "🌤 Погода",
+                            "payload": "{\"command\":\"weather\"}",
                         },
                         "color": "secondary",
                     },
@@ -133,11 +115,19 @@ def _vk_default_keyboard_json() -> str:
                     {
                         "action": {
                             "type": "text",
-                            "label": "❓ Помощь",
-                            "payload": "{\"command\":\"help\"}",
+                            "label": "🎧 Получить аудио",
+                            "payload": "{\"command\":\"continue\"}",
                         },
                         "color": "secondary",
-                    }
+                    },
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "✅ Прослушал",
+                            "payload": "{\"command\":\"done\"}",
+                        },
+                        "color": "positive",
+                    },
                 ],
             ],
         },
@@ -160,6 +150,30 @@ def _normalise_messenger_text(text: str) -> str:
         "🌿 начать": "start",
         "меню": "start",
         "главное меню": "start",
+        "🌿 попробовать бесплатно": "demo",
+        "попробовать бесплатно": "demo",
+        "бесплатная практика": "demo",
+        "демо": "demo",
+
+        "🔐 полный маршрут": "full",
+        "полный маршрут": "full",
+        "полный доступ": "full",
+
+        "💳 тарифы": "pay",
+        "тарифы": "pay",
+
+        "📈 мой прогресс": "progress",
+        "мой прогресс": "progress",
+        "анализ": "progress",
+        "анализ моего состояния": "progress",
+
+        "🧠 настройки": "settings",
+
+        "📣 посоветовать": "share",
+        "посоветовать": "share",
+
+        "🌤 погода": "weather",
+        "погода": "weather",
 
         "🎧 получить аудио": "continue",
         "получить аудио": "continue",
