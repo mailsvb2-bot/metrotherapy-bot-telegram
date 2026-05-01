@@ -88,6 +88,12 @@ def get_preface(user_id: int, context: str = "generic") -> str:
     rate-limiting decorative brick writes.
     """
 
+    if str(context) in {"menu", "messenger_menu", "vk_menu", "max_menu"}:
+        # Messenger menus already contain the canonical welcome and action list.
+        # A behavioral preface before that welcome duplicates the first-screen copy
+        # in VK/MAX and makes the entry message too noisy.
+        return _remember_preface(int(user_id), context, "")
+
     cached = _cached_preface(int(user_id), context)
     if cached is not None:
         return cached
