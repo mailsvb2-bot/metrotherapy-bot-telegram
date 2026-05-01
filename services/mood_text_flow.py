@@ -156,19 +156,58 @@ async def complete_pre_score_and_send(
         sender = senders.get(MessengerPlatform.VK.value)
         if sender is None:
             raise UnsupportedMessengerDelivery('No VK sender registered')
-        access_token = issue_or_reuse_audio_access_token(int(user_id), item=item, platform=plan.platform)
-        public_url = build_audio_access_url(access_token)
-        if not public_url:
-            raise UnsupportedMessengerDelivery('MESSENGER_PUBLIC_BASE_URL is empty; cannot deliver auto audio link for VK')
-        await sender.send_text(plan.external_user_id, f'🎧 Ваш аудиотранс готов: №{item.anchor} — {item.title}\n\nСлушать: {public_url}')
-        log_audio_timeline_event(int(user_id), event_type='link_sent', sequence_key='full_series', anchor=int(item.anchor), title=item.title, platform=plan.platform, token=access_token, slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'))
-        transport = 'vk_link'
+        try:
+            from services.messenger.audio_delivery import _post_audio_control_kwargs, _post_audio_controls_text
+            await sender.send_audio_file(
+                plan.external_user_id,
+                item.path,
+                caption=f'🎧 Ваш аудиотранс: №{item.anchor} — {item.title}',
+                **_post_audio_control_kwargs(MessengerPlatform.VK.value),
+            )
+            await sender.send_text(
+                plan.external_user_id,
+                _post_audio_controls_text(MessengerPlatform.VK.value, item),
+                **_post_audio_control_kwargs(MessengerPlatform.VK.value),
+            )
+            mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=None)
+            log_audio_timeline_event(
+                int(user_id),
+                event_type='native_audio_sent',
+                sequence_key='full_series',
+                anchor=int(item.anchor),
+                title=item.title,
+                platform=plan.platform,
+                slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'),
+            )
+            transport = 'vk_native_audio_pending'
+        except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery):
+            access_token = issue_or_reuse_audio_access_token(int(user_id), item=item, platform=plan.platform)
+            public_url = build_audio_access_url(access_token)
+            if not public_url:
+                raise UnsupportedMessengerDelivery('MESSENGER_PUBLIC_BASE_URL is empty; cannot deliver auto audio link for VK')
+            await sender.send_text(
+                plan.external_user_id,
+                f'🎧 Ваш аудиотранс готов: №{item.anchor} — {item.title}\n\n'
+                f'Слушать: {public_url}\n\n'
+                'Это аварийная ссылка на файл: native-отправка ВКонтакте сейчас не прошла.',
+            )
+            log_audio_timeline_event(
+                int(user_id),
+                event_type='link_sent',
+                sequence_key='full_series',
+                anchor=int(item.anchor),
+                title=item.title,
+                platform=plan.platform,
+                token=access_token,
+                slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'),
+            )
+            transport = 'vk_link'
 
     register_touch(int(user_id), 'morning' if session.kind == 'work' else 'evening')
     advance(int(user_id), 'morning' if session.kind == 'work' else 'evening')
     mark_audio_sent(session_id)
     record_audio_delivery(int(user_id), item=item, platform=plan.platform)
-    if transport in {'telegram_audio_pending', 'max_native_audio_pending'}:
+    if transport in {'telegram_audio_pending', 'max_native_audio_pending', 'vk_native_audio_pending'}:
         message = (
             f'✅ Оценку {score:+d} сохранил. Отправил аудио №{item.anchor} — {item.title}.\n\n'
             'Когда дослушаете, напишите: done / готово / прослушал — и я сразу пришлю следующее.'
