@@ -136,6 +136,59 @@ def _vk_default_keyboard_json() -> str:
     )
 
 
+def _vk_demo_kind_keyboard_json() -> str:
+    """VK keyboard for Telegram kb_demo_kind() parity.
+
+    Telegram uses inline callbacks:
+      demo_kind_work
+      demo_kind_home
+
+    VK persistent keyboards send text/payload instead, so we expose the same
+    semantic choice as numbered buttons and normalize them to demo_work/demo_home.
+    """
+    return json.dumps(
+        {
+            "one_time": False,
+            "inline": False,
+            "buttons": [
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "1️⃣ Утро / дорога",
+                            "payload": "{\"command\":\"demo_work\"}",
+                        },
+                        "color": "positive",
+                    },
+                ],
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "2️⃣ Вечер / домой",
+                            "payload": "{\"command\":\"demo_home\"}",
+                        },
+                        "color": "primary",
+                    },
+                ],
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "⬅️ Назад",
+                            "payload": "{\"command\":\"start\"}",
+                        },
+                        "color": "secondary",
+                    },
+                ],
+            ],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+
 def _normalise_messenger_text(text: str) -> str:
     """Normalize human/mobile button labels to canonical text commands."""
     raw = (text or "").strip()
@@ -154,6 +207,29 @@ def _normalise_messenger_text(text: str) -> str:
         "попробовать бесплатно": "demo",
         "бесплатная практика": "demo",
         "демо": "demo",
+
+        "1": "demo_work",
+        "1.": "demo_work",
+        "1️⃣": "demo_work",
+        "1️⃣ утро / дорога": "demo_work",
+        "утро / дорога": "demo_work",
+        "утро": "demo_work",
+        "дорога на работу": "demo_work",
+        "🚗 практика на утро / дорогу": "demo_work",
+        "практика на утро / дорогу": "demo_work",
+
+        "2": "demo_home",
+        "2.": "demo_home",
+        "2️⃣": "demo_home",
+        "2️⃣ вечер / домой": "demo_home",
+        "вечер / домой": "demo_home",
+        "вечер": "demo_home",
+        "дорога домой": "demo_home",
+        "🌙 практика на вечер / домой": "demo_home",
+        "практика на вечер / домой": "demo_home",
+
+        "⬅️ назад": "start",
+        "назад": "start",
 
         "🔐 полный маршрут": "full",
         "полный маршрут": "full",
@@ -446,7 +522,12 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
         raise MessengerTransportError(f'No sender for {platform}')
     for reply in replies:
         if reply.kind == 'text':
-            await sender.send_text(external_user_id, reply.text, **_with_vk_keyboard(platform, {}))
+            kwargs: dict[str, Any] = {}
+            if platform == 'vk':
+                keyboard_kind = (reply.meta or {}).get('vk_keyboard')
+                if keyboard_kind == 'demo_kind':
+                    kwargs['keyboard_json'] = _vk_demo_kind_keyboard_json()
+            await sender.send_text(external_user_id, reply.text, **_with_vk_keyboard(platform, kwargs))
             continue
         if reply.kind == 'next_audio':
             try:

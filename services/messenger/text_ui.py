@@ -301,10 +301,11 @@ def _help_text() -> str:
 def _demo_text() -> str:
     return (
         "🌿 Бесплатная практика\n\n"
-        "Выберите короткий маршрут. В VK сейчас доступен тот же смысловой вход, что и в Telegram: "
-        "бот выдаёт аудио, фиксирует прослушивание и принимает оценку после практики.\n\n"
-        "Чтобы начать прямо здесь, нажмите «🎧 Получить аудио».\n"
-        "После прослушивания нажмите «✅ Прослушал», затем отправьте оценку от -10 до 10.\n\n"
+        "Выберите короткий маршрут — как в Telegram.\n\n"
+        "1️⃣ Утро / дорога — мягко включиться в день.\n"
+        "2️⃣ Вечер / домой — снять напряжение и завершить день спокойнее.\n\n"
+        "Нажмите кнопку ниже или отправьте цифру: 1 или 2.\n\n"
+        "После аудио нажмите «✅ Прослушал», затем отправьте оценку от -10 до 10.\n"
         "Telegram для этого не нужен — сценарий исполняется внутри ВКонтакте."
     )
 
@@ -384,6 +385,10 @@ def _parse_command(text: str) -> tuple[str, str | None]:
         return "channel", ""
     if lowered in {"demo", "/demo", "демо", "попробовать бесплатно", "🌿 попробовать бесплатно", "бесплатная практика"}:
         return "demo", None
+    if lowered in {"demo_work", "1", "1.", "1️⃣", "1️⃣ утро / дорога", "утро", "утро / дорога", "дорога на работу", "практика на утро / дорогу"}:
+        return "demo_work", None
+    if lowered in {"demo_home", "2", "2.", "2️⃣", "2️⃣ вечер / домой", "вечер", "вечер / домой", "дорога домой", "практика на вечер / домой"}:
+        return "demo_home", None
     if lowered in {"full", "/full", "полный маршрут", "🔐 полный маршрут", "полный доступ"}:
         return "full", None
     if lowered in {"weather", "/weather", "погода", "🌤 погода"}:
@@ -480,6 +485,10 @@ def handle_incoming_text(
         return canonical_user_id, [MessengerReply(text=_help_text())]
     if action == "settings":
         return canonical_user_id, [MessengerReply(text=_settings_text(canonical_user_id))]
+    if action == "demo":
+        return canonical_user_id, [MessengerReply(text=_demo_text(), meta={"vk_keyboard": "demo_kind"})]
+    if action in {"demo_work", "demo_home"}:
+        return canonical_user_id, [MessengerReply(kind='next_audio')]
     if action == "share":
         return canonical_user_id, [MessengerReply(text=_share_text(canonical_user_id))]
     if action == "switch":
@@ -562,8 +571,6 @@ def handle_incoming_text(
             note += " Выбранный канал пока недоступен, поэтому сработает fallback."
         label = 'утренних' if slot == 'morning' else 'вечерних'
         return canonical_user_id, [MessengerReply(text=f"✅ Канал для {label} отправок обновлён: {selected_text}.\n\n{describe_delivery_preferences(canonical_user_id)}{note}")]
-    if action == "demo":
-        return canonical_user_id, [MessengerReply(text=_demo_text())]
     if action == "full":
         return canonical_user_id, [MessengerReply(text=_full_route_text(canonical_user_id))]
     if action == "weather":
