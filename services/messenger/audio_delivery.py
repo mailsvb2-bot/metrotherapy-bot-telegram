@@ -51,6 +51,39 @@ def _score_scale_text() -> str:
     )
 
 
+def _queue_finished_message(platform: str, snapshot: Any) -> str:
+    last = ''
+    if getattr(snapshot, 'last_anchor', None):
+        last_title = getattr(snapshot, 'last_title', '') or 'последнее аудио'
+        last = f'\n\nПоследний подтверждённый трек: №{snapshot.last_anchor} — {last_title}.'
+
+    if platform == MessengerPlatform.VK.value:
+        return (
+            '✅ Все доступные аудио в общей очереди уже выданы и подтверждены.'
+            f'{last}\n\n'
+            'Что можно сделать дальше прямо во ВКонтакте:\n'
+            '• нажать «📊 Прогресс» или отправить progress — посмотреть состояние;\n'
+            '• нажать «🧾 История» или отправить history — посмотреть историю аудио;\n'
+            '• отправить оценку от −10 до +10, если нужно зафиксировать состояние после последнего прослушивания;\n'
+            '• позже нажать «🎧 Получить аудио», когда в серии появятся новые практики.\n\n'
+            'Telegram для этого не нужен — сценарий остаётся внутри ВКонтакте.'
+        )
+
+    if platform == MessengerPlatform.MAX.value:
+        return (
+            '✅ Все доступные аудио в общей очереди уже выданы и подтверждены.'
+            f'{last}\n\n'
+            'Дальше можно отправить progress для прогресса, history для истории или оценку от −10 до +10. '
+            'Сценарий остаётся внутри MAX.'
+        )
+
+    return (
+        '✅ Все доступные аудио в общей очереди уже выданы и подтверждены.'
+        f'{last}\n\n'
+        'Можно открыть прогресс, историю или отправить оценку состояния от −10 до +10.'
+    )
+
+
 def _vk_post_audio_keyboard_json() -> str:
     """Inline VK controls for the canonical post-audio flow.
 
@@ -193,13 +226,12 @@ async def send_next_audio_to_user(
     else:
         item = get_next_audio_item(int(user_id))
     if item is None:
-        suffix = f" Последний трек: №{snapshot.last_anchor} — {snapshot.last_title}." if snapshot.last_anchor else ''
         return AudioDeliveryResult(
             user_id=int(user_id),
             platform=plan.platform,
             item=None,
-            transport='none',
-            message='✅ Серия уже дослушана целиком.' + suffix,
+            transport='audio_queue_finished',
+            message=_queue_finished_message(plan.platform, snapshot),
         )
 
     if plan.platform == MessengerPlatform.TELEGRAM.value:
