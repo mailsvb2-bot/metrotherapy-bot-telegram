@@ -223,26 +223,6 @@ class VkBotSender:
         return label_aliases.get(label, '')
 
     @staticmethod
-    def _payment_public_base_url() -> str:
-        base = (
-            getattr(settings, 'PAYMENT_PUBLIC_BASE_URL', '')
-            or getattr(settings, 'MESSENGER_PUBLIC_BASE_URL', '')
-            or 'https://metrotherapy-bot.metrotherapy.ru'
-        )
-        return str(base).strip().rstrip('/')
-
-    @classmethod
-    def _payment_url(cls, *, source: str, external_user_id: str, kind: str) -> str:
-        query = urllib.parse.urlencode(
-            {
-                'source': source,
-                'user_id': str(external_user_id),
-                'kind': kind,
-            }
-        )
-        return f'{cls._payment_public_base_url()}/pay/yookassa?{query}'
-
-    @staticmethod
     def _vk_text_button(label: str, command: str, color: str = 'secondary') -> dict[str, Any]:
         return {
             'action': {
@@ -253,26 +233,14 @@ class VkBotSender:
             'color': color,
         }
 
-    @staticmethod
-    def _vk_open_link_button(label: str, link: str, color: str = 'primary') -> dict[str, Any]:
-        return {
-            'action': {
-                'type': 'open_link',
-                'label': label,
-                'link': link,
-            },
-            'color': color,
-        }
-
     @classmethod
     def _telegram_main_parity_keyboard_json(cls, keyboard_json: str) -> str:
         """Keep VK main keyboard contract aligned with Telegram kb_main().
 
-        VK currently receives keyboard JSON from runtime/messenger_webhooks.py.
-        Older builds appended VK-only continuation controls to the persistent
-        main keyboard. That made VK's visible button surface diverge from the
-        Telegram main menu. We normalize only that full main-menu keyboard at
-        the transport boundary and leave contextual keyboards untouched.
+        Older VK builds appended continuation controls to the persistent main
+        keyboard. That made VK's visible button surface diverge from Telegram.
+        Normalize only that full main-menu keyboard and leave contextual
+        keyboards untouched.
         """
         try:
             keyboard = json.loads(keyboard_json)
@@ -321,45 +289,6 @@ class VkBotSender:
         return json.dumps(normalized, ensure_ascii=False, separators=(',', ':'))
 
     @classmethod
-    def _with_vk_payment_links(cls, keyboard_json: str, *, external_user_id: str) -> str:
-        """Make VK pay/gift buttons functional even when text UI lacks callbacks.
-
-        Telegram has callback handlers for tariff/gift menus. VK text keyboards
-        cannot run Telegram callbacks directly, so these main-menu buttons must
-        open the same payment boundary instead of falling back to menu text.
-        """
-        try:
-            keyboard = json.loads(keyboard_json)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return keyboard_json
-        if not isinstance(keyboard, dict) or not isinstance(keyboard.get('buttons'), list):
-            return keyboard_json
-
-        changed = False
-        for row in keyboard['buttons']:
-            if not isinstance(row, list):
-                continue
-            for idx, button in enumerate(row):
-                command = cls._button_command(button)
-                if command == 'pay':
-                    row[idx] = cls._vk_open_link_button(
-                        '💳 Тарифы',
-                        cls._payment_url(source='vk', external_user_id=external_user_id, kind='subscription'),
-                        'primary',
-                    )
-                    changed = True
-                elif command == 'gift':
-                    row[idx] = cls._vk_open_link_button(
-                        '🎁 Подарить',
-                        cls._payment_url(source='vk', external_user_id=external_user_id, kind='gift'),
-                        'secondary',
-                    )
-                    changed = True
-        if not changed:
-            return keyboard_json
-        return json.dumps(keyboard, ensure_ascii=False, separators=(',', ':'))
-
-    @classmethod
     def _full_route_keyboard_json(cls) -> str:
         """Contextual VK keyboard for the full-route branch.
 
@@ -386,8 +315,7 @@ class VkBotSender:
     def _prepare_vk_keyboard_json(cls, keyboard_json: str, *, external_user_id: str, text: str) -> str:
         if (text or '').lstrip().startswith('🔐 Полный маршрут'):
             return cls._full_route_keyboard_json()
-        normalized = cls._telegram_main_parity_keyboard_json(keyboard_json)
-        return cls._with_vk_payment_links(normalized, external_user_id=external_user_id)
+        return cls._telegram_main_parity_keyboard_json(keyboard_json)
 
     async def _vk_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         data = await asyncio.to_thread(
