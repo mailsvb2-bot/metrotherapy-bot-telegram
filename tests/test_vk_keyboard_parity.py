@@ -42,7 +42,10 @@ def _commands(keyboard_json: str) -> list[str]:
     commands: list[str] = []
     for row in keyboard["buttons"]:
         for button in row:
-            payload = json.loads(button["action"]["payload"])
+            action = button["action"]
+            if action["type"] != "text":
+                continue
+            payload = json.loads(action["payload"])
             commands.append(payload["command"])
     return commands
 
@@ -78,3 +81,31 @@ def test_vk_context_keyboard_is_not_normalized_as_main_menu():
     )
 
     assert VkBotSender._telegram_main_parity_keyboard_json(contextual) == contextual
+
+
+def test_vk_full_route_branch_gets_contextual_continue_done_keyboard():
+    prepared = VkBotSender._prepare_vk_keyboard_json(
+        _vk_keyboard_with_legacy_extra_controls(),
+        external_user_id="12345",
+        text="🔐 Полный маршрут\n\nНажмите «🎧 Получить аудио».",
+    )
+
+    assert _commands(prepared) == ["continue", "done", "start"]
+
+
+def test_vk_main_pay_and_gift_are_links_not_dead_text_commands():
+    prepared = VkBotSender._prepare_vk_keyboard_json(
+        _vk_keyboard_with_legacy_extra_controls(),
+        external_user_id="12345",
+        text="Главное меню",
+    )
+    keyboard = json.loads(prepared)
+    action_types = {
+        button["action"]["label"]: button["action"]["type"]
+        for row in keyboard["buttons"]
+        for button in row
+    }
+
+    assert action_types["💳 Тарифы"] == "open_link"
+    assert action_types["🎁 Подарить"] == "open_link"
+    assert _commands(prepared) == ["demo", "full", "progress", "settings", "share", "weather"]
