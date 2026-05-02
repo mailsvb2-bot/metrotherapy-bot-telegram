@@ -23,6 +23,7 @@ from services.messenger.audio_progress import get_progress_snapshot, SEQUENCE_FU
 from services.messenger.timeline import get_recent_audio_timeline
 from services.mood_text_flow import parse_score_text, find_pending_pre_session_id, find_pending_post_session_id
 from services.mood import create_session
+from services.pending import set_pending, peek_pending, pop_pending
 from datetime import datetime, timezone
 
 
@@ -334,10 +335,19 @@ def _full_route_text(user_id: int) -> str:
 def _weather_text() -> str:
     return (
         "🌤 Погода\n\n"
-        "В Telegram этот раздел показывает погоду и позволяет менять город. "
-        "Во ВКонтакте текстовый контур уже принимает команды, но полноценный ввод города отдельной кнопкой ещё нужно довести до parity.\n\n"
-        "Сейчас это безопасный экран-заглушка без перехода в Telegram. "
-        "Следующий шаг parity: добавить VK-команду смены города и общий weather-сервис для VK."
+        "Сейчас покажу прогноз по сохранённому городу или попрошу указать город.\n\n"
+        "Во ВКонтакте доступны те же базовые действия, что и в Telegram:\n"
+        "• посмотреть погоду;\n"
+        "• изменить город;\n"
+        "• вернуться в главное меню."
+    )
+
+
+def _weather_city_prompt_text() -> str:
+    return (
+        "🏙 Напишите название города одним сообщением.\n\n"
+        "Например: Москва, Казань, Amsterdam, Berlin.\n\n"
+        "После этого я сохраню город и покажу прогноз."
     )
 
 
@@ -395,6 +405,8 @@ def _parse_command(text: str) -> tuple[str, str | None]:
         return "full", None
     if lowered in {"weather", "/weather", "погода", "🌤 погода"}:
         return "weather", None
+    if lowered in {"weather_city", "/weather_city", "город", "изменить город", "🏙 изменить город", "сменить город"}:
+        return "weather_city", None
     if lowered.startswith("/platform") or lowered.startswith("platform "):
         parts = raw.replace("/platform", "platform", 1).split(maxsplit=1)
         value = parts[1].strip() if len(parts) == 2 else ""
@@ -474,6 +486,16 @@ def handle_incoming_text(
 
     command_text = (text or "").strip()
     command_norm = command_text.casefold().replace("ё", "е")
+
+    pending = peek_pending(canonical_user_id)
+    if pending and pending.kind == "weather_city":
+        # Let explicit navigation commands still work instead of treating them as city names.
+        if command_norm not in {"start", "menu", "/start", "/menu", "отмена", "cancel", "⬅️ меню"}:
+            pop_pending(canonical_user_id)
+            return canonical_user_id, [
+                MessengerReply(kind="weather_set_city", meta={"city": command_text})
+            ]
+        pop_pending(canonical_user_id)
 
     payment_aliases = {
         "pay",
@@ -639,7 +661,15 @@ def handle_incoming_text(
     if action == "full":
         return canonical_user_id, [MessengerReply(text=_full_route_text(canonical_user_id))]
     if action == "weather":
-        return canonical_user_id, [MessengerReply(text=_weather_text())]
+        return canonical_user_id, [
+            MessengerReply(text=_weather_text(), meta={"vk_keyboard": "weather"}),
+            MessengerReply(kind="weather_show"),
+        ]
+    if action == "weather_city":
+        set_pending(canonical_user_id, "weather_city", {})
+        return canonical_user_id, [
+            MessengerReply(text=_weather_city_prompt_text(), meta={"vk_keyboard": "weather_city"})
+        ]
     if action == "platform":
         raw_platform = (value or "").strip().lower()
         if raw_platform not in {"telegram", "max", "vk"}:

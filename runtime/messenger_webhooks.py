@@ -23,6 +23,7 @@ from config.settings import settings
 from runtime.telegram_transport import telegram_transport
 from runtime.messenger_senders import MaxBotSender, VkBotSender, MessengerTransportError
 from services.events import log_event
+from services.weather import get_weather_text_async, set_city
 from services.db import db
 from services.messenger.audio_delivery import send_next_audio_to_user, _post_audio_control_kwargs
 from services.messenger.audio_access import register_audio_access
@@ -188,6 +189,57 @@ def _vk_demo_kind_keyboard_json() -> str:
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _vk_weather_keyboard_json() -> str:
+    """VK weather keyboard aligned with Telegram weather entry surface."""
+    def button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
+        return {
+            "action": {
+                "type": "text",
+                "label": label,
+                "payload": json.dumps({"command": command}, ensure_ascii=False),
+            },
+            "color": color,
+        }
+
+    rows = [
+        [
+            button("🔄 Обновить погоду", "weather", "primary"),
+            button("🏙 Изменить город", "weather_city", "secondary"),
+        ],
+        [button("⬅️ Меню", "start", "secondary")],
+    ]
+
+    return json.dumps(
+        {"one_time": False, "inline": False, "buttons": rows},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _vk_weather_city_keyboard_json() -> str:
+    """VK keyboard while waiting for city input."""
+    def button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
+        return {
+            "action": {
+                "type": "text",
+                "label": label,
+                "payload": json.dumps({"command": command}, ensure_ascii=False),
+            },
+            "color": color,
+        }
+
+    return json.dumps(
+        {
+            "one_time": False,
+            "inline": False,
+            "buttons": [[button("⬅️ Меню", "start", "secondary")]],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
 
 
 def _vk_score_scale_keyboard_json() -> str:
@@ -661,6 +713,10 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
                     kwargs['keyboard_json'] = _vk_demo_kind_keyboard_json()
                 elif keyboard_kind == 'score_scale':
                     kwargs['keyboard_json'] = _vk_score_scale_keyboard_json()
+                elif keyboard_kind == 'weather':
+                    kwargs['keyboard_json'] = _vk_weather_keyboard_json()
+                elif keyboard_kind == 'weather_city':
+                    kwargs['keyboard_json'] = _vk_weather_city_keyboard_json()
             await sender.send_text(external_user_id, reply.text, **_with_vk_keyboard(platform, kwargs))
             continue
         if reply.kind == 'next_audio':
@@ -683,6 +739,43 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
                     **_with_vk_keyboard(platform, {}),
                 )
             continue
+        if reply.kind == 'weather_show':
+            txt = await get_weather_text_async(canonical_user_id, timeout_sec=2.0)
+            await sender.send_text(
+                external_user_id,
+                txt + "\n\nМожно нажать «🏙 Изменить город» или отправить команду: город.",
+                **_with_vk_keyboard(platform, {"keyboard_json": _vk_weather_keyboard_json()} if platform == "vk" else {}),
+            )
+            continue
+
+        if reply.kind == 'weather_set_city':
+            city = (reply.meta or {}).get("city", "").strip()
+            if not city:
+                await sender.send_text(
+                    external_user_id,
+                    "Пожалуйста, напишите название города текстом.",
+                    **_with_vk_keyboard(platform, {"keyboard_json": _vk_weather_city_keyboard_json()} if platform == "vk" else {}),
+                )
+                continue
+
+            ok, info = await asyncio.to_thread(set_city, canonical_user_id, city)
+            if not ok:
+                await sender.send_text(
+                    external_user_id,
+                    "❌ " + str(info),
+                    **_with_vk_keyboard(platform, {"keyboard_json": _vk_weather_city_keyboard_json()} if platform == "vk" else {}),
+                )
+                continue
+
+            log_event(canonical_user_id, "weather_city_set", {"city": str(info), "platform": platform})
+            txt = await get_weather_text_async(canonical_user_id, timeout_sec=2.0)
+            await sender.send_text(
+                external_user_id,
+                f"✅ Город принят: {info}.\n\n{txt}",
+                **_with_vk_keyboard(platform, {"keyboard_json": _vk_weather_keyboard_json()} if platform == "vk" else {}),
+            )
+            continue
+
         if reply.kind == 'progress_chart':
             chart_path = _vk_progress_chart_path(canonical_user_id)
             if chart_path is None:
