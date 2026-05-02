@@ -60,6 +60,11 @@ class Settings:
     MAX_BOT_TOKEN: str = _env("MAX_BOT_TOKEN", "")
     MAX_BOT_NAME: str = _env("MAX_BOT_NAME", "")
     MAX_BOT_LINK_BASE: str = _env("MAX_BOT_LINK_BASE", "")
+    # MAX webhook subscription secret. MAX sends it as X-Max-Bot-Api-Secret.
+    # Keep this separate from MAX_BOT_TOKEN: token authorizes outbound API calls,
+    # secret authenticates inbound webhook delivery.
+    MAX_WEBHOOK_SECRET: str = _env("MAX_WEBHOOK_SECRET", _env("MAX_SECRET_KEY", ""))
+    MAX_API_BASE_URL: str = _env("MAX_API_BASE_URL", "https://platform-api.max.ru")
     VK_GROUP_TOKEN: str = _env("VK_GROUP_TOKEN", "")
     VK_CONFIRMATION_TOKEN: str = _env("VK_CONFIRMATION_TOKEN", "")
     VK_SECRET: str = _env("VK_SECRET", "")
@@ -206,6 +211,20 @@ def _fail_fast_prod_config() -> None:
             raise SystemExit('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL must start with https:// in prod webhook mode')
         if not (settings.TELEGRAM_WEBHOOK_PREFIX or '').strip().startswith('/'):
             raise SystemExit('TELEGRAM_WEBHOOK_PREFIX must start with / in prod webhook mode')
+
+    max_enabled = bool((settings.MAX_BOT_TOKEN or '').strip() or (settings.MAX_BOT_LINK_BASE or '').strip())
+    if max_enabled:
+        if not (settings.MAX_BOT_TOKEN or '').strip():
+            missing.append('MAX_BOT_TOKEN')
+        if not (settings.MAX_BOT_LINK_BASE or '').strip():
+            missing.append('MAX_BOT_LINK_BASE')
+        if bool(settings.MESSENGER_WEBHOOK_ENABLED):
+            if not (settings.MESSENGER_PUBLIC_BASE_URL or '').strip():
+                missing.append('MESSENGER_PUBLIC_BASE_URL')
+            if not (settings.MAX_WEBHOOK_SECRET or '').strip():
+                missing.append('MAX_WEBHOOK_SECRET')
+            if not (settings.MESSENGER_PUBLIC_BASE_URL or '').strip().startswith('https://'):
+                raise SystemExit('MESSENGER_PUBLIC_BASE_URL must start with https:// in prod MAX webhook mode')
 
     if not bool(settings.HEALTHCHECK_ENABLED):
         raise SystemExit('HEALTHCHECK_ENABLED must be 1 in prod')
