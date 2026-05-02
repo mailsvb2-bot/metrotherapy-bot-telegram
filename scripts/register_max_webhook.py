@@ -80,7 +80,7 @@ def main() -> int:
     cfg = _load_config()
     payload = {
         "url": cfg.webhook_url,
-        "update_types": ["message_created", "bot_started"],
+        "update_types": ["message_created", "message_callback", "bot_started"],
         "secret": cfg.secret,
     }
     data = _json_request(cfg.api_base_url + "/subscriptions", token=cfg.token, payload=payload)
