@@ -10,6 +10,7 @@ import urllib.error
 import uuid
 import os
 import base64
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
 
@@ -22,6 +23,7 @@ from config.settings import settings
 from runtime.telegram_transport import telegram_transport
 from runtime.messenger_senders import MaxBotSender, VkBotSender, MessengerTransportError
 from services.events import log_event
+from services.db import db
 from services.messenger.audio_delivery import send_next_audio_to_user, _post_audio_control_kwargs
 from services.messenger.audio_access import register_audio_access
 from services.messenger.audio_links import resolve_public_audio_path, AUDIO_MEDIA_PREFIX, AUDIO_ACCESS_PREFIX
@@ -563,6 +565,88 @@ def _extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+
+def _vk_progress_chart_path(user_id: int) -> Path | None:
+    """Build VK progress chart from canonical mood_sessions."""
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, day, slot, kind, anchor_id, pre_score, post_score, audio_sent
+            FROM mood_sessions
+            WHERE user_id=?
+              AND (pre_score IS NOT NULL OR post_score IS NOT NULL)
+            ORDER BY id ASC
+            LIMIT 80
+            """,
+            (int(user_id),),
+        ).fetchall()
+
+    records = [dict(r) for r in rows]
+    if not records:
+        return None
+
+    labels = []
+    pre_values = []
+    post_values = []
+    delta_values = []
+
+    for idx, row in enumerate(records, start=1):
+        anchor = row.get("anchor_id")
+        day = str(row.get("day") or "")
+        label = f"№{anchor}" if anchor not in (None, "") else str(idx)
+        if day:
+            label = f"{label}\n{day[-5:]}"
+        labels.append(label)
+
+        pre = row.get("pre_score")
+        post = row.get("post_score")
+        pre_f = float(pre) if pre is not None else None
+        post_f = float(post) if post is not None else None
+
+        pre_values.append(pre_f)
+        post_values.append(post_f)
+        delta_values.append((post_f - pre_f) if pre_f is not None and post_f is not None else None)
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        log.exception("VK progress chart: matplotlib unavailable")
+        return None
+
+    out_dir = Path("/tmp/metrotherapy_vk_charts")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"progress_{int(user_id)}.png"
+
+    x = list(range(1, len(labels) + 1))
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+
+    if any(v is not None for v in pre_values):
+        ax.plot(x, [v if v is not None else float("nan") for v in pre_values], marker="o", label="До")
+    if any(v is not None for v in post_values):
+        ax.plot(x, [v if v is not None else float("nan") for v in post_values], marker="o", label="После")
+    if any(v is not None for v in delta_values):
+        ax.bar(x, [v if v is not None else 0 for v in delta_values], alpha=0.25, label="Изменение")
+
+    ax.axhline(0, linewidth=1)
+    ax.set_title("Метротерапия — динамика состояния")
+    ax.set_ylabel("Оценка состояния от -10 до +10")
+    ax.set_xlabel("Практики")
+    ax.set_ylim(-10.5, 10.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.legend(loc="best")
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+
+    log.info("VK progress chart built: user_id=%s path=%s", user_id, out_path)
+    return out_path
+
+
 async def _send_reply_bundle(platform: str, external_user_id: str, canonical_user_id: int, replies: list[MessengerReply]) -> None:
     registry = SenderRegistry(max=MaxBotSender(), vk=VkBotSender())
     sender = registry.get(platform)
@@ -599,6 +683,33 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
                     **_with_vk_keyboard(platform, {}),
                 )
             continue
+        if reply.kind == 'progress_chart':
+            chart_path = _vk_progress_chart_path(canonical_user_id)
+            if chart_path is None:
+                await sender.send_text(
+                    external_user_id,
+                    '📈 Пока недостаточно данных для графика. Пройдите цикл: шкала ДО → аудио → Прослушал → шкала ПОСЛЕ.',
+                    **_with_vk_keyboard(platform, {}),
+                )
+                continue
+
+            try:
+                await sender.send_audio_file(
+                    external_user_id,
+                    chart_path,
+                    caption='📈 Ваш график прогресса Метротерапии',
+                    **_with_vk_keyboard(platform, {}),
+                )
+                log.info('%s progress chart sent: user_id=%s path=%s', platform.upper(), canonical_user_id, chart_path)
+            except Exception:
+                log.exception('%s progress chart send failed', platform.upper())
+                await sender.send_text(
+                    external_user_id,
+                    '⚠️ График построен, но не удалось отправить его во ВКонтакте.',
+                    **_with_vk_keyboard(platform, {}),
+                )
+            continue
+
         if reply.kind == 'auto_pre_score':
             result = await complete_pre_score_and_send(
                 canonical_user_id,
