@@ -2,6 +2,11 @@ import importlib
 
 
 def _reload_modules(monkeypatch, tmp_path):
+    # These are unit/integration tests over SQLite-backed messenger helpers,
+    # not production boot tests. Keep them isolated from server-level APP_ENV
+    # and optional messenger secrets that may be present in systemd/.env.
+    monkeypatch.setenv('APP_ENV', 'dev')
+    monkeypatch.delenv('MAX_WEBHOOK_SECRET', raising=False)
     monkeypatch.setenv('METRO_DB_PATH', str(tmp_path / 'test.db'))
     core_paths = importlib.import_module('core.paths')
     db_core = importlib.import_module('services.db.core')
