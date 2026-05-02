@@ -192,6 +192,92 @@ class VkBotSender:
     def _api_version(self) -> str:
         return (self.api_version or getattr(settings, 'VK_API_VERSION', '') or '5.199').strip()
 
+    @staticmethod
+    def _button_command(button: Any) -> str:
+        if not isinstance(button, dict):
+            return ''
+        action = button.get('action') or {}
+        payload = action.get('payload')
+        if isinstance(payload, str) and payload.strip():
+            try:
+                decoded = json.loads(payload)
+            except json.JSONDecodeError:
+                decoded = None
+            if isinstance(decoded, dict):
+                command = decoded.get('command') or decoded.get('cmd') or decoded.get('action')
+                if isinstance(command, str) and command.strip():
+                    return command.strip()
+        label = str(action.get('label') or '').strip().casefold().replace('ё', 'е')
+        label_aliases = {
+            '🌿 попробовать бесплатно': 'demo',
+            '🔐 полный маршрут': 'full',
+            '💳 тарифы': 'pay',
+            '🎁 подарить': 'gift',
+            '📈 мой прогресс': 'progress',
+            '🧠 настройки': 'settings',
+            '📣 посоветовать': 'share',
+            '🌤 погода': 'weather',
+            '🎧 получить аудио': 'continue',
+            '✅ прослушал': 'done',
+        }
+        return label_aliases.get(label, '')
+
+    @classmethod
+    def _telegram_main_parity_keyboard_json(cls, keyboard_json: str) -> str:
+        """Keep VK main keyboard contract aligned with Telegram kb_main().
+
+        VK currently receives keyboard JSON from runtime/messenger_webhooks.py.
+        Older builds appended VK-only continuation controls to the persistent
+        main keyboard. That made VK's visible button surface diverge from the
+        Telegram main menu. We normalize only that full main-menu keyboard at
+        the transport boundary and leave contextual keyboards untouched.
+        """
+        try:
+            keyboard = json.loads(keyboard_json)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return keyboard_json
+        if not isinstance(keyboard, dict):
+            return keyboard_json
+        rows = keyboard.get('buttons')
+        if not isinstance(rows, list):
+            return keyboard_json
+
+        all_commands: set[str] = set()
+        row_commands: list[tuple[list[Any], set[str]]] = []
+        for row in rows:
+            if not isinstance(row, list):
+                row_commands.append((row, set()))
+                continue
+            commands = {cls._button_command(button) for button in row}
+            commands.discard('')
+            all_commands.update(commands)
+            row_commands.append((row, commands))
+
+        telegram_main_commands = {
+            'demo',
+            'full',
+            'pay',
+            'gift',
+            'progress',
+            'settings',
+            'share',
+            'weather',
+        }
+        vk_only_main_controls = {'continue', 'done'}
+        if not telegram_main_commands.issubset(all_commands):
+            return keyboard_json
+        if not vk_only_main_controls.intersection(all_commands):
+            return keyboard_json
+
+        filtered_rows = [
+            row
+            for row, commands in row_commands
+            if not commands or not commands.issubset(vk_only_main_controls)
+        ]
+        normalized = dict(keyboard)
+        normalized['buttons'] = filtered_rows
+        return json.dumps(normalized, ensure_ascii=False, separators=(',', ':'))
+
     async def _vk_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         data = await asyncio.to_thread(
             _form_request,
@@ -216,7 +302,7 @@ class VkBotSender:
             'message': text,
         }
         if kwargs.get('keyboard_json'):
-            params['keyboard'] = kwargs['keyboard_json']
+            params['keyboard'] = self._telegram_main_parity_keyboard_json(str(kwargs['keyboard_json']))
         if kwargs.get('attachment'):
             params['attachment'] = kwargs['attachment']
         data = await self._vk_method('messages.send', params)
