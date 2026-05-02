@@ -544,28 +544,40 @@ def handle_incoming_text(
     if action == "post_score":
         return canonical_user_id, [MessengerReply(kind='auto_post_score', meta={'score': str(value or '')})]
     if action == "done":
+        pending_post_session_id = find_pending_post_session_id(canonical_user_id)
         confirmed = confirm_pending_audio_delivery(canonical_user_id, platform=platform)
-        if confirmed is None:
-            return canonical_user_id, [MessengerReply(text='ℹ️ Сейчас нет аудио, ожидающего подтверждения. Отправьте continue, чтобы получить текущее или следующее аудио.')]
-        if find_pending_post_session_id(canonical_user_id) is not None:
+
+        if confirmed is None and pending_post_session_id is None:
             return canonical_user_id, [
                 MessengerReply(
                     text=(
-                        f'✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\n\n'
-                        'Теперь оцените состояние после прослушивания.\n'
+                        'ℹ️ Сейчас нет аудио, ожидающего подтверждения.\n\n'
+                        'Чтобы начать новый цикл, нажмите «🎧 Получить аудио»: '
+                        'сначала появится шкала ДО, потом аудио, потом кнопка «✅ Прослушал».'
+                    )
+                )
+            ]
+
+        if confirmed is None:
+            return canonical_user_id, [
+                MessengerReply(
+                    text=(
+                        '✅ Принял: аудио уже было отмечено как доставленное во ВКонтакте.\n\n'
+                        'Теперь оцените состояние ПОСЛЕ прослушивания.\n'
                         f'{_score_scale_text()}'
                     ),
                     meta={'vk_keyboard': 'score_scale'},
                 ),
             ]
+
         return canonical_user_id, [
             MessengerReply(
                 text=(
                     f'✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\n\n'
-                    'Теперь оцените состояние после прослушивания.\n'
+                    'Теперь оцените состояние ПОСЛЕ прослушивания.\n'
                     f'{_score_scale_text()}'
                 ),
-                meta={"vk_keyboard": "score_scale"},
+                meta={'vk_keyboard': 'score_scale'},
             ),
         ]
     if action == "progress":
