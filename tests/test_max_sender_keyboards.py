@@ -77,3 +77,30 @@ def test_max_payment_buttons_are_links_not_dead_text_buttons():
     assert 'kind=subscription' in pay_button['url']
     assert gift_button['type'] == 'link'
     assert 'kind=gift' in gift_button['url']
+
+
+def test_max_sender_uses_platform_api_domain_by_default(monkeypatch):
+    monkeypatch.delenv('MAX_API_BASE_URL', raising=False)
+    assert MaxBotSender._api_base_url() == 'https://platform-api.max.ru'
+    assert 'botapi.max.ru' not in MaxBotSender._api_base_url()
+
+
+def test_max_sender_uses_authorization_header_not_token_query(monkeypatch):
+    captured = {}
+
+    def fake_json_request(url, *, method='POST', headers=None, payload=None):
+        captured['url'] = url
+        captured['headers'] = dict(headers or {})
+        captured['payload'] = dict(payload or {})
+        return {'message': {'id': 'm1'}}
+
+    monkeypatch.setattr('runtime.messenger_senders._json_request', fake_json_request)
+    monkeypatch.setattr('runtime.messenger_senders.settings.MAX_BOT_TOKEN', 'secret-token')
+
+    import asyncio
+    asyncio.run(MaxBotSender().send_text('42', 'hello'))
+
+    assert captured['headers']['Authorization'] == 'secret-token'
+    assert 'access_token=' not in captured['url']
+    assert 'token=' not in captured['url']
+    assert captured['url'].startswith('https://platform-api.max.ru/messages?user_id=42')
