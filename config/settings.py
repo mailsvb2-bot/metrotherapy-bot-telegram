@@ -214,6 +214,11 @@ def _fail_fast_prod_config() -> None:
 
     max_enabled = bool((settings.MAX_BOT_TOKEN or '').strip() or (settings.MAX_BOT_LINK_BASE or '').strip())
     if max_enabled:
+        max_api_base = (settings.MAX_API_BASE_URL or '').strip().rstrip('/')
+        if 'botapi.max.ru' in max_api_base:
+            raise SystemExit('MAX_API_BASE_URL must use https://platform-api.max.ru, not legacy botapi.max.ru')
+        if not max_api_base.startswith('https://platform-api.max.ru'):
+            raise SystemExit('MAX_API_BASE_URL must start with https://platform-api.max.ru in prod')
         if not (settings.MAX_BOT_TOKEN or '').strip():
             missing.append('MAX_BOT_TOKEN')
         if not (settings.MAX_BOT_LINK_BASE or '').strip():
