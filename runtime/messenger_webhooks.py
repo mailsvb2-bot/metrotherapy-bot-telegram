@@ -22,7 +22,7 @@ from config.settings import settings
 from runtime.telegram_transport import telegram_transport
 from runtime.messenger_senders import MaxBotSender, VkBotSender, MessengerTransportError
 from services.events import log_event
-from services.messenger.audio_delivery import send_next_audio_to_user
+from services.messenger.audio_delivery import send_next_audio_to_user, _post_audio_control_kwargs
 from services.messenger.audio_access import register_audio_access
 from services.messenger.audio_links import resolve_public_audio_path, AUDIO_MEDIA_PREFIX, AUDIO_ACCESS_PREFIX
 from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDelivery
@@ -606,7 +606,10 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
                 score=int(reply.meta.get('score') or '0'),
                 senders=registry,
             )
-            await sender.send_text(external_user_id, result.message, **_with_vk_keyboard(platform, {}))
+            kwargs: dict[str, Any] = {}
+            if platform == 'vk' and getattr(result, 'prompt_done', False):
+                kwargs.update(_post_audio_control_kwargs('vk'))
+            await sender.send_text(external_user_id, result.message, **_with_vk_keyboard(platform, kwargs))
             continue
         if reply.kind == 'auto_post_score':
             result = await complete_post_score_and_send_next(
