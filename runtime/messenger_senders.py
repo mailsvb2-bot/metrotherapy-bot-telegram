@@ -103,11 +103,147 @@ class TelegramBotSender:
 class MaxBotSender:
     token: str | None = None
 
+    @staticmethod
+    def _api_base_url() -> str:
+        return str(getattr(settings, 'MAX_API_BASE_URL', '') or 'https://platform-api.max.ru').strip().rstrip('/')
+
+    @staticmethod
+    def _payment_public_base_url() -> str:
+        base = (
+            getattr(settings, 'PAYMENT_PUBLIC_BASE_URL', '')
+            or getattr(settings, 'MESSENGER_PUBLIC_BASE_URL', '')
+            or 'https://metrotherapy-bot.metrotherapy.ru'
+        )
+        return str(base).strip().rstrip('/')
+
+    @classmethod
+    def _payment_url(cls, *, external_user_id: str, kind: str) -> str:
+        query = urllib.parse.urlencode(
+            {
+                'source': 'max',
+                'user_id': str(external_user_id),
+                'kind': kind,
+            }
+        )
+        return f'{cls._payment_public_base_url()}/pay/yookassa?{query}'
+
+    @staticmethod
+    def _message_button(text: str, command: str) -> dict[str, Any]:
+        # MAX message buttons send the text back to the bot. The payload keeps
+        # the canonical command visible for clients that preserve it in webhook
+        # updates, while text remains compatible with services.messenger.text_ui.
+        return {'type': 'message', 'text': text, 'payload': command}
+
+    @staticmethod
+    def _link_button(text: str, url: str) -> dict[str, Any]:
+        return {'type': 'link', 'text': text, 'url': url}
+
+    @classmethod
+    def _inline_keyboard(cls, rows: list[list[dict[str, Any]]]) -> dict[str, Any]:
+        return {'type': 'inline_keyboard', 'payload': {'buttons': rows}}
+
+    @classmethod
+    def _main_keyboard(cls, *, external_user_id: str) -> dict[str, Any]:
+        # Mirrors keyboards.inline.kb_main(), except pay/gift are real links in
+        # MAX because Telegram payment callbacks cannot execute inside MAX.
+        return cls._inline_keyboard([
+            [
+                cls._message_button('🌿 Попробовать бесплатно', 'demo'),
+                cls._message_button('🔐 Полный маршрут', 'full'),
+            ],
+            [
+                cls._link_button('💳 Тарифы', cls._payment_url(external_user_id=external_user_id, kind='subscription')),
+                cls._link_button('🎁 Подарить', cls._payment_url(external_user_id=external_user_id, kind='gift')),
+            ],
+            [
+                cls._message_button('📈 Мой прогресс', 'progress'),
+                cls._message_button('🧠 Настройки', 'settings'),
+            ],
+            [
+                cls._message_button('📣 Посоветовать', 'share'),
+                cls._message_button('🌤 Погода', 'weather'),
+            ],
+        ])
+
+    @classmethod
+    def _demo_kind_keyboard(cls) -> dict[str, Any]:
+        return cls._inline_keyboard([
+            [cls._message_button('🚗 Практика на утро / дорогу', 'demo_work')],
+            [cls._message_button('🌙 Практика на вечер / домой', 'demo_home')],
+            [cls._message_button('⬅️ Назад', 'start')],
+        ])
+
+    @classmethod
+    def _score_scale_keyboard(cls) -> dict[str, Any]:
+        vals = list(range(-10, 11))
+        rows: list[list[dict[str, Any]]] = []
+        for i in range(0, len(vals), 7):
+            rows.append([
+                cls._message_button(f'{value:+d}' if value != 0 else '0', str(value))
+                for value in vals[i:i + 7]
+            ])
+        rows.append([cls._message_button('⬅️ Меню', 'start')])
+        return cls._inline_keyboard(rows)
+
+    @classmethod
+    def _full_route_keyboard(cls) -> dict[str, Any]:
+        return cls._inline_keyboard([
+            [
+                cls._message_button('🎧 Получить аудио', 'continue'),
+                cls._message_button('✅ Прослушал', 'done'),
+            ],
+            [cls._message_button('⬅️ Меню', 'start')],
+        ])
+
+    @classmethod
+    def _weather_keyboard(cls) -> dict[str, Any]:
+        return cls._inline_keyboard([
+            [
+                cls._message_button('🔄 Обновить погоду', 'weather'),
+                cls._message_button('🏙 Изменить город', 'weather_city'),
+            ],
+            [cls._message_button('⬅️ Меню', 'start')],
+        ])
+
+    @classmethod
+    def _weather_city_keyboard(cls) -> dict[str, Any]:
+        return cls._inline_keyboard([[cls._message_button('⬅️ Меню', 'start')]])
+
+    @classmethod
+    def _after_audio_keyboard(cls) -> dict[str, Any]:
+        return cls._inline_keyboard([
+            [
+                cls._message_button('✅ Прослушал', 'done'),
+                cls._message_button('🔁 Повторить аудио', 'repeat'),
+            ],
+            [cls._message_button('⬅️ Меню', 'start')],
+        ])
+
+    @classmethod
+    def _keyboard_for_text(cls, text: str, *, external_user_id: str) -> dict[str, Any] | None:
+        clean = (text or '').lstrip()
+        lowered = clean.casefold()
+        if clean.startswith('Главное меню'):
+            return cls._main_keyboard(external_user_id=external_user_id)
+        if clean.startswith('🌿 Бесплатная практика'):
+            return cls._demo_kind_keyboard()
+        if clean.startswith('🔐 Полный маршрут'):
+            return cls._full_route_keyboard()
+        if clean.startswith('🌤 Погода'):
+            return cls._weather_keyboard()
+        if clean.startswith('🏙 Напишите название города'):
+            return cls._weather_city_keyboard()
+        if 'шкала оценки' in lowered or 'оцените состояние сейчас' in lowered:
+            return cls._score_scale_keyboard()
+        if 'после оплаты вернитесь сюда' in lowered or 'аудио придёт' in lowered or 'аудио:' in lowered:
+            return cls._after_audio_keyboard()
+        return None
+
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         token = (self.token or settings.MAX_BOT_TOKEN or '').strip()
         if not token:
             raise MessengerTransportError('MAX_BOT_TOKEN is empty')
-        url = f'https://platform-api.max.ru/messages?user_id={urllib.parse.quote(str(external_user_id))}'
+        url = f'{self._api_base_url()}/messages?user_id={urllib.parse.quote(str(external_user_id))}'
         payload: dict[str, Any] = {'text': text}
         if kwargs.get('disable_link_preview') is not None:
             url += f"&disable_link_preview={'true' if kwargs['disable_link_preview'] else 'false'}"
@@ -115,6 +251,9 @@ class MaxBotSender:
             payload['format'] = kwargs['format']
         if kwargs.get('notify') is not None:
             payload['notify'] = bool(kwargs['notify'])
+        keyboard = kwargs.get('max_keyboard') or self._keyboard_for_text(str(text or ''), external_user_id=str(external_user_id))
+        if keyboard is not None:
+            payload.setdefault('attachments', []).append(keyboard)
         data = await asyncio.to_thread(_json_request, url, method='POST', headers={'Authorization': token}, payload=payload)
         if isinstance(data, dict) and data.get('error'):
             err = data['error']
@@ -132,7 +271,7 @@ class MaxBotSender:
             raise MessengerTransportError('MAX_BOT_TOKEN is empty')
         upload_meta = await asyncio.to_thread(
             _json_request,
-            'https://platform-api.max.ru/uploads?type=audio',
+            f'{self._api_base_url()}/uploads?type=audio',
             method='POST',
             headers={'Authorization': token},
             payload=None,
@@ -150,10 +289,13 @@ class MaxBotSender:
         if not token:
             raise MessengerTransportError('MAX_BOT_TOKEN is empty')
         media_token = await self._ensure_audio_token(file_path)
-        url = f'https://platform-api.max.ru/messages?user_id={urllib.parse.quote(str(external_user_id))}'
+        url = f'{self._api_base_url()}/messages?user_id={urllib.parse.quote(str(external_user_id))}'
         payload: dict[str, Any] = {
             'text': caption or '',
-            'attachments': [{'type': 'audio', 'payload': {'token': media_token}}],
+            'attachments': [
+                {'type': 'audio', 'payload': {'token': media_token}},
+                self._after_audio_keyboard(),
+            ],
         }
         if kwargs.get('notify') is not None:
             payload['notify'] = bool(kwargs['notify'])
