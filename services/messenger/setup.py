@@ -12,6 +12,7 @@ from services.messenger.links import build_switch_targets, build_messenger_targe
 class MessengerSetupStatus:
     telegram_ok: bool
     max_ok: bool
+    max_webhook_ok: bool
     vk_ok: bool
     webhook_runtime_ok: bool
     public_base_url: str
@@ -32,6 +33,12 @@ def build_setup_status() -> MessengerSetupStatus:
         _strip(getattr(settings, 'MAX_BOT_LINK_BASE', ''))
         and _strip(getattr(settings, 'MAX_BOT_TOKEN', ''))
     )
+    max_webhook_ok = bool(
+        max_ok
+        and _strip(getattr(settings, 'MAX_WEBHOOK_SECRET', ''))
+        and public_base
+        and public_base.startswith('https://')
+    )
     vk_ok = bool(
         _strip(getattr(settings, 'VK_GROUP_ID', ''))
         and _strip(getattr(settings, 'VK_GROUP_TOKEN', ''))
@@ -40,7 +47,7 @@ def build_setup_status() -> MessengerSetupStatus:
     messenger_runtime_ok = bool(
         getattr(settings, 'MESSENGER_WEBHOOK_ENABLED', False)
         and public_base
-        and (max_ok or vk_ok)
+        and (max_webhook_ok or vk_ok)
     )
     telegram_transport_mode = telegram_transport()
     telegram_webhook_ok = bool(
@@ -57,6 +64,8 @@ def build_setup_status() -> MessengerSetupStatus:
         missing.append('MAX_BOT_LINK_BASE')
     if not _strip(getattr(settings, 'MAX_BOT_TOKEN', '')):
         missing.append('MAX_BOT_TOKEN')
+    if max_ok and not _strip(getattr(settings, 'MAX_WEBHOOK_SECRET', '')):
+        missing.append('MAX_WEBHOOK_SECRET')
     if not _strip(getattr(settings, 'VK_GROUP_ID', '')):
         missing.append('VK_GROUP_ID')
     if not _strip(getattr(settings, 'VK_GROUP_TOKEN', '')):
@@ -69,8 +78,8 @@ def build_setup_status() -> MessengerSetupStatus:
         missing.append('MESSENGER_WEBHOOK_ENABLED=1 or TELEGRAM_TRANSPORT=webhook')
     if _strip(getattr(settings, 'MAX_BOT_LINK_BASE', '')) and '{payload}' not in _strip(getattr(settings, 'MAX_BOT_LINK_BASE', '')):
         warnings.append('MAX_BOT_LINK_BASE не содержит {payload}; проект добавит ?start=..., но шаблон с {payload} надёжнее.')
-    if public_base and not (public_base.startswith('https://') or public_base.startswith('http://')):
-        warnings.append('MESSENGER_PUBLIC_BASE_URL должен быть полным URL, например https://your-domain.tld')
+    if public_base and not public_base.startswith('https://'):
+        warnings.append('Для production MAX webhook MESSENGER_PUBLIC_BASE_URL должен начинаться с https://')
     telegram_public = _strip(getattr(settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', ''))
     if telegram_transport_mode == 'webhook' and not telegram_public:
         missing.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL')
@@ -82,6 +91,7 @@ def build_setup_status() -> MessengerSetupStatus:
     return MessengerSetupStatus(
         telegram_ok=telegram_ok,
         max_ok=max_ok,
+        max_webhook_ok=max_webhook_ok,
         vk_ok=vk_ok,
         webhook_runtime_ok=webhook_runtime_ok,
         public_base_url=public_base,
@@ -97,6 +107,7 @@ def render_setup_text() -> str:
     lines = ['🔧 Настройка multi-messenger', '']
     lines.append(f"Telegram referral/switch links: {'✅' if status.telegram_ok else '❌'}")
     lines.append(f"MAX link + sender: {'✅' if status.max_ok else '❌'}")
+    lines.append(f"MAX webhook: {'✅' if status.max_webhook_ok else '❌'}")
     lines.append(f"VK link + sender: {'✅' if status.vk_ok else '❌'}")
     lines.append(f"Webhook runtime: {'✅' if status.webhook_runtime_ok else '❌'}")
     lines.append('')
