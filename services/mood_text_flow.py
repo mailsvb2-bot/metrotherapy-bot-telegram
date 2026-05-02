@@ -245,30 +245,14 @@ async def complete_post_score_and_send_next(
     avg = comp.get('avg_delta')
     avg_text = f' Средняя динамика по последним дням: {int(avg):+d}.' if avg is not None else ''
 
-    from services.messenger.audio_delivery import send_next_audio_to_user
-    try:
-        next_result = await send_next_audio_to_user(
-            int(user_id),
-            senders=senders,
-            telegram_bot=telegram_bot,
-            target_platform=platform,
-            fallback=platform,
-        )
-    except UnsupportedMessengerDelivery:
-        next_result = None
-
-    message = f'✅ Оценку после прослушивания {int(score):+d} сохранил.{delta_text}{avg_text}'
-    transport = None
+    message = (
+        f'✅ Оценку после прослушивания {int(score):+d} сохранил.{delta_text}{avg_text}\n\n'
+        'Цикл этого аудио завершён.\n\n'
+        'Чтобы продолжить маршрут, нажмите «🎧 Получить аудио» или отправьте continue. '
+        'Следующее аудио начнётся правильно: сначала шкала состояния ДО прослушивания, потом аудио, потом шкала ПОСЛЕ.'
+    )
+    transport = 'post_score_saved'
     delivered_platform = platform
-    if next_result is None:
-        message += ' Следующее аудио пока не удалось отправить в этот мессенджер.'
-    else:
-        delivered_platform = next_result.platform
-        transport = next_result.transport
-        if next_result.transport == 'none' and next_result.message:
-            message += '\n\n' + next_result.message
-        else:
-            message += '\n\n🎧 Отправил следующее аудио.'
     log_audio_timeline_event(
         int(user_id),
         event_type='post_score_received',

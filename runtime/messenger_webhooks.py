@@ -188,6 +188,54 @@ def _vk_demo_kind_keyboard_json() -> str:
     )
 
 
+def _vk_score_scale_keyboard_json() -> str:
+    """VK keyboard for Telegram mood score scale parity.
+
+    VK buttons send plain text scores. The existing text parser already accepts
+    integers from -10 to 10, so this keeps one canonical score-processing path.
+    """
+    rows: list[list[dict[str, Any]]] = []
+
+    def button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
+        return {
+            "action": {
+                "type": "text",
+                "label": label,
+                "payload": json.dumps({"command": command}, ensure_ascii=False),
+            },
+            "color": color,
+        }
+
+    for row in [
+        [-10, -9, -8],
+        [-7, -6, -5],
+        [-4, -3, -2],
+        [-1, 0, 1],
+        [2, 3, 4],
+        [5, 6, 7],
+        [8, 9, 10],
+    ]:
+        rows.append([
+            button(("+" if value > 0 else "") + str(value), str(value), "primary" if value == 0 else "secondary")
+            for value in row
+        ])
+
+    rows.append([
+        button("📊 Прогресс", "progress", "primary"),
+        button("⬅️ Меню", "start", "secondary"),
+    ])
+
+    return json.dumps(
+        {
+            "one_time": False,
+            "inline": False,
+            "buttons": rows,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 
 def _normalise_messenger_text(text: str) -> str:
     """Normalize human/mobile button labels to canonical text commands."""
@@ -527,6 +575,8 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
                 keyboard_kind = (reply.meta or {}).get('vk_keyboard')
                 if keyboard_kind == 'demo_kind':
                     kwargs['keyboard_json'] = _vk_demo_kind_keyboard_json()
+                elif keyboard_kind == 'score_scale':
+                    kwargs['keyboard_json'] = _vk_score_scale_keyboard_json()
             await sender.send_text(external_user_id, reply.text, **_with_vk_keyboard(platform, kwargs))
             continue
         if reply.kind == 'next_audio':

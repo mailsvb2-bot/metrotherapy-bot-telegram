@@ -22,6 +22,8 @@ from services.messenger.preferences import get_channel_snapshot, set_preferred_p
 from services.messenger.audio_progress import get_progress_snapshot, SEQUENCE_FULL_SERIES, confirm_pending_audio_delivery
 from services.messenger.timeline import get_recent_audio_timeline
 from services.mood_text_flow import parse_score_text, find_pending_pre_session_id, find_pending_post_session_id
+from services.mood import create_session
+from datetime import datetime, timezone
 
 
 @dataclass(frozen=True)
@@ -400,6 +402,41 @@ def _parse_command(text: str) -> tuple[str, str | None]:
     return "menu", None
 
 
+
+def _vk_pre_audio_score_text(kind: str, session_id: int) -> str:
+    title = "утренней практики / дороги" if kind == "work" else "вечерней практики / дороги домой"
+    return (
+        f"🌿 Перед аудио для {title} оцените состояние сейчас.\n\n"
+        "Это тот же шаг, что и в Telegram: сначала фиксируем состояние ДО практики, "
+        "потом бот отправляет аудио.\n\n"
+        f"{_score_scale_text()}\n\n"
+        "Нажмите число ниже от -10 до +10. После выбора оценки аудио придёт прямо во ВКонтакте."
+    )
+
+
+def _start_vk_pre_audio_session(user_id: int, *, kind: str) -> MessengerReply:
+    snapshot = get_progress_snapshot(int(user_id))
+    item = snapshot.pending_item or snapshot.next_item
+    if item is None:
+        return MessengerReply(kind="next_audio")
+
+    day = datetime.now(timezone.utc).date().isoformat()
+    slot = "morning" if kind == "work" else "evening"
+    session_id = create_session(
+        int(user_id),
+        kind=kind,
+        source="settings",
+        day=day,
+        slot=slot,
+        scheduled_at=None,
+        anchor_id=int(item.anchor),
+    )
+
+    return MessengerReply(
+        text=_vk_pre_audio_score_text(kind, int(session_id)),
+        meta={"vk_keyboard": "score_scale"},
+    )
+
 def handle_incoming_text(
     user_id: int,
     *,
@@ -488,13 +525,15 @@ def handle_incoming_text(
     if action == "demo":
         return canonical_user_id, [MessengerReply(text=_demo_text(), meta={"vk_keyboard": "demo_kind"})]
     if action in {"demo_work", "demo_home"}:
-        return canonical_user_id, [MessengerReply(kind='next_audio')]
+        kind = "work" if action == "demo_work" else "home"
+        return canonical_user_id, [_start_vk_pre_audio_session(canonical_user_id, kind=kind)]
+        return canonical_user_id, [_start_vk_pre_audio_session(canonical_user_id, kind=kind)]
     if action == "share":
         return canonical_user_id, [MessengerReply(text=_share_text(canonical_user_id))]
     if action == "switch":
         return canonical_user_id, [MessengerReply(text=_switch_text(canonical_user_id))]
     if action == "continue":
-        return canonical_user_id, [MessengerReply(kind='next_audio')]
+        return canonical_user_id, [_start_vk_pre_audio_session(canonical_user_id, kind="work")]
     if action == "pre_score":
         return canonical_user_id, [MessengerReply(kind='auto_pre_score', meta={'score': str(value or '')})]
     if action == "post_score":
@@ -505,15 +544,24 @@ def handle_incoming_text(
             return canonical_user_id, [MessengerReply(text='ℹ️ Сейчас нет аудио, ожидающего подтверждения. Отправьте continue, чтобы получить текущее или следующее аудио.')]
         if find_pending_post_session_id(canonical_user_id) is not None:
             return canonical_user_id, [
-                MessengerReply(text=(
+                MessengerReply(
+                    text=(
+                        f'✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\n\n'
+                        'Теперь оцените состояние после прослушивания.\n'
+                        f'{_score_scale_text()}'
+                    ),
+                    meta={'vk_keyboard': 'score_scale'},
+                ),
+            ]
+        return canonical_user_id, [
+            MessengerReply(
+                text=(
                     f'✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\n\n'
                     'Теперь оцените состояние после прослушивания.\n'
                     f'{_score_scale_text()}'
-                )),
-            ]
-        return canonical_user_id, [
-            MessengerReply(text=f'✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}. Отправляю дальше.'),
-            MessengerReply(kind='next_audio'),
+                ),
+                meta={"vk_keyboard": "score_scale"},
+            ),
         ]
     if action == "progress":
         return canonical_user_id, [

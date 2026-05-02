@@ -91,12 +91,13 @@ def _queue_finished_message(platform: str, snapshot: Any) -> str:
 
 
 def _vk_post_audio_keyboard_json() -> str:
-    """VK post-audio controls with score-scale parity to Telegram.
+    """VK after-audio controls aligned with Telegram kb_mood_done().
 
-    After native VK audio delivery the user must not be dropped back to the
-    main menu. The active keyboard is the post-audio surface: done/progress and
-    the full -10..+10 score scale. Numeric buttons intentionally send plain text
-    values because the canonical text parser already validates and stores scores.
+    Canonical Telegram flow:
+      pre-score -> audio -> Done button -> post-score scale -> result.
+
+    This keyboard intentionally has no -10..+10 buttons. The score scale is
+    shown only after the user presses Done/Прослушал.
     """
 
     def button(label: str, command: str, color: str = 'secondary') -> dict[str, Any]:
@@ -110,44 +111,16 @@ def _vk_post_audio_keyboard_json() -> str:
         }
 
     rows: list[list[dict[str, Any]]] = [
+        [button('✅ Прослушал', 'done', 'positive')],
         [
-            button('✅ Прослушал', 'done', 'positive'),
             button('📊 Прогресс', 'progress', 'primary'),
-        ],
-        [
             button('🧾 История', 'history', 'secondary'),
-            button('🎧 Получить аудио', 'continue', 'secondary'),
         ],
+        [button('⬅️ Меню', 'start', 'secondary')],
     ]
 
-    for row in [
-        [-10, -9, -8],
-        [-7, -6, -5],
-        [-4, -3, -2],
-        [-1, 0, 1],
-        [2, 3, 4],
-        [5, 6, 7],
-        [8, 9, 10],
-    ]:
-        rows.append([
-            button(
-                ('+' if value > 0 else '') + str(value),
-                str(value),
-                'primary' if value == 0 else 'secondary',
-            )
-            for value in row
-        ])
-
-    rows.append([
-        button('⬅️ Меню', 'start', 'secondary'),
-    ])
-
     return json.dumps(
-        {
-            'one_time': False,
-            'inline': False,
-            'buttons': rows,
-        },
+        {'one_time': False, 'inline': False, 'buttons': rows},
         ensure_ascii=False,
         separators=(',', ':'),
     )
@@ -164,8 +137,7 @@ def _pending_caption(platform: str, item: AudioProgressItem, *, replay: bool = F
     return (
         f'🎧 Аудио №{item.anchor}: {item.title}\n\n'
         f'{prefix} прямо в {_platform_name(platform)}.\n'
-        'Когда дослушаете, нажмите «✅ Прослушал» или отправьте done / готово / прослушал.\n'
-        'После этого отправьте оценку от -10 до 10.'
+        'Когда дослушаете, нажмите «✅ Прослушал» или отправьте done / готово / прослушал.'
     )
 
 
@@ -177,12 +149,9 @@ def _post_audio_controls_text(platform: str, item: AudioProgressItem, *, replay:
     )
     return (
         f'{head}\n\n'
-        'Что делать дальше:\n'
-        '1. Дослушайте аудио.\n'
-        '2. Нажмите «✅ Прослушал» или отправьте done / готово / прослушал.\n'
-        '3. Затем отправьте оценку состояния.\n\n'
-        f'{_score_scale_text()}\n\n'
-        'Ниже есть кнопки оценки от −10 до +10 — можно нажать число сразу после прослушивания.\n\n'
+        'Когда прослушаете — нажмите кнопку «✅ Прослушал» ниже '
+        'или отправьте done / готово / прослушал.\n\n'
+        'После этого я покажу шкалу состояния от −10 до +10, как в Telegram.\n\n'
         'Для проверки результата можно нажать «📊 Прогресс» или «🧾 История». '
         'Telegram для этого не нужен — этот сценарий исполняется внутри текущего мессенджера.'
     )
@@ -335,8 +304,7 @@ async def send_next_audio_to_user(
         f'🎧 {"Повтор аудио" if replay else "Следующее аудио по вашей общей очереди"}: №{item.anchor} — {item.title}\n\n'
         f'Слушать: {public_url}\n\n'
         f'Для {_platform_name(plan.platform)} это аварийная ссылка на файл: native-отправка сейчас не прошла.\n'
-        'После прослушивания нажмите «✅ Прослушал» или отправьте done / готово / прослушал.\n'
-        'Затем отправьте оценку от -10 до 10 — например: -2, 0, 4 или 8.'
+        'После прослушивания нажмите «✅ Прослушал» или отправьте done / готово / прослушал.'
     )
     await sender.send_text(
         plan.external_user_id,
