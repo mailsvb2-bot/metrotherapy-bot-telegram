@@ -374,8 +374,10 @@ def _parse_command(text: str) -> tuple[str, str | None]:
         return "share", None
     if lowered in {"switch", "/switch", "сменить канал", "другой мессенджер"}:
         return "switch", None
-    if lowered in {"continue", "/continue", "next", "/next", "audio", "/audio", "следующее аудио"}:
+    if lowered in {"continue", "/continue", "next", "/next", "audio", "/audio", "следующее аудио", "🎧 получить аудио"}:
         return "continue", None
+    if lowered in {"repeat", "/repeat", "повторить", "🔁 повторить", "повторить аудио", "🔁 повторить аудио", "слушать снова"}:
+        return "repeat_audio", None
     if lowered in {"done", "/done", "готово", "прослушал", "дослушал", "listen done"}:
         return "done", None
     if lowered in {"progress", "/progress", "где остановился", "прогресс"}:
@@ -454,6 +456,69 @@ def _start_vk_pre_audio_session(user_id: int, *, kind: str) -> MessengerReply:
         text=_vk_pre_audio_score_text(kind, int(session_id)),
         meta={"vk_keyboard": "score_scale"},
     )
+
+
+
+def _kind_for_audio_item(item: object | None) -> str:
+    """Infer route kind for continuing the shared audio queue.
+
+    This is only a continuation fallback. First-time users should still choose
+    route via “Попробовать бесплатно”.
+    """
+    title = str(getattr(item, "title", "") or "").casefold()
+    anchor = getattr(item, "anchor", None)
+
+    if "evening" in title or "home" in title or "вечер" in title or "дом" in title:
+        return "home"
+
+    try:
+        if int(anchor) % 2 == 0:
+            return "home"
+    except Exception:
+        pass
+
+    return "work"
+
+
+def _continue_vk_audio_session(user_id: int) -> MessengerReply:
+    """Canonical meaning of “Получить аудио” in VK/MAX text UI.
+
+    “Попробовать бесплатно” is route selection.
+    “Получить аудио” is continuation.
+
+    If the user is brand new, do not silently pick morning/work. Send them to
+    the free route chooser so the behavior is explicit and Telegram-like.
+    """
+    snapshot = get_progress_snapshot(int(user_id))
+
+    if snapshot.pending_item is not None:
+        return MessengerReply(kind="next_audio")
+
+    if snapshot.last_anchor is None:
+        return MessengerReply(text=_demo_text(), meta={"vk_keyboard": "demo_kind"})
+
+    if snapshot.next_item is not None:
+        kind = _kind_for_audio_item(snapshot.next_item)
+        return _start_vk_pre_audio_session(int(user_id), kind=kind)
+
+    return MessengerReply(
+        text=(
+            "✅ Все доступные аудио уже выданы.\n\n"
+            "Можно нажать «📊 Прогресс» или «🧾 История».\n"
+            "Если хотите переслушать последнюю практику — отправьте repeat / повторить.\n"
+            "Если хотите начать маршрут заново — нажмите «🌿 Попробовать бесплатно» и выберите маршрут."
+        )
+    )
+
+
+
+def _repeat_last_vk_audio(user_id: int) -> MessengerReply:
+    """Repeat the last issued audio without advancing the queue."""
+    snapshot = get_progress_snapshot(int(user_id))
+    item = snapshot.pending_item or snapshot.last_item
+    if item is None:
+        return MessengerReply(text=_demo_text(), meta={"vk_keyboard": "demo_kind"})
+    return MessengerReply(kind="next_audio", meta={"replay": "1"})
 
 def handle_incoming_text(
     user_id: int,
@@ -559,8 +624,10 @@ def handle_incoming_text(
         return canonical_user_id, [MessengerReply(text=_share_text(canonical_user_id))]
     if action == "switch":
         return canonical_user_id, [MessengerReply(text=_switch_text(canonical_user_id))]
+    if action == "repeat_audio":
+        return canonical_user_id, [_repeat_last_vk_audio(canonical_user_id)]
     if action == "continue":
-        return canonical_user_id, [_start_vk_pre_audio_session(canonical_user_id, kind="work")]
+        return canonical_user_id, [_continue_vk_audio_session(canonical_user_id)]
     if action == "pre_score":
         return canonical_user_id, [MessengerReply(kind='auto_pre_score', meta={'score': str(value or '')})]
     if action == "post_score":
