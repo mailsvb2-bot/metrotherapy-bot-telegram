@@ -418,7 +418,13 @@ def _start_vk_pre_audio_session(user_id: int, *, kind: str) -> MessengerReply:
     snapshot = get_progress_snapshot(int(user_id))
     item = snapshot.pending_item or snapshot.next_item
     if item is None:
-        return MessengerReply(kind="next_audio")
+        return MessengerReply(
+            text=(
+                "✅ Все доступные аудио уже выданы.\n\n"
+                "Можно нажать «📊 Прогресс» или «🧾 История». "
+                "Когда появятся новые аудио, кнопка «🎧 Получить аудио» снова начнёт цикл со шкалы ДО прослушивания."
+            )
+        )
 
     day = datetime.now(timezone.utc).date().isoformat()
     slot = "morning" if kind == "work" else "evening"
@@ -526,7 +532,6 @@ def handle_incoming_text(
         return canonical_user_id, [MessengerReply(text=_demo_text(), meta={"vk_keyboard": "demo_kind"})]
     if action in {"demo_work", "demo_home"}:
         kind = "work" if action == "demo_work" else "home"
-        return canonical_user_id, [_start_vk_pre_audio_session(canonical_user_id, kind=kind)]
         return canonical_user_id, [_start_vk_pre_audio_session(canonical_user_id, kind=kind)]
     if action == "share":
         return canonical_user_id, [MessengerReply(text=_share_text(canonical_user_id))]
