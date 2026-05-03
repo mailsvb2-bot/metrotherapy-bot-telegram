@@ -1,14 +1,24 @@
 from __future__ import annotations
 
-"""Offline readiness check for Telegram/MAX/VK channel configuration."""
+"""Offline readiness check for Telegram/MAX/VK channel configuration.
+
+This CLI is diagnostic, not application boot. It must be able to run on a prod
+server even when prod fail-fast variables are missing, so it temporarily forces
+APP_ENV=dev before importing config.settings through preflight. Existing process
+environment variables are still visible to the checks; this only prevents import
+side effects from aborting before the report is printed.
+"""
 
 import json
+import os
 import sys
-
-from interfaces.messaging.preflight import check_all_preflights
 
 
 def main() -> int:
+    os.environ["APP_ENV"] = "dev"
+
+    from interfaces.messaging.preflight import check_all_preflights
+
     statuses = check_all_preflights()
     payload = {
         "ok": all(status.ok for status in statuses),
