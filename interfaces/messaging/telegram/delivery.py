@@ -10,6 +10,7 @@ Unified Messaging free from direct aiogram imports.
 from typing import Any
 
 from interfaces.messaging.contracts import CanonicalResponse
+from interfaces.messaging.observability import observe
 from interfaces.messaging.telegram.renderer import render_telegram_response
 
 
@@ -19,4 +20,16 @@ async def send_canonical_telegram_response(sender: Any, chat_id: int | str, resp
     reply_markup = rendered.payload.get("reply_markup")
     if reply_markup:
         kwargs["reply_markup"] = reply_markup
-    return await sender.send_message(chat_id, rendered.text, **kwargs)
+    try:
+        result = await sender.send_message(chat_id, rendered.text, **kwargs)
+    except Exception as exc:
+        observe(
+            "telegram",
+            "delivery",
+            "error",
+            has_buttons=bool(reply_markup),
+            error_type=type(exc).__name__,
+        )
+        raise
+    observe("telegram", "delivery", "ok", has_buttons=bool(reply_markup))
+    return result
