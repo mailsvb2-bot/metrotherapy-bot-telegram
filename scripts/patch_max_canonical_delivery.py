@@ -35,9 +35,14 @@ def apply_patch(path: Path = RUNTIME_PATH) -> bool:
             raise SystemExit("Import anchor not found; runtime file changed, review manually")
         text = text.replace(IMPORT_ANCHOR, IMPORT_ANCHOR + IMPORT_LINES, 1)
 
-    if OLD_TEXT_SEND_BLOCK in text:
+    if NEW_TEXT_SEND_BLOCK in text:
+        # Already patched. This check must happen before searching for
+        # OLD_TEXT_SEND_BLOCK because the old sender.send_text line is still
+        # intentionally present inside the non-MAX else branch.
+        pass
+    elif OLD_TEXT_SEND_BLOCK in text:
         text = text.replace(OLD_TEXT_SEND_BLOCK, NEW_TEXT_SEND_BLOCK, 1)
-    elif NEW_TEXT_SEND_BLOCK not in text:
+    else:
         raise SystemExit("MAX text send block anchor not found; runtime file changed, review manually")
 
     if text != original:
