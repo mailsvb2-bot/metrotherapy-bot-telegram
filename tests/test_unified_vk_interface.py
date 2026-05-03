@@ -1,4 +1,5 @@
 import json
+import pytest
 
 from interfaces.messaging.contracts import CanonicalButton, CanonicalResponse
 from interfaces.messaging.vk.adapter import adapt_vk_event, vk_event_key
@@ -87,15 +88,20 @@ def test_vk_renderer_turns_canonical_response_into_keyboard_json():
 
 
 class FakeVkSender:
-    def __init__(self):
+    def __init__(self, *, fail=False):
         self.calls = []
+        self.fail = fail
 
     async def send_text(self, external_user_id, text, **kwargs):
         self.calls.append((external_user_id, text, kwargs))
+        if self.fail:
+            raise RuntimeError('boom')
         return {'ok': True}
 
 
-def test_vk_delivery_bridge_sends_rendered_keyboard(event_loop):
+def test_vk_delivery_bridge_sends_rendered_keyboard(event_loop, monkeypatch):
+    observed = []
+    monkeypatch.setattr('interfaces.messaging.vk.delivery.observe', lambda *args, **kwargs: observed.append((args, kwargs)))
     sender = FakeVkSender()
     response = CanonicalResponse(
         text='Главное меню',
@@ -109,3 +115,15 @@ def test_vk_delivery_bridge_sends_rendered_keyboard(event_loop):
     assert sender.calls[0][1] == 'Главное меню'
     keyboard = json.loads(sender.calls[0][2]['keyboard_json'])
     assert keyboard['buttons'][0][0]['action']['payload'] == '{"command": "demo"}'
+    assert observed == [(('vk', 'delivery', 'ok'), {'has_buttons': True})]
+
+
+def test_vk_delivery_bridge_observes_and_reraises_errors(event_loop, monkeypatch):
+    observed = []
+    monkeypatch.setattr('interfaces.messaging.vk.delivery.observe', lambda *args, **kwargs: observed.append((args, kwargs)))
+    sender = FakeVkSender(fail=True)
+
+    with pytest.raises(RuntimeError):
+        event_loop.run_until_complete(send_canonical_vk_response(sender, '42', CanonicalResponse(text='x')))
+
+    assert observed == [(('vk', 'delivery', 'error'), {'has_buttons': False, 'error_type': 'RuntimeError'})]
