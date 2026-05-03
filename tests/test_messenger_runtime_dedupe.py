@@ -32,9 +32,10 @@ def _reload_modules(monkeypatch, tmp_path):
 
 def test_webhook_dedupe_rejects_duplicate(monkeypatch, tmp_path):
     dedupe, *_ = _reload_modules(monkeypatch, tmp_path)
-    payload = {'type': 'message_new', 'object': {'message': {'id': 1, 'from_id': 10}}}
-    assert dedupe.register_inbound_event('vk', 'vk:1', payload) is True
-    assert dedupe.register_inbound_event('vk', 'vk:1', payload) is False
+    event_key = f"vk:test:{tmp_path.name}"
+    payload = {'type': 'message_new', 'object': {'message': {'id': event_key, 'from_id': 10}}}
+    assert dedupe.register_inbound_event('vk', event_key, payload) is True
+    assert dedupe.register_inbound_event('vk', event_key, payload) is False
 
 
 def test_bridge_entry_makes_current_platform_preferred(monkeypatch, tmp_path):
