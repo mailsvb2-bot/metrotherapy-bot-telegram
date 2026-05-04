@@ -17,6 +17,54 @@ from services.messenger.timeline import log_audio_timeline_event
 from services.events import log_event
 
 
+
+# MAX_MOOD_LINK_DELIVERY_V1
+def _public_messenger_base_url() -> str:
+    try:
+        from config import settings
+        base = (
+            getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "")
+            or getattr(settings, "PAYMENT_PUBLIC_BASE_URL", "")
+            or "https://metrotherapy-bot.metrotherapy.ru"
+        )
+    except Exception:
+        base = "https://metrotherapy-bot.metrotherapy.ru"
+    return str(base).strip().rstrip("/")
+
+
+def _audio_access_url_for_token(token: str) -> str:
+    return f"{_public_messenger_base_url()}/media/audio/access/{token}"
+
+
+async def _send_mood_audio_canonically(sender, plan, item, *, caption: str) -> None:
+    """
+    MAX must receive a plain HTTPS access link. Native MAX audio upload is unstable
+    and previously produced silent non-delivery / HTTP 415 paths.
+    Telegram/VK keep their normal sender path.
+    """
+    platform = str(getattr(plan, "platform", "") or "").lower()
+    if platform != "max":
+        await _send_mood_audio_canonically(sender, plan, item, caption=caption)
+        return
+
+    from services.messenger.audio_delivery import issue_audio_access_link
+    from services.messenger.audio_progress import mark_pending_audio_delivery
+
+    token = issue_audio_access_link(int(plan.user_id), item=item, platform=platform)
+    access_url = _audio_access_url_for_token(token)
+    text = (
+        f"{caption}\n\n"
+        "MAX пока нестабильно принимает аудио как вложение, поэтому даю безопасную ссылку:\n"
+        f"{access_url}\n\n"
+        "После прослушивания вернитесь сюда и нажмите «✅ Прослушал» или напишите: done."
+    )
+    mark_pending_audio_delivery(int(plan.user_id), item=item, platform=platform, token=token)
+    await sender.send_text(
+        plan.external_user_id,
+        text,
+        disable_link_preview=False,
+    )
+
 def parse_score_text(text: str | None) -> int | None:
     raw = (text or '').strip().replace('−', '-')
     if not raw:
@@ -140,7 +188,7 @@ async def complete_pre_score_and_send(
         if sender is None:
             raise UnsupportedMessengerDelivery('No MAX sender registered')
         try:
-            await sender.send_audio_file(plan.external_user_id, item.path, caption=f'🎧 Ваш аудиотранс: №{item.anchor} — {item.title}')
+            await _send_mood_audio_canonically(sender, plan, item, caption=f'🎧 Ваш аудиотранс: №{item.anchor} — {item.title}')
             mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=None)
             log_audio_timeline_event(int(user_id), event_type='native_audio_sent', sequence_key='full_series', anchor=int(item.anchor), title=item.title, platform=plan.platform, slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'))
             transport = 'max_native_audio_pending'

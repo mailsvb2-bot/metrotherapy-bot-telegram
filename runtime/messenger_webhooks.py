@@ -32,6 +32,10 @@ from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDeli
 from services.messenger.text_ui import handle_incoming_text, MessengerReply
 from services.mood_text_flow import complete_pre_score_and_send, complete_post_score_and_send_next
 from services.messenger.webhook_dedupe import register_inbound_event
+from interfaces.messaging.vk.delivery import send_canonical_vk_response
+from interfaces.messaging.legacy_bridge import messenger_reply_to_canonical
+from interfaces.messaging.max.delivery import send_canonical_max_response
+from services.messenger.max_events import extract_max_inbound_message, max_event_key
 
 log = logging.getLogger(__name__)
 
@@ -471,16 +475,7 @@ def _vk_event_key(payload: dict[str, Any]) -> str:
 
 
 def _max_event_key(payload: dict[str, Any]) -> str:
-    message = payload.get('message') or {}
-    body = message.get('body') or {}
-    parts = [
-        str(payload.get('update_id') or payload.get('event_id') or ''),
-        str(message.get('message_id') or message.get('id') or body.get('mid') or ''),
-        str((message.get('sender') or {}).get('user_id') or (message.get('sender') or {}).get('id') or ''),
-        str(message.get('created_at') or payload.get('timestamp') or ''),
-    ]
-    key = ':'.join(part for part in parts if part)
-    return key or _stable_payload_key('max', payload)
+    return max_event_key(payload)
 
 
 @dataclass
@@ -598,24 +593,17 @@ def _extract_vk_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 def _extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
-    message = payload.get('message') or {}
-    sender = message.get('sender') or {}
-    body = message.get('body') or {}
-    user_id = sender.get('user_id') or sender.get('id')
-    safe_user_id = _safe_int(user_id)
-    if safe_user_id is None:
+    message = extract_max_inbound_message(payload)
+    if message is None:
         return None
-    text = (body.get('text') or '').strip()
-    full_name = ' '.join(part for part in [sender.get('first_name'), sender.get('last_name')] if part).strip() or sender.get('name')
     return {
-        'user_id': safe_user_id,
-        'external_user_id': str(user_id),
-        'username': sender.get('username'),
-        'display_name': full_name,
-        'first_name': sender.get('first_name') or sender.get('name'),
-        'text': text or 'start',
+        'user_id': message.user_id,
+        'external_user_id': message.external_user_id,
+        'username': message.username,
+        'display_name': message.display_name,
+        'first_name': message.first_name,
+        'text': _normalise_messenger_text(message.text or 'start'),
     }
-
 
 
 def _vk_progress_chart_path(user_id: int) -> Path | None:
@@ -717,7 +705,20 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
                     kwargs['keyboard_json'] = _vk_weather_keyboard_json()
                 elif keyboard_kind == 'weather_city':
                     kwargs['keyboard_json'] = _vk_weather_city_keyboard_json()
-            await sender.send_text(external_user_id, reply.text, **_with_vk_keyboard(platform, kwargs))
+            if platform == 'max':
+                await send_canonical_max_response(
+                    sender,
+                    external_user_id,
+                    messenger_reply_to_canonical(reply),
+                )
+            elif platform == 'vk':
+                await send_canonical_vk_response(
+                    sender,
+                    external_user_id,
+                    messenger_reply_to_canonical(reply),
+                )
+            else:
+                await sender.send_text(external_user_id, reply.text, **_with_vk_keyboard(platform, kwargs))
             continue
         if reply.kind == 'next_audio':
             try:
@@ -1088,7 +1089,9 @@ async def _max_webhook(request: web.Request) -> web.Response:
     except json.JSONDecodeError:
         return web.Response(status=400, text='invalid json')
     update_type = (payload.get('update_type') or '').strip()
-    if update_type and update_type != 'message_created':
+    allowed_update_types = {'message_created', 'message_callback', 'bot_started'}
+    if update_type and update_type not in allowed_update_types:
+        log.info('MAX webhook ignored update_type=%r', update_type)
         return web.json_response({'ok': True})
 
     if not register_inbound_event('max', _max_event_key(payload), payload):
@@ -1096,7 +1099,17 @@ async def _max_webhook(request: web.Request) -> web.Response:
 
     extracted = _extract_max_message(payload)
     if not extracted:
+        log.info('MAX webhook ignored: no extractable inbound message update_type=%r event_key=%s', update_type, _max_event_key(payload))
         return web.json_response({'ok': True})
+
+    log.info(
+        'MAX webhook extracted: update_type=%r event_key=%s external_user_id=%s text=%r username=%r',
+        update_type,
+        _max_event_key(payload),
+        extracted.get('external_user_id'),
+        extracted.get('text'),
+        extracted.get('username'),
+    )
 
     canonical_user_id, replies = handle_incoming_text(
         extracted['user_id'],
@@ -1108,6 +1121,7 @@ async def _max_webhook(request: web.Request) -> web.Response:
         first_name=extracted['first_name'],
     )
     try:
+        log.info("MAX replies prepared: external_user_id=%s canonical_user_id=%s replies=%s", extracted.get("external_user_id"), canonical_user_id, len(replies or []))
         await _send_reply_bundle('max', extracted['external_user_id'], canonical_user_id, replies)
     except MessengerTransportError:
         log.exception('MAX send failed')

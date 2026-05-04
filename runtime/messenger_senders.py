@@ -5,6 +5,7 @@ import json
 import mimetypes
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,6 +89,7 @@ class TelegramBotSender:
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         return await self.bot.send_message(int(external_user_id), text, **kwargs)
 
+    # MAX_NATIVE_AUDIO_HONEST_FAILURE_V1
     async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
         from services.fast_send_audio import send_audio_cached
         return await send_audio_cached(
@@ -126,6 +128,7 @@ class MaxBotSender:
             }
         )
         return f'{cls._payment_public_base_url()}/pay/yookassa?{query}'
+
 
     @staticmethod
     def _message_button(text: str, command: str) -> dict[str, Any]:
@@ -175,12 +178,15 @@ class MaxBotSender:
 
     @classmethod
     def _score_scale_keyboard(cls) -> dict[str, Any]:
+        # MAX clients can visually truncate wide inline rows.
+        # Keep the full -10..+10 scale, but render it in compact rows so every
+        # number stays visible. Users may also type the number manually.
         vals = list(range(-10, 11))
         rows: list[list[dict[str, Any]]] = []
-        for i in range(0, len(vals), 7):
+        for i in range(0, len(vals), 3):
             rows.append([
                 cls._message_button(f'{value:+d}' if value != 0 else '0', str(value))
-                for value in vals[i:i + 7]
+                for value in vals[i:i + 3]
             ])
         rows.append([cls._message_button('⬅️ Меню', 'start')])
         return cls._inline_keyboard(rows)
@@ -288,7 +294,18 @@ class MaxBotSender:
         token = (self.token or settings.MAX_BOT_TOKEN or '').strip()
         if not token:
             raise MessengerTransportError('MAX_BOT_TOKEN is empty')
-        media_token = await self._ensure_audio_token(file_path)
+
+        try:
+            media_token = await self._ensure_audio_token(file_path)
+        except urllib.error.HTTPError as exc:
+            # MAX native audio upload may reject source files with HTTP 415.
+            # Do not build /audio/<filename> here.
+            # The canonical layer services.messenger.audio_delivery owns fallback:
+            # /media/audio/access/<token>
+            raise MessengerTransportError(f'MAX audio upload failed: HTTP {exc.code}') from exc
+        except (OSError, ValueError, TypeError) as exc:
+            raise MessengerTransportError(f'MAX audio upload failed: {exc}') from exc
+
         url = f'{self._api_base_url()}/messages?user_id={urllib.parse.quote(str(external_user_id))}'
         payload: dict[str, Any] = {
             'text': caption or '',
@@ -299,28 +316,38 @@ class MaxBotSender:
         }
         if kwargs.get('notify') is not None:
             payload['notify'] = bool(kwargs['notify'])
+
         delays = (0.0, 0.8, 1.6, 2.4)
         last_error: Exception | None = None
         for delay in delays:
             if delay:
                 await asyncio.sleep(delay)
             try:
-                data = await asyncio.to_thread(_json_request, url, method='POST', headers={'Authorization': token}, payload=payload)
-            except (OSError, ValueError, TypeError) as exc:  # pragma: no cover
+                data = await asyncio.to_thread(
+                    _json_request,
+                    url,
+                    method='POST',
+                    headers={'Authorization': token},
+                    payload=payload,
+                )
+            except urllib.error.HTTPError as exc:
+                last_error = MessengerTransportError(f'MAX audio send failed: HTTP {exc.code}')
+                continue
+            except (OSError, ValueError, TypeError) as exc:
                 last_error = exc
                 continue
+
             if isinstance(data, dict) and data.get('code') == 'attachment.not.ready':
                 last_error = MessengerMediaNotReadyError(str(data))
                 continue
             if isinstance(data, dict) and data.get('error'):
-                raise MessengerTransportError(str(data['error']))
+                last_error = MessengerTransportError(str(data['error']))
+                continue
             return data.get('message', data)
+
         if last_error is not None:
             raise last_error if isinstance(last_error, MessengerTransportError) else MessengerTransportError(str(last_error))
         raise MessengerTransportError('MAX audio send failed without details')
-
-
-@dataclass
 class VkBotSender:
     token: str | None = None
     api_version: str | None = None
@@ -681,10 +708,11 @@ class VkBotSender:
         )
 
     async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
-        attachment = await self._ensure_doc_attachment(str(external_user_id), file_path)
-        return await self.send_text(
+        # VK canonical audio delivery uses the VK document upload path.
+        # Do not use MAX token/API/attachment format here.
+        return await self.send_document_file(
             external_user_id,
-            caption or f'🎧 Аудио: {file_path.stem}',
-            attachment=attachment,
+            file_path,
+            caption=caption,
             **kwargs,
         )

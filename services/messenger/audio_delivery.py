@@ -18,6 +18,30 @@ from services.messenger.audio_access import issue_or_reuse_audio_access_token
 from services.messenger.timeline import log_audio_timeline_event
 
 
+
+# MAX_CANONICAL_LINK_DELIVERY_V1
+def _max_public_base_url() -> str:
+    try:
+        from config import settings
+        base = (
+            getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "")
+            or getattr(settings, "PAYMENT_PUBLIC_BASE_URL", "")
+            or "https://metrotherapy-bot.metrotherapy.ru"
+        )
+    except Exception:
+        base = "https://metrotherapy-bot.metrotherapy.ru"
+    return str(base).strip().rstrip("/")
+
+
+def _max_audio_link_text(*, item, access_url: str, caption: str | None = None) -> str:
+    title = caption or f"🎧 Ваш аудиотранс: №{getattr(item, 'anchor', '')} — {getattr(item, 'title', '')}"
+    return (
+        f"{title}\n\n"
+        "MAX пока нестабильно принимает аудио как вложение, поэтому отправляю безопасную ссылку для прослушивания:\n"
+        f"{access_url}\n\n"
+        "После прослушивания вернитесь сюда и нажмите «✅ Прослушал» или напишите: done."
+    )
+
 async def _send_telegram_audio(bot: Any, external_user_id: str, item: AudioProgressItem) -> Any:
     from services.fast_send_audio import send_audio_cached
 
@@ -334,3 +358,49 @@ async def send_next_audio_to_user(
             f'🎧 Отправил аварийную ссылку в {_platform_name(plan.platform)}: №{item.anchor} — {item.title}'
         ),
     )
+
+
+# --- MAX/public audio access link helper v2026-05-04 ---
+def issue_audio_access_link(
+    user_id: int | str,
+    item,
+    *,
+    platform: str = "max",
+    sequence_key: str = "full_series",
+    base_url: str | None = None,
+) -> str:
+    """
+    Issue a canonical public audio access link and register it as pending delivery.
+
+    This is intentionally owned by audio_delivery, not by messenger_senders:
+    - sender layer sends text/buttons;
+    - audio_delivery owns progress, pending state and access-link issuance;
+    - /media/audio/access/<token> is served by runtime.messenger_webhooks.
+    """
+    import secrets
+
+    from config import settings
+    from services.messenger.audio_links import AUDIO_ACCESS_PREFIX
+    from services.messenger.audio_progress import mark_pending_audio_delivery
+
+    resolved_base = (
+        base_url
+        or getattr(settings, "PAYMENT_PUBLIC_BASE_URL", "")
+        or getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "")
+        or getattr(settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "")
+        or "https://metrotherapy-bot.metrotherapy.ru"
+    )
+    resolved_base = str(resolved_base).strip().rstrip("/")
+
+    token = secrets.token_urlsafe(24)
+
+    mark_pending_audio_delivery(
+        int(user_id),
+        item=item,
+        platform=str(platform or "max"),
+        token=token,
+        sequence_key=str(sequence_key or "full_series"),
+    )
+
+    return f"{resolved_base}{AUDIO_ACCESS_PREFIX}{token}"
+
