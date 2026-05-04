@@ -8,62 +8,13 @@ from services.audio_anchor import get_by_anchor
 from services.mood import get_session, set_pre, set_post, mark_audio_sent, last_delta
 from services.subscription import register_touch
 from services.progress import advance
-from services.messenger.audio_progress import AudioProgressItem, mark_pending_audio_delivery, record_audio_delivery
-from services.messenger.audio_access import issue_or_reuse_audio_access_token
-from services.messenger.audio_links import build_audio_access_url
+from services.messenger.audio_progress import AudioProgressItem, mark_pending_audio_delivery
 from services.messenger.outbound import SenderRegistry, build_delivery_plan, UnsupportedMessengerDelivery
 from services.messenger.platforms import MessengerPlatform
 from services.messenger.timeline import log_audio_timeline_event
+from services.messenger.max_audio import ensure_max_opus_file
 from services.events import log_event
 
-
-
-# MAX_MOOD_LINK_DELIVERY_V1
-def _public_messenger_base_url() -> str:
-    try:
-        from config import settings
-        base = (
-            getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "")
-            or getattr(settings, "PAYMENT_PUBLIC_BASE_URL", "")
-            or "https://metrotherapy-bot.metrotherapy.ru"
-        )
-    except Exception:
-        base = "https://metrotherapy-bot.metrotherapy.ru"
-    return str(base).strip().rstrip("/")
-
-
-def _audio_access_url_for_token(token: str) -> str:
-    return f"{_public_messenger_base_url()}/media/audio/access/{token}"
-
-
-async def _send_mood_audio_canonically(sender, plan, item, *, caption: str) -> None:
-    """
-    MAX must receive a plain HTTPS access link. Native MAX audio upload is unstable
-    and previously produced silent non-delivery / HTTP 415 paths.
-    Telegram/VK keep their normal sender path.
-    """
-    platform = str(getattr(plan, "platform", "") or "").lower()
-    if platform != "max":
-        await _send_mood_audio_canonically(sender, plan, item, caption=caption)
-        return
-
-    from services.messenger.audio_delivery import issue_audio_access_link
-    from services.messenger.audio_progress import mark_pending_audio_delivery
-
-    token = issue_audio_access_link(int(plan.user_id), item=item, platform=platform)
-    access_url = _audio_access_url_for_token(token)
-    text = (
-        f"{caption}\n\n"
-        "MAX пока нестабильно принимает аудио как вложение, поэтому даю безопасную ссылку:\n"
-        f"{access_url}\n\n"
-        "После прослушивания вернитесь сюда и нажмите «✅ Прослушал» или напишите: done."
-    )
-    mark_pending_audio_delivery(int(plan.user_id), item=item, platform=platform, token=token)
-    await sender.send_text(
-        plan.external_user_id,
-        text,
-        disable_link_preview=False,
-    )
 
 def parse_score_text(text: str | None) -> int | None:
     raw = (text or '').strip().replace('−', '-')
@@ -100,8 +51,6 @@ def find_pending_pre_session_id(user_id: int) -> int | None:
     return int(row['id']) if row else None
 
 
-
-
 def find_pending_post_session_id(user_id: int) -> int | None:
     from services.db import db
     with db() as conn:
@@ -118,6 +67,7 @@ def find_pending_post_session_id(user_id: int) -> int | None:
             (int(user_id),),
         ).fetchone()
     return int(row['id']) if row else None
+
 
 @dataclass(frozen=True)
 class MoodTextFlowResult:
@@ -188,18 +138,28 @@ async def complete_pre_score_and_send(
         if sender is None:
             raise UnsupportedMessengerDelivery('No MAX sender registered')
         try:
-            await _send_mood_audio_canonically(sender, plan, item, caption=f'🎧 Ваш аудиотранс: №{item.anchor} — {item.title}')
+            opus_path = ensure_max_opus_file(item.path)
+            await sender.send_audio_file(
+                plan.external_user_id,
+                opus_path,
+                caption=f'🎧 Ваш аудиотранс: №{item.anchor} — {item.title}',
+            )
             mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=None)
             log_audio_timeline_event(int(user_id), event_type='native_audio_sent', sequence_key='full_series', anchor=int(item.anchor), title=item.title, platform=plan.platform, slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'))
             transport = 'max_native_audio_pending'
-        except (RuntimeError, ValueError, TypeError):
-            access_token = issue_or_reuse_audio_access_token(int(user_id), item=item, platform=plan.platform)
-            public_url = build_audio_access_url(access_token)
-            if not public_url:
-                raise UnsupportedMessengerDelivery('MESSENGER_PUBLIC_BASE_URL is empty; cannot deliver auto audio link for MAX')
-            await sender.send_text(plan.external_user_id, f'🎧 Ваш аудиотранс готов: №{item.anchor} — {item.title}\n\nСлушать: {public_url}')
-            log_audio_timeline_event(int(user_id), event_type='link_sent', sequence_key='full_series', anchor=int(item.anchor), title=item.title, platform=plan.platform, token=access_token, slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'))
-            transport = 'max_link'
+        except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery) as exc:
+            log_audio_timeline_event(
+                int(user_id),
+                event_type='native_audio_fallback',
+                sequence_key='full_series',
+                anchor=int(item.anchor),
+                title=item.title,
+                platform=plan.platform,
+                slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'),
+            )
+            raise UnsupportedMessengerDelivery(
+                'MAX native .opus audio delivery failed in pre-score flow; refusing link fallback.'
+            ) from exc
     else:
         sender = senders.get(MessengerPlatform.VK.value)
         if sender is None:
@@ -229,43 +189,24 @@ async def complete_pre_score_and_send(
             )
             transport = 'vk_native_audio_pending'
         except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery):
-            access_token = issue_or_reuse_audio_access_token(int(user_id), item=item, platform=plan.platform)
-            public_url = build_audio_access_url(access_token)
-            if not public_url:
-                raise UnsupportedMessengerDelivery('MESSENGER_PUBLIC_BASE_URL is empty; cannot deliver auto audio link for VK')
-            await sender.send_text(
-                plan.external_user_id,
-                f'🎧 Ваш аудиотранс готов: №{item.anchor} — {item.title}\n\n'
-                f'Слушать: {public_url}\n\n'
-                'Это аварийная ссылка на файл: native-отправка ВКонтакте сейчас не прошла.',
-            )
-            log_audio_timeline_event(
-                int(user_id),
-                event_type='link_sent',
-                sequence_key='full_series',
-                anchor=int(item.anchor),
-                title=item.title,
-                platform=plan.platform,
-                token=access_token,
-                slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'),
-            )
-            transport = 'vk_link'
+            raise UnsupportedMessengerDelivery('VK native audio delivery failed in pre-score flow.')
 
     register_touch(int(user_id), 'morning' if session.kind == 'work' else 'evening')
     advance(int(user_id), 'morning' if session.kind == 'work' else 'evening')
     mark_audio_sent(session_id)
-    record_audio_delivery(int(user_id), item=item, platform=plan.platform)
-    if transport in {'telegram_audio_pending', 'max_native_audio_pending', 'vk_native_audio_pending'}:
-        message = (
-            f'✅ Оценку {score:+d} сохранил. Отправил аудио №{item.anchor} — {item.title}.\n\n'
-            'Когда дослушаете, напишите: done / готово / прослушал — и я сразу пришлю следующее.'
-        )
-        prompt_done = True
-    else:
-        message = f'✅ Оценку {score:+d} сохранил. Отправил ваш аудиотранс: №{item.anchor} — {item.title}.'
-        prompt_done = False
+
+    # Do NOT call record_audio_delivery() here.
+    # record_audio_delivery() confirms the pending audio and clears pending_*.
+    # In the Telegram-equivalent flow, confirmation belongs to the "Прослушал"/
+    # done step, after which the POST scale is shown. Calling it here made VK/MAX
+    # skip pending_item and pending_post_session_id immediately after PRE score.
+
+    message = (
+        f'✅ Оценку {score:+d} сохранил. Отправил аудио №{item.anchor} — {item.title}.\n\n'
+        'Когда дослушаете, нажмите «✅ Прослушал» или напишите: done / готово / прослушал.'
+    )
     log_event(int(user_id), 'mood_score', {'stage': 'pre', 'value': int(score), 'kind': session.kind, 'source': session.source, 'platform': delivered_platform})
-    return MoodTextFlowResult(True, message, prompt_done=prompt_done, delivered_platform=delivered_platform, transport=transport)
+    return MoodTextFlowResult(True, message, prompt_done=True, delivered_platform=delivered_platform, transport=transport)
 
 
 async def complete_post_score_and_send_next(
