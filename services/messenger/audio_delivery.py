@@ -6,6 +6,7 @@ from typing import Any
 
 from services.messenger.outbound import SenderRegistry, build_delivery_plan, UnsupportedMessengerDelivery
 from services.messenger.platforms import MessengerPlatform
+from services.messenger.max_audio import ensure_max_opus_file
 from services.messenger.audio_links import build_audio_access_url
 from services.messenger.audio_progress import (
     get_progress_snapshot,
@@ -189,9 +190,10 @@ async def _send_non_telegram_native(
     if platform not in {MessengerPlatform.MAX.value, MessengerPlatform.VK.value}:
         return None
     try:
+        audio_path = ensure_max_opus_file(item.path) if platform == MessengerPlatform.MAX.value else item.path
         await sender.send_audio_file(
             external_user_id,
-            item.path,
+            audio_path,
             caption=_pending_caption(platform, item, replay=replay),
             **_post_audio_control_kwargs(platform),
         )
