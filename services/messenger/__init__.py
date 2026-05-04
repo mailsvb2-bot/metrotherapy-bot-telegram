@@ -42,7 +42,13 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    """Keep legacy package imports without creating a text-ui import cycle."""
+    """Keep legacy package imports without creating a text-ui import cycle.
+
+    Importing services.mood_text_flow imports submodules under services.messenger.
+    Python executes this package __init__ first. If __init__ eagerly imports
+    services.messenger.text_ui, text_ui imports mood_text_flow back and the app
+    crashes with a partially initialized module. Keep text_ui lazy.
+    """
     if name in {"MessengerReply", "handle_incoming_text"}:
         from services.messenger.text_ui import MessengerReply, handle_incoming_text
 
