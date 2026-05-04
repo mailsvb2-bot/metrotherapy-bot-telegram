@@ -11,6 +11,7 @@ import hashlib
 import json
 
 from interfaces.messaging.contracts import ConversationEvent, ConversationUser
+from interfaces.messaging.observability import observe
 
 
 def _safe_int(value: Any) -> int | None:
@@ -63,12 +64,14 @@ def adapt_telegram_update(update: dict[str, Any]) -> ConversationEvent | None:
     if isinstance(callback, dict):
         sender = callback.get("from") or {}
         if not isinstance(sender, dict):
+            observe("telegram", "inbound", "rejected", reason="missing_callback_sender")
             return None
         user = _user_from_sender(sender)
         if user is None:
+            observe("telegram", "inbound", "rejected", reason="missing_user_id")
             return None
         text = str(callback.get("data") or "start").strip() or "start"
-        return ConversationEvent(
+        event = ConversationEvent(
             platform="telegram",
             kind="button",
             user=user,
@@ -77,24 +80,32 @@ def adapt_telegram_update(update: dict[str, Any]) -> ConversationEvent | None:
             raw=update,
             meta={"source": "telegram", "callback_query_id": callback.get("id")},
         )
+        observe("telegram", "inbound", "ok", kind="button", has_text=bool(text))
+        return event
 
     message = update.get("message") or update.get("edited_message")
     if isinstance(message, dict):
         sender = message.get("from") or {}
         if not isinstance(sender, dict):
+            observe("telegram", "inbound", "rejected", reason="missing_message_sender")
             return None
         user = _user_from_sender(sender)
         if user is None:
+            observe("telegram", "inbound", "rejected", reason="missing_user_id")
             return None
         text = str(message.get("text") or "start").strip() or "start"
-        return ConversationEvent(
+        kind = "start" if text == "/start" or text == "start" else "message"
+        event = ConversationEvent(
             platform="telegram",
-            kind="start" if text == "/start" or text == "start" else "message",
+            kind=kind,
             user=user,
             text=text,
             event_key=telegram_event_key(update),
             raw=update,
             meta={"source": "telegram"},
         )
+        observe("telegram", "inbound", "ok", kind=kind, has_text=bool(text))
+        return event
 
+    observe("telegram", "inbound", "rejected", reason="unsupported_update")
     return None
