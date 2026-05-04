@@ -294,6 +294,11 @@ async def send_next_audio_to_user(
     if native_result is not None:
         return native_result
 
+    if plan.platform == MessengerPlatform.MAX.value:
+        raise UnsupportedMessengerDelivery(
+            'MAX native audio delivery failed; refusing messenger link fallback because MAX must deliver audio directly in the bot window.'
+        )
+
     access_token = issue_or_reuse_audio_access_token(int(user_id), item=item, platform=plan.platform)
     public_url = build_audio_access_url(access_token)
     if not public_url:
