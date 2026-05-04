@@ -14,6 +14,7 @@ from services.messenger.audio_links import build_audio_access_url
 from services.messenger.outbound import SenderRegistry, build_delivery_plan, UnsupportedMessengerDelivery
 from services.messenger.platforms import MessengerPlatform
 from services.messenger.timeline import log_audio_timeline_event
+from services.messenger.max_audio import ensure_max_opus_file
 from services.events import log_event
 
 
@@ -140,18 +141,24 @@ async def complete_pre_score_and_send(
         if sender is None:
             raise UnsupportedMessengerDelivery('No MAX sender registered')
         try:
-            await sender.send_audio_file(plan.external_user_id, item.path, caption=f'🎧 Ваш аудиотранс: №{item.anchor} — {item.title}')
+            opus_path = ensure_max_opus_file(item.path)
+            await sender.send_audio_file(plan.external_user_id, opus_path, caption=f'🎧 Ваш аудиотранс: №{item.anchor} — {item.title}')
             mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=None)
             log_audio_timeline_event(int(user_id), event_type='native_audio_sent', sequence_key='full_series', anchor=int(item.anchor), title=item.title, platform=plan.platform, slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'))
             transport = 'max_native_audio_pending'
-        except (RuntimeError, ValueError, TypeError):
-            access_token = issue_or_reuse_audio_access_token(int(user_id), item=item, platform=plan.platform)
-            public_url = build_audio_access_url(access_token)
-            if not public_url:
-                raise UnsupportedMessengerDelivery('MESSENGER_PUBLIC_BASE_URL is empty; cannot deliver auto audio link for MAX')
-            await sender.send_text(plan.external_user_id, f'🎧 Ваш аудиотранс готов: №{item.anchor} — {item.title}\n\nСлушать: {public_url}')
-            log_audio_timeline_event(int(user_id), event_type='link_sent', sequence_key='full_series', anchor=int(item.anchor), title=item.title, platform=plan.platform, token=access_token, slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'))
-            transport = 'max_link'
+        except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery) as exc:
+            log_audio_timeline_event(
+                int(user_id),
+                event_type='native_audio_fallback',
+                sequence_key='full_series',
+                anchor=int(item.anchor),
+                title=item.title,
+                platform=plan.platform,
+                slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'),
+            )
+            raise UnsupportedMessengerDelivery(
+                'MAX native .opus audio delivery failed in pre-score flow; refusing link fallback.'
+            ) from exc
     else:
         sender = senders.get(MessengerPlatform.VK.value)
         if sender is None:
