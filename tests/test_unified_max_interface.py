@@ -6,7 +6,9 @@ from interfaces.messaging.max.renderer import render_max_response
 from interfaces.messaging.max.transport import MaxTransportClient, MaxTransportConfig
 
 
-def test_max_adapter_returns_conversation_event_without_business_logic():
+def test_max_adapter_returns_conversation_event_without_business_logic(monkeypatch):
+    observed = []
+    monkeypatch.setattr('interfaces.messaging.max.adapter.observe', lambda *args, **kwargs: observed.append((args, kwargs)))
     payload = {
         'update_id': 'u1',
         'message': {
@@ -26,6 +28,15 @@ def test_max_adapter_returns_conversation_event_without_business_logic():
     assert event.text == '🌿 Попробовать бесплатно'
     assert event.event_key == 'u1:m1:42'
     assert event.raw is payload
+    assert observed == [(('max', 'inbound', 'ok'), {'kind': 'message', 'has_text': True})]
+
+
+def test_max_adapter_observes_rejected_payload(monkeypatch):
+    observed = []
+    monkeypatch.setattr('interfaces.messaging.max.adapter.observe', lambda *args, **kwargs: observed.append((args, kwargs)))
+
+    assert adapt_max_event({'unknown': True}) is None
+    assert observed == [(('max', 'inbound', 'rejected'), {'reason': 'unsupported_payload'})]
 
 
 def test_max_renderer_turns_canonical_response_into_inline_keyboard():
