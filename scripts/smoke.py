@@ -106,12 +106,14 @@ def main() -> int:
     bot = Bot(token=token)
     dp = Dispatcher()
 
-    # Include routers exactly as app does (imports already happen in app)
+    # Include routers exactly as app does (imports already happen in app).
+    # Keep this list in parity with app.create_application(); otherwise smoke can
+    # pass while a production router is broken or missing.
     from handlers import (
         start, menu, text_input, payments, demo, audio,
         admin, admin_stats, admin_inline, share, weather,
         info, micro, settings as settings_router, mood,
-        diagnostics, gift_flow, kb_debug,
+        diagnostics, gift_flow, kb_debug, messenger_audio,
     )
 
     dp.include_router(start.router)
@@ -132,6 +134,7 @@ def main() -> int:
     dp.include_router(diagnostics.router)
     dp.include_router(gift_flow.router)
     dp.include_router(kb_debug.router)
+    dp.include_router(messenger_audio.router)
 
     # Close aiohttp session to avoid warnings.
     try:
