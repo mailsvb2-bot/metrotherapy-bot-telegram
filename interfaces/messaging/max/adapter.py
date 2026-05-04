@@ -9,12 +9,14 @@ updates into the channel-neutral ConversationEvent contract.
 from typing import Any
 
 from interfaces.messaging.contracts import ConversationEvent, ConversationUser
+from interfaces.messaging.observability import observe
 from services.messenger.max_events import extract_max_inbound_message, max_event_key
 
 
 def adapt_max_event(payload: dict[str, Any]) -> ConversationEvent | None:
     message = extract_max_inbound_message(payload)
     if message is None:
+        observe("max", "inbound", "rejected", reason="unsupported_payload")
         return None
 
     raw_text = (message.text or "").strip() or "start"
@@ -30,7 +32,7 @@ def adapt_max_event(payload: dict[str, Any]) -> ConversationEvent | None:
         display_name=message.display_name,
         first_name=message.first_name,
     )
-    return ConversationEvent(
+    event = ConversationEvent(
         platform="max",
         kind=kind,
         user=user,
@@ -39,3 +41,5 @@ def adapt_max_event(payload: dict[str, Any]) -> ConversationEvent | None:
         raw=payload,
         meta={"source": "max"},
     )
+    observe("max", "inbound", "ok", kind=kind, has_text=bool(raw_text))
+    return event
