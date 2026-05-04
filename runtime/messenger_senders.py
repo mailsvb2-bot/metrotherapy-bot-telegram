@@ -191,6 +191,17 @@ class MaxBotSender:
         rows.append([cls._max_message_button('📈 Мой прогресс'), cls._max_message_button('⬅️ Меню')])
         return cls._inline_keyboard_attachment(rows)
 
+    @classmethod
+    def _post_audio_attachment(cls) -> dict[str, Any]:
+        return cls._inline_keyboard_attachment([
+            [cls._max_message_button('✅ Прослушал')],
+            [
+                cls._max_message_button('📊 Прогресс'),
+                cls._max_message_button('🧾 История'),
+            ],
+            [cls._max_message_button('⬅️ Меню')],
+        ])
+
     @staticmethod
     def _is_score_scale_text(text: str) -> bool:
         raw = str(text or '').casefold().replace('−', '-')
@@ -198,6 +209,15 @@ class MaxBotSender:
             '-10' in raw
             and '10' in raw
             and ('шкал' in raw or 'оцен' in raw or 'состояни' in raw)
+        )
+
+    @staticmethod
+    def _is_post_audio_controls_text(text: str) -> bool:
+        raw = str(text or '').casefold().replace('ё', 'е')
+        return (
+            'прослуш' in raw
+            and ('когда дослушаете' in raw or 'когда прослушаете' in raw or 'аудио' in raw)
+            and ('done' in raw or 'готово' in raw or 'прослушал' in raw)
         )
 
     @staticmethod
@@ -248,6 +268,8 @@ class MaxBotSender:
             return [cls._weather_city_attachment()]
         if cls._is_score_scale_text(raw):
             return [cls._score_scale_attachment()]
+        if cls._is_post_audio_controls_text(raw):
+            return [cls._post_audio_attachment()]
         if stripped.startswith('🎧 Общий прогресс') or '📈 Анализ состояния' in raw:
             return [cls._inline_keyboard_attachment([
                 [cls._max_message_button('🎧 Получить аудио'), cls._max_message_button('✅ Прослушал')],
