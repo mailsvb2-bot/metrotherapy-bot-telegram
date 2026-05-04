@@ -21,9 +21,11 @@ def _render_button(button: CanonicalButton) -> dict[str, Any]:
     if button.kind == "link":
         if not button.url:
             raise ValueError(f"VK link button {button.text!r} has no URL")
+        # VK Callback/API keyboards reject color on open_link buttons:
+        # error_code=911 "action type is not compatible with setting colors".
+        # Color is valid for text buttons, but link buttons must be action-only.
         return {
             "action": {"type": "open_link", "label": button.text, "link": button.url},
-            "color": VK_COLOR_BY_ACTION.get(button.action, "secondary"),
         }
     return {
         "action": {
