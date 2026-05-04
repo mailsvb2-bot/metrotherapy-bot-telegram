@@ -192,6 +192,15 @@ class MaxBotSender:
         return cls._inline_keyboard_attachment(rows)
 
     @staticmethod
+    def _is_score_scale_text(text: str) -> bool:
+        raw = str(text or '').casefold().replace('−', '-')
+        return (
+            '-10' in raw
+            and '10' in raw
+            and ('шкал' in raw or 'оцен' in raw or 'состояни' in raw)
+        )
+
+    @staticmethod
     def _first_url(text: str) -> str:
         match = re.search(r'https?://[^\s)]+', text or '')
         return match.group(0).rstrip('.,;') if match else ''
@@ -237,7 +246,7 @@ class MaxBotSender:
             return [cls._weather_attachment()]
         if stripped.startswith('🏙 Напишите название города'):
             return [cls._weather_city_attachment()]
-        if 'Перед аудио' in raw and 'от -10 до +10' in raw:
+        if cls._is_score_scale_text(raw):
             return [cls._score_scale_attachment()]
         if stripped.startswith('🎧 Общий прогресс') or '📈 Анализ состояния' in raw:
             return [cls._inline_keyboard_attachment([
