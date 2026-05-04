@@ -11,6 +11,7 @@ import hashlib
 import json
 
 from interfaces.messaging.contracts import ConversationEvent, ConversationUser
+from interfaces.messaging.observability import observe
 
 
 def _safe_int(value: Any) -> int | None:
@@ -138,9 +139,11 @@ def adapt_vk_event(payload: dict[str, Any]) -> ConversationEvent | None:
     )
     safe_user_id = _safe_int(from_id)
     if safe_user_id is None:
+        observe("vk", "inbound", "rejected", reason="missing_user_id")
         return None
 
     text = (message.get("text") or obj.get("text") or "").strip()
+    has_payload = bool(message.get("payload") or obj.get("payload") or payload.get("payload"))
     if not text:
         text = _text_from_vk_payload(message.get("payload") or obj.get("payload") or payload.get("payload"))
     text = _normalise_vk_text(text) or "start"
@@ -150,12 +153,14 @@ def adapt_vk_event(payload: dict[str, Any]) -> ConversationEvent | None:
         external_user_id=str(from_id),
         platform="vk",
     )
-    return ConversationEvent(
+    event = ConversationEvent(
         platform="vk",
-        kind="button" if message.get("payload") or obj.get("payload") or payload.get("payload") else "message",
+        kind="button" if has_payload else "message",
         user=user,
         text=text,
         event_key=vk_event_key(payload),
         raw=payload,
         meta={"source": "vk"},
     )
+    observe("vk", "inbound", "ok", kind=event.kind, has_text=bool(text))
+    return event
