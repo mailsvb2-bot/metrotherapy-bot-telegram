@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import mimetypes
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -110,15 +111,159 @@ class MaxBotSender:
     token: str | None = None
 
     @staticmethod
-    def _prepare_text(text: str) -> str:
-        """Add an explicit numbered fallback menu for MAX when native buttons are absent.
+    def _has_main_menu_text(text: str) -> bool:
+        head = str(text or '').lstrip()[:500]
+        return 'Главное меню' in head and 'Попробовать бесплатно' in str(text or '')
 
-        The current MAX adapter sends text/audio, not a native button payload.
-        When the shared text UI sends the main menu, MAX users must still see
-        the canonical command vocabulary and have a reliable way to act.
+    @staticmethod
+    def _max_message_button(text: str) -> dict[str, str]:
+        """MAX native button that sends the same text into existing text routing.
+
+        We intentionally use `message` buttons instead of `callback` buttons here:
+        the codebase already has a canonical text-command pipeline for MAX/VK,
+        while MAX callback updates would require an additional webhook branch.
+        This keeps native buttons production-safe and preserves all old text
+        commands as fallback.
+        """
+        return {'type': 'message', 'text': text}
+
+    @staticmethod
+    def _max_link_button(text: str, url: str) -> dict[str, str]:
+        return {'type': 'link', 'text': text, 'url': url}
+
+    @classmethod
+    def _inline_keyboard_attachment(cls, rows: list[list[dict[str, str]]]) -> dict[str, Any]:
+        return {'type': 'inline_keyboard', 'payload': {'buttons': rows}}
+
+    @classmethod
+    def _main_menu_attachment(cls) -> dict[str, Any]:
+        rows: list[list[dict[str, str]]] = []
+        actions = list(MAIN_MENU_ACTIONS)
+        for idx in range(0, len(actions), 2):
+            rows.append([cls._max_message_button(action.title) for action in actions[idx:idx + 2]])
+        return cls._inline_keyboard_attachment(rows)
+
+    @classmethod
+    def _full_route_attachment(cls) -> dict[str, Any]:
+        return cls._inline_keyboard_attachment([
+            [
+                cls._max_message_button('🎧 Получить аудио'),
+                cls._max_message_button('✅ Прослушал'),
+            ],
+            [cls._max_message_button('⬅️ Меню')],
+        ])
+
+    @classmethod
+    def _demo_kind_attachment(cls) -> dict[str, Any]:
+        return cls._inline_keyboard_attachment([
+            [cls._max_message_button('1️⃣ Утро / дорога')],
+            [cls._max_message_button('2️⃣ Вечер / домой')],
+            [cls._max_message_button('⬅️ Меню')],
+        ])
+
+    @classmethod
+    def _weather_attachment(cls) -> dict[str, Any]:
+        return cls._inline_keyboard_attachment([
+            [
+                cls._max_message_button('🔄 Обновить погоду'),
+                cls._max_message_button('🏙 Изменить город'),
+            ],
+            [cls._max_message_button('⬅️ Меню')],
+        ])
+
+    @classmethod
+    def _weather_city_attachment(cls) -> dict[str, Any]:
+        return cls._inline_keyboard_attachment([[cls._max_message_button('⬅️ Меню')]])
+
+    @classmethod
+    def _score_scale_attachment(cls) -> dict[str, Any]:
+        rows: list[list[dict[str, str]]] = []
+        for row in [
+            [-10, -9, -8],
+            [-7, -6, -5],
+            [-4, -3, -2],
+            [-1, 0, 1],
+            [2, 3, 4],
+            [5, 6, 7],
+            [8, 9, 10],
+        ]:
+            rows.append([cls._max_message_button(str(value)) for value in row])
+        rows.append([cls._max_message_button('📈 Мой прогресс'), cls._max_message_button('⬅️ Меню')])
+        return cls._inline_keyboard_attachment(rows)
+
+    @staticmethod
+    def _first_url(text: str) -> str:
+        match = re.search(r'https?://[^\s)]+', text or '')
+        return match.group(0).rstrip('.,;') if match else ''
+
+    @classmethod
+    def _link_action_attachment(cls, text: str) -> dict[str, Any] | None:
+        url = cls._first_url(text)
+        if not url:
+            return None
+        if str(text or '').lstrip().startswith('💳 Оплата'):
+            return cls._inline_keyboard_attachment([
+                [cls._max_link_button('💳 Оплатить', url)],
+                [cls._max_message_button('🎧 Получить аудио'), cls._max_message_button('⬅️ Меню')],
+            ])
+        if str(text or '').lstrip().startswith('🎁 Подарить'):
+            return cls._inline_keyboard_attachment([
+                [cls._max_link_button('🎁 Оплатить подарок', url)],
+                [cls._max_message_button('📣 Посоветовать'), cls._max_message_button('⬅️ Меню')],
+            ])
+        if str(text or '').lstrip().startswith('↗️ Поделиться'):
+            return cls._inline_keyboard_attachment([
+                [cls._max_link_button('↗️ Открыть ссылку', url)],
+                [cls._max_message_button('⬅️ Меню')],
+            ])
+        return None
+
+    @classmethod
+    def _native_keyboard_attachments(cls, text: str) -> list[dict[str, Any]]:
+        raw = str(text or '')
+        stripped = raw.lstrip()
+
+        link_attachment = cls._link_action_attachment(raw)
+        if link_attachment is not None:
+            return [link_attachment]
+
+        if cls._has_main_menu_text(raw):
+            return [cls._main_menu_attachment()]
+        if stripped.startswith('🌿 Бесплатная практика'):
+            return [cls._demo_kind_attachment()]
+        if stripped.startswith('🔐 Полный маршрут'):
+            return [cls._full_route_attachment()]
+        if stripped.startswith('🌤 Погода') or '🏙 Изменить город' in raw:
+            return [cls._weather_attachment()]
+        if stripped.startswith('🏙 Напишите название города'):
+            return [cls._weather_city_attachment()]
+        if 'Перед аудио' in raw and 'от -10 до +10' in raw:
+            return [cls._score_scale_attachment()]
+        if stripped.startswith('🎧 Общий прогресс') or '📈 Анализ состояния' in raw:
+            return [cls._inline_keyboard_attachment([
+                [cls._max_message_button('🎧 Получить аудио'), cls._max_message_button('✅ Прослушал')],
+                [cls._max_message_button('🧾 История'), cls._max_message_button('⬅️ Меню')],
+            ])]
+        if stripped.startswith('⚙️ Настройки канала'):
+            return [cls._inline_keyboard_attachment([
+                [cls._max_message_button('/platform telegram'), cls._max_message_button('/platform max'), cls._max_message_button('/platform vk')],
+                [cls._max_message_button('switch'), cls._max_message_button('⬅️ Меню')],
+            ])]
+        return []
+
+    @classmethod
+    def _prepare_text(cls, text: str, *, has_native_keyboard: bool = False) -> str:
+        """Prepare MAX text while preserving a no-keyboard fallback.
+
+        Native MAX inline keyboards are attached whenever the message has a
+        known Telegram/VK-equivalent action surface. The numbered text menu is
+        retained only when a native keyboard is not attached, so old clients and
+        degraded API situations still have a command fallback without noisy
+        duplication in the normal path.
         """
         raw = str(text or '')
-        if raw.lstrip().startswith('Главное меню') and 'отправьте:' not in raw:
+        raw = raw.replace('Кнопки ВКонтакте соответствуют', 'Кнопки MAX и ВКонтакте соответствуют')
+        if cls._has_main_menu_text(raw) and not has_native_keyboard and 'отправьте:' not in raw:
             return raw.rstrip() + '\n\n' + max_numbered_menu_text()
         return raw
 
@@ -127,7 +272,10 @@ class MaxBotSender:
         if not token:
             raise MessengerTransportError('MAX_BOT_TOKEN is empty')
         url = f'https://platform-api.max.ru/messages?user_id={urllib.parse.quote(str(external_user_id))}'
-        payload: dict[str, Any] = {'text': self._prepare_text(text)}
+        attachments = list(kwargs.get('attachments') or self._native_keyboard_attachments(str(text or '')))
+        payload: dict[str, Any] = {'text': self._prepare_text(text, has_native_keyboard=bool(attachments))}
+        if attachments:
+            payload['attachments'] = attachments
         if kwargs.get('disable_link_preview') is not None:
             url += f"&disable_link_preview={'true' if kwargs['disable_link_preview'] else 'false'}"
         if kwargs.get('format'):
