@@ -16,31 +16,8 @@ from services.messenger.audio_progress import (
 )
 from services.messenger.audio_access import issue_or_reuse_audio_access_token
 from services.messenger.timeline import log_audio_timeline_event
+from services.messenger.max_audio import ensure_max_opus_file
 
-
-
-# MAX_CANONICAL_LINK_DELIVERY_V1
-def _max_public_base_url() -> str:
-    try:
-        from config import settings
-        base = (
-            getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "")
-            or getattr(settings, "PAYMENT_PUBLIC_BASE_URL", "")
-            or "https://metrotherapy-bot.metrotherapy.ru"
-        )
-    except Exception:
-        base = "https://metrotherapy-bot.metrotherapy.ru"
-    return str(base).strip().rstrip("/")
-
-
-def _max_audio_link_text(*, item, access_url: str, caption: str | None = None) -> str:
-    title = caption or f"🎧 Ваш аудиотранс: №{getattr(item, 'anchor', '')} — {getattr(item, 'title', '')}"
-    return (
-        f"{title}\n\n"
-        "MAX пока нестабильно принимает аудио как вложение, поэтому отправляю безопасную ссылку для прослушивания:\n"
-        f"{access_url}\n\n"
-        "После прослушивания вернитесь сюда и нажмите «✅ Прослушал» или напишите: done."
-    )
 
 async def _send_telegram_audio(bot: Any, external_user_id: str, item: AudioProgressItem) -> Any:
     from services.fast_send_audio import send_audio_cached
@@ -213,9 +190,10 @@ async def _send_non_telegram_native(
     if platform not in {MessengerPlatform.MAX.value, MessengerPlatform.VK.value}:
         return None
     try:
+        audio_path = ensure_max_opus_file(item.path) if platform == MessengerPlatform.MAX.value else item.path
         await sender.send_audio_file(
             external_user_id,
-            item.path,
+            audio_path,
             caption=_pending_caption(platform, item, replay=replay),
             **_post_audio_control_kwargs(platform),
         )
@@ -318,6 +296,11 @@ async def send_next_audio_to_user(
     if native_result is not None:
         return native_result
 
+    if plan.platform == MessengerPlatform.MAX.value:
+        raise UnsupportedMessengerDelivery(
+            'MAX native .opus audio delivery failed; refusing link fallback because MAX must deliver audio directly in the bot window.'
+        )
+
     access_token = issue_or_reuse_audio_access_token(int(user_id), item=item, platform=plan.platform)
     public_url = build_audio_access_url(access_token)
     if not public_url:
@@ -372,10 +355,9 @@ def issue_audio_access_link(
     """
     Issue a canonical public audio access link and register it as pending delivery.
 
-    This is intentionally owned by audio_delivery, not by messenger_senders:
-    - sender layer sends text/buttons;
-    - audio_delivery owns progress, pending state and access-link issuance;
-    - /media/audio/access/<token> is served by runtime.messenger_webhooks.
+    This helper is retained for compatibility with older callers, but the normal
+    MAX delivery path must not use it as audio fallback. MAX must receive native
+    .opus audio or fail loudly.
     """
     import secrets
 
@@ -403,4 +385,3 @@ def issue_audio_access_link(
     )
 
     return f"{resolved_base}{AUDIO_ACCESS_PREFIX}{token}"
-
