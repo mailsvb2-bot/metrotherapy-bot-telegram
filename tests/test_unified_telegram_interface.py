@@ -3,7 +3,9 @@ from interfaces.messaging.telegram.adapter import adapt_telegram_update, telegra
 from interfaces.messaging.telegram.renderer import render_telegram_response
 
 
-def test_telegram_adapter_returns_conversation_event_from_message():
+def test_telegram_adapter_returns_conversation_event_from_message(monkeypatch):
+    observed = []
+    monkeypatch.setattr('interfaces.messaging.telegram.adapter.observe', lambda *args, **kwargs: observed.append((args, kwargs)))
     update = {
         'update_id': 100,
         'message': {
@@ -23,9 +25,12 @@ def test_telegram_adapter_returns_conversation_event_from_message():
     assert event.user.username == 'sergey'
     assert event.text == '/start'
     assert event.event_key == '100:5:42'
+    assert observed == [(('telegram', 'inbound', 'ok'), {'kind': 'start', 'has_text': True})]
 
 
-def test_telegram_adapter_returns_conversation_event_from_callback_query():
+def test_telegram_adapter_returns_conversation_event_from_callback_query(monkeypatch):
+    observed = []
+    monkeypatch.setattr('interfaces.messaging.telegram.adapter.observe', lambda *args, **kwargs: observed.append((args, kwargs)))
     update = {
         'update_id': 101,
         'callback_query': {
@@ -44,6 +49,15 @@ def test_telegram_adapter_returns_conversation_event_from_callback_query():
     assert event.user.user_id == 77
     assert event.text == 'demo_work'
     assert event.event_key == '101:9:77'
+    assert observed == [(('telegram', 'inbound', 'ok'), {'kind': 'button', 'has_text': True})]
+
+
+def test_telegram_adapter_observes_rejected_update(monkeypatch):
+    observed = []
+    monkeypatch.setattr('interfaces.messaging.telegram.adapter.observe', lambda *args, **kwargs: observed.append((args, kwargs)))
+
+    assert adapt_telegram_update({'unknown': True}) is None
+    assert observed == [(('telegram', 'inbound', 'rejected'), {'reason': 'unsupported_update'})]
 
 
 def test_telegram_event_key_falls_back_to_hash():
