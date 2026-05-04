@@ -424,13 +424,14 @@ class VkBotSender:
 
     @staticmethod
     def _vk_open_link_button(label: str, link: str, color: str = 'primary') -> dict[str, Any]:
+        # VK rejects color on open_link buttons with error_code=911.
+        # Keep the color argument for backward-compatible call sites, but do not render it.
         return {
             'action': {
                 'type': 'open_link',
                 'label': label,
                 'link': link,
             },
-            'color': color,
         }
 
     @classmethod
