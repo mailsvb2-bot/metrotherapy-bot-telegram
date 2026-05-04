@@ -18,6 +18,12 @@ else:
 
 from config.settings import settings
 from services.messenger.media_assets import get_cached_media_token, store_media_token
+from services.messenger.menu_contract import (
+    CONTEXT_ACTIONS,
+    MAIN_MENU_ACTIONS,
+    main_menu_commands,
+    max_numbered_menu_text,
+)
 
 
 class MessengerTransportError(RuntimeError):
@@ -103,12 +109,25 @@ class TelegramBotSender:
 class MaxBotSender:
     token: str | None = None
 
+    @staticmethod
+    def _prepare_text(text: str) -> str:
+        """Add an explicit numbered fallback menu for MAX when native buttons are absent.
+
+        The current MAX adapter sends text/audio, not a native button payload.
+        When the shared text UI sends the main menu, MAX users must still see
+        the canonical command vocabulary and have a reliable way to act.
+        """
+        raw = str(text or '')
+        if raw.lstrip().startswith('Главное меню') and 'отправьте:' not in raw:
+            return raw.rstrip() + '\n\n' + max_numbered_menu_text()
+        return raw
+
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         token = (self.token or settings.MAX_BOT_TOKEN or '').strip()
         if not token:
             raise MessengerTransportError('MAX_BOT_TOKEN is empty')
         url = f'https://platform-api.max.ru/messages?user_id={urllib.parse.quote(str(external_user_id))}'
-        payload: dict[str, Any] = {'text': text}
+        payload: dict[str, Any] = {'text': self._prepare_text(text)}
         if kwargs.get('disable_link_preview') is not None:
             url += f"&disable_link_preview={'true' if kwargs['disable_link_preview'] else 'false'}"
         if kwargs.get('format'):
@@ -209,17 +228,10 @@ class VkBotSender:
                     return command.strip()
         label = str(action.get('label') or '').strip().casefold().replace('ё', 'е')
         label_aliases = {
-            '🌿 попробовать бесплатно': 'demo',
-            '🔐 полный маршрут': 'full',
-            '💳 тарифы': 'pay',
-            '🎁 подарить': 'gift',
-            '📈 мой прогресс': 'progress',
-            '🧠 настройки': 'settings',
-            '📣 посоветовать': 'share',
-            '🌤 погода': 'weather',
-            '🎧 получить аудио': 'continue',
-            '✅ прослушал': 'done',
+            action.title.casefold().replace('ё', 'е'): action.command
+            for action in MAIN_MENU_ACTIONS + CONTEXT_ACTIONS
         }
+        label_aliases['⬅️ меню'] = 'start'
         return label_aliases.get(label, '')
 
     @staticmethod
@@ -263,16 +275,7 @@ class VkBotSender:
             all_commands.update(commands)
             row_commands.append((row, commands))
 
-        telegram_main_commands = {
-            'demo',
-            'full',
-            'pay',
-            'gift',
-            'progress',
-            'settings',
-            'share',
-            'weather',
-        }
+        telegram_main_commands = set(main_menu_commands())
         vk_only_main_controls = {'continue', 'done'}
         if not telegram_main_commands.issubset(all_commands):
             return keyboard_json
