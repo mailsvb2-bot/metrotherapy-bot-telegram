@@ -52,6 +52,16 @@ def _normalise_max_text(text: str) -> str:
         "готово": "done",
         "прослушал": "done",
         "✅ прослушал": "done",
+        "progress": "progress",
+        "прогресс": "progress",
+        "📈 мой прогресс": "progress",
+        "мой прогресс": "progress",
+        "📈 посмотреть график изменения состояния": "progress",
+        "посмотреть график изменения состояния": "progress",
+        "📈 посмотреть график изменения моего состояния": "progress",
+        "посмотреть график изменения моего состояния": "progress",
+        "график изменения состояния": "progress",
+        "график состояния": "progress",
     }
     return aliases.get(compact, raw)
 
@@ -175,7 +185,7 @@ def extract_max_inbound_message(payload: dict[str, Any]) -> MaxInboundMessage | 
     if safe_user_id is None:
         return None
 
-    text = _text_from_max_payload(payload).strip() or "start"
+    text = _normalise_max_text(_text_from_max_payload(payload).strip() or "start")
     full_name = " ".join(
         part for part in [sender.get("first_name"), sender.get("last_name")] if part
     ).strip() or sender.get("name")
@@ -302,7 +312,7 @@ def _compat_extract_text(payload):
         payload_value = callback.get("payload")
         json_command = _compat_command_from_json_payload(payload_value)
         if json_command:
-            return json_command
+            return _normalise_max_text(json_command)
 
         # For explicit start aliases only, map to canonical start.
         for key in ("payload", "command", "data"):
@@ -311,7 +321,7 @@ def _compat_extract_text(payload):
                 low = value.strip().casefold().replace("ё", "е")
                 if low in {"/start", "start", "старт", "начать", "меню", "главное меню"}:
                     return "start"
-                return value.strip()
+                return _normalise_max_text(value.strip())
 
         # Preserve old contract: button text fallback remains raw, e.g. "✅ Прослушал".
         for key in ("text", "label", "title"):
@@ -320,7 +330,7 @@ def _compat_extract_text(payload):
                 low = value.strip().casefold().replace("ё", "е")
                 if low in {"/start", "start", "старт", "начать", "меню", "главное меню"}:
                     return "start"
-                return value.strip()
+                return _normalise_max_text(value.strip())
 
     # General message text extraction. Preserve raw text where possible.
     for obj in _compat_walk_dicts(payload):
@@ -330,7 +340,7 @@ def _compat_extract_text(payload):
                 low = value.strip().casefold().replace("ё", "е")
                 if low in {"/start", "start", "старт", "начать", "меню", "главное меню"}:
                     return "start"
-                return value.strip()
+                return _normalise_max_text(value.strip())
 
     for obj in _compat_walk_dicts(payload):
         for key in ("payload", "command", "data", "label", "title"):
@@ -339,7 +349,7 @@ def _compat_extract_text(payload):
                 low = value.strip().casefold().replace("ё", "е")
                 if low in {"/start", "start", "старт", "начать", "меню", "главное меню"}:
                     return "start"
-                return value.strip()
+                return _normalise_max_text(value.strip())
 
     return "start"
 
