@@ -24,9 +24,37 @@ def _first_keyboard_attachment(payload: dict[str, Any]) -> dict[str, Any] | None
     return None
 
 
+def _post_score_keyboard() -> dict[str, Any]:
+    return {
+        "type": "inline_keyboard",
+        "payload": {
+            "buttons": [
+                [
+                    {
+                        "type": "message",
+                        "text": "📈 Посмотреть график изменения состояния",
+                        "payload": "progress",
+                    }
+                ],
+                [
+                    {"type": "message", "text": "🎧 Другая практика", "payload": "demo"},
+                    {"type": "message", "text": "🔐 Открыть полный маршрут", "payload": "full"},
+                ],
+                [{"type": "message", "text": "🏠 Меню", "payload": "start"}],
+            ]
+        },
+    }
+
+
+def _is_post_score_response(text: str) -> bool:
+    return (text or "").lstrip().startswith("✅ Оценку после прослушивания")
+
+
 async def send_canonical_max_response(sender: Any, external_user_id: str, response: CanonicalResponse) -> Any:
     rendered = render_max_response(response)
     keyboard = _first_keyboard_attachment(rendered.payload)
+    if keyboard is None and _is_post_score_response(rendered.text):
+        keyboard = _post_score_keyboard()
     try:
         result = await sender.send_text(
             external_user_id,
