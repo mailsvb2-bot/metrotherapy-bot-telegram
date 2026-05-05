@@ -2,8 +2,10 @@ from __future__ import annotations
 
 """MAX-native audio preparation.
 
-MAX must receive audio as a native bot-window attachment. This helper prepares
-an .opus file before upload and fails loudly when conversion is impossible.
+MAX must receive audio as a native bot-window attachment. In practice MAX upload
+URLs reject our source .opus files, while MAX documents supported audio formats
+such as mp3/wav/m4a. Prepare an AAC/M4A file before upload and fail loudly when
+conversion is impossible.
 """
 
 import hashlib
@@ -14,25 +16,36 @@ from pathlib import Path
 
 
 class MaxOpusPreparationError(RuntimeError):
+    """Backward-compatible error name for older callers/tests."""
+
+
+class MaxAudioPreparationError(MaxOpusPreparationError):
     pass
 
 
 def _cache_dir() -> Path:
-    root = Path(os.getenv("MAX_OPUS_CACHE_DIR", "data/max_opus_cache"))
+    root = Path(os.getenv("MAX_AUDIO_CACHE_DIR", os.getenv("MAX_OPUS_CACHE_DIR", "data/max_audio_cache")))
     return root if root.is_absolute() else Path.cwd() / root
 
 
 def _target_path(source: Path) -> Path:
     digest = hashlib.sha256(str(source.resolve()).encode("utf-8")).hexdigest()[:16]
     safe_stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", source.stem).strip("._") or "audio"
-    return _cache_dir() / f"{safe_stem}.{digest}.opus"
+    return _cache_dir() / f"{safe_stem}.{digest}.m4a"
 
 
-def ensure_max_opus_file(file_path: Path | str) -> Path:
+def ensure_max_audio_file(file_path: Path | str) -> Path:
+    """Return an audio file suitable for MAX native audio upload.
+
+    MAX currently rejects the project's .opus sources during upload. The sender
+    therefore prepares a deterministic AAC/M4A copy for MAX only. Telegram/VK
+    can continue using the original .opus files.
+    """
     source = Path(file_path)
     if not source.exists() or not source.is_file():
-        raise MaxOpusPreparationError(f"MAX audio source does not exist: {source}")
-    if source.suffix.lower() == ".opus":
+        raise MaxAudioPreparationError(f"MAX audio source does not exist: {source}")
+
+    if source.suffix.lower() == ".m4a":
         return source
 
     target = _target_path(source)
@@ -40,21 +53,17 @@ def ensure_max_opus_file(file_path: Path | str) -> Path:
         return target
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".opus.tmp")
+    tmp = target.with_suffix(".m4a.tmp")
     cmd = [
         os.getenv("FFMPEG_BIN", "ffmpeg"),
         "-y",
         "-i",
         str(source),
         "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "48000",
         "-c:a",
-        "libopus",
+        "aac",
         "-b:a",
-        os.getenv("MAX_OPUS_BITRATE", "48k"),
+        os.getenv("MAX_M4A_BITRATE", "96k"),
         str(tmp),
     ]
 
@@ -65,14 +74,14 @@ def ensure_max_opus_file(file_path: Path | str) -> Path:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=int(os.getenv("MAX_OPUS_CONVERT_TIMEOUT_SEC", "300")),
+            timeout=int(os.getenv("MAX_AUDIO_CONVERT_TIMEOUT_SEC", os.getenv("MAX_OPUS_CONVERT_TIMEOUT_SEC", "300"))),
         )
     except FileNotFoundError as exc:
-        raise MaxOpusPreparationError(
-            "MAX native .opus delivery requires ffmpeg. Install ffmpeg or provide .opus source files."
+        raise MaxAudioPreparationError(
+            "MAX native audio delivery requires ffmpeg. Install ffmpeg or provide .m4a source files."
         ) from exc
     except subprocess.TimeoutExpired as exc:
-        raise MaxOpusPreparationError(f"MAX .opus conversion timed out for {source}") from exc
+        raise MaxAudioPreparationError(f"MAX audio conversion timed out for {source}") from exc
 
     if completed.returncode != 0 or not tmp.exists() or tmp.stat().st_size <= 0:
         try:
@@ -80,7 +89,16 @@ def ensure_max_opus_file(file_path: Path | str) -> Path:
         except OSError:
             pass
         details = (completed.stderr or completed.stdout or "").strip()[-500:]
-        raise MaxOpusPreparationError(f"MAX .opus conversion failed for {source}: {details}")
+        raise MaxAudioPreparationError(f"MAX audio conversion failed for {source}: {details}")
 
     tmp.replace(target)
     return target
+
+
+def ensure_max_opus_file(file_path: Path | str) -> Path:
+    """Compatibility alias.
+
+    Older code imports this name, but MAX-native delivery now prepares M4A/AAC
+    because MAX upload rejects project .opus files.
+    """
+    return ensure_max_audio_file(file_path)
