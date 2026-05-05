@@ -50,6 +50,36 @@ def _is_post_score_response(text: str) -> bool:
     return (text or "").lstrip().startswith("✅ Оценку после прослушивания")
 
 
+def _enable_direct_sender_post_score_keyboard() -> None:
+    """Attach the chart keyboard to direct MaxBotSender text responses too.
+
+    runtime.messenger_webhooks still sends the auto_post_score result directly
+    through MaxBotSender.send_text. This keeps that legacy path visually aligned
+    with the canonical MAX renderer without changing business flow semantics.
+    """
+    try:
+        from runtime.messenger_senders import MaxBotSender
+    except Exception:
+        return
+
+    marker = "_direct_post_score_keyboard_enabled"
+    if bool(getattr(MaxBotSender, marker, False)):
+        return
+
+    base_keyboard_for_text = MaxBotSender._keyboard_for_text
+
+    def keyboard_for_text(cls: type[Any], text: str, *, external_user_id: str) -> dict[str, Any] | None:
+        if _is_post_score_response(str(text or "")):
+            return _post_score_keyboard()
+        return base_keyboard_for_text(str(text or ""), external_user_id=str(external_user_id))
+
+    MaxBotSender._keyboard_for_text = classmethod(keyboard_for_text)
+    setattr(MaxBotSender, marker, True)
+
+
+_enable_direct_sender_post_score_keyboard()
+
+
 async def send_canonical_max_response(sender: Any, external_user_id: str, response: CanonicalResponse) -> Any:
     rendered = render_max_response(response)
     keyboard = _first_keyboard_attachment(rendered.payload)
