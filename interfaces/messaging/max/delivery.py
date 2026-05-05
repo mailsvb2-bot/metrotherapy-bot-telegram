@@ -34,13 +34,9 @@ def _post_score_keyboard() -> dict[str, Any]:
                 [
                     {
                         "type": "message",
-                        "text": "📈 Посмотреть график изменения состояния",
+                        "text": "📈 Мой прогресс",
                         "payload": "progress",
                     }
-                ],
-                [
-                    {"type": "message", "text": "🎧 Другая практика", "payload": "demo"},
-                    {"type": "message", "text": "🔐 Открыть полный маршрут", "payload": "full"},
                 ],
                 [{"type": "message", "text": "🏠 Меню", "payload": "start"}],
             ]
