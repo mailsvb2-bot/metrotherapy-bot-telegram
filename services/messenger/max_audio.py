@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """MAX-native audio preparation.
 
-MAX must receive audio as a native bot-window attachment. In practice MAX upload
-URLs reject our source .opus files, while MAX documents supported audio formats
-such as mp3/wav/m4a. Prepare an AAC/M4A file before upload and fail loudly when
+MAX must receive audio as a native bot-window attachment. MAX upload rejects the
+project's source .opus files in practice, while supported audio formats include
+m4a/mp3/wav. Prepare an AAC/M4A file before upload and fail loudly when
 conversion is impossible.
 """
 
@@ -53,7 +53,7 @@ def ensure_max_audio_file(file_path: Path | str) -> Path:
         return target
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".m4a.tmp")
+    tmp = target.with_name(f".{target.name}.tmp.m4a")
     cmd = [
         os.getenv("FFMPEG_BIN", "ffmpeg"),
         "-y",
@@ -64,6 +64,8 @@ def ensure_max_audio_file(file_path: Path | str) -> Path:
         "aac",
         "-b:a",
         os.getenv("MAX_M4A_BITRATE", "96k"),
+        "-f",
+        "mp4",
         str(tmp),
     ]
 
