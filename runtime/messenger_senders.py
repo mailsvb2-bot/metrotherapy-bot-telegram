@@ -49,22 +49,43 @@ def _form_request(url: str, params: dict[str, Any]) -> dict[str, Any]:
     return json.loads(raw) if raw else {}
 
 
-def _multipart_bytes(field_name: str, filename: str, content: bytes, *, content_type: str) -> tuple[bytes, str]:
+def _multipart_bytes(
+    field_name: str,
+    filename: str,
+    content: bytes,
+    *,
+    content_type: str | None = None,
+) -> tuple[bytes, str]:
     boundary = f'----ChatGPTBoundary{uuid4().hex}'
+    disposition = f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'
+    type_header = f'Content-Type: {content_type}\r\n' if content_type else ''
     head = (
         f'--{boundary}\r\n'
-        f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'
-        f'Content-Type: {content_type}\r\n\r\n'
+        f'{disposition}'
+        f'{type_header}'
+        f'\r\n'
     ).encode('utf-8')
     tail = f'\r\n--{boundary}--\r\n'.encode('utf-8')
     return head + content + tail, boundary
 
 
 
-def _multipart_upload(url: str, *, token: str | None = None, field_name: str, path: Path) -> dict[str, Any]:
+def _multipart_upload(
+    url: str,
+    *,
+    token: str | None = None,
+    field_name: str,
+    path: Path,
+    include_part_content_type: bool = True,
+) -> dict[str, Any]:
     mime_type = mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
     content = path.read_bytes()
-    body, boundary = _multipart_bytes(field_name, path.name, content, content_type=mime_type)
+    body, boundary = _multipart_bytes(
+        field_name,
+        path.name,
+        content,
+        content_type=mime_type if include_part_content_type else None,
+    )
     headers = {
         'Content-Type': f'multipart/form-data; boundary={boundary}',
         'Content-Length': str(len(body)),
@@ -80,6 +101,34 @@ def _multipart_upload(url: str, *, token: str | None = None, field_name: str, pa
     with urllib.request.urlopen(request, timeout=120) as response:
         raw = response.read().decode('utf-8')
     return json.loads(raw) if raw else {}
+
+
+def _max_multipart_upload(url: str, *, token: str | None = None, field_name: str, path: Path) -> dict[str, Any]:
+    """Upload to MAX upload URL with a curl-compatible multipart fallback.
+
+    MAX docs show `curl -F "data=@file"`, which does not force a per-part MIME
+    type in the way our hand-built multipart body did. Some MAX upload URLs
+    return HTTP 415 for .opus when the file part contains `Content-Type`.
+    Retry without the per-part MIME header before surfacing the error.
+    """
+    try:
+        return _multipart_upload(
+            url,
+            token=token,
+            field_name=field_name,
+            path=path,
+            include_part_content_type=True,
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code != 415:
+            raise
+        return _multipart_upload(
+            url,
+            token=token,
+            field_name=field_name,
+            path=path,
+            include_part_content_type=False,
+        )
 
 
 class TelegramBotSender:
@@ -185,7 +234,7 @@ class MaxBotSender:
         rows: list[list[dict[str, Any]]] = []
         for i in range(0, len(vals), 3):
             rows.append([
-                cls._message_button(f'{value:+d}' if value != 0 else '0', str(value))
+                cls._message_button(str(value), str(value))
                 for value in vals[i:i + 3]
             ])
         rows.append([cls._message_button('⬅️ Меню', 'start')])
@@ -286,7 +335,7 @@ class MaxBotSender:
         media_token = str(upload_meta.get('token') or '').strip()
         if not upload_url or not media_token:
             raise MessengerTransportError(f'Unexpected MAX upload response: {upload_meta}')
-        await asyncio.to_thread(_multipart_upload, upload_url, token=token, field_name='data', path=file_path)
+        await asyncio.to_thread(_max_multipart_upload, upload_url, token=token, field_name='data', path=file_path)
         store_media_token('max', file_path, media_token, media_type='audio')
         return media_token
 
