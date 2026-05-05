@@ -53,30 +53,30 @@ def _is_post_score_response(text: str) -> bool:
 
 
 def _pick_media_token(data: dict[str, Any]) -> str:
-    """Extract a reusable MAX media token from known upload response shapes."""
+    """Extract a reusable MAX media token from known nested upload shapes."""
     for key in ("token", "media_token", "file_token"):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
 
-    payload = data.get("payload")
-    if isinstance(payload, dict):
-        nested = _pick_media_token(payload)
-        if nested:
-            return nested
+    for key in ("payload", "photos", "attachment"):
+        value = data.get(key)
+        if isinstance(value, dict):
+            nested = _pick_media_token(value)
+            if nested:
+                return nested
 
-    photos = data.get("photos")
-    if isinstance(photos, dict):
-        nested = _pick_media_token(photos)
-        if nested:
-            return nested
-
-    attachment = data.get("attachment")
-    if isinstance(attachment, dict):
-        nested = _pick_media_token(attachment)
-        if nested:
-            return nested
-
+    for value in data.values():
+        if isinstance(value, dict):
+            nested = _pick_media_token(value)
+            if nested:
+                return nested
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    nested = _pick_media_token(item)
+                    if nested:
+                        return nested
     return ""
 
 
