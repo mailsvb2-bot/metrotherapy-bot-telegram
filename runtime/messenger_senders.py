@@ -29,6 +29,41 @@ class MessengerMediaNotReadyError(MessengerTransportError):
     pass
 
 
+_RESPONSE_PREVIEW_LIMIT = 500
+
+
+def _response_preview(raw: str) -> str:
+    return (raw or '').strip()[:_RESPONSE_PREVIEW_LIMIT]
+
+
+def _decode_json_response(raw: str, *, context: str, allow_non_json: bool = False) -> dict[str, Any]:
+    text = (raw or '').strip()
+    if not text:
+        return {}
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError as exc:
+        if allow_non_json:
+            return {
+                '_non_json_response': True,
+                'context': context,
+                'raw_preview': _response_preview(text),
+            }
+        raise ValueError(f'{context} returned non-JSON response: {_response_preview(text)!r}') from exc
+    if isinstance(decoded, dict):
+        return decoded
+    return {'value': decoded}
+
+
+def _http_error_details(exc: urllib.error.HTTPError) -> str:
+    try:
+        raw = exc.read().decode('utf-8', errors='replace')
+    except Exception:
+        raw = ''
+    preview = _response_preview(raw)
+    return f'HTTP {exc.code}' + (f': {preview}' if preview else '')
+
+
 def _json_request(url: str, *, method: str = 'POST', headers: dict[str, str] | None = None, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     data = None
     req_headers = dict(headers or {})
@@ -37,16 +72,16 @@ def _json_request(url: str, *, method: str = 'POST', headers: dict[str, str] | N
         req_headers.setdefault('Content-Type', 'application/json')
     request = urllib.request.Request(url, data=data, headers=req_headers, method=method)
     with urllib.request.urlopen(request, timeout=20) as response:
-        raw = response.read().decode('utf-8')
-    return json.loads(raw) if raw else {}
+        raw = response.read().decode('utf-8', errors='replace')
+    return _decode_json_response(raw, context=f'{method} {url}')
 
 
 def _form_request(url: str, params: dict[str, Any]) -> dict[str, Any]:
     encoded = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None}).encode('utf-8')
     request = urllib.request.Request(url, data=encoded, method='POST')
     with urllib.request.urlopen(request, timeout=20) as response:
-        raw = response.read().decode('utf-8')
-    return json.loads(raw) if raw else {}
+        raw = response.read().decode('utf-8', errors='replace')
+    return _decode_json_response(raw, context=f'POST {url}')
 
 
 def _multipart_bytes(
@@ -77,6 +112,7 @@ def _multipart_upload(
     field_name: str,
     path: Path,
     include_part_content_type: bool = True,
+    allow_non_json_response: bool = False,
 ) -> dict[str, Any]:
     mime_type = mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
     content = path.read_bytes()
@@ -99,8 +135,12 @@ def _multipart_upload(
         method='POST',
     )
     with urllib.request.urlopen(request, timeout=120) as response:
-        raw = response.read().decode('utf-8')
-    return json.loads(raw) if raw else {}
+        raw = response.read().decode('utf-8', errors='replace')
+    return _decode_json_response(
+        raw,
+        context=f'multipart upload {url}',
+        allow_non_json=allow_non_json_response,
+    )
 
 
 def _max_multipart_upload(url: str, *, token: str | None = None, field_name: str, path: Path) -> dict[str, Any]:
@@ -110,6 +150,10 @@ def _max_multipart_upload(url: str, *, token: str | None = None, field_name: str
     type in the way our hand-built multipart body did. Some MAX upload URLs
     return HTTP 415 for .opus when the file part contains `Content-Type`.
     Retry without the per-part MIME header before surfacing the error.
+
+    Some MAX upload URLs also complete with an empty or non-JSON response body.
+    That must not crash native audio delivery when /uploads already gave us the
+    media token that is later used in the message attachment.
     """
     try:
         return _multipart_upload(
@@ -118,6 +162,7 @@ def _max_multipart_upload(url: str, *, token: str | None = None, field_name: str
             field_name=field_name,
             path=path,
             include_part_content_type=True,
+            allow_non_json_response=True,
         )
     except urllib.error.HTTPError as exc:
         if exc.code != 415:
@@ -128,7 +173,29 @@ def _max_multipart_upload(url: str, *, token: str | None = None, field_name: str
             field_name=field_name,
             path=path,
             include_part_content_type=False,
+            allow_non_json_response=True,
         )
+
+
+def _extract_media_token(data: dict[str, Any]) -> str:
+    for key in ('token', 'media_token', 'file_token'):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    payload = data.get('payload')
+    if isinstance(payload, dict):
+        for key in ('token', 'media_token', 'file_token'):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    attachment = data.get('attachment')
+    if isinstance(attachment, dict):
+        payload = attachment.get('payload')
+        if isinstance(payload, dict):
+            value = payload.get('token')
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ''
 
 
 class TelegramBotSender:
@@ -332,12 +399,18 @@ class MaxBotSender:
             payload=None,
         )
         upload_url = str(upload_meta.get('url') or '').strip()
-        media_token = str(upload_meta.get('token') or '').strip()
-        if not upload_url or not media_token:
+        media_token = _extract_media_token(upload_meta)
+        if not upload_url:
             raise MessengerTransportError(f'Unexpected MAX upload response: {upload_meta}')
-        await asyncio.to_thread(_max_multipart_upload, upload_url, token=token, field_name='data', path=file_path)
-        store_media_token('max', file_path, media_token, media_type='audio')
-        return media_token
+        uploaded = await asyncio.to_thread(_max_multipart_upload, upload_url, token=token, field_name='data', path=file_path)
+        uploaded_token = _extract_media_token(uploaded) if isinstance(uploaded, dict) else ''
+        final_token = uploaded_token or media_token
+        if not final_token:
+            raise MessengerTransportError(
+                f'MAX audio upload completed but no media token was returned: upload_meta={upload_meta}, uploaded={uploaded}'
+            )
+        store_media_token('max', file_path, final_token, media_type='audio')
+        return final_token
 
     async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
         token = (self.token or settings.MAX_BOT_TOKEN or '').strip()
@@ -351,7 +424,7 @@ class MaxBotSender:
             # Do not build /audio/<filename> here.
             # The canonical layer services.messenger.audio_delivery owns fallback:
             # /media/audio/access/<token>
-            raise MessengerTransportError(f'MAX audio upload failed: HTTP {exc.code}') from exc
+            raise MessengerTransportError(f'MAX audio upload failed: {_http_error_details(exc)}') from exc
         except (OSError, ValueError, TypeError) as exc:
             raise MessengerTransportError(f'MAX audio upload failed: {exc}') from exc
 
@@ -380,7 +453,7 @@ class MaxBotSender:
                     payload=payload,
                 )
             except urllib.error.HTTPError as exc:
-                last_error = MessengerTransportError(f'MAX audio send failed: HTTP {exc.code}')
+                last_error = MessengerTransportError(f'MAX audio send failed: {_http_error_details(exc)}')
                 continue
             except (OSError, ValueError, TypeError) as exc:
                 last_error = exc
@@ -397,6 +470,8 @@ class MaxBotSender:
         if last_error is not None:
             raise last_error if isinstance(last_error, MessengerTransportError) else MessengerTransportError(str(last_error))
         raise MessengerTransportError('MAX audio send failed without details')
+
+
 class VkBotSender:
     token: str | None = None
     api_version: str | None = None
