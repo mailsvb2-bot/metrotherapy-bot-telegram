@@ -74,6 +74,21 @@ def _after_audio_buttons() -> tuple[tuple[CanonicalButton, ...], ...]:
     )
 
 
+def _post_score_chart_buttons() -> tuple[tuple[CanonicalButton, ...], ...]:
+    """Telegram kb_post_show_chart(session_id) semantic equivalent for text channels.
+
+    Telegram's exact callback is post:chart:<session_id>. MAX/VK button payloads
+    route through text commands, so the shared canonical action is `progress`,
+    which opens the existing state/progress chart surface.
+    """
+    return (
+        (_btn("📈 Посмотреть график изменения состояния", "progress"),),
+        (_btn("🎧 Другая практика", "demo"),),
+        (_btn("🔐 Открыть полный маршрут", "full"),),
+        (_btn("🏠 Меню", "start"),),
+    )
+
+
 def messenger_reply_to_canonical(reply: MessengerReply) -> CanonicalResponse:
     meta = dict(reply.meta or {})
     text = reply.text or ""
@@ -83,7 +98,9 @@ def messenger_reply_to_canonical(reply: MessengerReply) -> CanonicalResponse:
     stripped = text.lstrip()
     lowered = stripped.casefold()
 
-    if keyboard_kind == "demo_kind" or stripped.startswith("🌿 Бесплатная практика"):
+    if keyboard_kind == "post_score_chart" or stripped.startswith("✅ Оценку после прослушивания"):
+        buttons = _post_score_chart_buttons()
+    elif keyboard_kind == "demo_kind" or stripped.startswith("🌿 Бесплатная практика"):
         buttons = _demo_buttons()
     elif keyboard_kind == "score_scale" or "шкала оценки" in lowered or "оцените состояние сейчас" in lowered:
         buttons = _score_buttons()
