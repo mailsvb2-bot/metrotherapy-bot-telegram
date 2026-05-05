@@ -35,12 +35,19 @@ def _demo_buttons() -> tuple[tuple[CanonicalButton, ...], ...]:
 
 
 def _score_buttons() -> tuple[tuple[CanonicalButton, ...], ...]:
+    """MAX/VK-safe full -10..+10 score scale.
+
+    MAX mobile clients can truncate very wide inline rows. The previous bridge
+    rendered seven score buttons per row, so users visually missed part of the
+    scale even though the JSON contained all values. Keep the complete Telegram
+    score contract, but cap each row at three compact numeric buttons.
+    """
     values = list(range(-10, 11))
     rows: list[tuple[CanonicalButton, ...]] = []
-    for index in range(0, len(values), 7):
+    for index in range(0, len(values), 3):
         rows.append(tuple(
-            _btn(f"{value:+d}" if value != 0 else "0", str(value))
-            for value in values[index:index + 7]
+            _btn(str(value), str(value))
+            for value in values[index:index + 3]
         ))
     rows.append((_btn("⬅️ Меню", "start"),))
     return tuple(rows)
