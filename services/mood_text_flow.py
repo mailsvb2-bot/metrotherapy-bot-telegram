@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 import json
+import logging
 
 from services.audio_anchor import get_by_anchor
 from services.mood import get_session, set_pre, set_post, mark_audio_sent, last_delta
@@ -14,6 +15,9 @@ from services.messenger.platforms import MessengerPlatform
 from services.messenger.timeline import log_audio_timeline_event
 from services.messenger.max_audio import ensure_max_opus_file
 from services.events import log_event
+
+
+log = logging.getLogger(__name__)
 
 
 def parse_score_text(text: str | None) -> int | None:
@@ -109,11 +113,20 @@ async def complete_pre_score_and_send(
     anchor = int(session.anchor_id) if session.anchor_id is not None else None
     anchored = get_by_anchor(anchor) if anchor is not None else None
     if anchored is None or not anchored.path.exists():
+        log.warning(
+            'MAX/VK/Telegram pre-score audio source missing: user_id=%s platform=%s session_id=%s anchor=%s path=%s',
+            user_id,
+            platform,
+            session_id,
+            anchor,
+            getattr(anchored, 'path', None),
+        )
         return MoodTextFlowResult(False, 'Не удалось найти аудиофайл для этого касания.')
 
     item = AudioProgressItem(ordinal=0, anchor=int(anchored.anchor), title=str(anchored.clean_title), path=anchored.path)
     plan = build_delivery_plan(int(user_id), preferred_platform=platform, fallback=platform)
     if not plan.external_user_id:
+        log.warning('Messenger delivery plan has no external user id: user_id=%s platform=%s plan=%s', user_id, platform, plan)
         return MoodTextFlowResult(False, 'Не найден идентификатор пользователя для выбранного мессенджера.')
 
     delivered_platform = plan.platform
@@ -138,7 +151,23 @@ async def complete_pre_score_and_send(
         if sender is None:
             raise UnsupportedMessengerDelivery('No MAX sender registered')
         try:
+            log.info(
+                'MAX native audio pre-score delivery start: user_id=%s external_user_id=%s session_id=%s anchor=%s source_path=%s',
+                user_id,
+                plan.external_user_id,
+                session_id,
+                item.anchor,
+                item.path,
+            )
             opus_path = ensure_max_opus_file(item.path)
+            log.info(
+                'MAX native audio prepared: user_id=%s external_user_id=%s anchor=%s prepared_path=%s size=%s',
+                user_id,
+                plan.external_user_id,
+                item.anchor,
+                opus_path,
+                opus_path.stat().st_size if opus_path.exists() else None,
+            )
             await sender.send_audio_file(
                 plan.external_user_id,
                 opus_path,
@@ -146,8 +175,23 @@ async def complete_pre_score_and_send(
             )
             mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=None)
             log_audio_timeline_event(int(user_id), event_type='native_audio_sent', sequence_key='full_series', anchor=int(item.anchor), title=item.title, platform=plan.platform, slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'))
+            log.info(
+                'MAX native audio pre-score delivery ok: user_id=%s external_user_id=%s session_id=%s anchor=%s transport=max_native_audio_pending',
+                user_id,
+                plan.external_user_id,
+                session_id,
+                item.anchor,
+            )
             transport = 'max_native_audio_pending'
         except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery) as exc:
+            log.exception(
+                'MAX native audio pre-score delivery failed: user_id=%s external_user_id=%s session_id=%s anchor=%s path=%s',
+                user_id,
+                plan.external_user_id,
+                session_id,
+                item.anchor,
+                item.path,
+            )
             log_audio_timeline_event(
                 int(user_id),
                 event_type='native_audio_fallback',
