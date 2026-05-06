@@ -405,6 +405,10 @@ def _parse_command(text: str) -> tuple[str, str | None]:
         return "demo_home", None
     if lowered in {"full", "/full", "полный маршрут", "🔐 полный маршрут", "полный доступ"}:
         return "full", None
+    if lowered in {"pay", "/pay", "sub:menu", "subscription", "тарифы", "💳 тарифы", "оплата", "оплатить"}:
+        return "pay", None
+    if lowered in {"gift", "/gift", "gift:menu", "подарить", "🎁 подарить", "подарок"}:
+        return "gift", None
     if lowered in {"weather", "/weather", "погода", "🌤 погода"}:
         return "weather", None
     if lowered in {"weather_city", "/weather_city", "город", "изменить город", "🏙 изменить город", "сменить город"}:
@@ -513,12 +517,16 @@ def _continue_vk_audio_session(user_id: int) -> MessengerReply:
 
 
 def _repeat_last_vk_audio(user_id: int) -> MessengerReply:
-    """Repeat the last issued audio without advancing the queue."""
+    """Repeat the current/last issued audio without advancing the queue.
+
+    AudioDelivery owns replay semantics for VK/MAX: if the queue is finished,
+    it reuses the last confirmed anchor. Do not access non-existent
+    AudioProgressSnapshot.last_item here.
+    """
     snapshot = get_progress_snapshot(int(user_id))
-    item = snapshot.pending_item or snapshot.last_item
-    if item is None:
-        return MessengerReply(text=_demo_text(), meta={"vk_keyboard": "demo_kind"})
-    return MessengerReply(kind="next_audio", meta={"replay": "1"})
+    if snapshot.pending_item is not None or snapshot.last_anchor is not None:
+        return MessengerReply(kind="next_audio", meta={"replay": "1"})
+    return MessengerReply(text=_demo_text(), meta={"vk_keyboard": "demo_kind"})
 
 def handle_incoming_text(
     user_id: int,

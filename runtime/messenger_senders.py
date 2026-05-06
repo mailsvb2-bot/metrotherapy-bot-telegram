@@ -330,11 +330,9 @@ class MaxBotSender:
 
     @classmethod
     def _after_audio_keyboard(cls) -> dict[str, Any]:
+        # Telegram parity: keyboards.inline.kb_mood_done()
         return cls._inline_keyboard([
-            [
-                cls._message_button('✅ Прослушал', 'done'),
-                cls._message_button('🔁 Повторить аудио', 'repeat'),
-            ],
+            [cls._message_button('✅ Прослушал', 'done')],
             [cls._message_button('⬅️ Меню', 'start')],
         ])
 
