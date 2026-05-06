@@ -5,6 +5,8 @@ import urllib.parse
 
 from config.settings import settings
 from services.personalization import get_preface
+from services.plans import get_active_plans
+from services.events import log_event
 from services.delivery_preferences import (
     describe_delivery_preferences,
     set_user_timezone,
@@ -138,6 +140,83 @@ def _payment_text(user_id: int, *, platform: str, external_user_id: str | None) 
     return (
         "💳 Оплата доступа к Метротерапии\n\n"
         "Нажмите ссылку ниже, чтобы открыть безопасную оплату YooKassa:\n"
+        f"{url}\n\n"
+        "После оплаты вернитесь сюда и нажмите «🎧 Получить аудио»."
+    )
+
+
+def _tariffs_menu_text(user_id: int) -> str:
+    preface = get_preface(int(user_id), context="sub")
+    plans = get_active_plans()
+
+    lines = [
+        f"{preface}💳 Выберите тариф:",
+        "",
+    ]
+
+    if not plans:
+        lines.append("Сейчас нет активных тарифов. Попробуйте чуть позже.")
+        return "\n".join(lines)
+
+    for index, plan in enumerate(plans, start=1):
+        title = str(plan.get("title") or f"{plan.get('scope')}:{plan.get('days')}")
+        price = int(plan.get("price") or 0)
+        lines.append(f"{index}. {title} — {price} ₽")
+
+    lines.extend([
+        "",
+        "Нажмите кнопку тарифа ниже.",
+    ])
+    return "\n".join(lines)
+
+
+def _selected_tariff_payment_text(
+    user_id: int,
+    *,
+    platform: str,
+    external_user_id: str | None,
+    payload: str,
+) -> str:
+    try:
+        _, _, plan_id_s, expected_s = payload.split(":")
+        plan_id = int(plan_id_s)
+        expected_price = int(expected_s)
+    except Exception:
+        return "❌ Некорректная кнопка тарифа. Нажмите «💳 Тарифы» и выберите тариф ещё раз."
+
+    from services.plans import get_plan_by_id
+
+    plan = get_plan_by_id(plan_id)
+    if not plan or not plan.get("is_active"):
+        return "❌ Тариф не найден. Нажмите «💳 Тарифы» и выберите другой тариф."
+
+    title = str(plan.get("title") or "Подписка")
+    current_price = int(plan.get("price") or 0)
+    if current_price <= 0:
+        return "⚠️ Цена для выбранного тарифа не задана. Попробуйте позже."
+
+    if current_price != expected_price:
+        return (
+            "Цена только что обновилась.\n"
+            "Нажмите «💳 Тарифы» и выберите тариф ещё раз."
+        )
+
+    public_id = (external_user_id or "").strip() or str(user_id)
+    query = urllib.parse.urlencode(
+        {
+            "source": platform or "messenger",
+            "user_id": public_id,
+            "kind": "subscription",
+            "plan_id": str(plan_id),
+            "expected_price": str(current_price),
+        }
+    )
+    url = f"{_payment_public_base_url()}/pay/yookassa?{query}"
+
+    return (
+        f"✅ Вы выбрали:\n{title}\n\n"
+        f"💰 Стоимость: {current_price} ₽\n\n"
+        "Для оплаты нажмите ссылку ниже:\n"
         f"{url}\n\n"
         "После оплаты вернитесь сюда и нажмите «🎧 Получить аудио»."
     )
@@ -405,6 +484,8 @@ def _parse_command(text: str) -> tuple[str, str | None]:
         return "demo_home", None
     if lowered in {"full", "/full", "полный маршрут", "🔐 полный маршрут", "полный доступ"}:
         return "full", None
+    if lowered.startswith("sub:buy:"):
+        return "sub_buy", raw
     if lowered in {"pay", "/pay", "sub:menu", "subscription", "тарифы", "💳 тарифы", "оплата", "оплатить"}:
         return "pay", None
     if lowered in {"gift", "/gift", "gift:menu", "подарить", "🎁 подарить", "подарок"}:
@@ -588,14 +669,25 @@ def handle_incoming_text(
         "🎁 подарок",
     }
 
-    if command_norm in payment_aliases:
+    if action == "sub_buy":
         return canonical_user_id, [
             MessengerReply(
-                text=_payment_text(
+                text=_selected_tariff_payment_text(
                     canonical_user_id,
-                    platform=platform,
+                    platform=platform_norm,
                     external_user_id=external_user_id,
+                    payload=value or "",
                 )
+            )
+        ]
+
+    if command_norm in payment_aliases:
+        log_event(canonical_user_id, "view_tariffs", {"platform": platform_norm})
+        log_event(canonical_user_id, "sub_menu_open", {"platform": platform_norm})
+        return canonical_user_id, [
+            MessengerReply(
+                kind="tariffs_menu",
+                text=_tariffs_menu_text(canonical_user_id),
             )
         ]
 

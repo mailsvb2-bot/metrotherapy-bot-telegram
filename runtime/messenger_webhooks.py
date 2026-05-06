@@ -23,6 +23,7 @@ from config.settings import settings
 from runtime.telegram_transport import telegram_transport
 from runtime.messenger_senders import MaxBotSender, VkBotSender, MessengerTransportError
 from services.events import log_event
+from services.plans import get_active_plans
 from services.weather import get_weather_text_async, set_city
 from services.db import db
 from services.messenger.audio_delivery import send_next_audio_to_user, _post_audio_control_kwargs
@@ -742,6 +743,55 @@ def _max_progress_actions_keyboard(external_user_id: str) -> dict[str, Any]:
     }
 
 
+def _vk_tariffs_keyboard_json() -> str:
+    """VK tariff menu keyboard aligned with Telegram kb_tariffs()."""
+    def button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
+        return {
+            "action": {
+                "type": "text",
+                "label": label,
+                "payload": json.dumps({"command": command}, ensure_ascii=False),
+            },
+            "color": color,
+        }
+
+    rows: list[list[dict[str, Any]]] = []
+    for plan in get_active_plans():
+        title = str(plan.get("title") or f"{plan.get('scope')}:{plan.get('days')}")
+        price = int(plan.get("price") or 0)
+        label = f"{title} — {price} ₽"
+        command = f"sub:buy:{int(plan['id'])}:{price}"
+        rows.append([button(label, command, "primary")])
+
+    rows.append([button("🎁 Подарить подписку другу", "gift", "secondary")])
+    rows.append([button("📣 Посоветовать Метротерапию", "share", "secondary")])
+    rows.append([button("⬅️ Назад", "start", "secondary")])
+
+    return json.dumps(
+        {"one_time": False, "inline": False, "buttons": rows},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _max_tariffs_keyboard() -> dict[str, Any]:
+    """MAX tariff menu keyboard aligned with Telegram kb_tariffs()."""
+    buttons: list[list[dict[str, str]]] = []
+
+    for plan in get_active_plans():
+        title = str(plan.get("title") or f"{plan.get('scope')}:{plan.get('days')}")
+        price = int(plan.get("price") or 0)
+        text = f"{title} — {price} ₽"
+        payload = f"sub:buy:{int(plan['id'])}:{price}"
+        buttons.append([{"type": "message", "text": text, "payload": payload}])
+
+    buttons.append([{"type": "message", "text": "🎁 Подарить", "payload": "gift"}])
+    buttons.append([{"type": "message", "text": "📣 Посоветовать", "payload": "share"}])
+    buttons.append([{"type": "message", "text": "⬅️ Назад", "payload": "start"}])
+
+    return {"type": "inline_keyboard", "payload": {"buttons": buttons}}
+
+
 def _progress_actions_kwargs(platform: str, external_user_id: str) -> dict[str, Any]:
     if platform == "vk":
         return {"keyboard_json": _vk_progress_actions_keyboard_json()}
@@ -794,6 +844,23 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
             else:
                 await sender.send_text(external_user_id, reply.text, **_with_vk_keyboard(platform, kwargs))
             continue
+        if reply.kind == "tariffs_menu":
+            if platform == "vk":
+                await sender.send_text(
+                    external_user_id,
+                    reply.text,
+                    keyboard_json=_vk_tariffs_keyboard_json(),
+                )
+            elif platform == "max":
+                await sender.send_text(
+                    external_user_id,
+                    reply.text,
+                    max_keyboard=_max_tariffs_keyboard(),
+                )
+            else:
+                await sender.send_text(external_user_id, reply.text)
+            continue
+
         if reply.kind == 'next_audio':
             try:
                 result = await send_next_audio_to_user(
