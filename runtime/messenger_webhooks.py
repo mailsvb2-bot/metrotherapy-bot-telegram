@@ -712,11 +712,22 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
                     messenger_reply_to_canonical(reply),
                 )
             elif platform == 'vk':
-                await send_canonical_vk_response(
-                    sender,
-                    external_user_id,
-                    messenger_reply_to_canonical(reply),
-                )
+                # VK-specific keyboards may be selected by text_ui via reply.meta,
+                # for example the pre-audio score scale.
+                # Canonical rendering covers generic buttons, but these runtime
+                # keyboard_json overrides must be delivered explicitly.
+                if kwargs.get('keyboard_json'):
+                    await sender.send_text(
+                        external_user_id,
+                        reply.text,
+                        **_with_vk_keyboard(platform, kwargs),
+                    )
+                else:
+                    await send_canonical_vk_response(
+                        sender,
+                        external_user_id,
+                        messenger_reply_to_canonical(reply),
+                    )
             else:
                 await sender.send_text(external_user_id, reply.text, **_with_vk_keyboard(platform, kwargs))
             continue

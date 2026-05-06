@@ -52,3 +52,14 @@ artifacts/
 *.tmp
 max_user_reset_backup_*.json
 max_user_state_before_clean_reset_*.json
+
+# Server/runtime private artifacts
+data/
+*.db
+*.sqlite
+*.sqlite3
+backup_user_*_manual.json
+*.bak*
+.env
+.env.*
+!.env.example
