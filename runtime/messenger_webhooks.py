@@ -692,6 +692,71 @@ def _vk_progress_chart_path(user_id: int) -> Path | None:
     log.info("VK progress chart built: user_id=%s path=%s", user_id, out_path)
     return out_path
 
+def _vk_progress_actions_keyboard_json() -> str:
+    """VK actions under progress chart, aligned with Telegram post-chart UX."""
+    def button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
+        return {
+            "action": {
+                "type": "text",
+                "label": label,
+                "payload": json.dumps({"command": command}, ensure_ascii=False),
+            },
+            "color": color,
+        }
+
+    rows = [
+        [button("⬅️ Меню", "start", "secondary")],
+        [
+            button("💳 Оплатить", "pay", "primary"),
+            button("🎁 Подарить", "gift", "secondary"),
+        ],
+    ]
+    return json.dumps(
+        {"one_time": False, "inline": False, "buttons": rows},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _max_progress_actions_keyboard(external_user_id: str) -> dict[str, Any]:
+    """MAX actions under progress chart."""
+    return {
+        "type": "inline_keyboard",
+        "payload": {
+            "buttons": [
+                [{"type": "message", "text": "⬅️ Меню", "payload": "start"}],
+                [
+                    {
+                        "type": "link",
+                        "text": "💳 Оплатить",
+                        "url": _payment_link(
+                            source="max",
+                            external_user_id=str(external_user_id),
+                            kind="subscription",
+                        ),
+                    },
+                    {
+                        "type": "link",
+                        "text": "🎁 Подарить",
+                        "url": _payment_link(
+                            source="max",
+                            external_user_id=str(external_user_id),
+                            kind="gift",
+                        ),
+                    },
+                ],
+            ]
+        },
+    }
+
+
+def _progress_actions_kwargs(platform: str, external_user_id: str) -> dict[str, Any]:
+    if platform == "vk":
+        return {"keyboard_json": _vk_progress_actions_keyboard_json()}
+    if platform == "max":
+        return {"max_keyboard": _max_progress_actions_keyboard(str(external_user_id))}
+    return {}
+
 
 async def _send_reply_bundle(platform: str, external_user_id: str, canonical_user_id: int, replies: list[MessengerReply]) -> None:
     registry = SenderRegistry(max=MaxBotSender(), vk=VkBotSender())
@@ -805,12 +870,28 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
                 continue
 
             try:
-                await sender.send_audio_file(
-                    external_user_id,
-                    chart_path,
-                    caption='📈 Ваш график прогресса Метротерапии',
-                    **_with_vk_keyboard(platform, {}),
-                )
+                chart_kwargs = _progress_actions_kwargs(platform, external_user_id)
+                if hasattr(sender, "send_image_file"):
+                    await sender.send_image_file(
+                        external_user_id,
+                        chart_path,
+                        caption='📈 Ваш график прогресса Метротерапии',
+                        **chart_kwargs,
+                    )
+                elif hasattr(sender, "send_document_file"):
+                    await sender.send_document_file(
+                        external_user_id,
+                        chart_path,
+                        caption='📈 Ваш график прогресса Метротерапии',
+                        **_with_vk_keyboard(platform, chart_kwargs),
+                    )
+                else:
+                    await sender.send_audio_file(
+                        external_user_id,
+                        chart_path,
+                        caption='📈 Ваш график прогресса Метротерапии',
+                        **_with_vk_keyboard(platform, chart_kwargs),
+                    )
                 log.info('%s progress chart sent: user_id=%s path=%s', platform.upper(), canonical_user_id, chart_path)
             except Exception:
                 log.exception('%s progress chart send failed', platform.upper())

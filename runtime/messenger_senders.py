@@ -407,6 +407,69 @@ class MaxBotSender:
         store_media_token('max', file_path, final_token, media_type='audio')
         return final_token
 
+    async def _ensure_image_token(self, file_path: Path) -> str:
+        cached = get_cached_media_token('max', file_path, media_type='image')
+        if cached is not None:
+            return cached.remote_token
+
+        token = (self.token or settings.MAX_BOT_TOKEN or '').strip()
+        if not token:
+            raise MessengerTransportError('MAX_BOT_TOKEN is empty')
+
+        upload_meta = await asyncio.to_thread(
+            _json_request,
+            f'{self._api_base_url()}/uploads?type=image',
+            method='POST',
+            headers={'Authorization': token},
+            payload=None,
+        )
+        upload_url = str(upload_meta.get('url') or '').strip()
+        media_token = _extract_media_token(upload_meta)
+
+        if not upload_url:
+            raise MessengerTransportError(f'Unexpected MAX image upload response: {upload_meta}')
+
+        uploaded = await asyncio.to_thread(_max_multipart_upload, upload_url, token=token, field_name='data', path=file_path)
+        uploaded_token = _extract_media_token(uploaded) if isinstance(uploaded, dict) else ''
+        final_token = uploaded_token or media_token
+
+        if not final_token:
+            raise MessengerTransportError(
+                f'MAX image upload completed but no media token was returned: upload_meta={upload_meta}, uploaded={uploaded}'
+            )
+
+        store_media_token('max', file_path, final_token, media_type='image')
+        return final_token
+
+    async def send_image_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
+        token = (self.token or settings.MAX_BOT_TOKEN or '').strip()
+        if not token:
+            raise MessengerTransportError('MAX_BOT_TOKEN is empty')
+
+        media_token = await self._ensure_image_token(file_path)
+        url = f'{self._api_base_url()}/messages?user_id={urllib.parse.quote(str(external_user_id))}'
+        payload: dict[str, Any] = {
+            'text': caption or '',
+            'attachments': [{'type': 'image', 'payload': {'token': media_token}}],
+        }
+
+        if kwargs.get('max_keyboard') is not None:
+            payload['attachments'].append(kwargs['max_keyboard'])
+
+        if kwargs.get('notify') is not None:
+            payload['notify'] = bool(kwargs['notify'])
+
+        data = await asyncio.to_thread(
+            _json_request,
+            url,
+            method='POST',
+            headers={'Authorization': token},
+            payload=payload,
+        )
+        if isinstance(data, dict) and data.get('error'):
+            raise MessengerTransportError(str(data['error']))
+        return data.get('message', data) if isinstance(data, dict) else data
+
     async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
         token = (self.token or settings.MAX_BOT_TOKEN or '').strip()
         if not token:

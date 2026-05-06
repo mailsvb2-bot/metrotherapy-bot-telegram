@@ -678,10 +678,7 @@ def handle_incoming_text(
             ),
         ]
     if action == "progress":
-        return canonical_user_id, [
-            MessengerReply(text=_progress_text(canonical_user_id)),
-            MessengerReply(kind='progress_chart'),
-        ]
+        return canonical_user_id, [MessengerReply(kind="progress_chart")]
     if action == "history":
         return canonical_user_id, [MessengerReply(text=_history_text(canonical_user_id))]
     if action == "time":
