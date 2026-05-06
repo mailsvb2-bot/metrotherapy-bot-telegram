@@ -136,7 +136,7 @@ def plot_mood(kind_title: str, rows: list[dict[str, Any]]) -> bytes:
         return cached[1]
 
     """График по конкретному виду (работа/дом)."""
-    fig = plt.figure(figsize=(6.2, 7.2), dpi=220)
+    fig = plt.figure(figsize=(9.5, 6.2), dpi=240)
     ax = fig.add_subplot(111)
 
     xs = list(range(len(rows)))
@@ -160,7 +160,7 @@ def plot_mood(kind_title: str, rows: list[dict[str, Any]]) -> bytes:
 
     buf = io.BytesIO()
     fig.tight_layout()
-    fig.savefig(buf, format="png", dpi=220, bbox_inches="tight", pad_inches=0.08)
+    fig.savefig(buf, format="png", dpi=240, bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
     out = buf.getvalue()
     _CHART_CACHE[key] = (time.time(), out)
@@ -192,7 +192,7 @@ def plot_overall(rows_work: list[dict[str, Any]], rows_home: list[dict[str, Any]
         vals = [v for v in (pre, post) if v is not None]
         avg.append(float(sum(vals) / len(vals)) if vals else None)
 
-    fig = plt.figure(figsize=(6.2, 7.2), dpi=220)
+    fig = plt.figure(figsize=(9.5, 6.2), dpi=240)
     ax = fig.add_subplot(111)
     ax.plot(xs, avg, marker="o", linewidth=3.4, markersize=9, label="среднее")
     ax.set_title('Общая динамика состояния', fontsize=24, fontweight='bold')
@@ -208,7 +208,7 @@ def plot_overall(rows_work: list[dict[str, Any]], rows_home: list[dict[str, Any]
 
     buf = io.BytesIO()
     fig.tight_layout()
-    fig.savefig(buf, format="png", dpi=220, bbox_inches="tight", pad_inches=0.08)
+    fig.savefig(buf, format="png", dpi=240, bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
     out = buf.getvalue()
     _CHART_CACHE[key] = (time.time(), out)
@@ -226,7 +226,7 @@ def plot_state_ratings(title: str, rows: list[dict[str, Any]]) -> bytes:
     if cached and (time.time() - cached[0] < _CHART_CACHE_TTL):
         return cached[1]
 
-    fig = plt.figure(figsize=(6.2, 7.2), dpi=220)
+    fig = plt.figure(figsize=(9.5, 6.2), dpi=240)
     ax = fig.add_subplot(111)
     xs = list(range(len(rows)))
     ys: list[float | None] = []
@@ -251,7 +251,7 @@ def plot_state_ratings(title: str, rows: list[dict[str, Any]]) -> bytes:
 
     buf = io.BytesIO()
     fig.tight_layout()
-    fig.savefig(buf, format="png", dpi=220, bbox_inches="tight", pad_inches=0.08)
+    fig.savefig(buf, format="png", dpi=240, bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
     out = buf.getvalue()
     _CHART_CACHE[key] = (time.time(), out)

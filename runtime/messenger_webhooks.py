@@ -871,7 +871,22 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
 
             try:
                 chart_kwargs = _progress_actions_kwargs(platform, external_user_id)
-                if hasattr(sender, "send_image_file"):
+
+                if platform == "max" and hasattr(sender, "send_image_file"):
+                    # MAX renders image+caption+inline keyboard as a tall card with
+                    # empty space. Send the chart alone so it can use the full
+                    # available media width, then send compact actions separately.
+                    await sender.send_image_file(
+                        external_user_id,
+                        chart_path,
+                        caption=None,
+                    )
+                    await sender.send_text(
+                        external_user_id,
+                        "Действия:",
+                        **chart_kwargs,
+                    )
+                elif hasattr(sender, "send_image_file"):
                     await sender.send_image_file(
                         external_user_id,
                         chart_path,

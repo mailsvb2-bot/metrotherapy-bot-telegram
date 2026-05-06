@@ -434,9 +434,16 @@ class MaxBotSender:
         return final_token
 
     async def _ensure_image_token(self, file_path: Path) -> str:
-        cached = get_cached_media_token('max', file_path, media_type='image')
-        if cached is not None:
-            return cached.remote_token
+        # Progress charts are regenerated into stable /tmp paths.
+        # Do not reuse old MAX media tokens for them, otherwise MAX may keep
+        # showing the previously uploaded smaller chart.
+        path_text = str(file_path)
+        is_generated_chart = "/tmp/metrotherapy_vk_charts/" in path_text or "metrotherapy_vk_charts" in path_text
+
+        if not is_generated_chart:
+            cached = get_cached_media_token('max', file_path, media_type='image')
+            if cached is not None:
+                return cached.remote_token
 
         token = (self.token or settings.MAX_BOT_TOKEN or '').strip()
         if not token:
