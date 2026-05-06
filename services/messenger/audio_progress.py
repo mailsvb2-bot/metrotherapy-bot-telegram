@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 from core.time_utils import utc_now
@@ -9,6 +10,29 @@ from services.db import db, tx
 from services.messenger.timeline import log_audio_timeline_event
 
 SEQUENCE_FULL_SERIES = 'full_series'
+
+def _infinite_audio_test_user_ids() -> set[int]:
+    """Users allowed to loop the full audio series for manual QA/testing.
+
+    This is intentionally opt-in and env-driven. Production users keep the
+    normal finite full_series behavior.
+    """
+    raw = os.environ.get("INFINITE_AUDIO_TEST_USER_IDS", "") or ""
+    out: set[int] = set()
+    for part in raw.replace(";", ",").split(","):
+        value = part.strip()
+        if not value:
+            continue
+        try:
+            out.add(int(value))
+        except ValueError:
+            continue
+    return out
+
+
+def _is_infinite_audio_test_user(user_id: int) -> bool:
+    return int(user_id) in _infinite_audio_test_user_ids()
+
 
 
 @dataclass(frozen=True)
@@ -92,6 +116,12 @@ def get_next_audio_item(user_id: int, *, sequence_key: str = SEQUENCE_FULL_SERIE
     for item in items:
         if item.anchor > anchor:
             return item
+
+    # Manual QA/test loop: selected users may cycle the full series forever.
+    # Everyone else keeps the normal finite queue behavior.
+    if _is_infinite_audio_test_user(int(user_id)):
+        return items[0]
+
     return None
 
 
