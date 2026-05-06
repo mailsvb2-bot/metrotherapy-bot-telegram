@@ -136,7 +136,7 @@ def plot_mood(kind_title: str, rows: list[dict[str, Any]]) -> bytes:
         return cached[1]
 
     """График по конкретному виду (работа/дом)."""
-    fig = plt.figure(figsize=(9.5, 6.2), dpi=240)
+    fig = plt.figure(figsize=(7.2, 7.2), dpi=260)
     ax = fig.add_subplot(111)
 
     xs = list(range(len(rows)))
@@ -144,23 +144,23 @@ def plot_mood(kind_title: str, rows: list[dict[str, Any]]) -> bytes:
     post = _to_points(rows, "post")
 
     # По запросу UX: "что было" — красным, "что стало" — синим
-    ax.plot(xs, pre, marker="o", linewidth=3.2, markersize=9, label="что было", color="red")
-    ax.plot(xs, post, marker="o", linewidth=3.2, markersize=9, label="что стало", color="blue")
+    ax.plot(xs, pre, marker="o", linewidth=4.2, markersize=12, label="что было", color="red")
+    ax.plot(xs, post, marker="o", linewidth=4.2, markersize=12, label="что стало", color="blue")
 
-    ax.set_title(kind_title, fontsize=24, fontweight='bold')
-    ax.set_ylabel('самооценка', fontsize=17)
+    ax.set_title(kind_title, fontsize=28, fontweight='bold')
+    ax.set_ylabel('самооценка', fontsize=20)
     ax.set_ylim(-10.5, 10.5)
     ax.grid(True, linewidth=0.5, alpha=0.5)
     handles, labels = ax.get_legend_handles_labels()
-    ax.legend(handles[::-1], labels[::-1], loc='best', fontsize=15)
+    ax.legend(handles[::-1], labels[::-1], loc='best', fontsize=18)
 
     tick_pos, tick_lbl = _x_labels(rows)
     ax.set_xticks(tick_pos)
-    ax.set_xticklabels(tick_lbl, rotation=0, fontsize=14)
+    ax.set_xticklabels(tick_lbl, rotation=0, fontsize=16)
 
     buf = io.BytesIO()
     fig.tight_layout()
-    fig.savefig(buf, format="png", dpi=240, bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(buf, format="png", dpi=260, bbox_inches="tight", pad_inches=0.01)
     plt.close(fig)
     out = buf.getvalue()
     _CHART_CACHE[key] = (time.time(), out)
@@ -192,23 +192,23 @@ def plot_overall(rows_work: list[dict[str, Any]], rows_home: list[dict[str, Any]
         vals = [v for v in (pre, post) if v is not None]
         avg.append(float(sum(vals) / len(vals)) if vals else None)
 
-    fig = plt.figure(figsize=(9.5, 6.2), dpi=240)
+    fig = plt.figure(figsize=(7.2, 7.2), dpi=260)
     ax = fig.add_subplot(111)
-    ax.plot(xs, avg, marker="o", linewidth=3.4, markersize=9, label="среднее")
-    ax.set_title('Общая динамика состояния', fontsize=24, fontweight='bold')
-    ax.set_ylabel('самооценка', fontsize=17)
+    ax.plot(xs, avg, marker="o", linewidth=4.4, markersize=12, label="среднее")
+    ax.set_title('Общая динамика состояния', fontsize=28, fontweight='bold')
+    ax.set_ylabel('самооценка', fontsize=20)
     ax.set_ylim(-10.5, 10.5)
     ax.grid(True, linewidth=0.5, alpha=0.5)
     handles, labels = ax.get_legend_handles_labels()
-    ax.legend(handles[::-1], labels[::-1], loc='best', fontsize=15)
+    ax.legend(handles[::-1], labels[::-1], loc='best', fontsize=18)
 
     tick_pos, tick_lbl = _x_labels(rows)
     ax.set_xticks(tick_pos)
-    ax.set_xticklabels(tick_lbl, rotation=0, fontsize=14)
+    ax.set_xticklabels(tick_lbl, rotation=0, fontsize=16)
 
     buf = io.BytesIO()
     fig.tight_layout()
-    fig.savefig(buf, format="png", dpi=240, bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(buf, format="png", dpi=260, bbox_inches="tight", pad_inches=0.01)
     plt.close(fig)
     out = buf.getvalue()
     _CHART_CACHE[key] = (time.time(), out)
@@ -226,7 +226,7 @@ def plot_state_ratings(title: str, rows: list[dict[str, Any]]) -> bytes:
     if cached and (time.time() - cached[0] < _CHART_CACHE_TTL):
         return cached[1]
 
-    fig = plt.figure(figsize=(9.5, 6.2), dpi=240)
+    fig = plt.figure(figsize=(7.2, 7.2), dpi=260)
     ax = fig.add_subplot(111)
     xs = list(range(len(rows)))
     ys: list[float | None] = []
@@ -236,22 +236,22 @@ def plot_state_ratings(title: str, rows: list[dict[str, Any]]) -> bytes:
         except (TypeError, ValueError):
             ys.append(None)
 
-    ax.plot(xs, ys, marker="o", linewidth=3.4, markersize=9, label="оценка")
-    ax.set_title(title, fontsize=24, fontweight='bold')
-    ax.set_ylabel('оценка', fontsize=17)
+    ax.plot(xs, ys, marker="o", linewidth=4.4, markersize=12, label="оценка")
+    ax.set_title(title, fontsize=28, fontweight='bold')
+    ax.set_ylabel('оценка', fontsize=20)
     ax.set_ylim(0.5, 10.5)
     ax.set_yticks(list(range(1, 11)))
-    ax.tick_params(axis='y', labelsize=14)
+    ax.tick_params(axis='y', labelsize=16)
     ax.grid(True, linewidth=0.5, alpha=0.5)
 
     tick_pos, tick_lbl = _x_labels(rows)
     ax.set_xticks(tick_pos)
-    ax.set_xticklabels(tick_lbl, rotation=0, fontsize=14)
-    ax.legend(loc='best', fontsize=15)
+    ax.set_xticklabels(tick_lbl, rotation=0, fontsize=16)
+    ax.legend(loc='best', fontsize=18)
 
     buf = io.BytesIO()
     fig.tight_layout()
-    fig.savefig(buf, format="png", dpi=240, bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(buf, format="png", dpi=260, bbox_inches="tight", pad_inches=0.01)
     plt.close(fig)
     out = buf.getvalue()
     _CHART_CACHE[key] = (time.time(), out)
