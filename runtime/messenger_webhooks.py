@@ -727,22 +727,14 @@ def _max_progress_actions_keyboard(external_user_id: str) -> dict[str, Any]:
                 [{"type": "message", "text": "Меню", "payload": "start"}],
                 [
                     {
-                        "type": "link",
+                        "type": "message",
                         "text": "💳 Оплата",
-                        "url": _payment_link(
-                            source="max",
-                            external_user_id=str(external_user_id),
-                            kind="subscription",
-                        ),
+                        "payload": "pay",
                     },
                     {
-                        "type": "link",
+                        "type": "message",
                         "text": "🎁 Подарок",
-                        "url": _payment_link(
-                            source="max",
-                            external_user_id=str(external_user_id),
-                            kind="gift",
-                        ),
+                        "payload": "gift",
                     },
                 ],
             ]
