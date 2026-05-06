@@ -637,6 +637,7 @@ def handle_incoming_text(
         start_payload=payload,
     )
     canonical_user_id = int(entry.user_id)
+    platform_norm = (platform or "messenger").strip().casefold()
 
     command_text = (text or "").strip()
     command_norm = command_text.casefold().replace("ё", "е")
