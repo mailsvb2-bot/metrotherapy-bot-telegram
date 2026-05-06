@@ -285,6 +285,14 @@ def _normalise_messenger_text(text: str) -> str:
         "🌿 начать": "start",
         "меню": "start",
         "главное меню": "start",
+        "⬅️ меню": "start",
+        "🏠 меню": "start",
+        "⬅️ главное меню": "start",
+        "главное": "start",
+        "main": "start",
+        "menu": "start",
+
+        "demo": "demo",
         "🌿 попробовать бесплатно": "demo",
         "попробовать бесплатно": "demo",
         "бесплатная практика": "demo",
@@ -299,6 +307,8 @@ def _normalise_messenger_text(text: str) -> str:
         "дорога на работу": "demo_work",
         "🚗 практика на утро / дорогу": "demo_work",
         "практика на утро / дорогу": "demo_work",
+        "demo_work": "demo_work",
+        "demo_kind_work": "demo_work",
 
         "2": "demo_home",
         "2.": "demo_home",
@@ -309,14 +319,19 @@ def _normalise_messenger_text(text: str) -> str:
         "дорога домой": "demo_home",
         "🌙 практика на вечер / домой": "demo_home",
         "практика на вечер / домой": "demo_home",
+        "demo_home": "demo_home",
+        "demo_kind_home": "demo_home",
 
         "⬅️ назад": "start",
         "назад": "start",
 
+        "full": "full",
         "🔐 полный маршрут": "full",
         "полный маршрут": "full",
         "полный доступ": "full",
 
+        "sub:menu": "pay",
+        "subscription": "pay",
         "💳 тарифы": "pay",
         "тарифы": "pay",
 
@@ -326,17 +341,31 @@ def _normalise_messenger_text(text: str) -> str:
         "анализ моего состояния": "progress",
 
         "🧠 настройки": "settings",
+        "settings:menu": "settings",
 
         "📣 посоветовать": "share",
         "посоветовать": "share",
 
+        "weather:show": "weather",
         "🌤 погода": "weather",
         "погода": "weather",
+
+        "weather_city": "weather_city",
+        "weather:city": "weather_city",
+        "🏙 изменить город": "weather_city",
+        "изменить город": "weather_city",
+        "сменить город": "weather_city",
+        "город": "weather_city",
 
         "🎧 получить аудио": "continue",
         "получить аудио": "continue",
         "продолжить": "continue",
         "continue": "continue",
+
+        "repeat": "repeat_audio",
+        "🔁 повторить аудио": "repeat_audio",
+        "повторить аудио": "repeat_audio",
+        "повторить": "repeat_audio",
 
         "✅ прослушал": "done",
         "прослушал": "done",
@@ -353,6 +382,7 @@ def _normalise_messenger_text(text: str) -> str:
         "подарить": "gift",
         "подарок": "gift",
         "gift": "gift",
+        "gift:menu": "gift",
 
         "↗️ поделиться": "share",
         "поделиться": "share",
