@@ -217,7 +217,7 @@ def _vk_weather_city_keyboard_json() -> str:
         {
             "one_time": False,
             "inline": False,
-            "buttons": [[button("⬅️ Меню", "start", "secondary")]],
+            "buttons": [[button("Меню", "start", "secondary")]],
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -257,7 +257,7 @@ def _vk_score_scale_keyboard_json() -> str:
             for value in row
         ])
 
-    rows.append([button("⬅️ Меню", "start", "secondary")])
+    rows.append([button("Меню", "start", "secondary")])
 
     return json.dumps(
         {
@@ -705,10 +705,10 @@ def _vk_progress_actions_keyboard_json() -> str:
         }
 
     rows = [
-        [button("⬅️ Меню", "start", "secondary")],
+        [button("Меню", "start", "secondary")],
         [
-            button("💳 Оплатить", "pay", "primary"),
-            button("🎁 Подарить", "gift", "secondary"),
+            button("💳 Оплата", "pay", "primary"),
+            button("🎁 Подарок", "gift", "secondary"),
         ],
     ]
     return json.dumps(
@@ -724,11 +724,11 @@ def _max_progress_actions_keyboard(external_user_id: str) -> dict[str, Any]:
         "type": "inline_keyboard",
         "payload": {
             "buttons": [
-                [{"type": "message", "text": "⬅️ Меню", "payload": "start"}],
+                [{"type": "message", "text": "Меню", "payload": "start"}],
                 [
                     {
                         "type": "link",
-                        "text": "💳 Оплатить",
+                        "text": "💳 Оплата",
                         "url": _payment_link(
                             source="max",
                             external_user_id=str(external_user_id),
@@ -737,7 +737,7 @@ def _max_progress_actions_keyboard(external_user_id: str) -> dict[str, Any]:
                     },
                     {
                         "type": "link",
-                        "text": "🎁 Подарить",
+                        "text": "🎁 Подарок",
                         "url": _payment_link(
                             source="max",
                             external_user_id=str(external_user_id),
