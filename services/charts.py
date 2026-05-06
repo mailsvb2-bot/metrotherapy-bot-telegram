@@ -136,7 +136,7 @@ def plot_mood(kind_title: str, rows: list[dict[str, Any]]) -> bytes:
         return cached[1]
 
     """График по конкретному виду (работа/дом)."""
-    fig = plt.figure(figsize=(8, 4.2), dpi=160)
+    fig = plt.figure(figsize=(10, 6.5), dpi=220)
     ax = fig.add_subplot(111)
 
     xs = list(range(len(rows)))
@@ -144,10 +144,10 @@ def plot_mood(kind_title: str, rows: list[dict[str, Any]]) -> bytes:
     post = _to_points(rows, "post")
 
     # По запросу UX: "что было" — красным, "что стало" — синим
-    ax.plot(xs, pre, marker="o", linewidth=1.6, label="что было", color="red")
-    ax.plot(xs, post, marker="o", linewidth=1.6, label="что стало", color="blue")
+    ax.plot(xs, pre, marker="o", linewidth=2.6, markersize=7, label="что было", color="red")
+    ax.plot(xs, post, marker="o", linewidth=2.6, markersize=7, label="что стало", color="blue")
 
-    ax.set_title(kind_title, fontsize=16, fontweight='bold')
+    ax.set_title(kind_title, fontsize=20, fontweight='bold')
     ax.set_ylabel('самооценка', fontsize=12)
     ax.set_ylim(-10.5, 10.5)
     ax.grid(True, linewidth=0.5, alpha=0.5)
@@ -160,7 +160,7 @@ def plot_mood(kind_title: str, rows: list[dict[str, Any]]) -> bytes:
 
     buf = io.BytesIO()
     fig.tight_layout()
-    fig.savefig(buf, format="png")
+    fig.savefig(buf, format="png", dpi=220, bbox_inches="tight", pad_inches=0.35)
     plt.close(fig)
     out = buf.getvalue()
     _CHART_CACHE[key] = (time.time(), out)
@@ -192,10 +192,10 @@ def plot_overall(rows_work: list[dict[str, Any]], rows_home: list[dict[str, Any]
         vals = [v for v in (pre, post) if v is not None]
         avg.append(float(sum(vals) / len(vals)) if vals else None)
 
-    fig = plt.figure(figsize=(8, 4.2), dpi=160)
+    fig = plt.figure(figsize=(10, 6.5), dpi=220)
     ax = fig.add_subplot(111)
-    ax.plot(xs, avg, marker="o", linewidth=1.8, label="среднее")
-    ax.set_title('Общая динамика состояния', fontsize=16, fontweight='bold')
+    ax.plot(xs, avg, marker="o", linewidth=2.8, markersize=7, label="среднее")
+    ax.set_title('Общая динамика состояния', fontsize=20, fontweight='bold')
     ax.set_ylabel('самооценка', fontsize=12)
     ax.set_ylim(-10.5, 10.5)
     ax.grid(True, linewidth=0.5, alpha=0.5)
@@ -208,7 +208,7 @@ def plot_overall(rows_work: list[dict[str, Any]], rows_home: list[dict[str, Any]
 
     buf = io.BytesIO()
     fig.tight_layout()
-    fig.savefig(buf, format="png")
+    fig.savefig(buf, format="png", dpi=220, bbox_inches="tight", pad_inches=0.35)
     plt.close(fig)
     out = buf.getvalue()
     _CHART_CACHE[key] = (time.time(), out)
@@ -226,7 +226,7 @@ def plot_state_ratings(title: str, rows: list[dict[str, Any]]) -> bytes:
     if cached and (time.time() - cached[0] < _CHART_CACHE_TTL):
         return cached[1]
 
-    fig = plt.figure(figsize=(8, 4.2), dpi=160)
+    fig = plt.figure(figsize=(10, 6.5), dpi=220)
     ax = fig.add_subplot(111)
     xs = list(range(len(rows)))
     ys: list[float | None] = []
@@ -236,8 +236,8 @@ def plot_state_ratings(title: str, rows: list[dict[str, Any]]) -> bytes:
         except (TypeError, ValueError):
             ys.append(None)
 
-    ax.plot(xs, ys, marker="o", linewidth=1.8, label="оценка")
-    ax.set_title(title, fontsize=16, fontweight='bold')
+    ax.plot(xs, ys, marker="o", linewidth=2.8, markersize=7, label="оценка")
+    ax.set_title(title, fontsize=20, fontweight='bold')
     ax.set_ylabel('оценка', fontsize=12)
     ax.set_ylim(0.5, 10.5)
     ax.set_yticks(list(range(1, 11)))
@@ -250,7 +250,7 @@ def plot_state_ratings(title: str, rows: list[dict[str, Any]]) -> bytes:
 
     buf = io.BytesIO()
     fig.tight_layout()
-    fig.savefig(buf, format="png")
+    fig.savefig(buf, format="png", dpi=220, bbox_inches="tight", pad_inches=0.35)
     plt.close(fig)
     out = buf.getvalue()
     _CHART_CACHE[key] = (time.time(), out)
