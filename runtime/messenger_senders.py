@@ -178,23 +178,49 @@ def _max_multipart_upload(url: str, *, token: str | None = None, field_name: str
 
 
 def _extract_media_token(data: dict[str, Any]) -> str:
+    """Extract media token from MAX/VK-like upload responses.
+
+    MAX image upload may return:
+      {"photos": {"<photo_id>": {"token": "..."}}}
+
+    MAX audio upload may return token/media_token/file_token directly or under
+    payload/attachment. Keep this function transport-safe and generic.
+    """
+    if not isinstance(data, dict):
+        return ''
+
     for key in ('token', 'media_token', 'file_token'):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+
     payload = data.get('payload')
     if isinstance(payload, dict):
-        for key in ('token', 'media_token', 'file_token'):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
+        token = _extract_media_token(payload)
+        if token:
+            return token
+
     attachment = data.get('attachment')
     if isinstance(attachment, dict):
-        payload = attachment.get('payload')
-        if isinstance(payload, dict):
-            value = payload.get('token')
-            if isinstance(value, str) and value.strip():
-                return value.strip()
+        token = _extract_media_token(attachment)
+        if token:
+            return token
+
+    photos = data.get('photos')
+    if isinstance(photos, dict):
+        for item in photos.values():
+            if isinstance(item, dict):
+                token = _extract_media_token(item)
+                if token:
+                    return token
+
+    # Defensive fallback for future nested MAX response shapes.
+    for value in data.values():
+        if isinstance(value, dict):
+            token = _extract_media_token(value)
+            if token:
+                return token
+
     return ''
 
 
