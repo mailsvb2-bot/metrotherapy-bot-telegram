@@ -728,8 +728,8 @@ def _max_progress_actions_keyboard(external_user_id: str) -> dict[str, Any]:
                 [
                     {
                         "type": "message",
-                        "text": "💳 Оплата",
-                        "payload": "pay",
+                        "text": "💳 Тарифы",
+                        "payload": "sub:menu",
                     },
                     {
                         "type": "message",
