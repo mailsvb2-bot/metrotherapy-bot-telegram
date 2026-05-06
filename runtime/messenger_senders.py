@@ -301,7 +301,7 @@ class MaxBotSender:
         rows: list[list[dict[str, Any]]] = []
         for i in range(0, len(vals), 3):
             rows.append([
-                cls._message_button(str(value), str(value))
+                cls._message_button((f'+{value}' if value > 0 else str(value)), str(value))
                 for value in vals[i:i + 3]
             ])
         rows.append([cls._message_button('⬅️ Меню', 'start')])
@@ -320,11 +320,8 @@ class MaxBotSender:
     @classmethod
     def _weather_keyboard(cls) -> dict[str, Any]:
         return cls._inline_keyboard([
-            [
-                cls._message_button('🔄 Обновить погоду', 'weather'),
-                cls._message_button('🏙 Изменить город', 'weather_city'),
-            ],
-            [cls._message_button('⬅️ Меню', 'start')],
+            [cls._message_button('🏙 Изменить город', 'weather_city')],
+            [cls._message_button('⬅️ Назад', 'start')],
         ])
 
     @classmethod

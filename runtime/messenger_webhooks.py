@@ -118,24 +118,6 @@ def _vk_default_keyboard_json() -> str:
                         "color": "secondary",
                     },
                 ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🎧 Получить аудио",
-                            "payload": "{\"command\":\"continue\"}",
-                        },
-                        "color": "secondary",
-                    },
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "✅ Прослушал",
-                            "payload": "{\"command\":\"done\"}",
-                        },
-                        "color": "positive",
-                    },
-                ],
             ],
         },
         ensure_ascii=False,
@@ -162,7 +144,7 @@ def _vk_demo_kind_keyboard_json() -> str:
                     {
                         "action": {
                             "type": "text",
-                            "label": "1️⃣ Утро / дорога",
+                            "label": "🚗 Практика на утро / дорогу",
                             "payload": "{\"command\":\"demo_work\"}",
                         },
                         "color": "positive",
@@ -172,7 +154,7 @@ def _vk_demo_kind_keyboard_json() -> str:
                     {
                         "action": {
                             "type": "text",
-                            "label": "2️⃣ Вечер / домой",
+                            "label": "🌙 Практика на вечер / домой",
                             "payload": "{\"command\":\"demo_home\"}",
                         },
                         "color": "primary",
@@ -208,11 +190,8 @@ def _vk_weather_keyboard_json() -> str:
         }
 
     rows = [
-        [
-            button("🔄 Обновить погоду", "weather", "primary"),
-            button("🏙 Изменить город", "weather_city", "secondary"),
-        ],
-        [button("⬅️ Меню", "start", "secondary")],
+        [button("🏙 Изменить город", "weather_city", "secondary")],
+        [button("⬅️ Назад", "start", "secondary")],
     ]
 
     return json.dumps(
@@ -278,10 +257,7 @@ def _vk_score_scale_keyboard_json() -> str:
             for value in row
         ])
 
-    rows.append([
-        button("📊 Прогресс", "progress", "primary"),
-        button("⬅️ Меню", "start", "secondary"),
-    ])
+    rows.append([button("⬅️ Меню", "start", "secondary")])
 
     return json.dumps(
         {
