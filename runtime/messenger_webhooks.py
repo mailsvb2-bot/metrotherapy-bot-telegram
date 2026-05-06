@@ -895,10 +895,15 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
                 log.info('%s progress chart sent: user_id=%s path=%s', platform.upper(), canonical_user_id, chart_path)
             except Exception:
                 log.exception('%s progress chart send failed', platform.upper())
+                platform_title = {
+                    "vk": "во ВКонтакте",
+                    "max": "в MAX",
+                    "telegram": "в Telegram",
+                }.get(str(platform), f"в {platform}")
                 await sender.send_text(
                     external_user_id,
-                    '⚠️ График построен, но не удалось отправить его во ВКонтакте.',
-                    **_with_vk_keyboard(platform, {}),
+                    f"⚠️ График построен, но не удалось отправить его {platform_title}.",
+                    **_with_vk_keyboard(platform, _progress_actions_kwargs(platform, external_user_id)),
                 )
             continue
 
