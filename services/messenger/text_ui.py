@@ -665,6 +665,9 @@ def handle_incoming_text(
         "💳 тарифы",
         "sub:menu",
         "subscription",
+        "payment",
+        "💳 тарифы",
+        "💳 оплата",
     }
     gift_aliases = {
         "gift",

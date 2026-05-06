@@ -70,7 +70,7 @@ def _vk_default_keyboard_json() -> str:
                         "action": {
                             "type": "text",
                             "label": "💳 Тарифы",
-                            "payload": "{\"command\":\"pay\"}",
+                            "payload": "{\"command\":\"sub:menu\"}",
                         },
                         "color": "primary",
                     },
@@ -708,7 +708,7 @@ def _vk_progress_actions_keyboard_json() -> str:
     rows = [
         [button("Меню", "start", "secondary")],
         [
-            button("💳 Оплата", "pay", "primary"),
+            button("💳 Тарифы", "sub:menu", "primary"),
             button("🎁 Подарок", "gift", "secondary"),
         ],
     ]
