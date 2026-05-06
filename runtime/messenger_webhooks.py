@@ -774,20 +774,31 @@ def _vk_tariffs_keyboard_json() -> str:
     )
 
 
-def _max_tariffs_keyboard() -> dict[str, Any]:
-    """MAX tariff menu keyboard aligned with Telegram kb_tariffs()."""
+def _max_tariffs_keyboard(external_user_id: str) -> dict[str, Any]:
+    """MAX tariff menu keyboard aligned with Telegram tariff selection.
+
+    MAX does not reliably open payment pages from message payload callbacks.
+    Therefore each tariff button is a direct link to the canonical YooKassa
+    payment endpoint with plan_id and expected_price.
+    """
     buttons: list[list[dict[str, str]]] = []
 
     for plan in get_active_plans():
+        plan_id = int(plan["id"])
         title = str(plan.get("title") or f"{plan.get('scope')}:{plan.get('days')}")
         price = int(plan.get("price") or 0)
         text = f"{title} — {price} ₽"
-        payload = f"sub:buy:{int(plan['id'])}:{price}"
-        buttons.append([{"type": "message", "text": text, "payload": payload}])
+        url = _payment_link(
+            source="max",
+            external_user_id=str(external_user_id),
+            kind="subscription",
+            plan_id=plan_id,
+            expected_price=price,
+        )
+        buttons.append([{"type": "link", "text": text, "url": url}])
 
-    buttons.append([{"type": "message", "text": "🎁 Подарить", "payload": "gift"}])
-    buttons.append([{"type": "message", "text": "📣 Посоветовать", "payload": "share"}])
-    buttons.append([{"type": "message", "text": "⬅️ Назад", "payload": "start"}])
+    buttons.append([{"type": "message", "text": "🎁 Подарок", "payload": "gift"}])
+    buttons.append([{"type": "message", "text": "Меню", "payload": "start"}])
 
     return {"type": "inline_keyboard", "payload": {"buttons": buttons}}
 
@@ -855,7 +866,7 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
                 await sender.send_text(
                     external_user_id,
                     reply.text,
-                    max_keyboard=_max_tariffs_keyboard(),
+                    max_keyboard=_max_tariffs_keyboard(external_user_id),
                 )
             else:
                 await sender.send_text(external_user_id, reply.text)
@@ -1013,14 +1024,24 @@ def _payment_public_base_url() -> str:
     return _env_value("PAYMENT_PUBLIC_BASE_URL", _env_value("MESSENGER_PUBLIC_BASE_URL", "https://metrotherapy-bot.metrotherapy.ru")).rstrip("/")
 
 
-def _payment_link(*, source: str, external_user_id: str, kind: str = "subscription") -> str:
-    query = urllib.parse.urlencode(
-        {
-            "source": source,
-            "user_id": external_user_id,
-            "kind": kind,
-        }
-    )
+def _payment_link(
+    *,
+    source: str,
+    external_user_id: str,
+    kind: str = "subscription",
+    plan_id: int | str | None = None,
+    expected_price: int | str | None = None,
+) -> str:
+    params = {
+        "source": source,
+        "user_id": external_user_id,
+        "kind": kind,
+    }
+    if plan_id not in (None, ""):
+        params["plan_id"] = str(plan_id)
+    if expected_price not in (None, ""):
+        params["expected_price"] = str(expected_price)
+    query = urllib.parse.urlencode(params)
     return f"{_payment_public_base_url()}/pay/yookassa?{query}"
 
 
