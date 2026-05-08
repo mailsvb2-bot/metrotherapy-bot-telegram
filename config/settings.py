@@ -7,7 +7,7 @@ import os
 # По умолчанию .env читаем только в dev/stage.
 # Для принудительного поведения можно выставить LOAD_DOTENV=1.
 APP_ENV = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
-if os.getenv("LOAD_DOTENV", "") == "1" or APP_ENV != "prod":
+if os.getenv("LOAD_DOTENV", "") == "1" or APP_ENV in {"dev", "stage"}:
     try:
         from dotenv import load_dotenv
 
