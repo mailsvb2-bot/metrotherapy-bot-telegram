@@ -197,7 +197,7 @@ async def _send_non_telegram_native(
             caption=_pending_caption(platform, item, replay=replay),
             **_post_audio_control_kwargs(platform),
         )
-    except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery):
+    except (AttributeError, RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery):
         log_audio_timeline_event(int(user_id), event_type="native_audio_fallback", sequence_key="full_series", anchor=int(item.anchor), title=item.title, platform=platform)
         return None
     if pending is None:

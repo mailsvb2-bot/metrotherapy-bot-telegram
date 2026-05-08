@@ -14,9 +14,10 @@ class UnsupportedMessengerDelivery(RuntimeError):
 
 @dataclass(frozen=True)
 class DeliveryPlan:
-    user_id: int
     platform: str
     external_user_id: str | None
+    user_id: int = 0
+    reason: str = ""
 
 
 class TextSender(Protocol):

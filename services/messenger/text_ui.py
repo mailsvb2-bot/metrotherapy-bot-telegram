@@ -409,6 +409,10 @@ def _parse_command(text: str) -> tuple[str, str | None]:
         return "weather", None
     if lowered in {"weather_city", "/weather_city", "город", "изменить город", "🏙 изменить город", "сменить город"}:
         return "weather_city", None
+    if lowered in {"pay", "/pay", "оплата", "оплатить", "тарифы", "💳 тарифы"}:
+        return "pay", None
+    if lowered in {"gift", "/gift", "подарок", "подарить", "🎁 подарить"}:
+        return "gift", None
     if lowered.startswith("/platform") or lowered.startswith("platform "):
         parts = raw.replace("/platform", "platform", 1).split(maxsplit=1)
         value = parts[1].strip() if len(parts) == 2 else ""
@@ -532,6 +536,56 @@ def handle_incoming_text(
 ) -> tuple[int, list[MessengerReply]]:
     score_value = parse_score_text(text)
     action, value = _parse_command(text)
+    norm_platform = normalize_platform(platform)
+    raw_lower = (text or "").strip().lower()
+
+    if raw_lower in {"pay", "/pay", "оплата", "оплатить", "тарифы", "💳 тарифы"}:
+        return int(user_id), [
+            MessengerReply(
+                text=_payment_text(
+                    int(user_id),
+                    platform=norm_platform,
+                    external_user_id=external_user_id,
+                )
+            )
+        ]
+
+    if raw_lower in {"gift", "/gift", "подарок", "подарить", "🎁 подарить"}:
+        return int(user_id), [
+            MessengerReply(
+                text=_gift_text(
+                    int(user_id),
+                    platform=norm_platform,
+                    external_user_id=external_user_id,
+                )
+            )
+        ]
+
+    if action == "continue" and norm_platform == "telegram":
+        return int(user_id), [MessengerReply(kind="next_audio")]
+
+    if action == "done":
+        try:
+            confirmed = confirm_pending_audio_delivery(int(user_id), platform=norm_platform)
+        except TypeError:
+            confirmed = confirm_pending_audio_delivery(int(user_id))
+
+        if confirmed is None:
+            return int(user_id), [
+                MessengerReply(
+                    text="Сейчас нет аудио, которое ожидает подтверждения. Нажмите «🎧 Получить аудио» или отправьте continue."
+                )
+            ]
+
+        replies = [
+            MessengerReply(
+                text=f"✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\n\nОцените состояние после прослушивания: отправьте число от -10 до 10."
+            )
+        ]
+        if norm_platform == "telegram":
+            replies.append(MessengerReply(kind="next_audio"))
+        return int(user_id), replies
+
     if score_value is not None and action == 'menu':
         if find_pending_post_session_id(int(user_id)) is not None:
             action, value = 'post_score', str(score_value)
@@ -601,6 +655,14 @@ def handle_incoming_text(
                 )
             )
         ]
+
+    norm_platform = normalize_platform(platform)
+
+    if action == "pay":
+        return int(user_id), [MessengerReply(text=_payment_text(int(user_id), platform=norm_platform, external_user_id=external_user_id))]
+
+    if action == "gift":
+        return int(user_id), [MessengerReply(text=_gift_text(int(user_id), platform=norm_platform, external_user_id=external_user_id))]
 
     if action in {"start", "menu"}:
         replies: list[MessengerReply] = []
