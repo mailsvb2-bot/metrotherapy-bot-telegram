@@ -112,8 +112,22 @@ class MaxBotSender:
 
     @staticmethod
     def _has_main_menu_text(text: str) -> bool:
-        head = str(text or '').lstrip()[:500]
-        return 'Главное меню' in head and 'Попробовать бесплатно' in str(text or '')
+        raw = str(text or '')
+        head = raw.lstrip()[:500]
+        compact = raw.casefold().replace('ё', 'е')
+
+        # Canonical main-menu detection must not depend on the full rendered
+        # bullet list. Some callers send a short "Главное меню" text and rely
+        # on MAX to attach native buttons or a numbered fallback.
+        return (
+            'Главное меню' in head
+            and (
+                'выберите маршрут' in compact
+                or 'попробовать бесплатно' in compact
+                or 'кнопки max' in compact
+                or 'кнопки вконтакте' in compact
+            )
+        )
 
     @staticmethod
     def _max_message_button(text: str) -> dict[str, str]:
