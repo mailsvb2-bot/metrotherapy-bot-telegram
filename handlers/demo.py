@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery
 from config.settings import settings
 from keyboards.inline import kb_sales_offer
 from services.demo_analytics import record_demo_ack, demo_sent_kinds
+from services.demo_policy import can_repeat_demo_for_user
 from services.jobs import add_job
 from services.jobs import cancel_jobs
 from services.store import store
@@ -43,16 +44,17 @@ async def demo_send_other(cb: CallbackQuery):
         return
 
     user_id = int(cb.from_user.id)
+    admin_demo_bypass = can_repeat_demo_for_user(user_id)
 
     sent = demo_sent_kinds(user_id)
     # Если оба демо уже были отправлены — дальше не раздаём бесплатные повторы.
-    if "work" in sent and "home" in sent:
+    if not admin_demo_bypass and "work" in sent and "home" in sent:
         return await cb.message.answer(
             "✅ Вы уже получили оба ресурсных демо-транса.\n\n"
             "Если Вы хотите продолжить — пожалуйста, оформите подписку.",
             reply_markup=kb_sales_offer(user_id),
         )
-    if kind in sent:
+    if not admin_demo_bypass and kind in sent:
         return await cb.message.answer(
             "✅ Этот демо-транс уже был отправлен Вам ранее.\n\n"
             "Если Вы хотите продолжить — пожалуйста, оформите подписку.",

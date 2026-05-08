@@ -26,6 +26,7 @@ from services.catalog import AudioCatalog
 from services.audio_guard import pick_demo_file
 from services.subscription import is_active as is_sub_active
 from services.demo_analytics import record_demo_sent, demo_sent_kinds
+from services.demo_policy import can_repeat_demo_for_user
 from services.jobs import add_job, claim_due_jobs, lock_job, mark_done, reschedule
 from services.funnel_texts import funnel_text, funnel_text_ab
 from services.events import has_event_since
@@ -255,10 +256,11 @@ class Engine:
         kind = (payload.get("kind") or "work").strip()
 
         sent = demo_sent_kinds(user_id)
+        admin_demo_bypass = can_repeat_demo_for_user(int(user_id))
         other = "home" if kind == "work" else "work"
 
         # Лимит бесплатных демо: максимум 2 (work + home). Дальше предлагаем подписку.
-        if "work" in sent and "home" in sent:
+        if not admin_demo_bypass and "work" in sent and "home" in sent:
             await bot.send_message(
                 user_id,
                 "✅ Вы уже получили оба ресурсных демо-транса.\n\nЕсли Вы хотите продолжить — пожалуйста, оформите подписку.",
@@ -268,7 +270,7 @@ class Engine:
             return
 
         # Если такой kind уже отправляли — не пересылаем бесконечно.
-        if kind in sent:
+        if not admin_demo_bypass and kind in sent:
             await bot.send_message(
                 user_id,
                 "✅ Этот демо-транс уже был отправлен Вам ранее.\n\n"
