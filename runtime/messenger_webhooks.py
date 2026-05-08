@@ -32,455 +32,53 @@ from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDeli
 from services.messenger.text_ui import handle_incoming_text, MessengerReply
 from services.mood_text_flow import complete_pre_score_and_send, complete_post_score_and_send_next
 from services.messenger.webhook_dedupe import register_inbound_event
+from runtime.messenger_payloads import (
+    extract_max_message as _extract_max_message,
+    extract_vk_message as _extract_vk_message,
+    max_event_key as _max_event_key,
+    normalise_messenger_text as _normalise_messenger_text,
+    safe_int as _safe_int,
+    stable_payload_key as _stable_payload_key,
+    text_from_vk_payload as _text_from_vk_payload,
+    vk_event_key as _vk_event_key,
+)
+from runtime.messenger_vk_ui import (
+    vk_default_keyboard_json as _vk_default_keyboard_json,
+    vk_demo_kind_keyboard_json as _vk_demo_kind_keyboard_json,
+    vk_score_scale_keyboard_json as _vk_score_scale_keyboard_json,
+    vk_text_send_kwargs as _vk_text_send_kwargs,
+    vk_weather_city_keyboard_json as _vk_weather_city_keyboard_json,
+    vk_weather_keyboard_json as _vk_weather_keyboard_json,
+    with_vk_keyboard as _with_vk_keyboard,
+)
 
 log = logging.getLogger(__name__)
 
-def _vk_default_keyboard_json() -> str:
-    """Persistent VK keyboard aligned 1:1 with Telegram kb_main()."""
-    return json.dumps(
-        {
-            "one_time": False,
-            "inline": False,
-            "buttons": [
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🌿 Попробовать бесплатно",
-                            "payload": "{\"command\":\"demo\"}",
-                        },
-                        "color": "positive",
-                    },
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🔐 Полный маршрут",
-                            "payload": "{\"command\":\"full\"}",
-                        },
-                        "color": "primary",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "💳 Тарифы",
-                            "payload": "{\"command\":\"pay\"}",
-                        },
-                        "color": "primary",
-                    },
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🎁 Подарить",
-                            "payload": "{\"command\":\"gift\"}",
-                        },
-                        "color": "secondary",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "📈 Мой прогресс",
-                            "payload": "{\"command\":\"progress\"}",
-                        },
-                        "color": "primary",
-                    },
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🧠 Настройки",
-                            "payload": "{\"command\":\"settings\"}",
-                        },
-                        "color": "secondary",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "📣 Посоветовать",
-                            "payload": "{\"command\":\"share\"}",
-                        },
-                        "color": "secondary",
-                    },
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🌤 Погода",
-                            "payload": "{\"command\":\"weather\"}",
-                        },
-                        "color": "secondary",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🎧 Получить аудио",
-                            "payload": "{\"command\":\"continue\"}",
-                        },
-                        "color": "secondary",
-                    },
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "✅ Прослушал",
-                            "payload": "{\"command\":\"done\"}",
-                        },
-                        "color": "positive",
-                    },
-                ],
-            ],
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def _vk_demo_kind_keyboard_json() -> str:
-    """VK keyboard for Telegram kb_demo_kind() parity.
-
-    Telegram uses inline callbacks:
-      demo_kind_work
-      demo_kind_home
-
-    VK persistent keyboards send text/payload instead, so we expose the same
-    semantic choice as numbered buttons and normalize them to demo_work/demo_home.
-    """
-    return json.dumps(
-        {
-            "one_time": False,
-            "inline": False,
-            "buttons": [
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "1️⃣ Утро / дорога",
-                            "payload": "{\"command\":\"demo_work\"}",
-                        },
-                        "color": "positive",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "2️⃣ Вечер / домой",
-                            "payload": "{\"command\":\"demo_home\"}",
-                        },
-                        "color": "primary",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "⬅️ Назад",
-                            "payload": "{\"command\":\"start\"}",
-                        },
-                        "color": "secondary",
-                    },
-                ],
-            ],
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def _vk_weather_keyboard_json() -> str:
-    """VK weather keyboard aligned with Telegram weather entry surface."""
-    def button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
-        return {
-            "action": {
-                "type": "text",
-                "label": label,
-                "payload": json.dumps({"command": command}, ensure_ascii=False),
-            },
-            "color": color,
-        }
-
-    rows = [
-        [
-            button("🔄 Обновить погоду", "weather", "primary"),
-            button("🏙 Изменить город", "weather_city", "secondary"),
-        ],
-        [button("⬅️ Меню", "start", "secondary")],
-    ]
-
-    return json.dumps(
-        {"one_time": False, "inline": False, "buttons": rows},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def _vk_weather_city_keyboard_json() -> str:
-    """VK keyboard while waiting for city input."""
-    def button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
-        return {
-            "action": {
-                "type": "text",
-                "label": label,
-                "payload": json.dumps({"command": command}, ensure_ascii=False),
-            },
-            "color": color,
-        }
-
-    return json.dumps(
-        {
-            "one_time": False,
-            "inline": False,
-            "buttons": [[button("⬅️ Меню", "start", "secondary")]],
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-
-def _vk_score_scale_keyboard_json() -> str:
-    """VK keyboard for Telegram mood score scale parity.
-
-    VK buttons send plain text scores. The existing text parser already accepts
-    integers from -10 to 10, so this keeps one canonical score-processing path.
-    """
-    rows: list[list[dict[str, Any]]] = []
-
-    def button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
-        return {
-            "action": {
-                "type": "text",
-                "label": label,
-                "payload": json.dumps({"command": command}, ensure_ascii=False),
-            },
-            "color": color,
-        }
-
-    for row in [
-        [-10, -9, -8],
-        [-7, -6, -5],
-        [-4, -3, -2],
-        [-1, 0, 1],
-        [2, 3, 4],
-        [5, 6, 7],
-        [8, 9, 10],
-    ]:
-        rows.append([
-            button(("+" if value > 0 else "") + str(value), str(value), "primary" if value == 0 else "secondary")
-            for value in row
-        ])
-
-    rows.append([
-        button("📊 Прогресс", "progress", "primary"),
-        button("⬅️ Меню", "start", "secondary"),
-    ])
-
-    return json.dumps(
-        {
-            "one_time": False,
-            "inline": False,
-            "buttons": rows,
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-
-def _normalise_messenger_text(text: str) -> str:
-    """Normalize human/mobile button labels to canonical text commands."""
-    raw = (text or "").strip()
-    compact = raw.casefold().replace("ё", "е")
-    compact = " ".join(compact.split())
-
-    aliases = {
-        "/start": "start",
-        "start": "start",
-        "старт": "start",
-        "начать": "start",
-        "🌿 начать": "start",
-        "меню": "start",
-        "главное меню": "start",
-        "🌿 попробовать бесплатно": "demo",
-        "попробовать бесплатно": "demo",
-        "бесплатная практика": "demo",
-        "демо": "demo",
-
-        "1": "demo_work",
-        "1.": "demo_work",
-        "1️⃣": "demo_work",
-        "1️⃣ утро / дорога": "demo_work",
-        "утро / дорога": "demo_work",
-        "утро": "demo_work",
-        "дорога на работу": "demo_work",
-        "🚗 практика на утро / дорогу": "demo_work",
-        "практика на утро / дорогу": "demo_work",
-
-        "2": "demo_home",
-        "2.": "demo_home",
-        "2️⃣": "demo_home",
-        "2️⃣ вечер / домой": "demo_home",
-        "вечер / домой": "demo_home",
-        "вечер": "demo_home",
-        "дорога домой": "demo_home",
-        "🌙 практика на вечер / домой": "demo_home",
-        "практика на вечер / домой": "demo_home",
-
-        "⬅️ назад": "start",
-        "назад": "start",
-
-        "🔐 полный маршрут": "full",
-        "полный маршрут": "full",
-        "полный доступ": "full",
-
-        "💳 тарифы": "pay",
-        "тарифы": "pay",
-
-        "📈 мой прогресс": "progress",
-        "мой прогресс": "progress",
-        "анализ": "progress",
-        "анализ моего состояния": "progress",
-
-        "🧠 настройки": "settings",
-
-        "📣 посоветовать": "share",
-        "посоветовать": "share",
-
-        "🌤 погода": "weather",
-        "погода": "weather",
-
-        "🎧 получить аудио": "continue",
-        "получить аудио": "continue",
-        "продолжить": "continue",
-        "continue": "continue",
-
-        "✅ прослушал": "done",
-        "прослушал": "done",
-        "готово": "done",
-        "done": "done",
-
-        "💳 оплатить": "pay",
-        "оплатить": "pay",
-        "оплата": "pay",
-        "тарифы": "pay",
-        "pay": "pay",
-
-        "🎁 подарить": "gift",
-        "подарить": "gift",
-        "подарок": "gift",
-        "gift": "gift",
-
-        "↗️ поделиться": "share",
-        "поделиться": "share",
-        "посоветовать": "share",
-        "share": "share",
-
-        "⚙️ настройки": "settings",
-        "настройки": "settings",
-        "settings": "settings",
-
-        "📊 прогресс": "progress",
-        "прогресс": "progress",
-        "progress": "progress",
-
-        "🔁 другой мессенджер": "switch",
-        "другой мессенджер": "switch",
-        "switch": "switch",
-
-        "❓ помощь": "help",
-        "помощь": "help",
-        "help": "help",
-    }
-
-    return aliases.get(compact, raw)
-
-def _vk_text_send_kwargs(platform: str, text: str = "") -> dict[str, Any]:
-    if platform != "vk":
-        return {}
-    return {"keyboard_json": _vk_default_keyboard_json()}
-
-
-def _with_vk_keyboard(platform: str, kwargs: dict[str, Any]) -> dict[str, Any]:
-    if platform != "vk":
-        return kwargs
-    enriched = dict(kwargs)
-    enriched.setdefault("keyboard_json", _vk_default_keyboard_json())
-    return enriched
-
-def _stable_payload_key(platform: str, payload: dict[str, Any]) -> str:
-    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8', 'ignore')
-    return f'{platform}:sha256:' + hashlib.sha256(encoded).hexdigest()
-
-
-def _safe_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 
 
-def _text_from_vk_payload(raw: Any) -> str:
-    """Extract a command-like text from VK mobile/button payloads.
-
-    Some VK clients, especially mobile entry buttons, may send an empty text
-    with message.payload instead of a plain "Начать" message. We normalize
-    that to the same text-command path as ordinary messenger messages.
-    """
-    if raw in (None, "", b""):
-        return ""
-
-    payload: Any = raw
-    if isinstance(raw, str):
-        value = raw.strip()
-        if not value:
-            return ""
-        try:
-            payload = json.loads(value)
-        except json.JSONDecodeError:
-            return value
-
-    if isinstance(payload, dict):
-        for key in ("command", "cmd", "action", "button", "value", "text", "payload"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-            if isinstance(value, dict):
-                nested = _text_from_vk_payload(value)
-                if nested:
-                    return nested
-
-    return ""
-
-def _vk_event_key(payload: dict[str, Any]) -> str:
-    obj = payload.get('object') or {}
-    message = obj.get('message') or obj
-    parts = [
-        str(payload.get('event_id') or ''),
-        str(message.get('id') or message.get('conversation_message_id') or ''),
-        str(message.get('from_id') or message.get('user_id') or ''),
-        str(message.get('date') or ''),
-    ]
-    key = ':'.join(part for part in parts if part)
-    return key or _stable_payload_key('vk', payload)
 
 
-def _max_event_key(payload: dict[str, Any]) -> str:
-    message = payload.get('message') or {}
-    body = message.get('body') or {}
-    parts = [
-        str(payload.get('update_id') or payload.get('event_id') or ''),
-        str(message.get('message_id') or message.get('id') or body.get('mid') or ''),
-        str((message.get('sender') or {}).get('user_id') or (message.get('sender') or {}).get('id') or ''),
-        str(message.get('created_at') or payload.get('timestamp') or ''),
-    ]
-    key = ':'.join(part for part in parts if part)
-    return key or _stable_payload_key('max', payload)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 @dataclass
@@ -561,60 +159,7 @@ async def _telegram_webhook(request: web.Request) -> web.Response:
         await _process_update()
     return web.json_response({'ok': True})
 
-def _extract_vk_message(payload: dict[str, Any]) -> dict[str, Any] | None:
-    obj = payload.get("object") or {}
-    message = obj.get("message") or obj
 
-    from_id = (
-        message.get("from_id")
-        or message.get("user_id")
-        or message.get("peer_id")
-        or obj.get("from_id")
-        or obj.get("user_id")
-    )
-
-    text = (message.get("text") or obj.get("text") or "").strip()
-
-    if not text:
-        text = _text_from_vk_payload(
-            message.get("payload")
-            or obj.get("payload")
-            or payload.get("payload")
-        )
-
-    text = _normalise_messenger_text(text)
-
-    safe_user_id = _safe_int(from_id)
-    if safe_user_id is None:
-        return None
-
-    return {
-        "user_id": safe_user_id,
-        "external_user_id": str(from_id),
-        "username": None,
-        "display_name": None,
-        "first_name": None,
-        "text": text or "start",
-    }
-
-def _extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
-    message = payload.get('message') or {}
-    sender = message.get('sender') or {}
-    body = message.get('body') or {}
-    user_id = sender.get('user_id') or sender.get('id')
-    safe_user_id = _safe_int(user_id)
-    if safe_user_id is None:
-        return None
-    text = (body.get('text') or '').strip()
-    full_name = ' '.join(part for part in [sender.get('first_name'), sender.get('last_name')] if part).strip() or sender.get('name')
-    return {
-        'user_id': safe_user_id,
-        'external_user_id': str(user_id),
-        'username': sender.get('username'),
-        'display_name': full_name,
-        'first_name': sender.get('first_name') or sender.get('name'),
-        'text': text or 'start',
-    }
 
 
 
