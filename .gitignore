@@ -43,3 +43,13 @@ data/mplcache/
 
 # Local generated artifacts
 artifacts/
+
+# Runtime/server local state
+data/
+logs/
+*.log
+*.sqlite
+*.db
+*.bak*
+max_user_reset_backup_*.json
+max_user_state_before_clean_reset_*.json
