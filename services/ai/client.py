@@ -9,15 +9,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from config.settings import settings
+from services.ai.policy import ai_enabled_from_settings
 
 log = logging.getLogger(__name__)
-
-
-def _ai_enabled() -> bool:
-    try:
-        return int(getattr(settings, "AI_ENABLED", 1) or 0) == 1
-    except (TypeError, ValueError):
-        return False
 
 
 @dataclass
@@ -29,7 +23,7 @@ class OpenAIClient:
 
     @classmethod
     def from_settings(cls) -> "OpenAIClient | None":
-        if not _ai_enabled():
+        if not ai_enabled_from_settings():
             return None
 
         key = (getattr(settings, "OPENAI_API_KEY", "") or "").strip()
