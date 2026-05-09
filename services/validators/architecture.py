@@ -12,10 +12,34 @@ SECRET_PATTERNS = (
     re.compile(r"live_[A-Za-z0-9_-]{16,}"),              # YooKassa live secret-like
 )
 
+RAW_NETWORK_IMPORTS = {
+    "http.client",
+    "socket",
+    "urllib.error",
+    "urllib.request",
+}
+RAW_NETWORK_CALLS = {
+    ("urllib.request", "Request"),
+    ("urllib.request", "urlopen"),
+    ("socket", "socket"),
+    ("socket", "create_connection"),
+    ("http.client", "HTTPConnection"),
+    ("http.client", "HTTPSConnection"),
+}
+
 
 def _py_files() -> list[Path]:
     skip = {"__pycache__", ".git", ".pytest_cache", ".ruff_cache", ".mypy_cache", "dist", ".venv", "venv"}
     return [p for p in PROJECT_ROOT.rglob("*.py") if not any(part in skip for part in p.parts)]
+
+
+def _dotted_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _dotted_name(node.value)
+        return f"{base}.{node.attr}" if base else node.attr
+    return ""
 
 
 def validate_no_embedded_secrets(*, strict: bool = True) -> None:
@@ -88,7 +112,43 @@ def validate_no_duplicate_fsm_states(*, strict: bool = True) -> None:
             raise ValidationError(msg)
 
 
+def validate_runtime_has_no_raw_network(*, strict: bool = True) -> None:
+    """Runtime ingress must not own raw network provider calls.
+
+    Provider HTTP clients belong in service/effects layers, so webhook runtime
+    files stay thin: parse request, verify auth, dispatch to canonical services.
+    """
+    violations: list[str] = []
+    for p in _py_files():
+        rel = str(p.relative_to(PROJECT_ROOT)).replace("\\", "/")
+        if not rel.startswith("runtime/") or rel.startswith("runtime/messenger_senders.py"):
+            continue
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+        except SyntaxError as exc:
+            raise ValidationError(f"Syntax error while scanning runtime network policy: {rel}:{exc.lineno}") from exc
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in RAW_NETWORK_IMPORTS:
+                        violations.append(f"{rel}:{node.lineno}: import {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if module in RAW_NETWORK_IMPORTS:
+                    violations.append(f"{rel}:{node.lineno}: from {module} import ...")
+            elif isinstance(node, ast.Call):
+                name = _dotted_name(node.func)
+                for module, attr in RAW_NETWORK_CALLS:
+                    if name == f"{module}.{attr}":
+                        violations.append(f"{rel}:{node.lineno}: {name}(...)")
+    if violations:
+        msg = "Raw network calls/imports are forbidden in runtime ingress: " + ", ".join(violations[:30])
+        if strict:
+            raise ValidationError(msg)
+
+
 def validate_architecture_contracts(*, strict: bool = True) -> None:
     validate_no_embedded_secrets(strict=strict)
     validate_single_decision_core(strict=strict)
     validate_no_duplicate_fsm_states(strict=strict)
+    validate_runtime_has_no_raw_network(strict=strict)
