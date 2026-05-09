@@ -1,6 +1,7 @@
 """AI services.
 
 Contract:
+- services.ai.policy: single canonical AI role/scope contract
 - services.ai.client: low-level OpenAI HTTP client
 - services.ai.decisions: admin/marketing funnel advice
 - services.ai.pricing: admin-only price recommendations
@@ -12,10 +13,30 @@ No third-party SDK dependencies.
 
 from services.ai.client import OpenAIClient
 from services.ai.decisions import choose_funnel_profile, choose_funnel_profile_async, record_funnel_profile
+from services.ai.policy import (
+    AI_ALLOWED_SCOPES,
+    AI_FORBIDDEN_SCOPES,
+    AI_ROLE,
+    AI_ROLE_LABEL_RU,
+    AI_USER_THERAPY_ALLOWED,
+    admin_marketing_system_prompt,
+    ai_enabled_from_settings,
+    ai_policy_snapshot,
+    ai_provider_configured,
+)
 from services.ai.pricing import recommend_prices, record_price_recommendation
 
 __all__ = [
+    "AI_ALLOWED_SCOPES",
+    "AI_FORBIDDEN_SCOPES",
+    "AI_ROLE",
+    "AI_ROLE_LABEL_RU",
+    "AI_USER_THERAPY_ALLOWED",
     "OpenAIClient",
+    "admin_marketing_system_prompt",
+    "ai_enabled_from_settings",
+    "ai_policy_snapshot",
+    "ai_provider_configured",
     "choose_funnel_profile",
     "choose_funnel_profile_async",
     "record_funnel_profile",
