@@ -11,6 +11,7 @@ from aiohttp import web
 from config.settings import settings
 from runtime.telegram_transport import telegram_transport
 from core.paths import DB_PATH, ROOT
+from services.ai.policy import ai_policy_snapshot
 from services.db.runtime import CONFIG, redacted_db_target
 from services.db import get_connection
 from services.scheduler import scheduler_health_snapshot
@@ -161,6 +162,7 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
         'webhook_runtime_enabled': webhook_runtime_enabled,
         'app_env': (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower(),
         **_storage_health_fields(),
+        **ai_policy_snapshot(),
         **scheduler,
     }
 
