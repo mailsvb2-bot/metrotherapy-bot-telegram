@@ -5,11 +5,7 @@ import hashlib
 import json
 import logging
 import urllib.parse
-import urllib.request
-import urllib.error
-import uuid
 import os
-import base64
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
@@ -32,6 +28,7 @@ from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDeli
 from services.messenger.text_ui import handle_incoming_text, MessengerReply
 from services.mood_text_flow import complete_pre_score_and_send, complete_post_score_and_send_next
 from services.messenger.webhook_dedupe import register_inbound_event
+from services.payments.yookassa_checkout import create_yookassa_confirmation_url
 from runtime.messenger_payloads import (
     extract_max_message as _extract_max_message,
     extract_vk_message as _extract_vk_message,
@@ -55,32 +52,6 @@ from runtime.messenger_vk_ui import (
 log = logging.getLogger(__name__)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @dataclass
 class MessengerWebhookRuntime:
     runner: web.AppRunner
@@ -89,9 +60,6 @@ class MessengerWebhookRuntime:
 
     async def stop(self) -> None:
         await self.runner.cleanup()
-
-
-
 
 
 def _telegram_webhook_prefix() -> str:
@@ -158,9 +126,6 @@ async def _telegram_webhook(request: web.Request) -> web.Response:
     else:
         await _process_update()
     return web.json_response({'ok': True})
-
-
-
 
 
 def _vk_progress_chart_path(user_id: int) -> Path | None:
@@ -278,8 +243,8 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
                 log.exception('%s cross-channel audio delivery failed', platform.upper())
                 await sender.send_text(
                     external_user_id,
-                    '⚠️ Не удалось отправить следующее аудио в этот мессенджер. '\
-                    'Для MAX/ВКонтакте нужен публичный адрес MESSENGER_PUBLIC_BASE_URL, '\
+                    '⚠️ Не удалось отправить следующее аудио в этот мессенджер. '
+                    'Для MAX/ВКонтакте нужен публичный адрес MESSENGER_PUBLIC_BASE_URL, '
                     'чтобы бот мог присылать безопасную ссылку на следующий файл.',
                     **_with_vk_keyboard(platform, {}),
                 )
@@ -371,7 +336,6 @@ async def _send_reply_bundle(platform: str, external_user_id: str, canonical_use
             continue
 
 
-
 def _env_value(name: str, default: str = "") -> str:
     return (os.environ.get(name) or getattr(settings, name, default) or default).strip()
 
@@ -412,133 +376,13 @@ def _yookassa_return_url(kind: str, source: str) -> str:
     return f"{base}?payment=return&kind={urllib.parse.quote(kind)}&source={urllib.parse.quote(source)}"
 
 
-
-
-def _build_yookassa_receipt(*, amount_value: str, description: str) -> dict:
-    customer_email = (
-        os.environ.get("YOOKASSA_RECEIPT_EMAIL")
-        or os.environ.get("PAYMENT_RECEIPT_EMAIL")
-        or os.environ.get("ADMIN_EMAIL")
-        or "support@metrotherapy.ru"
-    ).strip()
-
-    vat_code = int((os.environ.get("YOOKASSA_VAT_CODE") or "1").strip())
-    payment_mode = (os.environ.get("YOOKASSA_PAYMENT_MODE") or "full_prepayment").strip()
-    payment_subject = (os.environ.get("YOOKASSA_PAYMENT_SUBJECT") or "service").strip()
-
-    return {
-        "customer": {
-            "email": customer_email,
-        },
-        "items": [
-            {
-                "description": (description or "Метротерапия")[:128],
-                "quantity": "1.00",
-                "amount": {
-                    "value": amount_value,
-                    "currency": "RUB",
-                },
-                "vat_code": vat_code,
-                "payment_mode": payment_mode,
-                "payment_subject": payment_subject,
-            }
-        ],
-    }
-
-
 def _create_yookassa_payment(*, source: str, external_user_id: str, kind: str = "subscription", **_: object) -> str:
-    shop_id = (os.environ.get("YOOKASSA_SHOP_ID") or "").strip()
-    secret_key = (os.environ.get("YOOKASSA_SECRET_KEY") or "").strip()
-
-    if not shop_id:
-        raise RuntimeError("YOOKASSA_SHOP_ID is empty")
-    if not secret_key:
-        raise RuntimeError("YOOKASSA_SECRET_KEY is empty")
-
-    kind = (kind or "subscription").strip().lower()
-    is_gift = kind == "gift"
-
-    amount_raw = (
-        os.environ.get("GIFT_PAYMENT_AMOUNT_RUB") if is_gift else os.environ.get("PAYMENT_AMOUNT_RUB")
-    ) or os.environ.get("PAYMENT_AMOUNT_RUB") or "990"
-
-    try:
-        amount_value = f"{float(str(amount_raw).replace(',', '.')):.2f}"
-    except ValueError as exc:
-        raise RuntimeError(f"Invalid payment amount: {amount_raw!r}") from exc
-
-    description = (
-        os.environ.get("GIFT_PAYMENT_DESCRIPTION") if is_gift else os.environ.get("PAYMENT_DESCRIPTION")
-    ) or ("Метротерапия — подарок" if is_gift else "Метротерапия — доступ к аудиопрактикам")
-
-    return_url = (
-        os.environ.get("PAYMENT_RETURN_URL")
-        or os.environ.get("SITE_PUBLIC_URL")
-        or "https://metrotherapy.ru"
-    ).strip()
-
-    payload = {
-        "amount": {
-            "value": amount_value,
-            "currency": "RUB",
-        },
-        "capture": True,
-        "description": description[:128],
-        "confirmation": {
-            "type": "redirect",
-            "return_url": return_url,
-        },
-        "metadata": {
-            "project": "metrotherapy",
-            "source": str(source or "unknown"),
-            "external_user_id": str(external_user_id or ""),
-            "kind": kind,
-        },
-        "receipt": _build_yookassa_receipt(
-            amount_value=amount_value,
-            description=description,
-        ),
-    }
-
-    auth_raw = f"{shop_id}:{secret_key}".encode("utf-8")
-    encoded_auth = base64.b64encode(auth_raw).decode("ascii")
-
-    request = urllib.request.Request(
-        "https://api.yookassa.ru/v3/payments",
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        method="POST",
-        headers={
-            "Authorization": f"Basic {encoded_auth}",
-            "Content-Type": "application/json",
-            "Idempotence-Key": str(uuid.uuid4()),
-        },
+    return create_yookassa_confirmation_url(
+        source=source,
+        external_user_id=external_user_id,
+        kind=kind,
     )
 
-    try:
-        with urllib.request.urlopen(request, timeout=25) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", "replace")
-        log.error("YooKassa payment creation failed: status=%s body=%s", exc.code, body)
-        raise RuntimeError(f"YooKassa HTTP {exc.code}") from exc
-
-    data = json.loads(raw or "{}")
-    confirmation = data.get("confirmation") or {}
-    confirmation_url = confirmation.get("confirmation_url") or confirmation.get("url")
-
-    if not confirmation_url:
-        log.error("YooKassa payment response without confirmation_url: %s", data)
-        raise RuntimeError("YooKassa response without confirmation_url")
-
-    log.info(
-        "YooKassa payment created: source=%s external_user_id=%s kind=%s amount=%s",
-        source,
-        external_user_id,
-        kind,
-        amount_value,
-    )
-
-    return str(confirmation_url)
 
 async def _pay_yookassa_web(request: web.Request) -> web.Response:
     source = (request.query.get("source") or "unknown").strip()[:32]
@@ -567,8 +411,6 @@ async def _pay_yookassa_web(request: web.Request) -> web.Response:
         )
 
     raise web.HTTPFound(location=confirmation_url)
-
-
 
 
 async def _vk_webhook(request: web.Request) -> web.Response:
