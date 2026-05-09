@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
 import time
-from datetime import datetime
 from core.time_utils import utc_now
 from typing import Literal
 
@@ -28,18 +28,15 @@ def _warn_db_rate_limited(msg: str, *, user_id: int) -> None:
 
 FunnelProfile = Literal["soft", "standard", "urgent"]
 
+
 def _utc_now_iso() -> str:
     return utc_now().replace(microsecond=0).isoformat()
 
 
 def _user_summary(user_id: int) -> dict:
-    """Минимальная сводка пользователя для AI-решения.
-
-    Принцип B/D: всё из БД, без скрытых зависимостей.
-    """
+    """Minimal DB-based user summary for admin/marketing funnel advice."""
     user_id = int(user_id)
     with db() as conn:
-        # последняя активность: час в локальном TZ
         hour = None
         try:
             hour = recent_hour_local(user_id)
@@ -47,7 +44,6 @@ def _user_summary(user_id: int) -> dict:
             _warn_db_rate_limited("recent_hour_local failed", user_id=user_id)
             hour = None
 
-        # открыл тарифы?
         opened_tariffs = False
         try:
             r = conn.execute(
@@ -59,7 +55,6 @@ def _user_summary(user_id: int) -> dict:
             _warn_db_rate_limited("DB error reading opened tariffs", user_id=user_id)
             opened_tariffs = False
 
-        # сколько демо ack
         demo_acks = 0
         try:
             r = conn.execute(
@@ -83,59 +78,64 @@ def _user_summary(user_id: int) -> dict:
     }
 
 
-def choose_funnel_profile(user_id: int, *, kind: str = "work") -> FunnelProfile:
-    """Выбрать профиль воронки.
-
-    UX не меняем: это влияет только на частоту/жёсткость касаний.
-    """
-    s = _user_summary(int(user_id))
-
-    # Подписка активна => никаких продаж
-    if s.get("sub_active"):
+def _fallback_funnel_profile(summary: dict) -> FunnelProfile:
+    if summary.get("sub_active"):
         return "soft"
+    if summary.get("opened_tariffs"):
+        return "soft"
+    if int(summary.get("demo_acks") or 0) >= 2:
+        return "urgent"
+    return "standard"
 
-    # Детерминированный fallback без AI:
-    # - если человек уже открыл тарифы => мягкий режим
-    # - если демо прослушал, но тарифы не открывал => стандарт
-    # - если демо прослушал несколько раз и игнорирует => urgent
-    fallback: FunnelProfile
-    if s.get("opened_tariffs"):
-        fallback = "soft"
-    elif int(s.get("demo_acks") or 0) >= 2:
-        fallback = "urgent"
-    else:
-        fallback = "standard"
+
+def _normalize_profile(value: str | None, fallback: FunnelProfile) -> FunnelProfile:
+    val = (value or "").strip().lower()
+    if val in ("soft", "standard", "urgent"):
+        return val  # type: ignore[return-value]
+    return fallback
+
+
+def choose_funnel_profile(user_id: int, *, kind: str = "work") -> FunnelProfile:
+    """Choose post-demo marketing funnel profile: soft / standard / urgent.
+
+    AI is used only as an admin/marketing adviser. It does not act as a therapist,
+    does not generate user-facing therapeutic claims, and never changes UX directly.
+    """
+    summary = _user_summary(int(user_id))
+    fallback = _fallback_funnel_profile(summary)
 
     client = OpenAIClient.from_settings()
     if not client:
         return fallback
 
     prompt = (
-        "Ты помощник продукта Telegram-бота. "
-        "Твоя задача: выбрать профиль коммуникаций после демо: soft / standard / urgent. "
+        "Ты AI-помощник маркетолога и администратора Telegram-бота. "
+        "Твоя задача: выбрать профиль маркетинговой коммуникации после демо: soft / standard / urgent. "
         "soft — минимум сообщений, standard — обычный режим, urgent — чуть более настойчиво, но без спама. "
+        "Не выступай терапевтом, врачом или психологом; не давай терапевтических выводов. "
         "Отвечай строго одним словом: soft или standard или urgent.\n\n"
-        f"Данные пользователя (JSON): {json.dumps(s, ensure_ascii=False)}\n"
+        f"Данные пользователя (JSON): {json.dumps(summary, ensure_ascii=False)}\n"
         f"Kind демо: {kind}\n"
     )
 
     txt = client.chat(
         messages=[
-            {"role": "system", "content": "Ты выбираешь только один из вариантов: soft, standard, urgent."},
+            {"role": "system", "content": "Выбери только один маркетинговый профиль: soft, standard, urgent."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.1,
         max_tokens=10,
     )
+    return _normalize_profile(txt, fallback)
 
-    val = (txt or "").strip().lower()
-    if val in ("soft", "standard", "urgent"):
-        return val  # type: ignore[return-value]
-    return fallback
+
+async def choose_funnel_profile_async(user_id: int, *, kind: str = "work") -> FunnelProfile:
+    """Async-safe wrapper for Telegram handlers."""
+    return await asyncio.to_thread(choose_funnel_profile, int(user_id), kind=kind)
 
 
 def record_funnel_profile(user_id: int, profile: str, *, meta: dict | None = None):
-    """Записать решение AI в БД для доказуемости (Принцип H)."""
+    """Record AI/fallback marketing profile decision for auditability."""
     with db() as conn:
         conn.execute(
             "INSERT INTO ai_decisions(user_id, kind, value, meta, created_at_utc) VALUES(?,?,?,?,?)",
