@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -92,6 +91,35 @@ def _schema_ready() -> tuple[bool, str | None]:
 
 
 
+def _storage_health_fields() -> dict[str, Any]:
+    """Expose active storage unambiguously in health output.
+
+    In Postgres mode, the historical SQLite file path is still useful as a
+    migration/legacy signal, but it must not look like the active database.
+    """
+    fields: dict[str, Any] = {
+        'root_exists': False,
+    }
+    try:
+        fields['root_exists'] = ROOT.exists()
+        if CONFIG.uses_postgres:
+            fields['legacy_sqlite_path'] = str(DB_PATH)
+            fields['legacy_sqlite_present'] = Path(DB_PATH).exists()
+        else:
+            fields['db_path'] = str(DB_PATH)
+            fields['db_exists'] = Path(DB_PATH).exists()
+    except OSError:
+        fields['root_exists'] = False
+        if CONFIG.uses_postgres:
+            fields['legacy_sqlite_path'] = str(DB_PATH)
+            fields['legacy_sqlite_present'] = False
+        else:
+            fields['db_path'] = str(DB_PATH)
+            fields['db_exists'] = False
+    return fields
+
+
+
 def build_health_payload() -> tuple[dict[str, Any], int]:
     db_ok, db_error = _db_ready()
     schema_ok, schema_error = _schema_ready()
@@ -103,19 +131,11 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
         'schema_ready': schema_ok,
         'db_engine': CONFIG.engine,
         'db_target': redacted_db_target(),
-        'db_path': str(DB_PATH),
-        'db_exists': False,
-        'root_exists': False,
         'messenger_webhook_enabled': _webhook_configured(),
         'app_env': (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower(),
+        **_storage_health_fields(),
         **scheduler,
     }
-    try:
-        details['db_exists'] = Path(DB_PATH).exists()
-        details['root_exists'] = ROOT.exists()
-    except OSError:
-        details['db_exists'] = False
-        details['root_exists'] = False
 
     errors: list[str] = []
     if db_error is not None:
