@@ -1,13 +1,14 @@
 from __future__ import annotations
-import logging
-
 
 import json
-from datetime import datetime, timedelta
-from core.time_utils import utc_now
+import logging
+from datetime import timedelta
 
-from services.db import db
+from core.time_utils import utc_now
 from services.ai.client import OpenAIClient
+from services.db import db
+
+log = logging.getLogger(__name__)
 
 
 def _utc_now_iso() -> str:
@@ -15,13 +16,12 @@ def _utc_now_iso() -> str:
 
 
 def _demand_snapshot(days: int = 7) -> dict:
-    """Сводка спроса по продажам (без изменения UX).
+    """Sales-demand snapshot for admin price advice.
 
-    Берём оплаченные подписки за последние N дней.
+    Reads paid subscriptions for the last N days. Does not mutate prices.
     """
     since = (utc_now().replace(microsecond=0) - timedelta(days=int(days))).isoformat()
     with db() as conn:
-        # paid_at появился позже; для старых записей fallback на created_at.
         rows = conn.execute(
             "SELECT scope, COUNT(1) AS n FROM subscriptions "
             "WHERE COALESCE(paid_at, created_at) IS NOT NULL AND COALESCE(paid_at, created_at) >= ? "
@@ -35,20 +35,23 @@ def _demand_snapshot(days: int = 7) -> dict:
 
 
 def recommend_prices() -> dict:
-    """AI-рекомендации цен.
+    """AI recommendations for admin price review.
 
-    Не применяет цены автоматически. Сохраняет рекомендации в таблицу, чтобы админ мог их посмотреть.
+    AI is only an admin/marketing adviser here. It never applies prices
+    automatically and must not be represented as a therapist or product coach.
     """
     snapshot = _demand_snapshot(7)
 
     client = OpenAIClient.from_settings()
     if not client:
-        return {"ok": False, "reason": "no_api_key", "snapshot": snapshot}
+        return {"ok": False, "reason": "ai_disabled_or_no_api_key", "snapshot": snapshot}
 
     prompt = (
-        "Ты продуктовый аналитик. Дай рекомендации по изменению цен тарифов Telegram-бота. "
+        "Ты AI-помощник маркетолога и администратора продукта. "
+        "Дай осторожные рекомендации по ценам тарифов Telegram-бота на основе спроса. "
         "Нужно предложить коэффициент (multiplier) для каждого scope (morning/evening/both) в диапазоне 0.8..1.3. "
-        "Если спрос выше — чуть повышай, если ниже — чуть снижай. "
+        "Если спрос выше — можно чуть повышать, если ниже — можно чуть снижать. "
+        "Не обещай терапевтические результаты и не делай медицинских выводов. "
         "Верни строго JSON вида: {\"morning\":1.0,\"evening\":1.0,\"both\":1.0,\"comment\":\"...\"}.\n\n"
         f"Данные спроса (JSON): {json.dumps(snapshot, ensure_ascii=False)}"
     )
@@ -67,7 +70,6 @@ def recommend_prices() -> dict:
 
     try:
         obj = json.loads(txt)
-        # нормализуем
         out = {}
         for k in ("morning", "evening", "both"):
             v = float(obj.get(k, 1.0))
@@ -78,11 +80,8 @@ def recommend_prices() -> dict:
             out[k] = round(v, 2)
         out["comment"] = str(obj.get("comment", "")).strip()
         return {"ok": True, "snapshot": snapshot, "recommendation": out}
-    except (json.JSONDecodeError, KeyError, IndexError):
-        logging.getLogger(__name__).exception("ai pricing: bad response")
-        return {"ok": False, "reason": "bad_json", "snapshot": snapshot}
-    except (TypeError, ValueError):
-        logging.getLogger(__name__).exception("ai pricing: bad response")
+    except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
+        log.warning("ai_pricing_bad_response", extra={"error_type": type(exc).__name__})
         return {"ok": False, "reason": "bad_json", "snapshot": snapshot}
 
 
