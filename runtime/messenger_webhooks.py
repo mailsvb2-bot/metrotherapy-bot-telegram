@@ -9,6 +9,11 @@ from aiohttp import web
 from config.settings import settings
 from runtime.messenger_ingress import max_webhook, vk_webhook
 from runtime.messenger_media_http import audio_access, audio_media
+from runtime.messenger_payloads import (
+    extract_max_message as _extract_max_message,
+    extract_vk_message as _extract_vk_message,
+)
+from runtime.messenger_vk_ui import vk_score_scale_keyboard_json as _vk_score_scale_keyboard_json
 from runtime.payment_http import pay_yookassa_web
 from runtime.telegram_transport import telegram_transport
 from runtime.telegram_webhook_runtime import (
