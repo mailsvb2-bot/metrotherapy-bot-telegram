@@ -166,6 +166,8 @@ def validate_wide_except_policy(*, strict: bool = True) -> None:
         "scripts/validate_project.py",
         "runtime/health_server.py",
         "runtime/messenger_webhooks.py",
+        "runtime/payment_http.py",
+        "services/messenger/reply_dispatcher.py",
         "services/db_writer.py",
         "services/validator.py",
         "services/db/core.py",
