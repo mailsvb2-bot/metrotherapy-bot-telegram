@@ -140,11 +140,11 @@ async def demo_ack(cb: CallbackQuery):
         if not store.is_sub_active(cb.from_user.id):
             t0 = datetime.now(UTC).replace(microsecond=0)
 
-            # AI: выбор профиля сопровождения (soft/standard/urgent) без изменения UX.
-            # Это влияет только на тайминги/частоту касаний, но никогда не спрашивает пользователя.
+            # AI здесь — только маркетинговый советчик для профиля воронки.
+            # Он не является терапевтом и не меняет пользовательский терапевтический контент.
             try:
-                from services.ai import choose_funnel_profile, record_funnel_profile
-                profile = choose_funnel_profile(int(cb.from_user.id), kind=kind)
+                from services.ai import choose_funnel_profile_async, record_funnel_profile
+                profile = await choose_funnel_profile_async(int(cb.from_user.id), kind=kind)
                 record_funnel_profile(int(cb.from_user.id), profile, meta={"kind": kind, "ack_at_utc": ack_utc})
             except ImportError:
                 profile = "standard"
