@@ -1,14 +1,23 @@
 from __future__ import annotations
-import logging
 
-
+import asyncio
 import json
-import urllib.request
+import logging
 import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from config.settings import settings
+
+log = logging.getLogger(__name__)
+
+
+def _ai_enabled() -> bool:
+    try:
+        return int(getattr(settings, "AI_ENABLED", 1) or 0) == 1
+    except (TypeError, ValueError):
+        return False
 
 
 @dataclass
@@ -20,6 +29,9 @@ class OpenAIClient:
 
     @classmethod
     def from_settings(cls) -> "OpenAIClient | None":
+        if not _ai_enabled():
+            return None
+
         key = (getattr(settings, "OPENAI_API_KEY", "") or "").strip()
         if not key:
             return None
@@ -28,9 +40,9 @@ class OpenAIClient:
         return cls(api_key=key, model=model, base_url=base)
 
     def chat(self, messages: list[dict[str, str]], *, temperature: float = 0.3, max_tokens: int = 300) -> str | None:
-        """Минимальный Chat Completions вызов.
+        """Minimal Chat Completions call for admin/marketing helper use.
 
-        Возвращает текст ассистента или None при ошибке.
+        Returns assistant text, or None on API/transport/parse failure.
         """
         url = self.base_url.rstrip("/") + "/chat/completions"
         payload = {
@@ -54,30 +66,33 @@ class OpenAIClient:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as e:
+        except urllib.error.HTTPError as exc:
             try:
-                _ = e.read()
+                exc.read()
             except OSError:
-                logging.getLogger(__name__).exception("Unhandled exception")
+                pass
+            log.warning("openai_chat_http_error", extra={"status": getattr(exc, "code", None)})
             return None
-        except (TimeoutError, urllib.error.URLError, ConnectionError):
-            logging.getLogger(__name__).exception("Unhandled exception")
+        except TimeoutError:
+            log.warning("openai_chat_timeout")
             return None
-        except OSError:
-            logging.getLogger(__name__).exception("Unhandled exception")
+        except (urllib.error.URLError, ConnectionError, OSError) as exc:
+            log.warning("openai_chat_transport_error", extra={"error_type": type(exc).__name__})
             return None
 
         try:
             obj: dict[str, Any] = json.loads(raw)
             choices = obj.get("choices") or []
             if not choices:
+                log.warning("openai_chat_empty_choices")
                 return None
             msg = (choices[0] or {}).get("message") or {}
             text = (msg.get("content") or "").strip()
             return text or None
-        except (json.JSONDecodeError, KeyError, IndexError):
-            logging.getLogger(__name__).exception("Unhandled exception")
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+            log.warning("openai_chat_bad_response", extra={"error_type": type(exc).__name__})
             return None
-        except TypeError:
-            logging.getLogger(__name__).exception("Unhandled exception")
-            return None
+
+    async def achat(self, messages: list[dict[str, str]], *, temperature: float = 0.3, max_tokens: int = 300) -> str | None:
+        """Async-safe wrapper around the blocking stdlib HTTP call."""
+        return await asyncio.to_thread(self.chat, messages, temperature=temperature, max_tokens=max_tokens)
