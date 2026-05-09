@@ -12,6 +12,7 @@ from services.db import db
 from services.subscription import is_active as is_sub_active
 from services.state_log import recent_hour_local
 from services.ai.client import OpenAIClient
+from services.ai.policy import admin_marketing_system_prompt
 
 log = logging.getLogger(__name__)
 _last_db_warn_ts: float = 0.0
@@ -109,10 +110,8 @@ def choose_funnel_profile(user_id: int, *, kind: str = "work") -> FunnelProfile:
         return fallback
 
     prompt = (
-        "Ты AI-помощник маркетолога и администратора Telegram-бота. "
-        "Твоя задача: выбрать профиль маркетинговой коммуникации после демо: soft / standard / urgent. "
+        "Нужно выбрать профиль маркетинговой коммуникации после демо: soft / standard / urgent. "
         "soft — минимум сообщений, standard — обычный режим, urgent — чуть более настойчиво, но без спама. "
-        "Не выступай терапевтом, врачом или психологом; не давай терапевтических выводов. "
         "Отвечай строго одним словом: soft или standard или urgent.\n\n"
         f"Данные пользователя (JSON): {json.dumps(summary, ensure_ascii=False)}\n"
         f"Kind демо: {kind}\n"
@@ -120,7 +119,10 @@ def choose_funnel_profile(user_id: int, *, kind: str = "work") -> FunnelProfile:
 
     txt = client.chat(
         messages=[
-            {"role": "system", "content": "Выбери только один маркетинговый профиль: soft, standard, urgent."},
+            {
+                "role": "system",
+                "content": admin_marketing_system_prompt(task="выбрать один профиль автоворонки: soft, standard, urgent"),
+            },
             {"role": "user", "content": prompt},
         ],
         temperature=0.1,
