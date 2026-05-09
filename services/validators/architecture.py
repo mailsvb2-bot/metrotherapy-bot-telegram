@@ -27,10 +27,51 @@ RAW_NETWORK_CALLS = {
     ("http.client", "HTTPSConnection"),
 }
 
+EXCLUDED_SCAN_DIR_NAMES = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    "site-packages",
+    "dist-packages",
+    "node_modules",
+    "build",
+    "dist",
+    "logs",
+}
+
+SECRET_TEXT_SUFFIXES = {
+    "",
+    ".bat",
+    ".cfg",
+    ".css",
+    ".env",
+    ".example",
+    ".html",
+    ".ini",
+    ".js",
+    ".json",
+    ".md",
+    ".py",
+    ".sh",
+    ".txt",
+    ".yaml",
+    ".yml",
+}
+
 
 def _py_files() -> list[Path]:
-    skip = {"__pycache__", ".git", ".pytest_cache", ".ruff_cache", ".mypy_cache", "dist", ".venv", "venv"}
-    return [p for p in PROJECT_ROOT.rglob("*.py") if not any(part in skip for part in p.parts)]
+    return [
+        p
+        for p in PROJECT_ROOT.rglob("*.py")
+        if not any(part in EXCLUDED_SCAN_DIR_NAMES for part in p.parts)
+    ]
 
 
 def _dotted_name(node: ast.AST) -> str:
@@ -42,16 +83,27 @@ def _dotted_name(node: ast.AST) -> str:
     return ""
 
 
+def _is_secret_scan_candidate(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    if any(part in EXCLUDED_SCAN_DIR_NAMES for part in path.parts):
+        return False
+    suffix = path.suffix.lower()
+    if suffix in SECRET_TEXT_SUFFIXES:
+        return True
+    if path.name.startswith(".env"):
+        return True
+    return False
+
+
 def validate_no_embedded_secrets(*, strict: bool = True) -> None:
     bad: list[str] = []
     for p in PROJECT_ROOT.rglob("*"):
-        if not p.is_file() or any(part in {".git", "__pycache__", ".pytest_cache", "dist"} for part in p.parts):
-            continue
-        if p.suffix.lower() in {".opus", ".ogg", ".mp3", ".wav", ".m4a", ".png", ".jpg", ".jpeg", ".zip"}:
+        if not _is_secret_scan_candidate(p):
             continue
         try:
-            txt = p.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
+            txt = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
             continue
         if any(rx.search(txt) for rx in SECRET_PATTERNS):
             bad.append(str(p.relative_to(PROJECT_ROOT)).replace("\\", "/"))
