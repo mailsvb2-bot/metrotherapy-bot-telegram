@@ -40,13 +40,33 @@ def _scheduler_snapshot() -> dict[str, bool | int]:
         }
 
 
-def _webhook_configured() -> bool:
+def _messenger_webhook_configured() -> bool:
     try:
-        messenger_enabled = bool(getattr(settings, 'MESSENGER_WEBHOOK_ENABLED', False) or False)
-        telegram_enabled = telegram_transport() == 'webhook'
-        return bool(messenger_enabled or telegram_enabled)
+        return bool(getattr(settings, 'MESSENGER_WEBHOOK_ENABLED', False) or False)
     except (AttributeError, RuntimeError):
         return False
+
+
+def _telegram_transport() -> str:
+    try:
+        return telegram_transport()
+    except (AttributeError, RuntimeError):
+        return 'unknown'
+
+
+def _telegram_webhook_configured() -> bool:
+    return _telegram_transport() == 'webhook'
+
+
+def _webhook_configured() -> bool:
+    """Return whether any local webhook ingress runtime should be up.
+
+    Kept as the backward-compatible aggregate health helper. The health payload
+    now also exposes Telegram and messenger webhook states separately so the
+    production-safe hybrid mode is not ambiguous:
+    Telegram polling + MAX/VK webhook runtime.
+    """
+    return bool(_messenger_webhook_configured() or _telegram_webhook_configured())
 
 
 
@@ -124,6 +144,10 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
     db_ok, db_error = _db_ready()
     schema_ok, schema_error = _schema_ready()
     scheduler = _scheduler_snapshot()
+    telegram_transport_value = _telegram_transport()
+    messenger_webhook_enabled = _messenger_webhook_configured()
+    telegram_webhook_enabled = telegram_transport_value == 'webhook'
+    webhook_runtime_enabled = bool(messenger_webhook_enabled or telegram_webhook_enabled)
     details: dict[str, Any] = {
         'ok': bool(db_ok and schema_ok),
         'service': 'metrotherapy',
@@ -131,7 +155,10 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
         'schema_ready': schema_ok,
         'db_engine': CONFIG.engine,
         'db_target': redacted_db_target(),
-        'messenger_webhook_enabled': _webhook_configured(),
+        'telegram_transport': telegram_transport_value,
+        'telegram_webhook_enabled': telegram_webhook_enabled,
+        'messenger_webhook_enabled': messenger_webhook_enabled,
+        'webhook_runtime_enabled': webhook_runtime_enabled,
         'app_env': (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower(),
         **_storage_health_fields(),
         **scheduler,
