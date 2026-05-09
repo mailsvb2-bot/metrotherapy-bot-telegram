@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from core.time_utils import utc_now
 from services.ai.client import OpenAIClient
+from services.ai.policy import admin_marketing_system_prompt
 from services.db import db
 
 log = logging.getLogger(__name__)
@@ -47,18 +48,19 @@ def recommend_prices() -> dict:
         return {"ok": False, "reason": "ai_disabled_or_no_api_key", "snapshot": snapshot}
 
     prompt = (
-        "Ты AI-помощник маркетолога и администратора продукта. "
         "Дай осторожные рекомендации по ценам тарифов Telegram-бота на основе спроса. "
         "Нужно предложить коэффициент (multiplier) для каждого scope (morning/evening/both) в диапазоне 0.8..1.3. "
         "Если спрос выше — можно чуть повышать, если ниже — можно чуть снижать. "
-        "Не обещай терапевтические результаты и не делай медицинских выводов. "
         "Верни строго JSON вида: {\"morning\":1.0,\"evening\":1.0,\"both\":1.0,\"comment\":\"...\"}.\n\n"
         f"Данные спроса (JSON): {json.dumps(snapshot, ensure_ascii=False)}"
     )
 
     txt = client.chat(
         messages=[
-            {"role": "system", "content": "Отвечай строго JSON, без текста вокруг."},
+            {
+                "role": "system",
+                "content": admin_marketing_system_prompt(task="дать JSON-рекомендацию цен без автоматического применения"),
+            },
             {"role": "user", "content": prompt},
         ],
         temperature=0.2,
