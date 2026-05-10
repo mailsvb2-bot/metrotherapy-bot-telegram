@@ -4,9 +4,9 @@ import inspect
 
 from core.callbacks import ADMIN_TARIFFS
 from handlers import admin_inline_reports
-from handlers.admin_reports import money_clients
+from handlers.admin_reports import ad_links, money_clients
 from handlers.text_input_parts import admin_users as admin_user_inputs
-from keyboards.inline import kb_admin_menu, kb_admin_money_card, kb_admin_money_payments
+from keyboards.inline import kb_admin_ad_links, kb_admin_menu, kb_admin_money_card, kb_admin_money_payments
 
 
 _DIRECT_ADMIN_CALLBACKS = {
@@ -42,6 +42,7 @@ def _is_known_admin_route(data: str) -> bool:
         or data.startswith("admin:perms:")
         or data.startswith("admin:tariffs:")
         or data.startswith("admin:money:payment:")
+        or data.startswith("admin:adlinks:create:")
     )
 
 
@@ -53,6 +54,17 @@ def test_visible_admin_menu_buttons_have_routes():
 
 def test_payments_button_opens_real_payment_list():
     assert admin_inline_reports._HANDLERS["admin:conversion"] is money_clients.run
+
+
+def test_ad_links_button_opens_real_ad_links_screen():
+    assert admin_inline_reports._HANDLERS["admin:adlinks"] is ad_links.run
+
+
+def test_ad_links_nested_buttons_have_routes():
+    callbacks = _callbacks(kb_admin_ad_links())
+    missing = [data for data in callbacks if data.startswith("admin:") and not _is_known_admin_route(data)]
+
+    assert missing == []
 
 
 def test_money_cockpit_nested_buttons_have_routes():
