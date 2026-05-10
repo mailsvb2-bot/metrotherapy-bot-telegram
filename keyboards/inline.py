@@ -99,12 +99,12 @@ def kb_staff_menu(
     # Воронка/маркетинг
     if ROLE_MARKETING in roles or ROLE_ADMIN in roles or is_superadmin:
         rows += [
-            [InlineKeyboardButton(text="📉 Воронка", callback_data="admin:funnel")],
-            [InlineKeyboardButton(text="💰 Конверсия", callback_data="admin:conversion")],
-            [InlineKeyboardButton(text="🧲 Сегменты", callback_data="admin:segments")],
-            [InlineKeyboardButton(text="🧪 Тесты офферов", callback_data="admin:ab")],
-            [InlineKeyboardButton(text="🤖 ИИ-копирайтер", callback_data="admin:copy:menu")],
-            [InlineKeyboardButton(text="🤖 ИИ-цены (рекомендации)", callback_data="admin:ai:prices")],
+            [InlineKeyboardButton(text="📉 Путь до оплаты", callback_data="admin:funnel")],
+            [InlineKeyboardButton(text="💰 Оплаты", callback_data="admin:conversion")],
+            [InlineKeyboardButton(text="🧲 Группы пользователей", callback_data="admin:segments")],
+            [InlineKeyboardButton(text="🧪 Проверка предложений", callback_data="admin:ab")],
+            [InlineKeyboardButton(text="✍️ Подготовить тексты", callback_data="admin:copy:menu")],
+            [InlineKeyboardButton(text="💡 Подсказка по ценам", callback_data="admin:ai:prices")],
         ]
 
     if allowed_perms is not None and not is_superadmin:
@@ -446,6 +446,6 @@ def kb_delivery_channel_select(slot: str, snapshot: dict):
     for platform in ['telegram', 'max', 'vk']:
         prefix = '✅ ' if current == platform else ''
         suffix = ' • подключён' if platform in identities else ' • fallback'
-        rows.append([InlineKeyboardButton(text=f"{prefix}{platform}{suffix}", callback_data=f"settings:delivery:slot:set:{slot}:{platform}")])
+        rows.append([InlineKeyboardButton(text=f"{prefix}{platform}{suffix}", callback_data=f'settings:delivery:slot:set:{slot}:{platform}')])
     rows.append([InlineKeyboardButton(text='⬅️ Назад', callback_data='settings:delivery:channels')])
     return _kb(rows)
