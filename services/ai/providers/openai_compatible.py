@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import logging
 import urllib.error
 import urllib.request
@@ -38,6 +39,12 @@ class OpenAICompatibleProvider:
             "temperature": float(temperature),
             "max_tokens": int(max_tokens),
         }
+
+        thinking_mode = (os.getenv("OPENAI_THINKING") or "").strip().lower()
+        is_deepseek = "api.deepseek.com" in self.config.base_url.lower()
+        if thinking_mode == "disabled" or (is_deepseek and thinking_mode != "enabled"):
+            payload["thinking"] = {"type": "disabled"}
+
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(url, data=data, method="POST", headers=self._headers())
 

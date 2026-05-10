@@ -15,8 +15,12 @@ def test_openai_client_respects_ai_enabled(monkeypatch):
 
 
 def test_ai_copywriter_falls_back_when_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "AI_ENABLED", 0)
     monkeypatch.setenv("AI_ENABLED", "0")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    monkeypatch.delenv("YANDEX_API_KEY", raising=False)
+    monkeypatch.delenv("GIGACHAT_CREDENTIALS", raising=False)
 
     a, b = generate_ab_texts(context="Аудиосессии по расписанию", goal="Мягко предложить подписку")
 
@@ -30,6 +34,7 @@ def test_ai_provider_router_selects_yandex(monkeypatch):
     monkeypatch.setenv("AI_PROVIDER", "yandex")
     monkeypatch.setenv("YANDEX_API_KEY", "test-yandex-key")
     monkeypatch.setenv("YANDEX_FOLDER_ID", "folder-1")
+    monkeypatch.delenv("YANDEX_MODEL", raising=False)
 
     provider = build_ai_provider()
 
