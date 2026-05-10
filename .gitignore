@@ -53,3 +53,17 @@ logs/
 *.bak*
 max_user_reset_backup_*.json
 max_user_state_before_clean_reset_*.json
+
+# Runtime state must not be shipped
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+logs/*.log
+*.log
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
