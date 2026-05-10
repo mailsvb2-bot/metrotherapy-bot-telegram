@@ -4,6 +4,7 @@ import inspect
 
 from core.callbacks import ADMIN_TARIFFS
 from handlers import admin_inline_reports
+from handlers.admin_reports import money_clients
 from handlers.text_input_parts import admin_users as admin_user_inputs
 from keyboards.inline import kb_admin_menu, kb_admin_money_card, kb_admin_money_payments
 
@@ -48,6 +49,10 @@ def test_visible_admin_menu_buttons_have_routes():
     missing = [data for data in _callbacks(kb_admin_menu()) if data.startswith("admin:") and not _is_known_admin_route(data)]
 
     assert missing == []
+
+
+def test_payments_button_opens_real_payment_list():
+    assert admin_inline_reports._HANDLERS["admin:conversion"] is money_clients.run
 
 
 def test_money_cockpit_nested_buttons_have_routes():
