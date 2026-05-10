@@ -83,6 +83,7 @@ def kb_staff_menu(
 
     if ROLE_MARKETING in roles or ROLE_ADMIN in roles or is_superadmin:
         rows += [
+            [InlineKeyboardButton(text="📣 Рекламные ссылки", callback_data="admin:adlinks")],
             [InlineKeyboardButton(text="📉 Путь до оплаты", callback_data="admin:funnel")],
             [InlineKeyboardButton(text="💰 Деньги и клиенты", callback_data="admin:money:today")],
             [InlineKeyboardButton(text="💰 Оплаты", callback_data="admin:conversion")],
@@ -113,6 +114,15 @@ def kb_staff_menu(
 
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")])
     return _kb(rows)
+
+
+def kb_admin_ad_links() -> InlineKeyboardMarkup:
+    return _kb([
+        [InlineKeyboardButton(text="➕ Telegram Ads", callback_data="admin:adlinks:create:telegram_ads")],
+        [InlineKeyboardButton(text="➕ Пост в Telegram", callback_data="admin:adlinks:create:telegram_post")],
+        [InlineKeyboardButton(text="➕ Партнёр/посев", callback_data="admin:adlinks:create:partner")],
+        [InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")],
+    ])
 
 
 def kb_admin_money_periods(active: str = "today") -> InlineKeyboardMarkup:
