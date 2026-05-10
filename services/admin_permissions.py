@@ -99,6 +99,7 @@ PERMS: list[PermItem] = [
     PermItem("admin:user:card", "🔎 Карточка пользователя"),
     PermItem("admin:behavior", "🧠 Поведение"),
     PermItem("admin:funnel", "📉 Воронка"),
+    PermItem("admin:money:today", "💰 Деньги и клиенты"),
     PermItem("admin:conversion", "💰 Конверсия"),
     PermItem("admin:segments", "🧲 Сегменты"),
     PermItem("admin:ab", "🧪 Тесты офферов"),
