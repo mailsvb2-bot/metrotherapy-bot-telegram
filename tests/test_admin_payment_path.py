@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 from services import admin_payment_path
+from services.acquisition_attribution import start_attribution_meta
 
 
 class _DbCtx:
@@ -28,7 +30,7 @@ def _fake_db(path: Path):
     return _DbCtx(path)
 
 
-def _setup(conn: sqlite3.Connection) -> None:
+def _setup(conn: sqlite3.Connection, *, start_meta: str | None = None) -> None:
     conn.executescript(
         """
         CREATE TABLE users(
@@ -59,7 +61,7 @@ def _setup(conn: sqlite3.Connection) -> None:
         (101, "2026-05-10T10:00:00+00:00", "buyer", "Анна"),
     )
     events = [
-        (101, "start", '{"utm_source":"telegram_ads","utm_campaign":"may","utm_creative":"creative_1","ad_spend":"340 RUB"}', "2026-05-10T10:00:00+00:00"),
+        (101, "start", start_meta or '{"utm_source":"telegram_ads","utm_campaign":"may","utm_creative":"creative_1","ad_spend":"340 RUB"}', "2026-05-10T10:00:00+00:00"),
         (101, "funnel_demo_open", "{}", "2026-05-10T10:05:00+00:00"),
         (101, "funnel_demo_ack", "{}", "2026-05-10T10:25:00+00:00"),
         (101, "funnel_offer_shown", "{}", "2026-05-10T10:30:00+00:00"),
@@ -94,3 +96,23 @@ def test_payment_path_report_shows_client_path_and_attribution(tmp_path, monkeyp
     assert "/start" in text
     assert "клик оплаты" in text
     assert "оплата" in text
+
+
+def test_payment_path_report_uses_parsed_start_payload(tmp_path, monkeypatch):
+    path = tmp_path / "path_payload.db"
+    meta = json.dumps(
+        start_attribution_meta("src_telegram_ads__camp_may__creative_reels1__cost_340rub"),
+        ensure_ascii=False,
+    )
+    with _fake_db(path) as conn:
+        _setup(conn, start_meta=meta)
+
+    monkeypatch.setattr(admin_payment_path, "db", lambda: _fake_db(path))
+    monkeypatch.setattr(admin_payment_path, "_period_start", lambda period: "2026-05-10T00:00:00+00:00")
+
+    text = admin_payment_path.format_payment_path_report(admin_payment_path.payment_path_report("today"))
+
+    assert "telegram_ads" in text
+    assert "may" in text
+    assert "reels1" in text
+    assert "340rub" in text
