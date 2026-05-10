@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -29,7 +30,7 @@ def _http_json(url: str, *, timeout: float = 5) -> tuple[bool, str, dict[str, An
         with urllib.request.urlopen(url, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
             status = getattr(response, "status", 0)
-    except Exception as exc:  # validator: allow-wide-except
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
         # Ops boundary: a network probe must report degraded health instead of
         # crashing before the remaining checks can run.
         return False, f"{type(exc).__name__}: {exc}", None
