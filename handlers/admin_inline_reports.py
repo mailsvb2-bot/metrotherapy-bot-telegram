@@ -9,6 +9,7 @@ from handlers.admin_inline_common import AdminCtx
 
 from handlers.admin_reports import (
     ab,
+    ad_links,
     demo_brief,
     demo_full,
     funnel,
@@ -26,6 +27,7 @@ from handlers.admin_reports import (
 
 _HANDLERS = {
     "admin:ab": ab.run,
+    "admin:adlinks": ad_links.run,
     "admin:demo:brief": demo_brief.run,
     "admin:demo:full": demo_full.run,
     "admin:funnel": funnel.run,
@@ -51,6 +53,8 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
     log = logging.getLogger(__name__)
     if data.startswith("admin:money:payment:"):
         return await money_clients.run(cb, state, ctx, log)
+    if data.startswith("admin:adlinks:create:"):
+        return await ad_links.run(cb, state, ctx, log)
     fn = _HANDLERS.get(data)
     if not fn:
         return False
