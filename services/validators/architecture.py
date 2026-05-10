@@ -127,7 +127,6 @@ def validate_single_decision_core(*, strict: bool = True) -> None:
                 classes.append(f"{rel}:{node.lineno}")
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "run":
                 if isinstance(node.func.value, ast.Name) and "runner" in node.func.value.id.lower():
-                    # Allowed at the action gateway boundary and in tests.
                     if rel not in {"core/ai/action_gateway.py", "runtime/telegram_action_runner.py"} and not rel.startswith("tests/"):
                         direct_runners.append(f"{rel}:{node.lineno}")
     if len(classes) != 1 or not classes[0].startswith("core/ai/decision_core.py:"):
@@ -165,15 +164,15 @@ def validate_no_duplicate_fsm_states(*, strict: bool = True) -> None:
 
 
 def validate_runtime_has_no_raw_network(*, strict: bool = True) -> None:
-    """Runtime ingress must not own raw network provider calls.
+    """Runtime ingress/senders must not own raw network provider calls.
 
-    Provider HTTP clients belong in service/effects layers, so webhook runtime
-    files stay thin: parse request, verify auth, dispatch to canonical services.
+    Provider HTTP clients belong in service/effects layers, so runtime files stay
+    thin: parse request, verify auth, dispatch to canonical services/senders.
     """
     violations: list[str] = []
     for p in _py_files():
         rel = str(p.relative_to(PROJECT_ROOT)).replace("\\", "/")
-        if not rel.startswith("runtime/") or rel.startswith("runtime/messenger_senders.py"):
+        if not rel.startswith("runtime/"):
             continue
         try:
             tree = ast.parse(p.read_text(encoding="utf-8"))
@@ -194,7 +193,7 @@ def validate_runtime_has_no_raw_network(*, strict: bool = True) -> None:
                     if name == f"{module}.{attr}":
                         violations.append(f"{rel}:{node.lineno}: {name}(...)")
     if violations:
-        msg = "Raw network calls/imports are forbidden in runtime ingress: " + ", ".join(violations[:30])
+        msg = "Raw network calls/imports are forbidden in runtime ingress/senders: " + ", ".join(violations[:30])
         if strict:
             raise ValidationError(msg)
 

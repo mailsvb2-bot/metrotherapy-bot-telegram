@@ -9,26 +9,6 @@ from aiohttp import web
 from config.settings import settings
 from runtime.messenger_ingress import max_webhook, vk_webhook
 from runtime.messenger_media_http import audio_access, audio_media
-from runtime.messenger_payloads import (
-    extract_max_message as _extract_max_message,
-    extract_vk_message as _extract_vk_message,
-    max_event_key as _max_event_key,
-    normalise_messenger_text as _normalise_messenger_text,
-    safe_int as _safe_int,
-    stable_payload_key as _stable_payload_key,
-    text_from_vk_payload as _text_from_vk_payload,
-    vk_event_key as _vk_event_key,
-)
-from runtime.messenger_senders import MaxBotSender, VkBotSender
-from runtime.messenger_vk_ui import (
-    vk_default_keyboard_json as _vk_default_keyboard_json,
-    vk_demo_kind_keyboard_json as _vk_demo_kind_keyboard_json,
-    vk_score_scale_keyboard_json as _vk_score_scale_keyboard_json,
-    vk_text_send_kwargs as _vk_text_send_kwargs,
-    vk_weather_city_keyboard_json as _vk_weather_city_keyboard_json,
-    vk_weather_keyboard_json as _vk_weather_keyboard_json,
-    with_vk_keyboard as _with_vk_keyboard,
-)
 from runtime.payment_http import pay_yookassa_web
 from runtime.telegram_transport import telegram_transport
 from runtime.telegram_webhook_runtime import (
@@ -36,41 +16,12 @@ from runtime.telegram_webhook_runtime import (
     telegram_webhook,
     telegram_webhook_path,
 )
-from services.messenger.audio_delivery import send_next_audio_to_user
 from services.messenger.audio_links import AUDIO_ACCESS_PREFIX, AUDIO_MEDIA_PREFIX
-from services.messenger import reply_dispatcher as _reply_dispatcher
 
 if TYPE_CHECKING:
     from aiogram import Bot, Dispatcher
-    from services.messenger.text_ui import MessengerReply
 
 log = logging.getLogger(__name__)
-
-
-async def _send_reply_bundle(
-    platform: str,
-    external_user_id: str,
-    canonical_user_id: int,
-    replies: list["MessengerReply"],
-) -> None:
-    """Legacy compatibility wrapper around the canonical reply dispatcher.
-
-    Some regression tests monkeypatch the historical `runtime.messenger_webhooks`
-    sender symbols. Keep that patch surface thin while the implementation lives
-    in `services.messenger.reply_dispatcher`.
-    """
-    old_vk = _reply_dispatcher.VkBotSender
-    old_max = _reply_dispatcher.MaxBotSender
-    old_send_next_audio = _reply_dispatcher.send_next_audio_to_user
-    try:
-        _reply_dispatcher.VkBotSender = VkBotSender
-        _reply_dispatcher.MaxBotSender = MaxBotSender
-        _reply_dispatcher.send_next_audio_to_user = send_next_audio_to_user
-        await _reply_dispatcher.send_reply_bundle(platform, external_user_id, canonical_user_id, replies)
-    finally:
-        _reply_dispatcher.VkBotSender = old_vk
-        _reply_dispatcher.MaxBotSender = old_max
-        _reply_dispatcher.send_next_audio_to_user = old_send_next_audio
 
 
 @dataclass

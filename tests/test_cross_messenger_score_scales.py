@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from runtime.messenger_senders import MaxBotSender
-from runtime.messenger_webhooks import _vk_score_scale_keyboard_json
+from runtime.messenger_vk_ui import vk_score_scale_keyboard_json
 from services.mood_text_flow import parse_score_text
 
 
@@ -24,7 +24,7 @@ def _max_score_values() -> list[int]:
 
 
 def _vk_score_values() -> list[int]:
-    keyboard = json.loads(_vk_score_scale_keyboard_json())
+    keyboard = json.loads(vk_score_scale_keyboard_json())
     values: list[int] = []
     for row in keyboard["buttons"]:
         for button in row:

@@ -50,13 +50,12 @@ def test_identity_conflict_collapses_to_latest_canonical_user(monkeypatch, tmp_p
     assert snap_702['identities'][0]['external_user_id'] == 'same-ext'
 
 
-
 import pytest
 
 
 @pytest.mark.asyncio
 async def test_send_reply_bundle_does_not_duplicate_audio_link_message(monkeypatch):
-    from runtime.messenger_webhooks import _send_reply_bundle
+    from services.messenger.reply_dispatcher import send_reply_bundle
     from services.messenger.text_ui import MessengerReply
 
     sent = []
@@ -72,9 +71,9 @@ async def test_send_reply_bundle_does_not_duplicate_audio_link_message(monkeypat
             message = 'SHOULD_NOT_BE_SENT_TWICE'
         return Result()
 
-    monkeypatch.setattr('runtime.messenger_webhooks.VkBotSender', lambda: FakeSender())
-    monkeypatch.setattr('runtime.messenger_webhooks.MaxBotSender', lambda: FakeSender())
-    monkeypatch.setattr('runtime.messenger_webhooks.send_next_audio_to_user', fake_send_next_audio_to_user)
+    monkeypatch.setattr('services.messenger.reply_dispatcher.VkBotSender', lambda: FakeSender())
+    monkeypatch.setattr('services.messenger.reply_dispatcher.MaxBotSender', lambda: FakeSender())
+    monkeypatch.setattr('services.messenger.reply_dispatcher.send_next_audio_to_user', fake_send_next_audio_to_user)
 
-    await _send_reply_bundle('vk', 'vk-1', 1, [MessengerReply(kind='next_audio')])
+    await send_reply_bundle('vk', 'vk-1', 1, [MessengerReply(kind='next_audio')])
     assert sent == [('vk-1', 'LINK_MESSAGE')]
