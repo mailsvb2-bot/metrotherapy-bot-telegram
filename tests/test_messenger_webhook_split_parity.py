@@ -45,7 +45,7 @@ def test_text_normalisation_preserves_known_aliases():
         "start",
         "demo",
         "demo_work",
-        "demo_evening",
+        "demo_home",
         "continue",
         "pay",
         "gift",
