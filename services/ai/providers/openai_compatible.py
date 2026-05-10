@@ -54,19 +54,33 @@ class OpenAICompatibleProvider:
         except TimeoutError:
             log.warning("ai_provider_timeout", extra={"provider": self.config.name})
             return None
-        except (urllib.error.URLError, ConnectionError, OSError) as exc:
+        except urllib.error.URLError as exc:
+            log.warning("ai_provider_transport_error", extra={"provider": self.config.name, "error_type": type(exc).__name__})
+            return None
+        except ConnectionError as exc:
+            log.warning("ai_provider_transport_error", extra={"provider": self.config.name, "error_type": type(exc).__name__})
+            return None
+        except OSError as exc:
             log.warning("ai_provider_transport_error", extra={"provider": self.config.name, "error_type": type(exc).__name__})
             return None
 
         try:
             obj: dict[str, Any] = json.loads(raw)
-            choices = obj.get("choices") or []
-            if not choices:
-                log.warning("ai_provider_empty_choices", extra={"provider": self.config.name})
-                return None
-            msg = (choices[0] or {}).get("message") or {}
-            text = (msg.get("content") or "").strip()
-            return text or None
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+        except json.JSONDecodeError as exc:
             log.warning("ai_provider_bad_response", extra={"provider": self.config.name, "error_type": type(exc).__name__})
             return None
+
+        choices = obj.get("choices") or []
+        if not isinstance(choices, list) or not choices:
+            log.warning("ai_provider_empty_choices", extra={"provider": self.config.name})
+            return None
+        first = choices[0]
+        if not isinstance(first, dict):
+            log.warning("ai_provider_bad_response", extra={"provider": self.config.name, "error_type": "choice_not_object"})
+            return None
+        msg = first.get("message") or {}
+        if not isinstance(msg, dict):
+            log.warning("ai_provider_bad_response", extra={"provider": self.config.name, "error_type": "message_not_object"})
+            return None
+        text = (msg.get("content") or "").strip()
+        return text or None
