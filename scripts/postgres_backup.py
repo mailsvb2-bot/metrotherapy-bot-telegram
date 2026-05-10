@@ -31,7 +31,17 @@ def create_backup(*, backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = backup_dir / f"{_db_name(url)}_{stamp}.dump"
     proc = subprocess.run(
-        ["pg_dump", "--format=custom", "--no-owner", "--no-privileges", "--file", str(out), url],
+        [
+            "pg_dump",
+            "--format=custom",
+            "--no-owner",
+            "--no-privileges",
+            "--exclude-table=public.*manual_backup*",
+            "--exclude-table=public.*_backup_*",
+            "--file",
+            str(out),
+            url,
+        ],
         check=False,
     )
     if proc.returncode != 0:
