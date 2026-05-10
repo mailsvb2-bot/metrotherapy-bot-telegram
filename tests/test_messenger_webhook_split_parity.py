@@ -44,7 +44,7 @@ def test_text_normalisation_preserves_known_aliases():
     assert normalized == [
         "start",
         "demo",
-        "demo_morning",
+        "demo_work",
         "demo_evening",
         "continue",
         "pay",
@@ -85,7 +85,7 @@ def test_message_extractors_preserve_vk_and_max_payloads():
             "body": {"text": "pay"},
         },
     }
-    assert messenger_payloads.vk_event_key(vk_payload) == "vk:evt-1"
-    assert messenger_payloads.max_event_key(max_payload) == "max:u1"
+    assert messenger_payloads.vk_event_key(vk_payload) == "evt-1:10:123:1710000000"
+    assert messenger_payloads.max_event_key(max_payload) == "u1:m1:456:2026-05-08T00:00:00Z"
     assert messenger_payloads.extract_vk_message(vk_payload)["user_id"] == 123
     assert messenger_payloads.extract_max_message(max_payload)["user_id"] == 456
