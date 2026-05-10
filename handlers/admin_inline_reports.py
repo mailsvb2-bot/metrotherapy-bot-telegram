@@ -20,6 +20,7 @@ from handlers.admin_reports import (
     retention,
     state_last,
     messenger_overview,
+    payment_problems,
 )
 
 _HANDLERS = {
@@ -28,6 +29,7 @@ _HANDLERS = {
     "admin:demo:full": demo_full.run,
     "admin:funnel": funnel.run,
     "admin:conversion": conversion.run,
+    "admin:payment:problems": payment_problems.run,
     "admin:funnel2": funnel2.run,
     "admin:giftshare": giftshare.run,
     "admin:segments": segments.run,
