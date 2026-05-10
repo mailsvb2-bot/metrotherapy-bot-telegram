@@ -29,7 +29,9 @@ _HANDLERS = {
     "admin:demo:brief": demo_brief.run,
     "admin:demo:full": demo_full.run,
     "admin:funnel": funnel.run,
-    "admin:conversion": conversion.run,
+    # The visible button is "Оплаты". It must open the real payment/client list,
+    # not a generic conversion counter report.
+    "admin:conversion": money_clients.run,
     "admin:payment:problems": payment_problems.run,
     "admin:funnel2": funnel2.run,
     "admin:giftshare": giftshare.run,
