@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 from datetime import timedelta
+from json import JSONDecoder
+from typing import Any
 
 from core.time_utils import utc_now
 from services.ai.client import OpenAIClient
@@ -35,6 +37,49 @@ def _demand_snapshot(days: int = 7) -> dict:
     return out
 
 
+def _extract_json_object(text: str) -> dict[str, Any]:
+    """Extract the first JSON object from model output.
+
+    Providers sometimes wrap valid JSON in Markdown fences or add a short
+    sentence around it. The admin price surface needs a strict object, not a
+    free-form answer, so we only accept a real JSON object and ignore wrappers.
+    """
+    cleaned = (text or "").strip()
+    if not cleaned:
+        raise ValueError("empty_ai_price_response")
+
+    decoder = JSONDecoder()
+    for index, char in enumerate(cleaned):
+        if char != "{":
+            continue
+        obj, _end = decoder.raw_decode(cleaned[index:])
+        if isinstance(obj, dict):
+            return obj
+    raise ValueError("ai_price_json_object_not_found")
+
+
+def _coerce_multiplier(value: object) -> float:
+    v = float(value)
+    if v < 0.8:
+        return 0.8
+    if v > 1.3:
+        return 1.3
+    return round(v, 2)
+
+
+def _fallback_recommendation(snapshot: dict) -> dict[str, Any]:
+    """Deterministic safe fallback when the model output is unusable."""
+    by_scope = snapshot.get("by_scope") or {}
+    total = sum(int(by_scope.get(scope, 0) or 0) for scope in ("morning", "evening", "both"))
+    comment = (
+        "ИИ вернул ответ не в нужном формате, поэтому показана безопасная базовая подсказка: "
+        "цены не менять до накопления более устойчивой статистики оплат."
+        if total < 10
+        else "ИИ вернул ответ не в нужном формате, поэтому показана безопасная базовая подсказка: менять цены вручную только после проверки спроса по каждому тарифу."
+    )
+    return {"morning": 1.0, "evening": 1.0, "both": 1.0, "comment": comment}
+
+
 def recommend_prices() -> dict:
     """AI recommendations for admin price review.
 
@@ -51,7 +96,8 @@ def recommend_prices() -> dict:
         "Дай осторожные рекомендации по ценам тарифов Telegram-бота на основе спроса. "
         "Нужно предложить коэффициент (multiplier) для каждого scope (morning/evening/both) в диапазоне 0.8..1.3. "
         "Если спрос выше — можно чуть повышать, если ниже — можно чуть снижать. "
-        "Верни строго JSON вида: {\"morning\":1.0,\"evening\":1.0,\"both\":1.0,\"comment\":\"...\"}.\n\n"
+        "Верни строго JSON без Markdown и без пояснений: "
+        "{\"morning\":1.0,\"evening\":1.0,\"both\":1.0,\"comment\":\"...\"}.\n\n"
         f"Данные спроса (JSON): {json.dumps(snapshot, ensure_ascii=False)}"
     )
 
@@ -71,20 +117,18 @@ def recommend_prices() -> dict:
         return {"ok": False, "reason": "api_error", "snapshot": snapshot}
 
     try:
-        obj = json.loads(txt)
-        out = {}
-        for k in ("morning", "evening", "both"):
-            v = float(obj.get(k, 1.0))
-            if v < 0.8:
-                v = 0.8
-            if v > 1.3:
-                v = 1.3
-            out[k] = round(v, 2)
+        obj = _extract_json_object(txt)
+        out = {k: _coerce_multiplier(obj.get(k, 1.0)) for k in ("morning", "evening", "both")}
         out["comment"] = str(obj.get("comment", "")).strip()
         return {"ok": True, "snapshot": snapshot, "recommendation": out}
-    except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
         log.warning("ai_pricing_bad_response", extra={"error_type": type(exc).__name__})
-        return {"ok": False, "reason": "bad_json", "snapshot": snapshot}
+        return {
+            "ok": True,
+            "snapshot": snapshot,
+            "recommendation": _fallback_recommendation(snapshot),
+            "warning": "bad_json_fallback",
+        }
 
 
 def record_price_recommendation(payload: dict):
