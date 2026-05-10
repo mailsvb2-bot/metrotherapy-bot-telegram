@@ -7,6 +7,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
+from services.acquisition_attribution import start_attribution_meta
 from services.messenger.entrypoints import register_user_entry
 from services.events import log_event
 
@@ -137,7 +138,7 @@ async def start_cmd(message: Message):
     # Plain /start is a hot path: answer first, all side effects afterwards.
     await _open_main_menu_fail_open(message)
     await asyncio.to_thread(_register_user_entry_safe, message, payload)
-    await asyncio.to_thread(_log_safe, _user_id(message), "funnel_start_command", {"payload": payload})
+    await asyncio.to_thread(_log_safe, _user_id(message), "funnel_start_command", start_attribution_meta(payload))
 
 
 @router.message(F.text.casefold().in_({"start", "/start", "старт", "начать", "начать заново", "меню", "menu"}))
