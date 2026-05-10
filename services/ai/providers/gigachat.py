@@ -50,10 +50,6 @@ class GigaChatProvider:
         try:
             with urllib.request.urlopen(req, timeout=int(self.config.timeout_sec)) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
-            data: dict[str, Any] = json.loads(raw)
-            token = str(data.get("access_token") or "").strip()
-            self._access_token = token
-            return token or None
         except urllib.error.HTTPError as exc:
             try:
                 exc.read()
@@ -64,9 +60,24 @@ class GigaChatProvider:
         except TimeoutError:
             log.warning("gigachat_oauth_timeout")
             return None
-        except (urllib.error.URLError, ConnectionError, OSError, json.JSONDecodeError, TypeError) as exc:
+        except urllib.error.URLError as exc:
             log.warning("gigachat_oauth_failed", extra={"error_type": type(exc).__name__})
             return None
+        except ConnectionError as exc:
+            log.warning("gigachat_oauth_failed", extra={"error_type": type(exc).__name__})
+            return None
+        except OSError as exc:
+            log.warning("gigachat_oauth_failed", extra={"error_type": type(exc).__name__})
+            return None
+
+        try:
+            data: dict[str, Any] = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            log.warning("gigachat_oauth_failed", extra={"error_type": type(exc).__name__})
+            return None
+        token = str(data.get("access_token") or "").strip()
+        self._access_token = token
+        return token or None
 
     def chat(self, messages: list[dict[str, str]], *, temperature: float = 0.3, max_tokens: int = 300) -> str | None:
         token = self._get_access_token()
@@ -101,16 +112,33 @@ class GigaChatProvider:
         except TimeoutError:
             log.warning("gigachat_timeout")
             return None
-        except (urllib.error.URLError, ConnectionError, OSError) as exc:
+        except urllib.error.URLError as exc:
+            log.warning("gigachat_transport_error", extra={"error_type": type(exc).__name__})
+            return None
+        except ConnectionError as exc:
+            log.warning("gigachat_transport_error", extra={"error_type": type(exc).__name__})
+            return None
+        except OSError as exc:
             log.warning("gigachat_transport_error", extra={"error_type": type(exc).__name__})
             return None
 
         try:
             obj: dict[str, Any] = json.loads(raw)
-            choices = obj.get("choices") or []
-            msg = (choices[0] or {}).get("message") or {}
-            text = (msg.get("content") or "").strip()
-            return text or None
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+        except json.JSONDecodeError as exc:
             log.warning("gigachat_bad_response", extra={"error_type": type(exc).__name__})
             return None
+
+        choices = obj.get("choices") or []
+        if not isinstance(choices, list) or not choices:
+            log.warning("gigachat_bad_response", extra={"error_type": "empty_choices"})
+            return None
+        first = choices[0]
+        if not isinstance(first, dict):
+            log.warning("gigachat_bad_response", extra={"error_type": "choice_not_object"})
+            return None
+        msg = first.get("message") or {}
+        if not isinstance(msg, dict):
+            log.warning("gigachat_bad_response", extra={"error_type": "message_not_object"})
+            return None
+        text = (msg.get("content") or "").strip()
+        return text or None
