@@ -29,7 +29,9 @@ def _http_json(url: str, *, timeout: float = 5) -> tuple[bool, str, dict[str, An
         with urllib.request.urlopen(url, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
             status = getattr(response, "status", 0)
-    except Exception as exc:  # ops boundary: network probe should report, not raise
+    except Exception as exc:  # validator: allow-wide-except
+        # Ops boundary: a network probe must report degraded health instead of
+        # crashing before the remaining checks can run.
         return False, f"{type(exc).__name__}: {exc}", None
     try:
         payload = json.loads(raw)
