@@ -9,7 +9,7 @@ from aiohttp import web
 from config.settings import settings
 from runtime.messenger_ingress import max_webhook, vk_webhook
 from runtime.messenger_media_http import audio_access, audio_media
-from runtime.payment_http import pay_yookassa_web
+from runtime.payment_http import pay_yookassa_web, yookassa_reconciliation_webhook
 from runtime.telegram_transport import telegram_transport
 from runtime.telegram_webhook_runtime import (
     telegram_public_webhook_url,
@@ -46,6 +46,7 @@ def _register_health_routes(app: web.Application) -> None:
 
 def _register_messenger_routes(app: web.Application) -> None:
     app.router.add_get("/pay/yookassa", pay_yookassa_web)
+    app.router.add_post("/pay/yookassa/webhook", yookassa_reconciliation_webhook)
     app.router.add_post("/webhooks/vk", vk_webhook)
     app.router.add_post("/webhooks/max", max_webhook)
     app.router.add_get(f"{AUDIO_MEDIA_PREFIX}{{filename}}", audio_media)
