@@ -24,7 +24,7 @@ def ensure(c: sqlite3.Connection) -> None:
         """
     )
 
-    # PAYMENTS (идемпотентность успешных платежей)
+    # PAYMENTS (идемпотентность успешных платежей + provider reconciliation)
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS payments(
@@ -43,6 +43,17 @@ def ensure(c: sqlite3.Connection) -> None:
     # Payments attribution (Decision Sovereignty / Reward causal link)
     _add_col(c, 'payments', 'decision_id TEXT')
     _add_col(c, 'payments', 'correlation_id TEXT')
+
+    # Provider reconciliation fields. They keep external payment state visible
+    # without creating a second payment brain or changing Telegram polling mode.
+    _add_col(c, 'payments', 'provider_status TEXT')
+    _add_col(c, 'payments', 'provider_event_id TEXT')
+    _add_col(c, 'payments', 'provider_raw TEXT')
+    _add_col(c, 'payments', 'reconciled_at TEXT')
+    _add_col(c, 'payments', 'problem TEXT')
+    c.execute("CREATE INDEX IF NOT EXISTS idx_payments_provider_charge_id ON payments(provider_charge_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_payments_provider_status ON payments(provider_status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_payments_problem ON payments(problem)")
 
     # FUNNEL EVENTS 2.0 (сценарии, idempotency, аналитика)
     c.execute(
