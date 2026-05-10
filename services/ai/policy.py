@@ -44,7 +44,15 @@ def ai_enabled_from_settings() -> bool:
 
 
 def ai_provider_configured() -> bool:
-    return bool((getattr(settings, "OPENAI_API_KEY", "") or "").strip())
+    from services.ai.providers.router import provider_configured
+
+    return provider_configured()
+
+
+def ai_provider_name() -> str:
+    from services.ai.providers.router import provider_name
+
+    return provider_name()
 
 
 def ai_policy_snapshot() -> dict[str, Any]:
@@ -53,6 +61,7 @@ def ai_policy_snapshot() -> dict[str, Any]:
         "ai_role": AI_ROLE,
         "ai_role_label": AI_ROLE_LABEL_RU,
         "ai_enabled": ai_enabled_from_settings(),
+        "ai_provider": ai_provider_name(),
         "ai_provider_configured": ai_provider_configured(),
         "ai_user_therapy_allowed": AI_USER_THERAPY_ALLOWED,
         "ai_allowed_scopes": list(AI_ALLOWED_SCOPES),
