@@ -21,13 +21,12 @@ from core.callback_utils import safe_answer_callback
 
 def _format_ai_price_recommendations(res: dict) -> str:
     if not res.get("ok"):
-        reason = res.get("reason") or "unknown"
+        reason = str(res.get("reason") or "неизвестная причина")
         return (
-            "🤖 AI-рекомендации цен\n\n"
-            f"Не удалось получить рекомендации: {reason}.\n\n"
-            "AI здесь работает только как советчик для администратора. "
-            "Цены автоматически не меняются.\n\n"
-            "Чтобы изменить цены — откройте: Админка → Тарифы → Изменить тарифы."
+            "💡 Подсказка по ценам\n\n"
+            f"Сейчас не получилось подготовить совет: {reason}.\n\n"
+            "Это только подсказка для вас. Бот сам цены не меняет.\n\n"
+            "Чтобы изменить цены: Админка → Тарифы → Изменить тарифы."
         )
 
     reco = dict(res.get("recommendation") or {})
@@ -35,37 +34,43 @@ def _format_ai_price_recommendations(res: dict) -> str:
     demand = dict(snapshot.get("by_scope") or {})
 
     labels = {
-        "morning": "Утренний тариф",
-        "evening": "Вечерний тариф",
-        "both": "Полный доступ",
+        "morning": "Утренние практики",
+        "evening": "Вечерние практики",
+        "both": "Утро и вечер вместе",
     }
 
     lines = [
-        "🤖 AI-рекомендации цен",
+        "💡 Подсказка по ценам",
         "",
-        "Роль AI: маркетинговый советчик для администратора. Цены автоматически не применяются.",
+        "Я посмотрел последние оплаты и подготовил совет. Цены сами не меняются — решение остаётся за вами.",
         "",
-        "Спрос за период:",
+        "Оплаты за последние дни:",
     ]
     if demand:
         for scope in ("morning", "evening", "both"):
-            lines.append(f"• {labels[scope]}: {int(demand.get(scope, 0) or 0)} оплат")
+            lines.append(f"• {labels[scope]}: {int(demand.get(scope, 0) or 0)}")
     else:
-        lines.append("• Оплат за период не найдено")
+        lines.append("• Оплат пока не найдено")
 
     lines.append("")
-    lines.append("Рекомендованные коэффициенты:")
+    lines.append("Что можно сделать с ценами:")
     for scope in ("morning", "evening", "both"):
         multiplier = float(reco.get(scope, 1.0) or 1.0)
-        lines.append(f"• {labels[scope]}: ×{multiplier:.2f}")
+        if multiplier > 1.03:
+            advice = f"можно осторожно поднять примерно на {round((multiplier - 1.0) * 100)}%"
+        elif multiplier < 0.97:
+            advice = f"можно осторожно снизить примерно на {round((1.0 - multiplier) * 100)}%"
+        else:
+            advice = "лучше пока оставить без изменений"
+        lines.append(f"• {labels[scope]}: {advice}")
 
     comment = str(reco.get("comment") or "").strip()
     if comment:
-        lines.extend(["", "Комментарий:", comment])
+        lines.extend(["", "Почему так:", comment])
 
     lines.extend([
         "",
-        "Чтобы изменить цены — откройте: Админка → Тарифы → Изменить тарифы.",
+        "Чтобы поменять цены: Админка → Тарифы → Изменить тарифы.",
     ])
     return "\n".join(lines)
 
@@ -80,19 +85,20 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
         await state.clear()
         await state.set_state(MarketingCopyState.key)
         back_kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="🏠 Админ-меню", callback_data="admin:menu")]]
+            inline_keyboard=[[InlineKeyboardButton(text="🏠 Админка", callback_data="admin:menu")]]
         )
         await cb.message.answer(
-            "🤖 AI-копирайтер автоворонки\n\n"
-            "Роль AI: маркетинговый помощник администратора. Не терапевт.\n\n"
-            "Шаг 1/3: отправьте ключ шага (точно как в списке):\n"
-            "• nudge\n"
-            "• postdemo\n"
-            "• offer\n"
-            "• offer_nextday\n"
-            "• deadline\n"
-            "• lastcall\n\n"
-            "ℹ️ Два варианта A/B сохраняются в базе и начнут использоваться автоматически.",
+            "✍️ Тексты для сообщений\n\n"
+            "Я помогу подготовить два варианта текста для выбранного шага. "
+            "Тексты будут сохранены, а бот сможет использовать их автоматически.\n\n"
+            "Шаг 1 из 3. Скопируйте и отправьте одно слово из списка:\n\n"
+            "• nudge — мягкое напоминание\n"
+            "• postdemo — сообщение после пробной практики\n"
+            "• offer — предложение подписки\n"
+            "• offer_nextday — предложение на следующий день\n"
+            "• deadline — напоминание перед окончанием предложения\n"
+            "• lastcall — последнее напоминание\n\n"
+            "Важно: помощник пишет только тексты для администратора и не даёт людям медицинских обещаний.",
             reply_markup=back_kb,
         )
         return True
@@ -123,7 +129,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
                 return _format_ai_price_recommendations(res)
 
         txt_result = await sovereign_execute(decision, runner=_AdminPricesRunner())
-        txt_result = str(txt_result or "🤖 AI-рекомендации цен\n\nНет данных.")
+        txt_result = str(txt_result or "💡 Подсказка по ценам\n\nПока нет данных для совета.")
         await safe_edit_admin(
             cb,
             state,

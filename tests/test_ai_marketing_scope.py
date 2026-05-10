@@ -24,9 +24,13 @@ def test_ai_copywriter_falls_back_when_disabled(monkeypatch):
 
     a, b = generate_ab_texts(context="Аудиосессии по расписанию", goal="Мягко предложить подписку")
 
-    assert "Контекст:" in a
-    assert "Цель:" in b
-    assert "подпис" in (a + b).lower()
+    joined = (a + "\n" + b).lower()
+    assert "аудиосессии по расписанию" in joined
+    assert "подпис" in joined
+    assert "контекст:" not in joined
+    assert "цель:" not in joined
+    assert "оффер" not in joined
+    assert "воронк" not in joined
 
 
 def test_ai_provider_router_selects_yandex(monkeypatch):
@@ -72,10 +76,15 @@ def test_admin_price_recommendations_render_recommendation_payload():
 
     text = _format_ai_price_recommendations(payload)
 
-    assert "AI-рекомендации цен" in text
-    assert "маркетинговый советчик" in text
-    assert "×1.05" in text
-    assert "×0.95" in text
-    assert "×1.10" in text
-    assert "Цены автоматически не применяются" in text
+    assert "Подсказка по ценам" in text
+    assert "Цены сами не меняются" in text
+    assert "Утренние практики" in text
+    assert "Вечерние практики" in text
+    assert "Утро и вечер вместе" in text
+    assert "поднять примерно на 5%" in text
+    assert "снизить примерно на 5%" in text
+    assert "поднять примерно на 10%" in text
     assert "Тестовый комментарий" in text
+    assert "AI-рекомендации" not in text
+    assert "маркетинговый советчик" not in text
+    assert "×1." not in text
