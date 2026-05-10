@@ -14,6 +14,21 @@ from services.funnel_copies import upsert_copy
 
 router = Router()
 
+_STEP_TITLES = {
+    "nudge": "мягкое напоминание",
+    "postdemo": "сообщение после пробной практики",
+    "offer": "предложение подписки",
+    "offer_nextday": "предложение на следующий день",
+    "deadline": "напоминание перед окончанием предложения",
+    "lastcall": "последнее напоминание",
+}
+
+_ALLOWED_STEPS = set(_STEP_TITLES)
+
+
+def _step_help() -> str:
+    return "\n".join(f"• {key} — {title}" for key, title in _STEP_TITLES.items())
+
 
 @router.message(MarketingCopyState.key)
 async def msg_copy_key(message: Message, state: FSMContext):
@@ -22,18 +37,18 @@ async def msg_copy_key(message: Message, state: FSMContext):
         return
 
     key = (message.text or "").strip().lower()
-    allowed = {"nudge", "postdemo", "offer", "offer_nextday", "deadline", "lastcall"}
-    if key not in allowed:
+    if key not in _ALLOWED_STEPS:
         return await message.answer(
-            "Пожалуйста, укажите ключ шага воронки: nudge / postdemo / offer / offer_nextday / deadline / lastcall.",
+            "Не нашёл такой шаг. Отправьте одно слово из списка:\n\n" + _step_help(),
             reply_markup=kb_back_main(),
         )
 
     await state.update_data(copy_key=key)
     await state.set_state(MarketingCopyState.context)
     await message.answer(
-        "✍️ Теперь кратко опишите контекст продукта/оффера (1–5 предложений).\n\n"
-        "Например: \"Метротерапия — аудиосессии для дороги, подписка даёт ежедневные треки по расписанию\".",
+        "Шаг 2 из 3. Расскажите, о чём должно быть сообщение.\n\n"
+        "Например: «Человек прошёл пробную практику. Нужно мягко предложить продолжить с подпиской».\n\n"
+        "Пишите обычными словами — я сам превращу это в готовый текст.",
         reply_markup=kb_back_main(),
     )
 
@@ -46,13 +61,14 @@ async def msg_copy_context(message: Message, state: FSMContext):
 
     context = (message.text or "").strip()
     if len(context) < 10:
-        return await message.answer("Пожалуйста, чуть подробнее (минимум 10 символов).", reply_markup=kb_back_main())
+        return await message.answer("Напишите чуть подробнее, хотя бы одно короткое предложение.", reply_markup=kb_back_main())
 
     await state.update_data(copy_context=context)
     await state.set_state(MarketingCopyState.goal)
     await message.answer(
-        "🎯 Какова цель сообщения?\n\n"
-        "Например: \"Мягко предложить оплатить самый популярный тариф прямо сейчас\".",
+        "Шаг 3 из 3. Что человек должен сделать после этого сообщения?\n\n"
+        "Например: «Открыть тарифы», «оформить подписку», «вернуться к практике завтра утром».\n\n"
+        "Без сложных терминов — просто напишите нужное действие.",
         reply_markup=kb_back_main(),
     )
 
@@ -65,7 +81,7 @@ async def msg_copy_goal(message: Message, state: FSMContext):
 
     goal = (message.text or "").strip()
     if len(goal) < 5:
-        return await message.answer("Пожалуйста, сформулируйте цель чуть подробнее.", reply_markup=kb_back_main())
+        return await message.answer("Пожалуйста, напишите цель чуть понятнее.", reply_markup=kb_back_main())
 
     data = await state.get_data()
     key = str(data.get("copy_key") or "offer").strip().lower()
@@ -77,11 +93,12 @@ async def msg_copy_goal(message: Message, state: FSMContext):
 
     await state.clear()
 
+    step_title = _STEP_TITLES.get(key, key)
     await message.answer(
-        "✅ Готово. Я сохранил тексты для этого шага воронки в базе (A и B).\n\n"
-        f"Ключ: {key}\n\n"
-        "Вариант A (превью):\n" + (a[:600] + ("..." if len(a) > 600 else "")) + "\n\n"
-        "Вариант B (превью):\n" + (b[:600] + ("..." if len(b) > 600 else "")) + "\n\n"
-        "ℹ️ Дальше бот будет использовать эти тексты автоматически (последняя активная версия).",
+        "✅ Готово. Сохранил два варианта текста.\n\n"
+        f"Для какого сообщения: {step_title}\n\n"
+        "Первый вариант:\n" + (a[:600] + ("..." if len(a) > 600 else "")) + "\n\n"
+        "Второй вариант:\n" + (b[:600] + ("..." if len(b) > 600 else "")) + "\n\n"
+        "Бот будет использовать последнюю сохранённую версию. Вы можете в любой момент создать новые варианты.",
         reply_markup=kb_back_main(),
     )
