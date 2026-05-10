@@ -118,12 +118,6 @@ def _payment_where(period: str) -> tuple[str, list[Any]]:
 
 
 def money_period_summary(period: str = "today", *, limit: int = 20) -> dict[str, Any]:
-    """Payment list for the admin money cockpit.
-
-    This is intentionally factual: it uses only stored payment/subscription/user
-    data. Advertising spend and creative attribution stay explicit as
-    "not connected" until a real attribution table is added.
-    """
     period = (period or "today").strip().lower()
     if period not in _PERIOD_DAYS:
         period = "today"
@@ -203,10 +197,20 @@ def _find_first_start_event(conn: Any, user_id: int) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+def _meta_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def _attribution_from_event(event: dict[str, Any] | None) -> dict[str, str]:
-    meta = event.get("meta") if event else {}
-    if not isinstance(meta, dict):
-        meta = {}
+    meta = _meta_dict(event.get("meta") if event else {})
     return {
         "source": str(meta.get("utm_source") or meta.get("source") or "не подключено").strip() or "не подключено",
         "campaign": str(meta.get("utm_campaign") or meta.get("campaign") or "не подключено").strip() or "не подключено",
