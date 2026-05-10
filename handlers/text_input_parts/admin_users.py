@@ -5,10 +5,9 @@ from aiogram import Router
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 
-from config.settings import settings
-from handlers.text_input_parts.common import is_superadmin
 from handlers.text_input_parts.states import AdminInputState
 from keyboards.inline import kb_back_main
+from services.admin import is_admin
 from services.admin_cards import user_card
 
 router = Router()
@@ -17,12 +16,13 @@ router = Router()
 async def msg_admin_user_card(message: Message, state: FSMContext):
     """Админ вводит user_id для карточки пользователя."""
     try:
-        admin_ids = set(settings.admin_id_list)
-        if int(message.from_user.id) not in admin_ids:
-            await state.clear()
-            return
+        admin_id = int(message.from_user.id) if message.from_user else None
     except (TypeError, ValueError, AttributeError):
         logging.getLogger(__name__).exception("Admin check failed in user_card input")
+        await state.clear()
+        return
+
+    if not is_admin(admin_id):
         await state.clear()
         return
 
