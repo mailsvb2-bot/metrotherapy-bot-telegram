@@ -18,8 +18,6 @@ def _kb(rows):
 
 @lru_cache()
 def kb_main(user_id: int | None = None):
-    # UX: главное меню теперь является входной рекламной воронкой.
-    # Контракты callback_data не меняем, чтобы не ломать обработчики.
     rows = [
         [
             InlineKeyboardButton(text="🌿 Попробовать бесплатно", callback_data="demo"),
@@ -38,7 +36,6 @@ def kb_main(user_id: int | None = None):
             InlineKeyboardButton(text="🌤 Погода", callback_data="weather:show"),
         ],
     ]
-    # Панель доступна команде (admin/support/marketing). Конкретные разделы ограничиваются в handlers.
     is_admin = bool(user_id) and (int(user_id) in set(ADMIN_IDS))
     if is_admin:
         rows.append([InlineKeyboardButton(text="🛠 Панель", callback_data="admin:menu")])
@@ -48,12 +45,6 @@ def kb_main(user_id: int | None = None):
 
 @lru_cache()
 def kb_state_after_charts():
-    """Кнопки под графиками состояния.
-
-    UX: пользователь посмотрел графики — дальше можно вернуться в анализ/настройки
-    или сделать действие (подписка/подарить) без поиска меню.
-    """
-    # После графиков — не перегружаем: "Назад" достаточно.
     return _kb([
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="settings:menu")],
     ])
@@ -70,18 +61,12 @@ def kb_staff_menu(
     rows = []
 
     def _allow(perm: str) -> bool:
-        """Фильтр прав.
-
-        Если allowed_perms не задан — работаем как раньше.
-        Если задан — показываем только разрешённые пункты.
-        """
         if is_superadmin:
             return True
         if allowed_perms is None:
             return True
         return perm in allowed_perms
 
-    # Аналитика/диагностика (support тоже нужно видеть карточки)
     if ROLE_SUPPORT in roles or ROLE_ADMIN in roles or is_superadmin:
         rows += [
             [InlineKeyboardButton(text="📊 Демо (кратко)", callback_data="admin:demo:brief")],
@@ -90,13 +75,12 @@ def kb_staff_menu(
             [InlineKeyboardButton(text="🔎 Карточка пользователя", callback_data="admin:user:card")],
             [InlineKeyboardButton(text="🧠 Поведение", callback_data="admin:behavior")],
             [InlineKeyboardButton(text="💬 Мессенджеры", callback_data="admin:messenger:overview")],
+            [InlineKeyboardButton(text="⚠️ Проверить оплаты", callback_data="admin:payment:problems")],
         ]
 
-    # применяем фильтр прав к уже собранным пунктам
     if allowed_perms is not None and not is_superadmin:
         rows = [r for r in rows if _allow(r[0].callback_data)]  # type: ignore[attr-defined]
 
-    # Воронка/маркетинг
     if ROLE_MARKETING in roles or ROLE_ADMIN in roles or is_superadmin:
         rows += [
             [InlineKeyboardButton(text="📉 Путь до оплаты", callback_data="admin:funnel")],
@@ -110,7 +94,6 @@ def kb_staff_menu(
     if allowed_perms is not None and not is_superadmin:
         rows = [r for r in rows if _allow(r[0].callback_data)]  # type: ignore[attr-defined]
 
-    # Технические/доп. отчёты (только админ)
     if ROLE_ADMIN in roles or is_superadmin:
         rows += [
             [InlineKeyboardButton(text="🎁 Подарки и рекомендации", callback_data="admin:giftshare")],
@@ -133,7 +116,6 @@ def kb_staff_menu(
 
 @lru_cache()
 def kb_admin_menu():
-    """Backwards compatible alias (старый импорт kb_admin_menu())."""
     return kb_staff_menu({ROLE_ADMIN}, is_superadmin=True)
 
 @lru_cache()
@@ -143,10 +125,8 @@ def kb_back():
     ])
 
 
-# --- Совместимость с handlers/menu.py (в проекте встречаются разные имена) ---
 @lru_cache()
 def kb_back_main():
-    """Кнопка 'Назад' в главное меню (единая точка возврата)."""
     return _kb([
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")]
     ])
@@ -154,11 +134,6 @@ def kb_back_main():
 
 @lru_cache()
 def kb_weather():
-    """Клавиатура экрана погоды.
-
-    UX: не ломаем текущее меню, просто даём пользователю удобный способ
-    выбрать/изменить город и вернуться назад.
-    """
     return _kb([
         [InlineKeyboardButton(text="🏙 Изменить город", callback_data="weather:city")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
@@ -167,7 +142,6 @@ def kb_weather():
 
 @lru_cache()
 def kb_demo_kind():
-    """Выбор бесплатной практики: дорога на работу / домой."""
     return _kb([
         [InlineKeyboardButton(text="🚗 Практика на утро / дорогу", callback_data="demo_kind_work")],
         [InlineKeyboardButton(text="🌙 Практика на вечер / домой", callback_data="demo_kind_home")],
@@ -200,15 +174,6 @@ def kb_pay():
 
 @lru_cache()
 def kb_sales_offer(user_id: int):
-    """Кнопки аккуратного апсейла (после демо / воронка).
-
-    UX-правило: ничего не ломаем, просто даём удобные кнопки.
-    Контракты callback_data:
-      - sub:menu (handlers/payments.py)
-      - menu:main (handlers/menu.py)
-    """
-
-    # ВАЖНО: пробный доступ отключён по ТЗ ("убери везде").
     return _kb([
         [InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")],
         [InlineKeyboardButton(text="🎧 Ещё одна бесплатная практика", callback_data="demo")],
@@ -219,7 +184,6 @@ def kb_sales_offer(user_id: int):
 
 @lru_cache()
 def kb_full_access_menu():
-    """Клавиатура для окна 'Полный доступ' — добавили кнопку 'Подписка' по ТЗ."""
     return _kb([
         [InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")],
         [InlineKeyboardButton(text="⏰ Напомнить завтра утром", callback_data="remind:continue_tomorrow")],
@@ -229,7 +193,6 @@ def kb_full_access_menu():
 
 @lru_cache()
 def kb_settings_locked():
-    """Окно блокировки настроек времени: полный доступ по подписке."""
     return _kb([
         [InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")],
         [
@@ -241,7 +204,6 @@ def kb_settings_locked():
 
 @lru_cache()
 def kb_sub_extras():
-    """Дополнительные кнопки в разделе тарифов (без изменения старых callback контрактов)."""
     return _kb([
         [InlineKeyboardButton(text="🎁 Подарить подписку другу", callback_data="gift:menu")],
         [InlineKeyboardButton(text="📣 Посоветовать Метротерапию", callback_data="share:menu")],
@@ -250,11 +212,6 @@ def kb_sub_extras():
 
 
 def kb_micro_question(q_key: str, options: list[str]):
-    """Inline buttons for a micro-question.
-
-    callback_data contract:
-      micro:<q_key>:<idx>
-    """
     rows = []
     for idx, opt in enumerate(options):
         rows.append([InlineKeyboardButton(text=str(opt), callback_data=f"micro:{q_key}:{idx}")])
@@ -264,7 +221,6 @@ def kb_micro_question(q_key: str, options: list[str]):
 
 @lru_cache()
 def kb_settings_menu():
-    """Меню настроек пользователя (без ломки UX)."""
     return _kb([
         [InlineKeyboardButton(text="🌦 Погода в моём городе", callback_data="weather:show")],
         [InlineKeyboardButton(text="⏰ Время: дорога на работу", callback_data="settings:time:work")],
@@ -277,15 +233,8 @@ def kb_settings_menu():
     ])
 
 
-
-
 @lru_cache()
 def kb_mood_done(session_id: int):
-    """Кнопка "Прослушал".
-
-    callback_data:
-      mood:done:<session_id>
-    """
     sid = int(session_id)
     return _kb([
         [InlineKeyboardButton(text="✅ Прослушал", callback_data=f"mood:done:{sid}")],
@@ -294,19 +243,12 @@ def kb_mood_done(session_id: int):
 
 
 def kb_body_question(session_id: int, q_key: str, question: str, options: list[str]):
-    """Вопрос про тело.
-
-    callback_data:
-      body:<session_id>:<q_key>:<idx>
-    """
     sid = int(session_id)
     rows = []
     for idx, opt in enumerate(options or []):
         rows.append([InlineKeyboardButton(text=str(opt), callback_data=f"body:{sid}:{q_key}:{idx}")])
     rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="menu:main")])
     return question, _kb(rows)
-
-
 
 
 def kb_messenger_platforms(snapshot: dict, available_targets: list[dict[str, str]]):
@@ -332,10 +274,6 @@ def kb_messenger_platforms(snapshot: dict, available_targets: list[dict[str, str
 
 @lru_cache()
 def kb_after_post_actions():
-    """Кнопки после фиксации оценки "после".
-
-    UX: сразу дать анализ и аккуратные действия.
-    """
     return _kb([
         [InlineKeyboardButton(text="📈 Посмотреть изменение состояния", callback_data="settings:state")],
         [InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")],
@@ -347,7 +285,6 @@ def kb_after_post_actions():
 
 @lru_cache()
 def kb_ref_bonus_actions():
-    """Кнопки на экране бонусов."""
     return _kb([
         [InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")],
         [InlineKeyboardButton(text="🎁 Подарить подписку другу", callback_data="gift:menu")],
@@ -357,14 +294,8 @@ def kb_ref_bonus_actions():
 
 @lru_cache()
 def kb_mood_scale(session_id: int, *, stage: str):
-    """Кнопки -10..+10.
-
-    callback_data:
-      mood:<stage>:<session_id>:<value>
-    """
     stage = (stage or "pre").strip()
     sid = int(session_id)
-    # 21 значение, делаем 3 ряда по 7
     vals = list(range(-10, 11))
     rows = []
     for i in range(0, len(vals), 7):
@@ -387,11 +318,7 @@ def kb_post_show_chart(session_id: int):
     ])
 
 
-
-# --- Анализ состояния: выбор периода ---
-
 def kb_state_period_menu() -> InlineKeyboardMarkup:
-    """Меню анализа состояния (без лишних пунктов)."""
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="⭐ Оценить состояние сейчас", callback_data="state:rate"),
@@ -415,19 +342,14 @@ def kb_state_period_menu() -> InlineKeyboardMarkup:
 
 
 def kb_state_rate_scale() -> InlineKeyboardMarkup:
-    """Шкала быстрой оценки (1..10)."""
     rows = []
     nums = list(range(1, 11))
-    # 2 ряда по 5
     for i in range(0, len(nums), 5):
         row = [InlineKeyboardButton(text=str(n), callback_data=f"state:rate:{n}") for n in nums[i:i+5]]
         rows.append(row)
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings:state")])
     rows.append([InlineKeyboardButton(text="🏠 Меню", callback_data="menu:main")])
     return _kb(rows)
-
-
- 
 
 
 def kb_delivery_channel_slots(snapshot: dict):
