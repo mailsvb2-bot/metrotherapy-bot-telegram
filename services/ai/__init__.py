@@ -2,7 +2,8 @@
 
 Contract:
 - services.ai.policy: single canonical AI role/scope contract
-- services.ai.client: low-level OpenAI HTTP client
+- services.ai.providers: canonical provider selection and transport adapters
+- services.ai.client: backward-compatible facade routed through providers
 - services.ai.decisions: admin/marketing funnel advice
 - services.ai.pricing: admin-only price recommendations
 
@@ -23,8 +24,10 @@ from services.ai.policy import (
     ai_enabled_from_settings,
     ai_policy_snapshot,
     ai_provider_configured,
+    ai_provider_name,
 )
 from services.ai.pricing import recommend_prices, record_price_recommendation
+from services.ai.providers import build_ai_provider
 
 __all__ = [
     "AI_ALLOWED_SCOPES",
@@ -37,6 +40,8 @@ __all__ = [
     "ai_enabled_from_settings",
     "ai_policy_snapshot",
     "ai_provider_configured",
+    "ai_provider_name",
+    "build_ai_provider",
     "choose_funnel_profile",
     "choose_funnel_profile_async",
     "record_funnel_profile",
