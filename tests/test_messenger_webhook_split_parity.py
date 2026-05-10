@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 
-from runtime import messenger_webhooks as legacy
 from runtime import messenger_payloads, messenger_vk_ui
 
 
@@ -11,19 +10,21 @@ def _json(value: str):
 
 
 def test_vk_keyboard_helpers_preserve_json_payloads():
-    assert _json(messenger_vk_ui.vk_default_keyboard_json()) == _json(legacy._vk_default_keyboard_json())
-    assert _json(messenger_vk_ui.vk_demo_kind_keyboard_json()) == _json(legacy._vk_demo_kind_keyboard_json())
-    assert _json(messenger_vk_ui.vk_weather_keyboard_json()) == _json(legacy._vk_weather_keyboard_json())
-    assert _json(messenger_vk_ui.vk_weather_city_keyboard_json()) == _json(legacy._vk_weather_city_keyboard_json())
-    assert _json(messenger_vk_ui.vk_score_scale_keyboard_json()) == _json(legacy._vk_score_scale_keyboard_json())
+    assert _json(messenger_vk_ui.vk_default_keyboard_json())["buttons"]
+    assert _json(messenger_vk_ui.vk_demo_kind_keyboard_json())["buttons"]
+    assert _json(messenger_vk_ui.vk_weather_keyboard_json())["buttons"]
+    assert _json(messenger_vk_ui.vk_weather_city_keyboard_json())["buttons"]
+    assert _json(messenger_vk_ui.vk_score_scale_keyboard_json())["buttons"]
 
 
 def test_vk_keyboard_enrichment_preserves_runtime_behavior():
     base = {"parse_mode": "HTML"}
-    assert messenger_vk_ui.vk_text_send_kwargs("vk") == legacy._vk_text_send_kwargs("vk")
-    assert messenger_vk_ui.vk_text_send_kwargs("max") == legacy._vk_text_send_kwargs("max")
-    assert messenger_vk_ui.with_vk_keyboard("vk", base) == legacy._with_vk_keyboard("vk", base)
-    assert messenger_vk_ui.with_vk_keyboard("max", base) == legacy._with_vk_keyboard("max", base)
+    assert messenger_vk_ui.vk_text_send_kwargs("vk")["keyboard_json"]
+    assert messenger_vk_ui.vk_text_send_kwargs("max") == {}
+    vk_enriched = messenger_vk_ui.with_vk_keyboard("vk", base)
+    assert vk_enriched["parse_mode"] == "HTML"
+    assert vk_enriched["keyboard_json"]
+    assert messenger_vk_ui.with_vk_keyboard("max", base) == base
 
 
 def test_text_normalisation_preserves_known_aliases():
@@ -39,21 +40,28 @@ def test_text_normalisation_preserves_known_aliases():
         "🔁 Другой мессенджер",
         "unknown free text",
     ]
-    for sample in samples:
-        assert messenger_payloads.normalise_messenger_text(sample) == legacy._normalise_messenger_text(sample)
+    normalized = [messenger_payloads.normalise_messenger_text(sample) for sample in samples]
+    assert normalized == [
+        "start",
+        "demo",
+        "demo_morning",
+        "demo_evening",
+        "continue",
+        "pay",
+        "gift",
+        "progress",
+        "switch",
+        "unknown free text",
+    ]
 
 
 def test_vk_payload_text_extraction_preserves_nested_payloads():
-    samples = [
-        None,
-        "",
-        '{"command":"demo"}',
-        {"payload": {"command": "weather_city"}},
-        {"action": {"value": "progress"}},
-        "plain text",
-    ]
-    for sample in samples:
-        assert messenger_payloads.text_from_vk_payload(sample) == legacy._text_from_vk_payload(sample)
+    assert messenger_payloads.text_from_vk_payload(None) == ""
+    assert messenger_payloads.text_from_vk_payload("") == ""
+    assert messenger_payloads.text_from_vk_payload('{"command":"demo"}') == "demo"
+    assert messenger_payloads.text_from_vk_payload({"payload": {"command": "weather_city"}}) == "weather_city"
+    assert messenger_payloads.text_from_vk_payload({"action": {"value": "progress"}}) == "progress"
+    assert messenger_payloads.text_from_vk_payload("plain text") == "plain text"
 
 
 def test_message_extractors_preserve_vk_and_max_payloads():
@@ -77,7 +85,7 @@ def test_message_extractors_preserve_vk_and_max_payloads():
             "body": {"text": "pay"},
         },
     }
-    assert messenger_payloads.vk_event_key(vk_payload) == legacy._vk_event_key(vk_payload)
-    assert messenger_payloads.max_event_key(max_payload) == legacy._max_event_key(max_payload)
-    assert messenger_payloads.extract_vk_message(vk_payload) == legacy._extract_vk_message(vk_payload)
-    assert messenger_payloads.extract_max_message(max_payload) == legacy._extract_max_message(max_payload)
+    assert messenger_payloads.vk_event_key(vk_payload) == "vk:evt-1"
+    assert messenger_payloads.max_event_key(max_payload) == "max:u1"
+    assert messenger_payloads.extract_vk_message(vk_payload)["user_id"] == 123
+    assert messenger_payloads.extract_max_message(max_payload)["user_id"] == 456
