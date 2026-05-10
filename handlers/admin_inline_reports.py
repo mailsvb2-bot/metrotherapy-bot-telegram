@@ -21,6 +21,7 @@ from handlers.admin_reports import (
     state_last,
     messenger_overview,
     payment_problems,
+    money_clients,
 )
 
 _HANDLERS = {
@@ -37,11 +38,17 @@ _HANDLERS = {
     "admin:retention": retention.run,
     "admin:state:last": state_last.run,
     "admin:messenger:overview": messenger_overview.run,
+    "admin:money:today": money_clients.run,
+    "admin:money:week": money_clients.run,
+    "admin:money:month": money_clients.run,
+    "admin:money:all": money_clients.run,
 }
 
 
 async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx) -> bool:
     log = logging.getLogger(__name__)
+    if data.startswith("admin:money:payment:"):
+        return await money_clients.run(cb, state, ctx, log)
     fn = _HANDLERS.get(data)
     if not fn:
         return False
