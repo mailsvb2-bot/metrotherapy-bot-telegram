@@ -10,6 +10,8 @@ def normalise_messenger_text(text: str) -> str:
     raw = (text or "").strip()
     compact = raw.casefold().replace("ё", "е")
     compact = " ".join(compact.split())
+    if compact.startswith("+") and compact[1:].isdigit():
+        return compact[1:]
 
     aliases = {
         "/start": "start",
@@ -19,6 +21,9 @@ def normalise_messenger_text(text: str) -> str:
         "🌿 начать": "start",
         "меню": "start",
         "главное меню": "start",
+        "⬅️ назад": "start",
+        "назад": "start",
+        "⬅️ меню": "start",
         "🌿 попробовать бесплатно": "demo",
         "попробовать бесплатно": "demo",
         "бесплатная практика": "demo",
@@ -41,8 +46,6 @@ def normalise_messenger_text(text: str) -> str:
         "дорога домой": "demo_home",
         "🌙 практика на вечер / домой": "demo_home",
         "практика на вечер / домой": "demo_home",
-        "⬅️ назад": "start",
-        "назад": "start",
         "🔐 полный маршрут": "full",
         "полный маршрут": "full",
         "полный доступ": "full",
@@ -57,6 +60,13 @@ def normalise_messenger_text(text: str) -> str:
         "посоветовать": "share",
         "🌤 погода": "weather",
         "погода": "weather",
+        "🔄 обновить погоду": "weather",
+        "обновить погоду": "weather",
+        "weather_city": "weather_city",
+        "🏙 изменить город": "weather_city",
+        "изменить город": "weather_city",
+        "сменить город": "weather_city",
+        "город": "weather_city",
         "🎧 получить аудио": "continue",
         "получить аудио": "continue",
         "продолжить": "continue",
@@ -65,6 +75,10 @@ def normalise_messenger_text(text: str) -> str:
         "прослушал": "done",
         "готово": "done",
         "done": "done",
+        "🔁 повторить": "repeat_audio",
+        "повторить": "repeat_audio",
+        "повторить аудио": "repeat_audio",
+        "слушать снова": "repeat_audio",
         "💳 оплатить": "pay",
         "оплатить": "pay",
         "оплата": "pay",
@@ -82,6 +96,9 @@ def normalise_messenger_text(text: str) -> str:
         "📊 прогресс": "progress",
         "прогресс": "progress",
         "progress": "progress",
+        "🧾 история": "history",
+        "история": "history",
+        "history": "history",
         "🔁 другой мессенджер": "switch",
         "другой мессенджер": "switch",
         "switch": "switch",
