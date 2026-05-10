@@ -5,6 +5,7 @@ import os
 from config.settings import settings
 from services.ai.policy import ai_enabled_from_settings
 from services.ai.providers.base import AIChatProvider, AIProviderConfig
+from services.ai.providers.gigachat import GigaChatProvider
 from services.ai.providers.openai_compatible import OpenAICompatibleProvider
 from services.ai.providers.yandex import YandexGPTProvider
 
@@ -20,6 +21,8 @@ def provider_name() -> str:
         return explicit
     if _env("YANDEX_API_KEY", "").strip():
         return "yandex"
+    if _env("GIGACHAT_CREDENTIALS", "").strip():
+        return "gigachat"
     return "openai"
 
 
@@ -55,11 +58,28 @@ def _yandex_config() -> AIProviderConfig:
     )
 
 
+def _gigachat_config() -> AIProviderConfig:
+    return AIProviderConfig(
+        name="gigachat",
+        model=_env("GIGACHAT_MODEL", "GigaChat-2-Pro").strip() or "GigaChat-2-Pro",
+        base_url=_env("GIGACHAT_BASE_URL", "https://gigachat.devices.sberbank.ru/api/v1").strip(),
+        timeout_sec=_timeout(),
+        credentials=_env("GIGACHAT_CREDENTIALS", "").strip(),
+        scope=_env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS").strip() or "GIGACHAT_API_PERS",
+    )
+
+
 def provider_configured(name: str | None = None) -> bool:
     selected = (name or provider_name()).strip().lower()
     if not ai_enabled_from_settings():
         return False
-    cfg = _yandex_config() if selected == "yandex" else _openai_config()
+    if selected == "yandex":
+        cfg = _yandex_config()
+        return bool(cfg.api_key and cfg.model and cfg.base_url)
+    if selected in {"gigachat", "sber"}:
+        cfg = _gigachat_config()
+        return bool(cfg.credentials and cfg.model and cfg.base_url)
+    cfg = _openai_config()
     return bool(cfg.api_key and cfg.model and cfg.base_url)
 
 
@@ -70,6 +90,9 @@ def build_ai_provider() -> AIChatProvider | None:
     if selected == "yandex":
         cfg = _yandex_config()
         return YandexGPTProvider(cfg) if provider_configured("yandex") else None
+    if selected in {"gigachat", "sber"}:
+        cfg = _gigachat_config()
+        return GigaChatProvider(cfg) if provider_configured("gigachat") else None
     if selected in {"openai", "openai-compatible", "openai_compatible", "compatible"}:
         cfg = _openai_config()
         return OpenAICompatibleProvider(cfg) if provider_configured("openai") else None
