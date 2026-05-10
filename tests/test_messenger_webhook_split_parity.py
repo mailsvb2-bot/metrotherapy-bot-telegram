@@ -9,12 +9,44 @@ def _json(value: str):
     return json.loads(value)
 
 
+def _keyboard_buttons(keyboard_json: str) -> list[dict]:
+    keyboard = _json(keyboard_json)
+    return [button for row in keyboard["buttons"] for button in row]
+
+
+def _button_label(button: dict) -> str:
+    return str(button["action"]["label"])
+
+
+def _button_command(button: dict) -> str:
+    return messenger_payloads.text_from_vk_payload(button["action"].get("payload"))
+
+
 def test_vk_keyboard_helpers_preserve_json_payloads():
     assert _json(messenger_vk_ui.vk_default_keyboard_json())["buttons"]
     assert _json(messenger_vk_ui.vk_demo_kind_keyboard_json())["buttons"]
     assert _json(messenger_vk_ui.vk_weather_keyboard_json())["buttons"]
     assert _json(messenger_vk_ui.vk_weather_city_keyboard_json())["buttons"]
     assert _json(messenger_vk_ui.vk_score_scale_keyboard_json())["buttons"]
+
+
+def test_vk_keyboard_buttons_have_payloads_matching_canonical_normalizer():
+    keyboards = [
+        messenger_vk_ui.vk_default_keyboard_json(),
+        messenger_vk_ui.vk_demo_kind_keyboard_json(),
+        messenger_vk_ui.vk_weather_keyboard_json(),
+        messenger_vk_ui.vk_weather_city_keyboard_json(),
+        messenger_vk_ui.vk_score_scale_keyboard_json(),
+    ]
+    for keyboard_json in keyboards:
+        for button in _keyboard_buttons(keyboard_json):
+            action = button["action"]
+            if action["type"] != "text":
+                continue
+            label_command = messenger_payloads.normalise_messenger_text(_button_label(button))
+            payload_command = _button_command(button)
+            assert payload_command
+            assert label_command == payload_command
 
 
 def test_vk_keyboard_enrichment_preserves_runtime_behavior():
@@ -37,7 +69,12 @@ def test_text_normalisation_preserves_known_aliases():
         "💳 Оплатить",
         "🎁 Подарить",
         "📊 Прогресс",
+        "📈 Мой прогресс",
+        "🧾 История",
         "🔁 Другой мессенджер",
+        "⬅️ Меню",
+        "🔄 Обновить погоду",
+        "🏙 Изменить город",
         "unknown free text",
     ]
     normalized = [messenger_payloads.normalise_messenger_text(sample) for sample in samples]
@@ -50,7 +87,12 @@ def test_text_normalisation_preserves_known_aliases():
         "pay",
         "gift",
         "progress",
+        "progress",
+        "history",
         "switch",
+        "start",
+        "weather",
+        "weather_city",
         "unknown free text",
     ]
 
