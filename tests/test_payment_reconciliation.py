@@ -34,12 +34,11 @@ class _DbCtx:
         return False
 
 
-def _connect(path):
-    conn = sqlite3.connect(path)
+def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.row_factory = sqlite3.Row
     conn.execute(
         """
-        CREATE TABLE payments(
+        CREATE TABLE IF NOT EXISTS payments(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             telegram_charge_id TEXT NOT NULL UNIQUE,
@@ -57,6 +56,11 @@ def _connect(path):
         """
     )
     conn.commit()
+
+
+def _connect(path):
+    conn = sqlite3.connect(path)
+    _ensure_schema(conn)
     return conn
 
 
@@ -64,7 +68,7 @@ def test_yookassa_reconciliation_is_idempotent(tmp_path, monkeypatch):
     db_path = tmp_path / "payments.db"
 
     def fake_db():
-        return _DbCtx(_connect(db_path) if not db_path.exists() else sqlite3.connect(db_path))
+        return _DbCtx(_connect(db_path))
 
     monkeypatch.setattr(reconciliation, "db", fake_db)
     monkeypatch.setattr(reconciliation, "tx", lambda conn: _Tx(conn))
@@ -92,7 +96,7 @@ def test_yookassa_reconciliation_marks_missing_user(tmp_path, monkeypatch):
     db_path = tmp_path / "payments.db"
 
     def fake_db():
-        return _DbCtx(_connect(db_path) if not db_path.exists() else sqlite3.connect(db_path))
+        return _DbCtx(_connect(db_path))
 
     monkeypatch.setattr(reconciliation, "db", fake_db)
     monkeypatch.setattr(reconciliation, "tx", lambda conn: _Tx(conn))
