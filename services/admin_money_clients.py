@@ -39,7 +39,9 @@ def _rowdict(row: Any | None) -> dict[str, Any] | None:
         return dict(row)
     try:
         return dict(row)
-    except (TypeError, ValueError):
+    except TypeError:
+        return None
+    except ValueError:
         return None
 
 
@@ -55,7 +57,9 @@ def _rows(rows: list[Any]) -> list[dict[str, Any]]:
 def _amount_rub(amount_minor: Any, currency: Any = "RUB") -> str:
     try:
         amount = int(amount_minor or 0) / 100
-    except (TypeError, ValueError):
+    except TypeError:
+        amount = 0
+    except ValueError:
         amount = 0
     return f"{amount:.0f} {currency or 'RUB'}"
 
@@ -94,12 +98,19 @@ def _human_delta(start: Any, end: Any) -> str:
 def _safe_count(conn: Any, sql: str, params: tuple[Any, ...]) -> int:
     try:
         row = conn.execute(sql, params).fetchone()
-        if not row:
-            return 0
+    except sqlite3.Error:
+        return 0
+    if not row:
+        return 0
+    try:
         if isinstance(row, dict):
             return int(row.get("n") or 0)
         return int(row[0] or 0)
-    except (sqlite3.Error, KeyError, TypeError, ValueError):
+    except KeyError:
+        return 0
+    except TypeError:
+        return 0
+    except ValueError:
         return 0
 
 
@@ -180,18 +191,14 @@ def _find_first_start_event(conn: Any, user_id: int) -> dict[str, Any] | None:
         SELECT name, meta, created_at
         FROM events
         WHERE user_id=?
-        ORDER BY COALESCE(created_at, ts, '') ASC, id ASC
+        ORDER BY COALESCE(created_at, '') ASC, id ASC
         LIMIT 20
         """.strip(),
         (int(user_id),),
     )
     for row in rows:
         name = str(row.get("name") or row.get("event") or "").strip()
-        meta_raw = row.get("meta") or "{}"
-        try:
-            meta = json.loads(meta_raw) if isinstance(meta_raw, str) else {}
-        except json.JSONDecodeError:
-            meta = {}
+        meta = _meta_dict(row.get("meta") or "{}")
         if name in {"start", "bot_start", "user_start", "demo_sent", "view_tariffs"} or any(k in meta for k in ("utm_source", "utm_campaign", "utm_creative", "creative")):
             return {"name": name or "первое событие", "meta": meta, "created_at": row.get("created_at")}
     return rows[0] if rows else None
