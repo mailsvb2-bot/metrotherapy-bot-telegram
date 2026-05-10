@@ -10,6 +10,8 @@ def normalise_messenger_text(text: str) -> str:
     raw = (text or "").strip()
     compact = raw.casefold().replace("ё", "е")
     compact = " ".join(compact.split())
+    if compact.startswith("+") and compact[1:].isdigit():
+        return compact[1:]
 
     aliases = {
         "/start": "start",
