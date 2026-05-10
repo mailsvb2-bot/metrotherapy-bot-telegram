@@ -84,6 +84,7 @@ def kb_staff_menu(
     if ROLE_MARKETING in roles or ROLE_ADMIN in roles or is_superadmin:
         rows += [
             [InlineKeyboardButton(text="📉 Путь до оплаты", callback_data="admin:funnel")],
+            [InlineKeyboardButton(text="💰 Деньги и клиенты", callback_data="admin:money:today")],
             [InlineKeyboardButton(text="💰 Оплаты", callback_data="admin:conversion")],
             [InlineKeyboardButton(text="🧲 Группы пользователей", callback_data="admin:segments")],
             [InlineKeyboardButton(text="🧪 Проверка предложений", callback_data="admin:ab")],
@@ -112,6 +113,41 @@ def kb_staff_menu(
 
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")])
     return _kb(rows)
+
+
+def kb_admin_money_periods(active: str = "today") -> InlineKeyboardMarkup:
+    labels = [
+        ("today", "Сегодня"),
+        ("week", "7 дней"),
+        ("month", "30 дней"),
+        ("all", "Всё время"),
+    ]
+    row = []
+    for key, title in labels:
+        prefix = "✅ " if key == active else ""
+        row.append(InlineKeyboardButton(text=f"{prefix}{title}", callback_data=f"admin:money:{key}"))
+    return _kb([
+        row[:2],
+        row[2:],
+        [InlineKeyboardButton(text="⚠️ Проблемные оплаты", callback_data="admin:payment:problems")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")],
+    ])
+
+
+def kb_admin_money_payments(payment_ids: list[int], active: str = "today") -> InlineKeyboardMarkup:
+    rows = []
+    for pid in payment_ids[:10]:
+        rows.append([InlineKeyboardButton(text=f"Открыть оплату #{int(pid)}", callback_data=f"admin:money:payment:{int(pid)}")])
+    rows.extend(kb_admin_money_periods(active).inline_keyboard)
+    return _kb(rows)
+
+
+def kb_admin_money_card(payment_id: int) -> InlineKeyboardMarkup:
+    return _kb([
+        [InlineKeyboardButton(text="⬅️ К оплатам за сегодня", callback_data="admin:money:today")],
+        [InlineKeyboardButton(text="⚠️ Проверить оплаты", callback_data="admin:payment:problems")],
+        [InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")],
+    ])
 
 
 @lru_cache()
@@ -147,7 +183,6 @@ def kb_demo_kind():
         [InlineKeyboardButton(text="🌙 Практика на вечер / домой", callback_data="demo_kind_home")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
     ])
-
 def kb_sub(prices: dict[str, int]):
     def btn(title: str, cb: str):
         price = prices.get(title)
