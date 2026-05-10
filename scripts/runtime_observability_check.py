@@ -77,14 +77,22 @@ def _port_owner(port: int) -> str:
     return out
 
 
-def _journal_errors(minutes: int) -> str:
+def _journal_errors(minutes: int, *, pid: str = "0") -> str:
     pattern = "error|exception|traceback|failed|critical|address already in use|conflict|Application crashed"
     code, out = _run([
         "sh",
         "-lc",
         f"journalctl -u metrotherapy.service --since '{minutes} minutes ago' --no-pager -l | grep -Ei '{pattern}' || true",
     ], timeout=20)
-    return out
+
+    if not out.strip() or not pid or pid == "0":
+        return out
+
+    current_pid_marker = f"python[{pid}]"
+    return "\n".join(
+        line for line in out.splitlines()
+        if current_pid_marker in line
+    )
 
 
 def collect_results() -> list[CheckResult]:
@@ -118,8 +126,9 @@ def collect_results() -> list[CheckResult]:
     same_pid_ports = pid != "0" and f"pid={pid}" in port_8081 and f"pid={pid}" in port_8082
     results.append(CheckResult("ports:8081_8082_same_pid", same_pid_ports, f"pid={pid}"))
 
-    journal = _journal_errors(int(os.getenv("METRO_OBS_JOURNAL_MINUTES", "20")))
-    results.append(CheckResult("journal:no_recent_errors", journal.strip() == "", journal[:1000] if journal else "none"))
+    journal = _journal_errors(int(os.getenv("METRO_OBS_JOURNAL_MINUTES", "20")), pid=pid)
+    journal_detail = journal[:1000] if journal else f"none for pid={pid}"
+    results.append(CheckResult("journal:no_recent_errors", journal.strip() == "", journal_detail))
     return results
 
 
