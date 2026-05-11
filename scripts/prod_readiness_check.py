@@ -147,9 +147,15 @@ def run() -> tuple[list[str], list[str]]:
         re.compile(r"live_[A-Za-z0-9_-]{16,}"),
     )
     for p in ROOT.rglob("*"):
-        if not p.is_file() or any(part in {".git", "__pycache__", ".pytest_cache", "dist"} for part in p.parts):
+        if not p.is_file():
             continue
-        if p.suffix.lower() in {".opus", ".ogg", ".mp3", ".wav", ".m4a", ".png", ".jpg", ".jpeg", ".zip"}:
+        try:
+            rel_parts = p.relative_to(ROOT).parts
+        except ValueError:
+            continue
+        if any(part in SKIP_DIRS for part in rel_parts):
+            continue
+        if p.suffix.lower() in {".opus", ".ogg", ".mp3", ".wav", ".m4a", ".png", ".jpg", ".jpeg", ".zip", ".so"}:
             continue
         if p.name.startswith(".env"):
             forbidden.append(str(p.relative_to(ROOT)))
@@ -161,12 +167,43 @@ def run() -> tuple[list[str], list[str]]:
         if any(rx.search(txt) for rx in secret_patterns):
             forbidden.append(f"embedded-secret:{p.relative_to(ROOT)}")
 
-    forbidden.extend(str(p.relative_to(ROOT)) for p in ROOT.rglob("__pycache__") if p.is_dir())
-    forbidden.extend(str(p.relative_to(ROOT)) for p in ROOT.rglob("*.pyc") if p.is_file())
-    forbidden.extend(str(p.relative_to(ROOT)) for p in [ROOT / ".pytest_cache", ROOT / "data.db", ROOT / "data" / "data.db"] if p.exists())
-    forbidden.extend(str(p.relative_to(ROOT)) for p in ROOT.rglob("*.db-wal") if p.is_file())
-    forbidden.extend(str(p.relative_to(ROOT)) for p in ROOT.rglob("*.db-shm") if p.is_file())
-    forbidden.extend(str(p.relative_to(ROOT)) for p in ROOT.rglob("*.log") if p.is_file())
+    def _is_runtime_scan_candidate(path: Path) -> bool:
+        try:
+            rel_parts = path.relative_to(ROOT).parts
+        except ValueError:
+            return False
+        return not any(part in SKIP_DIRS for part in rel_parts)
+
+    forbidden.extend(
+        str(p.relative_to(ROOT))
+        for p in ROOT.rglob("__pycache__")
+        if p.is_dir() and _is_runtime_scan_candidate(p)
+    )
+    forbidden.extend(
+        str(p.relative_to(ROOT))
+        for p in ROOT.rglob("*.pyc")
+        if p.is_file() and _is_runtime_scan_candidate(p)
+    )
+    forbidden.extend(
+        str(p.relative_to(ROOT))
+        for p in [ROOT / ".pytest_cache", ROOT / "data.db", ROOT / "data" / "data.db"]
+        if p.exists()
+    )
+    forbidden.extend(
+        str(p.relative_to(ROOT))
+        for p in ROOT.rglob("*.db-wal")
+        if p.is_file() and _is_runtime_scan_candidate(p)
+    )
+    forbidden.extend(
+        str(p.relative_to(ROOT))
+        for p in ROOT.rglob("*.db-shm")
+        if p.is_file() and _is_runtime_scan_candidate(p)
+    )
+    forbidden.extend(
+        str(p.relative_to(ROOT))
+        for p in ROOT.rglob("*.log")
+        if p.is_file() and _is_runtime_scan_candidate(p)
+    )
     if forbidden:
         errors.append("Forbidden release/runtime artifacts present: " + ", ".join(sorted(set(forbidden))[:30]))
 
