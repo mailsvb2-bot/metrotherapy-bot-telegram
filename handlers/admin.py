@@ -5,7 +5,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from services.admin import is_admin
+from services.admin import is_platform_admin
 from services.db import db
 
 router = Router()
@@ -14,7 +14,7 @@ router = Router()
 @router.message(Command("admin"))
 async def admin_cmd(message: Message):
     uid = message.from_user.id if message.from_user else None
-    if not is_admin(uid):
+    if not is_platform_admin(uid):
         try:
             await message.answer("Недоступно.")
         except TelegramAPIError:
@@ -30,10 +30,11 @@ async def admin_cmd(message: Message):
         "Подсказка: удобнее пользоваться кнопкой \"🛠 Панель\" в главном меню."
     )
 
+
 @router.message(Command("users"))
 async def users(message: Message):
     uid = message.from_user.id if message.from_user else None
-    if not is_admin(uid):
+    if not is_platform_admin(uid):
         return
     with db() as conn:
         count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
