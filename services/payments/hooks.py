@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sqlite3
 import urllib.parse
+from typing import Any
 
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message, PreCheckoutQuery, InlineKeyboardButton
@@ -27,6 +28,38 @@ from services.payments.ui import kb_after_paid, kb, kb_back
 from services.payments.gift import deliver_gift_message
 
 logger = logging.getLogger(__name__)
+
+
+def payment_insert_values(
+    *,
+    user_id: int,
+    telegram_charge_id: str,
+    provider_charge_id: str | None,
+    payload: str,
+    amount: int,
+    currency: str | None,
+    created_at: str,
+    decision_id: str | None,
+    correlation_id: str | None,
+) -> tuple[Any, ...]:
+    """Return values in the exact order expected by the payments INSERT.
+
+    This tiny helper is intentionally kept near the payment hook because the
+    order of created_at / decision_id / correlation_id is a production data
+    contract. A previous regression swapped these values and broke payment
+    attribution, so tests lock the order explicitly.
+    """
+    return (
+        int(user_id),
+        telegram_charge_id,
+        provider_charge_id,
+        payload,
+        int(amount),
+        currency,
+        created_at,
+        decision_id,
+        correlation_id,
+    )
 
 
 async def pre_checkout(pre: PreCheckoutQuery) -> None:
@@ -74,19 +107,20 @@ async def successful_payment(message: Message) -> None:
         try:
             conn.execute("BEGIN")
             if charge_id:
+                created_at = utc_now().replace(tzinfo=None, microsecond=0).isoformat()
                 conn.execute(
                     "INSERT OR IGNORE INTO payments(user_id, telegram_charge_id, provider_charge_id, payload, amount, currency, created_at, decision_id, correlation_id) "
                     "VALUES(?,?,?,?,?,?,?,?,?)",
-                    (
-                        int(message.from_user.id),
-                        charge_id,
-                        provider_id or None,
-                        payload,
-                        int(sp.total_amount or 0),
-                        (sp.currency or "").strip() or None,
-                        decision_id,
-                        correlation_id,
-                        utc_now().replace(tzinfo=None, microsecond=0).isoformat(),
+                    payment_insert_values(
+                        user_id=int(message.from_user.id),
+                        telegram_charge_id=charge_id,
+                        provider_charge_id=provider_id or None,
+                        payload=payload,
+                        amount=int(sp.total_amount or 0),
+                        currency=(sp.currency or "").strip() or None,
+                        created_at=created_at,
+                        decision_id=decision_id,
+                        correlation_id=correlation_id,
                     ),
                 )
                 n = conn.execute("SELECT changes() AS n").fetchone()["n"]
