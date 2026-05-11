@@ -50,24 +50,6 @@ def _rowdict(row: Any | None) -> dict[str, Any] | None:
         return None
 
 
-def ensure_schema() -> None:
-    with db() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS admin_ad_links(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source TEXT NOT NULL,
-                campaign TEXT NOT NULL,
-                creative TEXT NOT NULL,
-                ad_spend TEXT NOT NULL DEFAULT '',
-                start_payload TEXT NOT NULL,
-                url TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """.strip()
-        )
-
-
 def build_start_payload(*, source: str, campaign: str, creative: str, ad_spend: str = "") -> str:
     source = _safe_token(source, fallback="telegram_ads")
     campaign = _safe_token(campaign, fallback="campaign")
@@ -85,7 +67,6 @@ def build_start_url(payload: str, *, bot_username: str | None = None) -> str:
 
 
 def create_ad_link(source: str, *, campaign: str | None = None, creative: str | None = None, ad_spend: str = "") -> dict[str, Any]:
-    ensure_schema()
     now = _utc_now()
     src = _safe_token(source, fallback="telegram_ads")
     if src not in _ALLOWED_SOURCES:
@@ -121,7 +102,6 @@ def create_ad_link(source: str, *, campaign: str | None = None, creative: str | 
 
 
 def list_ad_links(*, limit: int = 10) -> list[dict[str, Any]]:
-    ensure_schema()
     with db() as conn:
         try:
             rows = conn.execute(
