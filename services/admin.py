@@ -7,8 +7,8 @@ from config.settings import ADMIN_IDS
 
 
 # Roles that are allowed to enter the staff/admin control surface.
-# This is intentionally broader than ROLE_ADMIN because the project supports
-# delegated staff roles (marketing/support/etc.) with scoped permissions.
+# Permissions are scoped *inside* that surface; they do not create staff identity
+# by themselves. This prevents stale/denied permission rows from granting access.
 _STAFF_ROLE_NAMES = {
     "admin",
     "support",
@@ -97,7 +97,7 @@ def is_platform_admin(user_id: int | None) -> bool:
         return False
     if is_superadmin(uid):
         return True
-    return "admin" in _roles_for(uid)
+    return "admin" in staff_roles(uid)
 
 
 def is_staff(user_id: int | None) -> bool:
@@ -107,16 +107,24 @@ def is_staff(user_id: int | None) -> bool:
         return False
     if is_superadmin(uid):
         return True
-    if staff_roles(uid):
+    return bool(staff_roles(uid))
+
+
+def can_use_scoped_admin_permission(user_id: int | None, permission: str) -> bool:
+    """Check a specific admin permission for an already delegated staff user.
+
+    None from get_allowed_perms means "no explicit restrictions" and is allowed
+    only after staff identity is proven by superadmin or role.
+    """
+    uid = _uid(user_id)
+    if uid is None or not is_staff(uid):
+        return False
+    if is_superadmin(uid):
         return True
-    return has_any_allowed_permission(uid)
+    perms = _allowed_permissions_for(uid)
+    return perms is None or str(permission) in perms
 
 
 def is_admin(user_id: int | None) -> bool:
-    """Backward-compatible admin-gate API.
-
-    Historically this function was used both for superadmins and delegated staff
-    control-plane access. It now keeps that compatibility while fixing the P0
-    bug where "permission rows exist, but all are denied" still granted access.
-    """
+    """Backward-compatible staff-gate API."""
     return is_staff(user_id)
