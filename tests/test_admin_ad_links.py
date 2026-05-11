@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from services import admin_ad_links
+from services.migrations.admin_ad_links_v1 import apply as apply_admin_ad_links_v1
 
 
 class _DbCtx:
@@ -28,6 +29,11 @@ def _fake_db(path: Path):
     return _DbCtx(path)
 
 
+def _prepare_ad_links_db(path: Path) -> None:
+    with _fake_db(path) as conn:
+        apply_admin_ad_links_v1(conn)
+
+
 def test_build_start_payload_is_telegram_safe():
     payload = admin_ad_links.build_start_payload(
         source="Telegram Ads",
@@ -43,6 +49,7 @@ def test_create_ad_link_persists_and_returns_tme_url(tmp_path, monkeypatch):
     path = tmp_path / "adlinks.db"
     monkeypatch.setattr(admin_ad_links, "db", lambda: _fake_db(path))
     monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "metrotherapybot")
+    _prepare_ad_links_db(path)
 
     item = admin_ad_links.create_ad_link(
         "telegram_ads",
@@ -64,6 +71,7 @@ def test_create_ad_link_persists_and_returns_tme_url(tmp_path, monkeypatch):
 def test_ad_links_report_is_plain_admin_text(tmp_path, monkeypatch):
     path = tmp_path / "adlinks_report.db"
     monkeypatch.setattr(admin_ad_links, "db", lambda: _fake_db(path))
+    _prepare_ad_links_db(path)
     admin_ad_links.create_ad_link("partner", campaign="may", creative="post1")
 
     text = admin_ad_links.format_ad_links_report(admin_ad_links.ad_links_report())
