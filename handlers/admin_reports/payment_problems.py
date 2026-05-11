@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 
 from handlers.admin_inline_common import AdminCtx, safe_edit
+from services.admin_growth_ops import access_alerts, format_access_alerts
 from services.payments.reconciliation import payment_problem_summary
 
 
@@ -17,17 +18,22 @@ def _rub(amount_minor: int | None, currency: str | None) -> str:
     return f"{amount:.2f} {currency or 'RUB'}"
 
 
-def _format(rows: list[dict]) -> str:
+def _format(rows: list[dict], missing_access: list[dict] | None = None) -> str:
+    missing_access = missing_access or []
+    access_text = format_access_alerts(missing_access)
     if not rows:
         return (
-            "✅ Проблем с оплатами сейчас не видно.\n\n"
-            "Я проверяю платежи, которые пришли от платёжного провайдера, но требуют внимания: "
-            "отмена, ожидание подтверждения, отсутствие пользователя или другая пометка."
+            "✅ Проблем с оплатами от платёжного провайдера сейчас не видно.\n\n"
+            + access_text
+            + "\n\nЯ проверяю платежи, которые пришли от платёжного провайдера, но требуют внимания: "
+            "отмена, ожидание подтверждения, отсутствие пользователя, успешная оплата без активного доступа или другая пометка."
         )
 
     lines = [
         "⚠️ Оплаты, которые нужно проверить\n",
         "Это не меняет доступ автоматически. Это список для ручной проверки и поддержки.",
+        "",
+        access_text,
         "",
     ]
     for row in rows:
@@ -48,6 +54,9 @@ def _format(rows: list[dict]) -> str:
 
 
 async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, log) -> bool:
-    rows = await asyncio.to_thread(payment_problem_summary, 20)
-    await safe_edit(cb, _format(rows), reply_markup=ctx.staff_kb)
+    rows, missing_access = await asyncio.gather(
+        asyncio.to_thread(payment_problem_summary, 20),
+        asyncio.to_thread(access_alerts, limit=20),
+    )
+    await safe_edit(cb, _format(rows, missing_access), reply_markup=ctx.staff_kb)
     return True
