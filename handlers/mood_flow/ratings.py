@@ -15,6 +15,7 @@ import asyncio
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, BufferedInputFile
 from aiogram.types import FSInputFile
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from keyboards.inline import kb_mood_scale, kb_mood_done, kb_body_question, kb_after_post_actions, kb_post_show_chart
 from services.db import mark_delivery_once, unmark_delivery, was_delivered
@@ -26,7 +27,8 @@ from services.audio_anchor import get_by_anchor
 from services.catalog import AudioCatalog
 # Контракт: запись факта отправки демо живёт в demo_analytics.
 # В старых ветках файл мог называться demo_events — оставляем только корректный импорт.
-from services.demo_analytics import record_demo_sent
+from services.demo_analytics import record_demo_sent, demo_sent_kinds
+from services.demo_policy import next_remaining_demo_kind
 from services.body import pick_body_question, save_body_feedback, technique_for_area
 from services.audio_cache import get_cached_file_id, save_cached_file_id
 from services.messenger.audio_progress import record_audio_delivery, AudioProgressItem
@@ -37,6 +39,88 @@ from services.subscription import register_touch
 
 from core.callback_utils import safe_answer_callback
 router = Router()
+
+
+def _fmt_score(v):
+    if v is None:
+        return "—"
+    return f"{int(v):+d}" if int(v) != 0 else "0"
+
+
+def _trial_outcome_keyboard(user_id: int, kind: str, *, delta: int | None) -> InlineKeyboardMarkup:
+    """Outcome-aware actions after a free demo post-score.
+
+    The button set must not promise a free practice when TrialPolicy says both
+    free demo kinds were already consumed.  This keeps UX aligned with the
+    canonical demo access policy and avoids a hidden second trial brain.
+    """
+
+    rows: list[list[InlineKeyboardButton]] = []
+    rows.append([InlineKeyboardButton(text="📈 Посмотреть график изменения", callback_data="settings:state")])
+
+    try:
+        sent = demo_sent_kinds(int(user_id))
+        remaining = next_remaining_demo_kind(kind, sent)
+    except sqlite3.Error:
+        logging.getLogger(__name__).exception("trial keyboard: failed to read demo history")
+        remaining = None
+    except (TypeError, ValueError):
+        logging.getLogger(__name__).exception("trial keyboard: bad demo history")
+        remaining = None
+
+    if delta is not None and delta < 0:
+        # Safety-first: no direct payment CTA after negative self-reported outcome.
+        if remaining:
+            rows.append([InlineKeyboardButton(text="🌿 Попробовать позже другой маршрут", callback_data="demo")])
+        rows.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:main")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    rows.append([InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")])
+    if remaining:
+        label = "🌙 Попробовать вечернюю практику" if remaining == "home" else "🚗 Попробовать утреннюю практику"
+        rows.append([InlineKeyboardButton(text=label, callback_data="demo")])
+    else:
+        rows.append([InlineKeyboardButton(text="✅ Бесплатные практики завершены", callback_data="sub:menu")])
+    rows.append([InlineKeyboardButton(text="🎁 Подарить подписку", callback_data="gift:menu")])
+    rows.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _trial_outcome_text(*, pre: int | None, post: int | None, delta: int | None, avg_delta: int | None) -> str:
+    base = (
+        "✅ Зафиксировал состояние после демо-практики.\n\n"
+        f"Сегодня: {_fmt_score(pre)} → {_fmt_score(post)} (изменение {_fmt_score(delta)})"
+    )
+    if avg_delta is not None:
+        base += f"\nСредняя динамика за последние дни: {_fmt_score(avg_delta)}"
+
+    if delta is None:
+        return base + (
+            "\n\nЯ сохранил результат. Полный маршрут нужен не для разового прослушивания, "
+            "а чтобы встроить короткие практики в ритм дня."
+        )
+
+    if delta > 0:
+        return base + (
+            "\n\nЭто хороший сигнал: формат Вам подходит. "
+            "Одна практика может дать сдвиг, но главный эффект Метротерапии — в регулярном ритме: "
+            "утро, вечер или оба маршрута.\n\n"
+            "Можно открыть полный маршрут и продолжить уже не вслепую, а отталкиваясь от Вашего первого результата."
+        )
+
+    if delta == 0:
+        return base + (
+            "\n\nЯвного сдвига пока нет — это нормально. "
+            "Иногда человеку лучше подходит другой момент дня: утро/дорога или вечер/домой.\n\n"
+            "Можно попробовать второй бесплатный маршрут или посмотреть, что входит в полный маршрут."
+        )
+
+    return base + (
+        "\n\nЯ вижу, что по Вашей оценке после практики стало тяжелее. "
+        "Сейчас лучше не усиливать нагрузку и не торопиться с продолжением.\n\n"
+        "Сделайте паузу. Если состояние острое или небезопасное — обратитесь за живой профессиональной помощью. "
+        "К практике можно вернуться позже, в более мягком темпе."
+    )
 
 
 
@@ -51,7 +135,7 @@ async def mood_answer(cb: CallbackQuery):
     UX:
     - после клика "до" аудио отправляется СРАЗУ (без подтверждений и пауз);
     - после кнопки "Прослушал" показываем шкалу "после";
-    - после "после" — быстрый анализ + вопрос про тело + техника.
+    - после "после" — быстрый анализ + outcome-aware try-before-buy предложение.
     """
     # Сразу отвечаем на callback, чтобы у пользователя не висел "часик".
     # Дальше тяжёлые операции (отправка аудио) можно выполнить без блокировки UI.
@@ -245,26 +329,42 @@ async def mood_answer(cb: CallbackQuery):
         tm().create(_send_audio())
         return
 
-    # --- STAGE: POST -> quick compare, analysis button, then body question ---
+    # --- STAGE: POST -> quick compare + outcome-aware try-before-buy next action ---
     if stage == "post":
-        # Сравнение (коротко и понятно)
-        comp = last_delta(int(cb.from_user.id), kind=s.kind or "")
-        lp, lq, ld, ad = comp.get("last_pre"), comp.get("last_post"), comp.get("last_delta"), comp.get("avg_delta")
+        # Обновляем сессию после set_post(), иначе локальный объект s содержит старый post_score.
+        s_after = await asyncio.to_thread(get_session, sid)
+        pre_score = getattr(s_after, "pre_score", None) if s_after else None
+        post_score = getattr(s_after, "post_score", None) if s_after else val
+        delta = (int(post_score) - int(pre_score)) if pre_score is not None and post_score is not None else None
 
-        def _fmt(v):
-            if v is None:
-                return "—"
-            return f"{int(v):+d}" if int(v) != 0 else "0"
+        comp = last_delta(int(cb.from_user.id), kind=(getattr(s_after, "kind", s.kind) or ""))
+        ad = comp.get("avg_delta")
+        kind = str(getattr(s_after, "kind", s.kind) or "")
+        source = str(getattr(s_after, "source", s.source) or "")
+
+        if source == "demo":
+            if delta is not None:
+                if delta > 0:
+                    log_event(int(cb.from_user.id), "trial_delta_positive", {"kind": kind, "delta": delta, "session_id": sid})
+                elif delta < 0:
+                    log_event(int(cb.from_user.id), "trial_delta_negative", {"kind": kind, "delta": delta, "session_id": sid})
+                else:
+                    log_event(int(cb.from_user.id), "trial_delta_neutral", {"kind": kind, "delta": delta, "session_id": sid})
+            log_event(int(cb.from_user.id), "trial_outcome_recorded", {"kind": kind, "delta": delta, "session_id": sid})
+            await cb.message.answer(
+                _trial_outcome_text(pre=pre_score, post=post_score, delta=delta, avg_delta=ad),
+                reply_markup=_trial_outcome_keyboard(int(cb.from_user.id), kind, delta=delta),
+            )
+            return
 
         msg = (
             "✅ Зафиксировал состояние после транса.\n\n"
-            f"Сегодня: {_fmt(lp)} → {_fmt(lq)} (изменение {_fmt(ld)})"
+            f"Сегодня: {_fmt_score(pre_score)} → {_fmt_score(post_score)} (изменение {_fmt_score(delta)})"
         )
         if ad is not None:
-            msg += f"\nСредняя динамика за последние дни: {_fmt(ad)}"
+            msg += f"\nСредняя динамика за последние дни: {_fmt_score(ad)}"
 
         await cb.message.answer(msg, reply_markup=kb_post_show_chart(sid))
-        # Вопрос про тело задаём после просмотра графика (по кнопке)
         return
 
 
