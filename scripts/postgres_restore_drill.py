@@ -13,6 +13,7 @@ REQUIRED_TABLES = (
     "subscriptions",
     "deliveries",
 )
+DEFAULT_BACKUP_DIR = Path(os.getenv("METRO_POSTGRES_BACKUP_DIR", "/var/backups/metrotherapy/postgres"))
 
 
 def _target_url() -> str:
@@ -22,6 +23,13 @@ def _target_url() -> str:
     if value == (os.getenv("DATABASE_URL") or ""):
         raise SystemExit("Restore drill target equals DATABASE_URL; refusing to touch production database")
     return value.strip()
+
+
+def latest_backup(*, backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path:
+    files = sorted(backup_dir.glob("*.dump"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not files:
+        raise SystemExit(f"No Postgres backups found in {backup_dir}")
+    return files[0]
 
 
 def _run(cmd: list[str]) -> str:
@@ -48,9 +56,14 @@ def restore_drill(*, dump_path: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Restore a pg_dump into a non-production drill database and verify core tables")
-    parser.add_argument("dump_path")
+    parser.add_argument("dump_path", nargs="?", help="Path to a .dump file. Use --latest to restore the newest backup.")
+    parser.add_argument("--latest", action="store_true", help="Restore the newest .dump from METRO_POSTGRES_BACKUP_DIR")
+    parser.add_argument("--backup-dir", default=str(DEFAULT_BACKUP_DIR))
     args = parser.parse_args()
-    restore_drill(dump_path=Path(args.dump_path))
+    dump = latest_backup(backup_dir=Path(args.backup_dir)) if args.latest else Path(args.dump_path or "")
+    if not str(dump):
+        raise SystemExit("dump_path is required unless --latest is used")
+    restore_drill(dump_path=dump)
     return 0
 
 
