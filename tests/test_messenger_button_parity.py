@@ -2,9 +2,15 @@ import json
 
 from keyboards.inline import kb_main
 from runtime import messenger_max_ui
-from runtime.messenger_senders import MaxBotSender
-from runtime.messenger_vk_ui import vk_main_keyboard_json, vk_demo_kind_keyboard_json
-from services.messenger.menu_contract import MAIN_MENU_ACTIONS, main_menu_commands, telegram_main_callbacks
+from runtime.messenger_senders import MaxBotSender, VkBotSender
+from runtime.messenger_vk_ui import (
+    full_route_keyboard_json,
+    prepare_vk_keyboard_json,
+    telegram_main_parity_keyboard_json,
+    vk_demo_kind_keyboard_json,
+    vk_main_keyboard_json,
+)
+from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS, main_menu_commands, telegram_main_callbacks
 
 
 def _vk_commands(keyboard_json: str) -> list[str]:
@@ -49,6 +55,32 @@ def test_vk_demo_kind_labels_match_telegram_demo_kind_surface():
     assert "🚗 Практика на утро / дорогу" in labels
     assert "🌙 Практика на вечер / домой" in labels
     assert "⬅️ Назад" in labels
+
+
+def test_vk_renderer_filters_context_controls_from_main_keyboard():
+    rows = json.loads(vk_main_keyboard_json())["buttons"]
+    rows.append([
+        {"action": {"type": "text", "label": "🎧 Получить аудио", "payload": json.dumps({"command": "continue"}, ensure_ascii=False)}, "color": "primary"},
+        {"action": {"type": "text", "label": "✅ Прослушал", "payload": json.dumps({"command": "done"}, ensure_ascii=False)}, "color": "positive"},
+    ])
+    noisy = json.dumps({"one_time": False, "inline": False, "buttons": rows}, ensure_ascii=False)
+    normalized_commands = set(_vk_commands(telegram_main_parity_keyboard_json(noisy)))
+    assert "continue" not in normalized_commands
+    assert "done" not in normalized_commands
+
+
+def test_vk_renderer_keeps_context_controls_for_full_route():
+    rendered = prepare_vk_keyboard_json(vk_main_keyboard_json(), external_user_id="123", text="🔐 Полный маршрут")
+    assert rendered == full_route_keyboard_json()
+    commands = set(_vk_commands(rendered))
+    assert {"continue", "done", "start"}.issubset(commands)
+
+
+def test_vk_sender_delegates_keyboard_normalization_to_renderer():
+    rendered = VkBotSender()._api_version  # smoke: class remains transport-focused and instantiable
+    assert callable(rendered)
+    expected = prepare_vk_keyboard_json(vk_main_keyboard_json(), external_user_id="123", text="🔐 Полный маршрут")
+    assert set(_vk_commands(expected)).intersection({action.command for action in CONTEXT_ACTIONS})
 
 
 def test_max_main_keyboard_uses_canonical_menu_titles():
