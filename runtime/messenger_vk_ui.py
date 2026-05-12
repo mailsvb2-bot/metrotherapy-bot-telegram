@@ -3,153 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-
-def vk_default_keyboard_json() -> str:
-    """Persistent VK keyboard aligned 1:1 with Telegram kb_main()."""
-    return json.dumps(
-        {
-            "one_time": False,
-            "inline": False,
-            "buttons": [
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🌿 Попробовать бесплатно",
-                            "payload": "{\"command\":\"demo\"}",
-                        },
-                        "color": "positive",
-                    },
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🔐 Полный маршрут",
-                            "payload": "{\"command\":\"full\"}",
-                        },
-                        "color": "primary",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "💳 Тарифы",
-                            "payload": "{\"command\":\"pay\"}",
-                        },
-                        "color": "primary",
-                    },
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🎁 Подарить",
-                            "payload": "{\"command\":\"gift\"}",
-                        },
-                        "color": "secondary",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "📈 Мой прогресс",
-                            "payload": "{\"command\":\"progress\"}",
-                        },
-                        "color": "primary",
-                    },
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🧠 Настройки",
-                            "payload": "{\"command\":\"settings\"}",
-                        },
-                        "color": "secondary",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "📣 Посоветовать",
-                            "payload": "{\"command\":\"share\"}",
-                        },
-                        "color": "secondary",
-                    },
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🌤 Погода",
-                            "payload": "{\"command\":\"weather\"}",
-                        },
-                        "color": "secondary",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "🎧 Получить аудио",
-                            "payload": "{\"command\":\"continue\"}",
-                        },
-                        "color": "secondary",
-                    },
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "✅ Прослушал",
-                            "payload": "{\"command\":\"done\"}",
-                        },
-                        "color": "positive",
-                    },
-                ],
-            ],
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def vk_demo_kind_keyboard_json() -> str:
-    """VK keyboard for Telegram demo-kind parity."""
-    return json.dumps(
-        {
-            "one_time": False,
-            "inline": False,
-            "buttons": [
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "1️⃣ Утро / дорога",
-                            "payload": "{\"command\":\"demo_work\"}",
-                        },
-                        "color": "positive",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "2️⃣ Вечер / домой",
-                            "payload": "{\"command\":\"demo_home\"}",
-                        },
-                        "color": "primary",
-                    },
-                ],
-                [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": "⬅️ Назад",
-                            "payload": "{\"command\":\"start\"}",
-                        },
-                        "color": "secondary",
-                    },
-                ],
-            ],
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+from config.settings import ADMIN_IDS
+from services.messenger.menu_contract import MAIN_MENU_ACTIONS
 
 
 def _button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
@@ -163,36 +18,69 @@ def _button(label: str, command: str, color: str = "secondary") -> dict[str, Any
     }
 
 
-def vk_weather_keyboard_json() -> str:
-    """VK weather keyboard aligned with Telegram weather entry surface."""
+def _keyboard(rows: list[list[dict[str, Any]]]) -> str:
     return json.dumps(
-        {
-            "one_time": False,
-            "inline": False,
-            "buttons": [
-                [
-                    _button("🔄 Обновить погоду", "weather", "primary"),
-                    _button("🏙 Изменить город", "weather_city", "secondary"),
-                ],
-                [_button("⬅️ Меню", "start", "secondary")],
-            ],
-        },
+        {"one_time": False, "inline": False, "buttons": rows},
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _is_admin(user_id: int | None) -> bool:
+    try:
+        return user_id is not None and int(user_id) in {int(item) for item in ADMIN_IDS}
+    except (TypeError, ValueError):
+        return False
+
+
+def vk_main_keyboard_json(user_id: int | None = None) -> str:
+    """Persistent VK keyboard aligned with Telegram ``kb_main``.
+
+    The main menu is rendered from the canonical cross-messenger contract, not
+    from a handwritten duplicate. Context-only controls such as “Получить аудио”
+    and “Прослушал” are intentionally excluded from the main menu and are shown
+    only in route/audio contexts.
+    """
+    rows: list[list[dict[str, Any]]] = []
+    actions = list(MAIN_MENU_ACTIONS)
+    for idx in range(0, len(actions), 2):
+        rows.append([
+            _button(action.title, action.command, action.vk_color)
+            for action in actions[idx:idx + 2]
+        ])
+    if _is_admin(user_id):
+        rows.append([_button("🛠 Панель", "admin", "primary")])
+    return _keyboard(rows)
+
+
+def vk_default_keyboard_json() -> str:
+    """Backward-compatible alias for the canonical VK main menu."""
+    return vk_main_keyboard_json()
+
+
+def vk_demo_kind_keyboard_json() -> str:
+    """VK keyboard for Telegram demo-kind parity."""
+    return _keyboard([
+        [_button("🚗 Практика на утро / дорогу", "demo_work", "positive")],
+        [_button("🌙 Практика на вечер / домой", "demo_home", "primary")],
+        [_button("⬅️ Назад", "start", "secondary")],
+    ])
+
+
+def vk_weather_keyboard_json() -> str:
+    """VK weather keyboard aligned with Telegram weather entry surface."""
+    return _keyboard([
+        [
+            _button("🔄 Обновить погоду", "weather", "primary"),
+            _button("🏙 Изменить город", "weather_city", "secondary"),
+        ],
+        [_button("⬅️ Меню", "start", "secondary")],
+    ])
 
 
 def vk_weather_city_keyboard_json() -> str:
     """VK keyboard while waiting for city input."""
-    return json.dumps(
-        {
-            "one_time": False,
-            "inline": False,
-            "buttons": [[_button("⬅️ Меню", "start", "secondary")]],
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    return _keyboard([[_button("⬅️ Меню", "start", "secondary")]])
 
 
 def vk_score_scale_keyboard_json() -> str:
@@ -215,24 +103,20 @@ def vk_score_scale_keyboard_json() -> str:
         _button("📊 Прогресс", "progress", "primary"),
         _button("⬅️ Меню", "start", "secondary"),
     ])
-    return json.dumps(
-        {"one_time": False, "inline": False, "buttons": rows},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    return _keyboard(rows)
 
 
-def vk_text_send_kwargs(platform: str, text: str = "") -> dict[str, Any]:
+def vk_text_send_kwargs(platform: str, text: str = "", *, user_id: int | None = None) -> dict[str, Any]:
     if platform != "vk":
         return {}
-    return {"keyboard_json": vk_default_keyboard_json()}
+    return {"keyboard_json": vk_main_keyboard_json(user_id)}
 
 
-def with_vk_keyboard(platform: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+def with_vk_keyboard(platform: str, kwargs: dict[str, Any], *, user_id: int | None = None) -> dict[str, Any]:
     if platform != "vk":
         return kwargs
     enriched = dict(kwargs)
-    enriched.setdefault("keyboard_json", vk_default_keyboard_json())
+    enriched.setdefault("keyboard_json", vk_main_keyboard_json(user_id))
     return enriched
 
 
