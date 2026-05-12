@@ -23,6 +23,10 @@ from services.weather import get_weather_text_async, set_city
 log = logging.getLogger(__name__)
 
 
+def _vk_kwargs(platform: str, kwargs: dict[str, Any], canonical_user_id: int) -> dict[str, Any]:
+    return with_vk_keyboard(platform, kwargs, user_id=canonical_user_id)
+
+
 async def send_reply_bundle(
     platform: str,
     external_user_id: str,
@@ -52,7 +56,7 @@ async def send_reply_bundle(
                     kwargs["keyboard_json"] = vk_weather_keyboard_json()
                 elif keyboard_kind == "weather_city":
                     kwargs["keyboard_json"] = vk_weather_city_keyboard_json()
-            await sender.send_text(external_user_id, reply.text, **with_vk_keyboard(platform, kwargs))
+            await sender.send_text(external_user_id, reply.text, **_vk_kwargs(platform, kwargs, canonical_user_id))
             continue
 
         if reply.kind == "next_audio":
@@ -64,7 +68,7 @@ async def send_reply_bundle(
                     fallback=platform,
                 )
                 if result.transport == "none":
-                    await sender.send_text(external_user_id, result.message, **with_vk_keyboard(platform, {}))
+                    await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))
             except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
                 log.exception("%s cross-channel audio delivery failed", platform.upper())
                 await sender.send_text(
@@ -72,7 +76,7 @@ async def send_reply_bundle(
                     "⚠️ Не удалось отправить следующее аудио в этот мессенджер. "
                     "Для MAX/ВКонтакте нужен публичный адрес MESSENGER_PUBLIC_BASE_URL, "
                     "чтобы бот мог присылать безопасную ссылку на следующий файл.",
-                    **with_vk_keyboard(platform, {}),
+                    **_vk_kwargs(platform, {}, canonical_user_id),
                 )
             continue
 
@@ -81,7 +85,7 @@ async def send_reply_bundle(
             await sender.send_text(
                 external_user_id,
                 txt + "\n\nМожно нажать «🏙 Изменить город» или отправить команду: город.",
-                **with_vk_keyboard(platform, {"keyboard_json": vk_weather_keyboard_json()} if platform == "vk" else {}),
+                **_vk_kwargs(platform, {"keyboard_json": vk_weather_keyboard_json()} if platform == "vk" else {}, canonical_user_id),
             )
             continue
 
@@ -91,7 +95,7 @@ async def send_reply_bundle(
                 await sender.send_text(
                     external_user_id,
                     "Пожалуйста, напишите название города текстом.",
-                    **with_vk_keyboard(platform, {"keyboard_json": vk_weather_city_keyboard_json()} if platform == "vk" else {}),
+                    **_vk_kwargs(platform, {"keyboard_json": vk_weather_city_keyboard_json()} if platform == "vk" else {}, canonical_user_id),
                 )
                 continue
 
@@ -100,7 +104,7 @@ async def send_reply_bundle(
                 await sender.send_text(
                     external_user_id,
                     "❌ " + str(info),
-                    **with_vk_keyboard(platform, {"keyboard_json": vk_weather_city_keyboard_json()} if platform == "vk" else {}),
+                    **_vk_kwargs(platform, {"keyboard_json": vk_weather_city_keyboard_json()} if platform == "vk" else {}, canonical_user_id),
                 )
                 continue
 
@@ -109,7 +113,7 @@ async def send_reply_bundle(
             await sender.send_text(
                 external_user_id,
                 f"✅ Город принят: {info}.\n\n{txt}",
-                **with_vk_keyboard(platform, {"keyboard_json": vk_weather_keyboard_json()} if platform == "vk" else {}),
+                **_vk_kwargs(platform, {"keyboard_json": vk_weather_keyboard_json()} if platform == "vk" else {}, canonical_user_id),
             )
             continue
 
@@ -119,7 +123,7 @@ async def send_reply_bundle(
                 await sender.send_text(
                     external_user_id,
                     "📈 Пока недостаточно данных для графика. Пройдите цикл: шкала ДО → аудио → Прослушал → шкала ПОСЛЕ.",
-                    **with_vk_keyboard(platform, {}),
+                    **_vk_kwargs(platform, {}, canonical_user_id),
                 )
                 continue
 
@@ -128,7 +132,7 @@ async def send_reply_bundle(
                     external_user_id,
                     chart_path,
                     caption="📈 Ваш график прогресса Метротерапии",
-                    **with_vk_keyboard(platform, {}),
+                    **_vk_kwargs(platform, {}, canonical_user_id),
                 )
                 log.info("%s progress chart sent: user_id=%s path=%s", platform.upper(), canonical_user_id, chart_path)
             except Exception:  # validator: allow-wide-except
@@ -136,7 +140,7 @@ async def send_reply_bundle(
                 await sender.send_text(
                     external_user_id,
                     "⚠️ График построен, но не удалось отправить его во ВКонтакте.",
-                    **with_vk_keyboard(platform, {}),
+                    **_vk_kwargs(platform, {}, canonical_user_id),
                 )
             continue
 
@@ -150,7 +154,7 @@ async def send_reply_bundle(
             kwargs: dict[str, Any] = {}
             if platform == "vk" and getattr(result, "prompt_done", False):
                 kwargs.update(_post_audio_control_kwargs("vk"))
-            await sender.send_text(external_user_id, result.message, **with_vk_keyboard(platform, kwargs))
+            await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, kwargs, canonical_user_id))
             continue
 
         if reply.kind == "auto_post_score":
@@ -160,5 +164,5 @@ async def send_reply_bundle(
                 score=int(reply.meta.get("score") or "0"),
                 senders=registry,
             )
-            await sender.send_text(external_user_id, result.message, **with_vk_keyboard(platform, {}))
+            await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))
             continue
