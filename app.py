@@ -86,6 +86,7 @@ from handlers import (
     micro,
     settings as settings_router,
     mood,
+    post_chart,
     diagnostics,
     gift_flow,
     kb_debug,
@@ -227,6 +228,7 @@ async def create_application():
     dp.include_router(micro.router)
     dp.include_router(settings_router.router)
     dp.include_router(mood.router)
+    dp.include_router(post_chart.router)
     dp.include_router(diagnostics.router)
     dp.include_router(gift_flow.router)
     dp.include_router(kb_debug.router)
