@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -15,12 +14,8 @@ else:
 
 from config.settings import settings
 from runtime import messenger_max_ui as max_ui
+from runtime.messenger_vk_ui import prepare_vk_keyboard_json
 from services.messenger.media_assets import get_cached_media_token, store_media_token
-from services.messenger.menu_contract import (
-    CONTEXT_ACTIONS,
-    MAIN_MENU_ACTIONS,
-    main_menu_commands,
-)
 from services.messenger.provider_transport import form_request, json_request, multipart_upload
 
 
@@ -137,72 +132,6 @@ class VkBotSender:
     def _api_version(self) -> str:
         return (self.api_version or getattr(settings, 'VK_API_VERSION', '') or '5.199').strip()
 
-    @staticmethod
-    def _button_command(button: Any) -> str:
-        if not isinstance(button, dict):
-            return ''
-        action = button.get('action') or {}
-        payload = action.get('payload')
-        if isinstance(payload, str) and payload.strip():
-            try:
-                decoded = json.loads(payload)
-            except json.JSONDecodeError:
-                decoded = None
-            if isinstance(decoded, dict):
-                command = decoded.get('command') or decoded.get('cmd') or decoded.get('action')
-                if isinstance(command, str) and command.strip():
-                    return command.strip()
-        label = str(action.get('label') or '').strip().casefold().replace('ё', 'е')
-        label_aliases = {action.title.casefold().replace('ё', 'е'): action.command for action in MAIN_MENU_ACTIONS + CONTEXT_ACTIONS}
-        label_aliases['⬅️ меню'] = 'start'
-        return label_aliases.get(label, '')
-
-    @staticmethod
-    def _vk_text_button(label: str, command: str, color: str = 'secondary') -> dict[str, Any]:
-        return {'action': {'type': 'text', 'label': label, 'payload': json.dumps({'command': command}, ensure_ascii=False)}, 'color': color}
-
-    @classmethod
-    def _telegram_main_parity_keyboard_json(cls, keyboard_json: str) -> str:
-        try:
-            keyboard = json.loads(keyboard_json)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return keyboard_json
-        if not isinstance(keyboard, dict):
-            return keyboard_json
-        rows = keyboard.get('buttons')
-        if not isinstance(rows, list):
-            return keyboard_json
-        all_commands: set[str] = set()
-        row_commands: list[tuple[list[Any], set[str]]] = []
-        for row in rows:
-            if not isinstance(row, list):
-                row_commands.append((row, set()))
-                continue
-            commands = {cls._button_command(button) for button in row}
-            commands.discard('')
-            all_commands.update(commands)
-            row_commands.append((row, commands))
-        telegram_main_commands = set(main_menu_commands())
-        vk_only_main_controls = {'continue', 'done'}
-        if not telegram_main_commands.issubset(all_commands):
-            return keyboard_json
-        if not vk_only_main_controls.intersection(all_commands):
-            return keyboard_json
-        filtered_rows = [row for row, commands in row_commands if not commands or not commands.issubset(vk_only_main_controls)]
-        normalized = dict(keyboard)
-        normalized['buttons'] = filtered_rows
-        return json.dumps(normalized, ensure_ascii=False, separators=(',', ':'))
-
-    @classmethod
-    def _full_route_keyboard_json(cls) -> str:
-        return json.dumps({'one_time': False, 'inline': False, 'buttons': [[cls._vk_text_button('🎧 Получить аудио', 'continue', 'primary'), cls._vk_text_button('✅ Прослушал', 'done', 'positive')], [cls._vk_text_button('⬅️ Меню', 'start', 'secondary')]]}, ensure_ascii=False, separators=(',', ':'))
-
-    @classmethod
-    def _prepare_vk_keyboard_json(cls, keyboard_json: str, *, external_user_id: str, text: str) -> str:
-        if (text or '').lstrip().startswith('🔐 Полный маршрут'):
-            return cls._full_route_keyboard_json()
-        return cls._telegram_main_parity_keyboard_json(keyboard_json)
-
     async def _vk_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         data = await asyncio.to_thread(form_request, f'https://api.vk.com/method/{method}', {**params, 'access_token': self._token(), 'v': self._api_version()})
         if isinstance(data, dict) and data.get('error'):
@@ -215,7 +144,7 @@ class VkBotSender:
             random_id = int(time.time_ns() % 2147483647)
         params = {'user_id': str(external_user_id), 'random_id': int(random_id), 'message': text}
         if kwargs.get('keyboard_json'):
-            params['keyboard'] = self._prepare_vk_keyboard_json(str(kwargs['keyboard_json']), external_user_id=str(external_user_id), text=str(text or ''))
+            params['keyboard'] = prepare_vk_keyboard_json(str(kwargs['keyboard_json']), external_user_id=str(external_user_id), text=str(text or ''))
         if kwargs.get('attachment'):
             params['attachment'] = kwargs['attachment']
         data = await self._vk_method('messages.send', params)
