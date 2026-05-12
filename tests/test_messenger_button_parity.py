@@ -1,6 +1,7 @@
 import json
 
 from keyboards.inline import kb_main
+from runtime import messenger_max_ui
 from runtime.messenger_senders import MaxBotSender
 from runtime.messenger_vk_ui import vk_main_keyboard_json, vk_demo_kind_keyboard_json
 from services.messenger.menu_contract import MAIN_MENU_ACTIONS, main_menu_commands, telegram_main_callbacks
@@ -51,8 +52,19 @@ def test_vk_demo_kind_labels_match_telegram_demo_kind_surface():
 
 
 def test_max_main_keyboard_uses_canonical_menu_titles():
-    attachment = MaxBotSender._main_menu_attachment()
+    attachment = messenger_max_ui.main_menu_attachment()
     assert _max_button_texts(attachment) == [action.title for action in MAIN_MENU_ACTIONS]
+
+
+def test_max_sender_delegates_main_keyboard_to_renderer():
+    assert MaxBotSender._main_menu_attachment() == messenger_max_ui.main_menu_attachment()
+
+
+def test_max_demo_kind_labels_match_telegram_demo_kind_surface():
+    labels = _max_button_texts(messenger_max_ui.demo_kind_attachment())
+    assert "🚗 Практика на утро / дорогу" in labels
+    assert "🌙 Практика на вечер / домой" in labels
+    assert "⬅️ Меню" in labels
 
 
 def test_telegram_main_callbacks_are_tracked_by_contract():
