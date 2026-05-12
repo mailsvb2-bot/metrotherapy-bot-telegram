@@ -19,6 +19,14 @@ def _int_env(name: str, default: int) -> int:
         raise StartupCheckError(f"Invalid integer env {name}={raw!r}") from exc
 
 
+def _env_any(*names: str) -> str:
+    for name in names:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _prod_ingress_checks() -> None:
     app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
     telegram_transport = (os.getenv("TELEGRAM_TRANSPORT", os.getenv("RUN_MODE", "polling")) or "polling").strip().lower()
@@ -68,6 +76,8 @@ def run_startup_checks(project_root: Path) -> None:
     """Fail-fast проверки целостности проекта.
 
     Цель: не стартовать «тихо криво», если нет критичных файлов/папок.
+    Runtime-папки создаём сами: отсутствие data/logs/audio подкаталогов не должно
+    превращать публичный вход `/start` в недоступный бот после чистого деплоя.
     """
     root = project_root.resolve()
 
@@ -78,16 +88,13 @@ def run_startup_checks(project_root: Path) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Audio folders
+    # Audio folders are runtime content mount points. Create them on clean deploys;
+    # actual missing tracks must be handled by the audio flow, not by blocking /start.
     audio_dir = root / "audio"
-    if not audio_dir.exists():
-        raise StartupCheckError(f"Missing required directory: {audio_dir}")
     demo_dir = audio_dir / "demo"
-    if not demo_dir.exists():
-        raise StartupCheckError(f"Missing required directory: {demo_dir}")
     full_dir = audio_dir / "full"
-    if not full_dir.exists():
-        raise StartupCheckError(f"Missing required directory: {full_dir}")
+    demo_dir.mkdir(parents=True, exist_ok=True)
+    full_dir.mkdir(parents=True, exist_ok=True)
 
     # Critical modules introduced for stability
     critical_files = [
@@ -101,7 +108,6 @@ def run_startup_checks(project_root: Path) -> None:
 
     _prod_ingress_checks()
 
-    # Token sanity (do not print token)
-    if not (os.getenv("BOT_TOKEN") or "").strip():
-        # app.py also checks; keep here to surface in one place
-        raise StartupCheckError("BOT_TOKEN is empty. Put it into .env (see .env.example)")
+    # Token sanity (do not print token). Support TELEGRAM_BOT_TOKEN for server snippets.
+    if not _env_any("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"):
+        raise StartupCheckError("BOT_TOKEN is empty. Set BOT_TOKEN or TELEGRAM_BOT_TOKEN (see .env.example)")
