@@ -65,9 +65,9 @@ MAIN_MENU_ACTIONS: tuple[MenuAction, ...] = (
     ),
     MenuAction(
         command="share",
-        title="📣 Посоветовать",
+        title="Поделиться",
         telegram_callback="share:menu",
-        aliases=("посоветовать", "поделиться", "share", "пригласить"),
+        aliases=("посоветовать", "📣 посоветовать", "поделиться", "share", "пригласить"),
     ),
     MenuAction(
         command="weather",
