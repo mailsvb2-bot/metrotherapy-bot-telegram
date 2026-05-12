@@ -59,9 +59,9 @@ MAIN_MENU_ACTIONS: tuple[MenuAction, ...] = (
     ),
     MenuAction(
         command="settings",
-        title="🧠 Настройки",
+        title="Настройки",
         telegram_callback="settings:menu",
-        aliases=("настройки", "settings"),
+        aliases=("настройки", "🧠 настройки", "настройки канала", "settings"),
     ),
     MenuAction(
         command="share",
