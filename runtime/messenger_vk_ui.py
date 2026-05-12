@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from config.settings import ADMIN_IDS
-from services.messenger.menu_contract import MAIN_MENU_ACTIONS
+from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS, main_menu_commands
 
 
 def _button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
@@ -31,6 +31,74 @@ def _is_admin(user_id: int | None) -> bool:
         return user_id is not None and int(user_id) in {int(item) for item in ADMIN_IDS}
     except (TypeError, ValueError):
         return False
+
+
+def button_command(button: Any) -> str:
+    if not isinstance(button, dict):
+        return ""
+    action = button.get("action") or {}
+    payload = action.get("payload")
+    if isinstance(payload, str) and payload.strip():
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, dict):
+            command = decoded.get("command") or decoded.get("cmd") or decoded.get("action")
+            if isinstance(command, str) and command.strip():
+                return command.strip()
+    label = str(action.get("label") or "").strip().casefold().replace("ё", "е")
+    label_aliases = {action.title.casefold().replace("ё", "е"): action.command for action in MAIN_MENU_ACTIONS + CONTEXT_ACTIONS}
+    label_aliases["⬅️ меню"] = "start"
+    return label_aliases.get(label, "")
+
+
+def telegram_main_parity_keyboard_json(keyboard_json: str) -> str:
+    try:
+        keyboard = json.loads(keyboard_json)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return keyboard_json
+    if not isinstance(keyboard, dict):
+        return keyboard_json
+    rows = keyboard.get("buttons")
+    if not isinstance(rows, list):
+        return keyboard_json
+
+    all_commands: set[str] = set()
+    row_commands: list[tuple[list[Any], set[str]]] = []
+    for row in rows:
+        if not isinstance(row, list):
+            row_commands.append((row, set()))
+            continue
+        commands = {button_command(button) for button in row}
+        commands.discard("")
+        all_commands.update(commands)
+        row_commands.append((row, commands))
+
+    telegram_main_commands = set(main_menu_commands())
+    vk_only_main_controls = {"continue", "done"}
+    if not telegram_main_commands.issubset(all_commands):
+        return keyboard_json
+    if not vk_only_main_controls.intersection(all_commands):
+        return keyboard_json
+
+    filtered_rows = [row for row, commands in row_commands if not commands or not commands.issubset(vk_only_main_controls)]
+    normalized = dict(keyboard)
+    normalized["buttons"] = filtered_rows
+    return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+
+
+def full_route_keyboard_json() -> str:
+    return _keyboard([
+        [_button("🎧 Получить аудио", "continue", "primary"), _button("✅ Прослушал", "done", "positive")],
+        [_button("⬅️ Меню", "start", "secondary")],
+    ])
+
+
+def prepare_vk_keyboard_json(keyboard_json: str, *, external_user_id: str, text: str) -> str:
+    if (text or "").lstrip().startswith("🔐 Полный маршрут"):
+        return full_route_keyboard_json()
+    return telegram_main_parity_keyboard_json(keyboard_json)
 
 
 def vk_main_keyboard_json(user_id: int | None = None) -> str:
