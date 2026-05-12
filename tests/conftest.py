@@ -41,3 +41,11 @@ for name in (
     "TELEGRAM_WEBHOOK_SECRET_TOKEN",
 ):
     os.environ.pop(name, None)
+
+# Tests that exercise messenger text entrypoints must use the same canonical
+# schema bootstrap as application startup. Otherwise a fresh isolated pytest DB
+# exists but has no users/events tables, and button-parity tests fail before
+# reaching the messenger behavior under test.
+from services.schema import init_db
+
+init_db()
