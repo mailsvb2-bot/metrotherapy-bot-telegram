@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from runtime.messenger_senders import MaxBotSender
+from runtime import messenger_max_ui as max_ui
 from services.messenger.menu_contract import MAIN_MENU_ACTIONS
+from services.messenger.text_ui import handle_incoming_text
 
 
 def _button_texts(attachment: dict) -> list[str]:
@@ -34,7 +35,7 @@ def test_max_main_menu_gets_native_buttons_equal_to_canonical_menu() -> None:
         "• 🌤 Погода"
     )
 
-    attachments = MaxBotSender._native_keyboard_attachments(text)
+    attachments = max_ui.native_keyboard_attachments(text)
 
     assert len(attachments) == 1
     assert attachments[0]["type"] == "inline_keyboard"
@@ -49,17 +50,17 @@ def test_max_main_menu_text_fallback_is_only_added_without_native_keyboard() -> 
         "• 🌿 Попробовать бесплатно\n"
     )
 
-    assert "отправьте:" not in MaxBotSender._prepare_text(text, has_native_keyboard=True)
-    assert "отправьте:" in MaxBotSender._prepare_text(text, has_native_keyboard=False)
+    assert "отправьте:" not in max_ui.prepare_text(text, has_native_keyboard=True)
+    assert "отправьте:" in max_ui.prepare_text(text, has_native_keyboard=False)
 
 
 def test_max_demo_full_weather_and_score_surfaces_have_native_buttons() -> None:
-    demo = MaxBotSender._native_keyboard_attachments("🌿 Бесплатная практика\n\nВыберите короткий маршрут")
-    full = MaxBotSender._native_keyboard_attachments("🔐 Полный маршрут\n\nНажмите «🎧 Получить аудио»")
-    weather = MaxBotSender._native_keyboard_attachments("🌤 Погода\n\nВо ВКонтакте доступны те же базовые действия")
-    score = MaxBotSender._native_keyboard_attachments("🌿 Перед аудио оцените состояние сейчас от -10 до +10")
+    demo = max_ui.native_keyboard_attachments("🌿 Бесплатная практика\n\nВыберите короткий маршрут")
+    full = max_ui.native_keyboard_attachments("🔐 Полный маршрут\n\nНажмите «🎧 Получить аудио»")
+    weather = max_ui.native_keyboard_attachments("🌤 Погода\n\nВ MAX и ВКонтакте доступны те же базовые действия")
+    score = max_ui.native_keyboard_attachments("🌿 Перед аудио оцените состояние сейчас от -10 до +10")
 
-    assert _button_texts(demo[0]) == ["1️⃣ Утро / дорога", "2️⃣ Вечер / домой", "⬅️ Меню"]
+    assert _button_texts(demo[0]) == ["🚗 Практика на утро / дорогу", "🌙 Практика на вечер / домой", "⬅️ Меню"]
     assert _button_texts(full[0]) == ["🎧 Получить аудио", "✅ Прослушал", "⬅️ Меню"]
     assert _button_texts(weather[0]) == ["🔄 Обновить погоду", "🏙 Изменить город", "⬅️ Меню"]
     assert "-10" in _button_texts(score[0])
@@ -68,10 +69,10 @@ def test_max_demo_full_weather_and_score_surfaces_have_native_buttons() -> None:
 
 
 def test_max_payment_and_gift_surfaces_use_link_buttons() -> None:
-    payment = MaxBotSender._native_keyboard_attachments(
+    payment = max_ui.native_keyboard_attachments(
         "💳 Оплата доступа к Метротерапии\n\nhttps://metrotherapy-bot.metrotherapy.ru/pay/yookassa?source=max"
     )
-    gift = MaxBotSender._native_keyboard_attachments(
+    gift = max_ui.native_keyboard_attachments(
         "🎁 Подарить Метротерапию\n\nhttps://metrotherapy-bot.metrotherapy.ru/pay/yookassa?kind=gift"
     )
 
@@ -80,3 +81,15 @@ def test_max_payment_and_gift_surfaces_use_link_buttons() -> None:
     assert payment[0]["payload"]["buttons"][0][0]["type"] == "link"
     assert gift[0]["payload"]["buttons"][0][0]["text"] == "🎁 Оплатить подарок"
     assert gift[0]["payload"]["buttons"][0][0]["type"] == "link"
+
+
+def test_max_text_surfaces_are_not_vk_only() -> None:
+    for text in [
+        handle_incoming_text(951001, platform="max", external_user_id="951001", text="demo")[1][0].text,
+        handle_incoming_text(951002, platform="max", external_user_id="951002", text="full")[1][0].text,
+        handle_incoming_text(951003, platform="max", external_user_id="951003", text="weather")[1][0].text,
+    ]:
+        prepared = max_ui.prepare_text(text, has_native_keyboard=True)
+        assert "внутри ВКонтакте" not in prepared
+        assert "во ВКонтакте" not in prepared
+        assert "в этот мессенджер" in prepared or "MAX и ВКонтакте" in prepared
