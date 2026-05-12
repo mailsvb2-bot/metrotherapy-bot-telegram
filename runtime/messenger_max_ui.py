@@ -162,8 +162,33 @@ def native_keyboard_attachments(text: str) -> list[dict[str, Any]]:
     return []
 
 
+def normalize_max_text(text: str) -> str:
+    """Remove VK-only wording from shared MAX/VK text surfaces.
+
+    The canonical text UI is shared by non-Telegram messengers. VK-specific
+    execution details are acceptable for VK, but MAX must not tell the user that
+    the scenario happens only inside VK.
+    """
+    raw = str(text or "")
+    replacements = {
+        "Кнопки ВКонтакте соответствуют": "Кнопки MAX и ВКонтакте соответствуют",
+        "Telegram для этого не нужен — сценарий исполняется внутри ВКонтакте.": "Telegram для этого не нужен — сценарий исполняется прямо в этом мессенджере.",
+        "Во ВКонтакте маршрут исполняется через ту же общую аудио-очередь": "В этом мессенджере маршрут исполняется через ту же общую аудио-очередь",
+        "продолжить полный маршрут во ВКонтакте": "продолжить полный маршрут в этом мессенджере",
+        "Во ВКонтакте доступны те же базовые действия": "В MAX и ВКонтакте доступны те же базовые действия",
+        "После выбора оценки аудио придёт прямо во ВКонтакте.": "После выбора оценки аудио придёт прямо в этот мессенджер.",
+        "В VK нельзя надёжно открыть системный выбор друзей прямо из кнопки бота.": "В MAX/VK нельзя надёжно открыть системный выбор друзей прямо из кнопки бота.",
+        "в VK, Telegram или любом другом мессенджере": "в MAX, VK, Telegram или любом другом мессенджере",
+        "Кнопки ниже открывают VK-бота, Telegram и сайт.": "Кнопки ниже открывают доступные каналы и сайт.",
+        "Позже можно усилить это до полноценного выбора друга внутри VK": "Позже можно усилить это до полноценного выбора друга внутри мессенджера",
+    }
+    for src, dst in replacements.items():
+        raw = raw.replace(src, dst)
+    return raw
+
+
 def prepare_text(text: str, *, has_native_keyboard: bool = False) -> str:
-    raw = str(text or "").replace("Кнопки ВКонтакте соответствуют", "Кнопки MAX и ВКонтакте соответствуют")
+    raw = normalize_max_text(text)
     if has_main_menu_text(raw) and not has_native_keyboard and "отправьте:" not in raw:
         return raw.rstrip() + "\n\n" + max_numbered_menu_text()
     return raw
