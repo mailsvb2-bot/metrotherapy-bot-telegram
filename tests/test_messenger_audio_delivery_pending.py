@@ -81,7 +81,7 @@ def test_full_audio_sequence_loops_only_for_configured_admins(monkeypatch):
     first = AudioProgressItem(ordinal=1, anchor=1, title='Morning', path=Path('audio/full/1_morning.opus'))
     second = AudioProgressItem(ordinal=2, anchor=2, title='Evening', path=Path('audio/full/2_evening.opus'))
     monkeypatch.setattr('services.messenger.audio_progress.list_full_series', lambda: [first, second])
-    monkeypatch.setattr('services.messenger.audio_progress.settings.admin_id_list', [940004], raising=False)
+    monkeypatch.setattr('services.messenger.audio_progress._can_loop_audio', lambda user_id: int(user_id) == 940004)
 
     user_id = 940004
     record_audio_delivery(user_id, item=first, platform='vk')
