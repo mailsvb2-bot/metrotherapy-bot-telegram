@@ -44,7 +44,7 @@ def main_menu_attachment() -> dict[str, Any]:
 def full_route_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("🎧 Получить аудио"), max_message_button("✅ Прослушал")],
-        [max_message_button("⬅️ Меню")],
+        [max_message_button("⬅️ Назад")],
     ])
 
 
@@ -53,48 +53,48 @@ def demo_kind_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("🚗 Практика на утро / дорогу")],
         [max_message_button("🌙 Практика на вечер / домой")],
-        [max_message_button("⬅️ Меню")],
+        [max_message_button("⬅️ Назад")],
     ])
 
 
 def weather_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("🔄 Обновить погоду"), max_message_button("🏙 Изменить город")],
-        [max_message_button("⬅️ Меню")],
+        [max_message_button("⬅️ Назад")],
     ])
 
 
 def weather_city_attachment() -> dict[str, Any]:
-    return inline_keyboard_attachment([[max_message_button("⬅️ Меню")]])
+    return inline_keyboard_attachment([[max_message_button("⬅️ Назад")]])
 
 
 def score_scale_attachment() -> dict[str, Any]:
     rows: list[list[dict[str, str]]] = []
     for row in [[-10, -9, -8], [-7, -6, -5], [-4, -3, -2], [-1, 0, 1], [2, 3, 4], [5, 6, 7], [8, 9, 10]]:
-        rows.append([max_message_button(str(value)) for value in row])
-    rows.append([max_message_button("📈 Мой прогресс"), max_message_button("⬅️ Меню")])
+        rows.append([max_message_button(("+" if value > 0 else "") + str(value)) for value in row])
+    rows.append([max_message_button("📈 Мой прогресс"), max_message_button("⬅️ Назад")])
     return inline_keyboard_attachment(rows)
 
 
 def post_audio_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("✅ Прослушал")],
-        [max_message_button("📊 Прогресс"), max_message_button("🧾 История")],
-        [max_message_button("⬅️ Меню")],
+        [max_message_button("📈 Мой прогресс"), max_message_button("🧾 История")],
+        [max_message_button("⬅️ Назад")],
     ])
 
 
 def progress_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("🎧 Получить аудио"), max_message_button("✅ Прослушал")],
-        [max_message_button("🧾 История"), max_message_button("⬅️ Меню")],
+        [max_message_button("🧾 История"), max_message_button("⬅️ Назад")],
     ])
 
 
 def settings_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("/platform telegram"), max_message_button("/platform max"), max_message_button("/platform vk")],
-        [max_message_button("switch"), max_message_button("⬅️ Меню")],
+        [max_message_button("switch"), max_message_button("⬅️ Назад")],
     ])
 
 
@@ -120,17 +120,17 @@ def link_action_attachment(text: str) -> dict[str, Any] | None:
     if str(text or "").lstrip().startswith("💳 Оплата"):
         return inline_keyboard_attachment([
             [max_link_button("💳 Оплатить", url)],
-            [max_message_button("🎧 Получить аудио"), max_message_button("⬅️ Меню")],
+            [max_message_button("🎧 Получить аудио"), max_message_button("⬅️ Назад")],
         ])
     if str(text or "").lstrip().startswith("🎁 Подарить"):
         return inline_keyboard_attachment([
             [max_link_button("🎁 Оплатить подарок", url)],
-            [max_message_button("📣 Посоветовать"), max_message_button("⬅️ Меню")],
+            [max_message_button("📣 Посоветовать"), max_message_button("⬅️ Назад")],
         ])
     if str(text or "").lstrip().startswith("↗️ Поделиться"):
         return inline_keyboard_attachment([
             [max_link_button("↗️ Открыть ссылку", url)],
-            [max_message_button("⬅️ Меню")],
+            [max_message_button("⬅️ Назад")],
         ])
     return None
 
