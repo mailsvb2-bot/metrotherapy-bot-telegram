@@ -18,6 +18,7 @@ from services.messenger.bridge import issue_bridge_token
 from services.messenger.entrypoints import register_user_entry
 from services.messenger.links import build_messenger_targets, build_switch_targets
 from services.messenger.platforms import normalize_platform, platform_title
+from services.messenger.menu_contract import normalize_menu_command
 from services.messenger.preferences import get_channel_snapshot, set_preferred_platform
 from services.messenger.audio_progress import get_progress_snapshot, SEQUENCE_FULL_SERIES, confirm_pending_audio_delivery
 from services.messenger.timeline import get_recent_audio_timeline
@@ -239,7 +240,7 @@ def _progress_text(user_id: int) -> str:
         )
     return (
         f"{audio_part}\n\n"
-        "📈 Анализ состояния\n\n"
+        "📈 Мой прогресс и анализ состояния\n\n"
         "Сейчас пришлю графики по тем же данным, что используются в Telegram: "
         "быстрая шкала состояния, дорога на работу, дорога домой и общая динамика — если по ним уже есть данные.\n\n"
         "Чтобы добавить новую оценку состояния, отправьте число от -10 до 10 после прослушивания аудио."
@@ -361,6 +362,9 @@ def _parse_command(text: str) -> tuple[str, str | None]:
     if not raw:
         return "menu", None
     lowered = raw.lower()
+    contract_command = normalize_menu_command(raw)
+    if contract_command:
+        return ("menu" if contract_command == "start" else contract_command), None
     if lowered.startswith("/start"):
         parts = raw.split(maxsplit=1)
         return "start", parts[1].strip() if len(parts) == 2 else ""
