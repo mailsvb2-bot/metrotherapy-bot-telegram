@@ -4,14 +4,26 @@ import hashlib
 import json
 from typing import Any
 
+from services.messenger.menu_contract import normalize_menu_command
+
 
 def normalise_messenger_text(text: str) -> str:
-    """Normalize human/mobile button labels to canonical text commands."""
+    """Normalize human/mobile button labels to canonical text commands.
+
+    VK and MAX buttons send plain text labels. Telegram remains the source of
+    truth for those labels through ``services.messenger.menu_contract``; this
+    function only keeps route/context aliases that are outside the Telegram main
+    menu, such as demo route choice, weather city and score buttons.
+    """
     raw = (text or "").strip()
     compact = raw.casefold().replace("ё", "е")
     compact = " ".join(compact.split())
     if compact.startswith("+") and compact[1:].isdigit():
         return compact[1:]
+
+    command = normalize_menu_command(compact)
+    if command:
+        return "start" if command == "start" else command
 
     aliases = {
         "/start": "start",
@@ -19,15 +31,13 @@ def normalise_messenger_text(text: str) -> str:
         "старт": "start",
         "начать": "start",
         "🌿 начать": "start",
+        "menu": "start",
+        "/menu": "start",
         "меню": "start",
         "главное меню": "start",
         "⬅️ назад": "start",
         "назад": "start",
         "⬅️ меню": "start",
-        "🌿 попробовать бесплатно": "demo",
-        "попробовать бесплатно": "demo",
-        "бесплатная практика": "demo",
-        "демо": "demo",
         "1": "demo_work",
         "1.": "demo_work",
         "1️⃣": "demo_work",
@@ -46,65 +56,31 @@ def normalise_messenger_text(text: str) -> str:
         "дорога домой": "demo_home",
         "🌙 практика на вечер / домой": "demo_home",
         "практика на вечер / домой": "demo_home",
-        "🔐 полный маршрут": "full",
-        "полный маршрут": "full",
-        "полный доступ": "full",
-        "💳 тарифы": "pay",
-        "тарифы": "pay",
-        "📈 мой прогресс": "progress",
-        "мой прогресс": "progress",
-        "анализ": "progress",
-        "анализ моего состояния": "progress",
-        "🧠 настройки": "settings",
-        "📣 посоветовать": "share",
-        "посоветовать": "share",
-        "🌤 погода": "weather",
-        "погода": "weather",
-        "🔄 обновить погоду": "weather",
-        "обновить погоду": "weather",
         "weather_city": "weather_city",
         "🏙 изменить город": "weather_city",
         "изменить город": "weather_city",
         "сменить город": "weather_city",
         "город": "weather_city",
-        "🎧 получить аудио": "continue",
-        "получить аудио": "continue",
-        "продолжить": "continue",
-        "continue": "continue",
-        "✅ прослушал": "done",
-        "прослушал": "done",
-        "готово": "done",
-        "done": "done",
+        "🔄 обновить погоду": "weather",
+        "обновить погоду": "weather",
+        "repeat": "repeat_audio",
+        "/repeat": "repeat_audio",
         "🔁 повторить": "repeat_audio",
         "повторить": "repeat_audio",
         "повторить аудио": "repeat_audio",
         "слушать снова": "repeat_audio",
-        "💳 оплатить": "pay",
-        "оплатить": "pay",
-        "оплата": "pay",
-        "pay": "pay",
-        "🎁 подарить": "gift",
-        "подарить": "gift",
-        "подарок": "gift",
-        "gift": "gift",
-        "↗️ поделиться": "share",
-        "поделиться": "share",
-        "share": "share",
-        "⚙️ настройки": "settings",
-        "настройки": "settings",
-        "settings": "settings",
-        "📊 прогресс": "progress",
-        "прогресс": "progress",
-        "progress": "progress",
         "🧾 история": "history",
         "история": "history",
         "history": "history",
+        "timeline": "history",
+        "/timeline": "history",
         "🔁 другой мессенджер": "switch",
         "другой мессенджер": "switch",
         "switch": "switch",
         "❓ помощь": "help",
         "помощь": "help",
         "help": "help",
+        "/help": "help",
     }
     return aliases.get(compact, raw)
 
@@ -209,7 +185,7 @@ def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     safe_user_id = safe_int(user_id)
     if safe_user_id is None:
         return None
-    text = (body.get("text") or "").strip()
+    text = normalise_messenger_text((body.get("text") or "").strip())
     full_name = " ".join(part for part in [sender.get("first_name"), sender.get("last_name")] if part).strip() or sender.get("name")
     return {
         "user_id": safe_user_id,
