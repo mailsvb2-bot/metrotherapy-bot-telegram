@@ -5,8 +5,9 @@ from __future__ import annotations
 One source of truth for the main user-facing actions that must exist across
 Telegram inline callbacks, VK persistent keyboards and MAX text/menu fallback.
 
-The contract is intentionally small and data-only: platform adapters may render
-it differently, but they must not invent a second command vocabulary.
+Telegram is the UX source of truth: titles and callback semantics here mirror
+``keyboards.inline.kb_main``. Platform adapters may render the actions
+differently, but they must not invent a second command vocabulary.
 """
 
 from dataclasses import dataclass
@@ -59,15 +60,15 @@ MAIN_MENU_ACTIONS: tuple[MenuAction, ...] = (
     ),
     MenuAction(
         command="settings",
-        title="Настройки",
+        title="🧠 Настройки",
         telegram_callback="settings:menu",
-        aliases=("настройки", "🧠 настройки", "настройки канала", "settings"),
+        aliases=("настройки", "настройки канала", "settings"),
     ),
     MenuAction(
         command="share",
-        title="Поделиться",
+        title="📣 Посоветовать",
         telegram_callback="share:menu",
-        aliases=("посоветовать", "📣 посоветовать", "поделиться", "share", "пригласить"),
+        aliases=("посоветовать", "поделиться", "share", "пригласить"),
     ),
     MenuAction(
         command="weather",
@@ -94,6 +95,13 @@ CONTEXT_ACTIONS: tuple[MenuAction, ...] = (
     ),
 )
 
+TELEGRAM_MAIN_LAYOUT: tuple[tuple[str, ...], ...] = (
+    ("🌿 Попробовать бесплатно", "🔐 Полный маршрут"),
+    ("💳 Тарифы", "🎁 Подарить"),
+    ("📈 Мой прогресс", "🧠 Настройки"),
+    ("📣 Посоветовать", "🌤 Погода"),
+)
+
 
 def iter_main_menu_actions() -> Iterable[MenuAction]:
     return iter(MAIN_MENU_ACTIONS)
@@ -116,6 +124,8 @@ def normalize_menu_command(text: str) -> str | None:
     compact = " ".join(compact.split())
     if not compact:
         return None
+    if compact in {"⬅️ назад", "назад", "⬅️ меню", "меню", "главное меню", "start", "/start"}:
+        return "start"
     for action in MAIN_MENU_ACTIONS + CONTEXT_ACTIONS:
         candidates = {action.command, action.title.casefold().replace("ё", "е"), *action.aliases}
         if compact in {" ".join(str(item).casefold().replace("ё", "е").split()) for item in candidates}:
@@ -126,9 +136,8 @@ def normalize_menu_command(text: str) -> str | None:
 def max_numbered_menu_text() -> str:
     """Fallback menu for MAX when native buttons are unavailable.
 
-    MAX transport in this codebase currently sends text/audio. Until a native
-    button adapter is introduced, the numbered menu keeps the same command
-    vocabulary visible and actionable.
+    MAX native buttons are rendered where supported. The numbered menu keeps
+    the exact same Telegram-derived command vocabulary visible as a fallback.
     """
     lines = ["Главное меню", ""]
     for idx, action in enumerate(MAIN_MENU_ACTIONS, start=1):
