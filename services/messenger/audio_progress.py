@@ -92,7 +92,10 @@ def get_next_audio_item(user_id: int, *, sequence_key: str = SEQUENCE_FULL_SERIE
     for item in items:
         if item.anchor > anchor:
             return item
-    return None
+    # The audio route is intentionally cyclic: after the last available item,
+    # the next request starts the same curated sequence again instead of
+    # permanently blocking the user with "all audio already delivered".
+    return items[0]
 
 
 def record_audio_delivery(
