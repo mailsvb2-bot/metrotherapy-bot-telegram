@@ -4,7 +4,13 @@ import pytest
 
 from services.schema import init_db
 from services.messenger import audio_delivery as delivery
-from services.messenger.audio_progress import get_progress_snapshot, AudioProgressItem, mark_pending_audio_delivery
+from services.messenger.audio_progress import (
+    AudioProgressItem,
+    get_next_audio_item,
+    get_progress_snapshot,
+    mark_pending_audio_delivery,
+    record_audio_delivery,
+)
 from services.messenger.outbound import SenderRegistry
 
 
@@ -56,3 +62,19 @@ async def test_continue_reuses_pending_item_before_advancing(monkeypatch):
     snap = get_progress_snapshot(940002)
     assert snap.pending_item is not None
     assert snap.pending_item.anchor == 41
+
+
+def test_full_audio_sequence_loops_after_last_available_item(monkeypatch):
+    first = AudioProgressItem(ordinal=1, anchor=1, title='Morning', path=Path('audio/full/1_morning.opus'))
+    second = AudioProgressItem(ordinal=2, anchor=2, title='Evening', path=Path('audio/full/2_evening.opus'))
+    monkeypatch.setattr('services.messenger.audio_progress.list_full_series', lambda: [first, second])
+
+    user_id = 940003
+    record_audio_delivery(user_id, item=first, platform='vk')
+    assert get_next_audio_item(user_id).anchor == 2
+
+    record_audio_delivery(user_id, item=second, platform='vk')
+    next_item = get_next_audio_item(user_id)
+
+    assert next_item is not None
+    assert next_item.anchor == 1
