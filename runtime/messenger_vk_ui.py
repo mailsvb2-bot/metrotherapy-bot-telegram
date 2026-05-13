@@ -50,6 +50,8 @@ def button_command(button: Any) -> str:
     label = str(action.get("label") or "").strip().casefold().replace("ё", "е")
     label_aliases = {action.title.casefold().replace("ё", "е"): action.command for action in MAIN_MENU_ACTIONS + CONTEXT_ACTIONS}
     label_aliases["⬅️ меню"] = "start"
+    label_aliases["⬅️ назад"] = "start"
+    label_aliases["назад"] = "start"
     return label_aliases.get(label, "")
 
 
@@ -91,7 +93,7 @@ def telegram_main_parity_keyboard_json(keyboard_json: str) -> str:
 def full_route_keyboard_json() -> str:
     return _keyboard([
         [_button("🎧 Получить аудио", "continue", "primary"), _button("✅ Прослушал", "done", "positive")],
-        [_button("⬅️ Меню", "start", "secondary")],
+        [_button("⬅️ Назад", "start", "secondary")],
     ])
 
 
@@ -142,13 +144,13 @@ def vk_weather_keyboard_json() -> str:
             _button("🔄 Обновить погоду", "weather", "primary"),
             _button("🏙 Изменить город", "weather_city", "secondary"),
         ],
-        [_button("⬅️ Меню", "start", "secondary")],
+        [_button("⬅️ Назад", "start", "secondary")],
     ])
 
 
 def vk_weather_city_keyboard_json() -> str:
     """VK keyboard while waiting for city input."""
-    return _keyboard([[_button("⬅️ Меню", "start", "secondary")]])
+    return _keyboard([[_button("⬅️ Назад", "start", "secondary")]])
 
 
 def vk_score_scale_keyboard_json() -> str:
@@ -168,8 +170,8 @@ def vk_score_scale_keyboard_json() -> str:
             for value in row
         ])
     rows.append([
-        _button("📊 Прогресс", "progress", "primary"),
-        _button("⬅️ Меню", "start", "secondary"),
+        _button("📈 Мой прогресс", "progress", "primary"),
+        _button("⬅️ Назад", "start", "secondary"),
     ])
     return _keyboard(rows)
 
