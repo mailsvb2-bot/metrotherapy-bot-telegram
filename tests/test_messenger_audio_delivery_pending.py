@@ -64,12 +64,26 @@ async def test_continue_reuses_pending_item_before_advancing(monkeypatch):
     assert snap.pending_item.anchor == 41
 
 
-def test_full_audio_sequence_loops_after_last_available_item(monkeypatch):
+def test_full_audio_sequence_ends_for_regular_users(monkeypatch):
     first = AudioProgressItem(ordinal=1, anchor=1, title='Morning', path=Path('audio/full/1_morning.opus'))
     second = AudioProgressItem(ordinal=2, anchor=2, title='Evening', path=Path('audio/full/2_evening.opus'))
     monkeypatch.setattr('services.messenger.audio_progress.list_full_series', lambda: [first, second])
 
     user_id = 940003
+    record_audio_delivery(user_id, item=first, platform='vk')
+    assert get_next_audio_item(user_id).anchor == 2
+
+    record_audio_delivery(user_id, item=second, platform='vk')
+    assert get_next_audio_item(user_id) is None
+
+
+def test_full_audio_sequence_loops_only_for_configured_admins(monkeypatch):
+    first = AudioProgressItem(ordinal=1, anchor=1, title='Morning', path=Path('audio/full/1_morning.opus'))
+    second = AudioProgressItem(ordinal=2, anchor=2, title='Evening', path=Path('audio/full/2_evening.opus'))
+    monkeypatch.setattr('services.messenger.audio_progress.list_full_series', lambda: [first, second])
+    monkeypatch.setattr('services.messenger.audio_progress.settings.admin_id_list', [940004], raising=False)
+
+    user_id = 940004
     record_audio_delivery(user_id, item=first, platform='vk')
     assert get_next_audio_item(user_id).anchor == 2
 
