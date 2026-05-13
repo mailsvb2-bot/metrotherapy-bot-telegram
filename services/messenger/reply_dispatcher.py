@@ -31,6 +31,22 @@ def _vk_kwargs(platform: str, kwargs: dict[str, Any], canonical_user_id: int) ->
     return with_vk_keyboard(platform, kwargs, user_id=canonical_user_id)
 
 
+def _looks_like_score_scale(text: str) -> bool:
+    """Detect score-scale prompts even when reply metadata is missing.
+
+    Some text-channel flows create the post-audio prompt from mood/session state
+    rather than from a UI keyboard factory. VK must still show the same -10..+10
+    keyboard as Telegram/MAX after the user presses “Прослушал”.
+    """
+    raw = str(text or "").casefold().replace("−", "-").replace("ё", "е")
+    return "-10" in raw and "10" in raw and (
+        "шкал" in raw
+        or "оцен" in raw
+        or "состояни" in raw
+        or "после прослуш" in raw
+    )
+
+
 async def _send_max_image_file(external_user_id: str, file_path: Path, *, caption: str) -> Any:
     """Send a generated PNG chart to MAX as an image attachment.
 
@@ -136,7 +152,7 @@ async def send_reply_bundle(
                 keyboard_kind = (reply.meta or {}).get("vk_keyboard")
                 if keyboard_kind == "demo_kind":
                     kwargs["keyboard_json"] = vk_demo_kind_keyboard_json()
-                elif keyboard_kind == "score_scale":
+                elif keyboard_kind == "score_scale" or _looks_like_score_scale(reply.text):
                     kwargs["keyboard_json"] = vk_score_scale_keyboard_json()
                 elif keyboard_kind == "weather":
                     kwargs["keyboard_json"] = vk_weather_keyboard_json()
