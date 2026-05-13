@@ -193,8 +193,14 @@ async def create_application():
     thr_ms = int(os.getenv("SLOW_HANDLER_MS", "700"))
     dp.update.middleware(SlowHandlerLogMiddleware(threshold_ms=thr_ms))
 
-    # Make inline buttons feel instant (spinner disappears immediately)
-    dp.update.middleware(QuickAckCallbackMiddleware())
+    # Make inline buttons feel instant (spinner disappears immediately).
+    # Aiogram may pass the raw CallbackQuery through the callback_query observer
+    # after the top-level Update middleware chain, so register the quick-ack guard
+    # on both contours. The middleware itself makes duplicate cb.answer() calls
+    # a no-op inside the same callback lifecycle.
+    quick_ack = QuickAckCallbackMiddleware()
+    dp.update.middleware(quick_ack)
+    dp.callback_query.middleware(quick_ack)
 
     callback_interval_sec = float(
         os.getenv("SOFT_CALLBACK_RATE_LIMIT_SEC", os.getenv("SOFT_RATE_LIMIT_SEC", "0.05")) or "0.05"
