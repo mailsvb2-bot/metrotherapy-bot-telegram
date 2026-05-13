@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from config.settings import settings
 from core.time_utils import utc_now
 from services.audio_anchor import scan_full_anchored
 from services.db import db, tx
@@ -31,6 +32,10 @@ class AudioProgressSnapshot:
     pending_platform: str | None
     pending_delivered_at: str | None
     next_item: AudioProgressItem | None
+
+
+def _can_loop_audio(user_id: int) -> bool:
+    return int(user_id) in set(settings.admin_id_list)
 
 
 def list_full_series() -> list[AudioProgressItem]:
@@ -92,10 +97,7 @@ def get_next_audio_item(user_id: int, *, sequence_key: str = SEQUENCE_FULL_SERIE
     for item in items:
         if item.anchor > anchor:
             return item
-    # The audio route is intentionally cyclic: after the last available item,
-    # the next request starts the same curated sequence again instead of
-    # permanently blocking the user with "all audio already delivered".
-    return items[0]
+    return items[0] if _can_loop_audio(int(user_id)) else None
 
 
 def record_audio_delivery(
