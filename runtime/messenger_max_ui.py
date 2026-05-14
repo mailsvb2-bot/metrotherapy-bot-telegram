@@ -6,15 +6,18 @@ from typing import Any
 from services.messenger.menu_contract import MAIN_MENU_ACTIONS, max_numbered_menu_text
 
 
-def max_message_button(text: str) -> dict[str, str]:
-    return {"type": "message", "text": text}
+def max_message_button(text: str, *, command: str | None = None) -> dict[str, Any]:
+    button: dict[str, Any] = {"type": "message", "text": text}
+    if command is not None:
+        button["payload"] = {"command": command}
+    return button
 
 
 def max_link_button(text: str, url: str) -> dict[str, str]:
     return {"type": "link", "text": text, "url": url}
 
 
-def inline_keyboard_attachment(rows: list[list[dict[str, str]]]) -> dict[str, Any]:
+def inline_keyboard_attachment(rows: list[list[dict[str, Any]]]) -> dict[str, Any]:
     return {"type": "inline_keyboard", "payload": {"buttons": rows}}
 
 
@@ -34,67 +37,70 @@ def has_main_menu_text(text: str) -> bool:
 
 
 def main_menu_attachment() -> dict[str, Any]:
-    rows: list[list[dict[str, str]]] = []
+    rows: list[list[dict[str, Any]]] = []
     actions = list(MAIN_MENU_ACTIONS)
     for idx in range(0, len(actions), 2):
-        rows.append([max_message_button(action.title) for action in actions[idx:idx + 2]])
+        rows.append([max_message_button(action.title, command=action.command) for action in actions[idx:idx + 2]])
     return inline_keyboard_attachment(rows)
 
 
 def full_route_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
-        [max_message_button("🎧 Получить аудио"), max_message_button("✅ Прослушал")],
-        [max_message_button("⬅️ Назад")],
+        [max_message_button("🎧 Получить аудио", command="continue"), max_message_button("✅ Прослушал", command="done")],
+        [max_message_button("⬅️ Назад", command="start")],
     ])
 
 
 def demo_kind_attachment() -> dict[str, Any]:
     """MAX keyboard for Telegram demo-kind parity."""
     return inline_keyboard_attachment([
-        [max_message_button("🚗 Практика на утро / дорогу")],
-        [max_message_button("🌙 Практика на вечер / домой")],
-        [max_message_button("⬅️ Назад")],
+        [max_message_button("🚗 Практика на утро / дорогу", command="demo_work")],
+        [max_message_button("🌙 Практика на вечер / домой", command="demo_home")],
+        [max_message_button("⬅️ Назад", command="start")],
     ])
 
 
 def weather_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
-        [max_message_button("🔄 Обновить погоду"), max_message_button("🏙 Изменить город")],
-        [max_message_button("⬅️ Назад")],
+        [max_message_button("🔄 Обновить погоду", command="weather"), max_message_button("🏙 Изменить город", command="weather_city")],
+        [max_message_button("⬅️ Назад", command="start")],
     ])
 
 
 def weather_city_attachment() -> dict[str, Any]:
-    return inline_keyboard_attachment([[max_message_button("⬅️ Назад")]])
+    return inline_keyboard_attachment([[max_message_button("⬅️ Назад", command="start")]])
 
 
 def score_scale_attachment() -> dict[str, Any]:
-    rows: list[list[dict[str, str]]] = []
+    rows: list[list[dict[str, Any]]] = []
     for row in [[-10, -9, -8], [-7, -6, -5], [-4, -3, -2], [-1, 0, 1], [2, 3, 4], [5, 6, 7], [8, 9, 10]]:
-        rows.append([max_message_button(("+" if value > 0 else "") + str(value)) for value in row])
-    rows.append([max_message_button("📈 Мой прогресс"), max_message_button("⬅️ Назад")])
+        rows.append([
+            max_message_button(("+" if value > 0 else "") + str(value), command=str(value))
+            for value in row
+        ])
+    rows.append([max_message_button("📈 Мой прогресс", command="progress"), max_message_button("⬅️ Назад", command="start")])
     return inline_keyboard_attachment(rows)
 
 
 def post_audio_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
-        [max_message_button("✅ Прослушал")],
-        [max_message_button("📈 Мой прогресс"), max_message_button("🧾 История")],
-        [max_message_button("⬅️ Назад")],
+        [max_message_button("✅ Прослушал", command="done")],
+        [max_message_button("📈 Мой прогресс", command="progress"), max_message_button("🧾 История", command="history")],
+        [max_message_button("⬅️ Назад", command="start")],
     ])
 
 
 def progress_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
-        [max_message_button("🎧 Получить аудио"), max_message_button("✅ Прослушал")],
-        [max_message_button("🧾 История"), max_message_button("⬅️ Назад")],
+        [max_message_button("🎧 Получить аудио", command="continue"), max_message_button("✅ Прослушал", command="done")],
+        [max_message_button("🧾 История", command="history"), max_message_button("⬅️ Назад", command="start")],
     ])
 
 
 def settings_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
-        [max_message_button("/platform telegram"), max_message_button("/platform max"), max_message_button("/platform vk")],
-        [max_message_button("switch"), max_message_button("⬅️ Назад")],
+        [max_message_button("/platform telegram", command="/platform telegram"), max_message_button("/platform max", command="/platform max"), max_message_button("/platform vk", command="/platform vk")],
+        [max_message_button("switch", command="switch"), max_message_button("⬅️ Назад", command="start")],
     ])
 
 
@@ -120,17 +126,17 @@ def link_action_attachment(text: str) -> dict[str, Any] | None:
     if str(text or "").lstrip().startswith("💳 Оплата"):
         return inline_keyboard_attachment([
             [max_link_button("💳 Оплатить", url)],
-            [max_message_button("🎧 Получить аудио"), max_message_button("⬅️ Назад")],
+            [max_message_button("🎧 Получить аудио", command="continue"), max_message_button("⬅️ Назад", command="start")],
         ])
     if str(text or "").lstrip().startswith("🎁 Подарить"):
         return inline_keyboard_attachment([
             [max_link_button("🎁 Оплатить подарок", url)],
-            [max_message_button("📣 Посоветовать"), max_message_button("⬅️ Назад")],
+            [max_message_button("📣 Посоветовать", command="share"), max_message_button("⬅️ Назад", command="start")],
         ])
     if str(text or "").lstrip().startswith("↗️ Поделиться"):
         return inline_keyboard_attachment([
             [max_link_button("↗️ Открыть ссылку", url)],
-            [max_message_button("⬅️ Назад")],
+            [max_message_button("⬅️ Назад", command="start")],
         ])
     return None
 
