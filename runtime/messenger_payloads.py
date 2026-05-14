@@ -104,14 +104,13 @@ def stable_payload_key(platform: str, payload: dict[str, Any]) -> str:
     return f"{platform}:sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def _payload_text(raw: Any) -> str:
+def _payload_text(raw: Any, *, prefer_command: bool = False) -> str:
     """Extract text/command from nested messenger button payloads.
 
-    VK and MAX do not always send a visible message text for native buttons.
-    Some clients send a nested payload object, callback object or button value.
-    This function is intentionally generic and read-only: it extracts the first
-    stable command-like string and leaves semantic normalization to
-    ``normalise_messenger_text``.
+    Native MAX buttons can send both stale display text and a command payload.
+    When prefer_command=True, command-like keys are selected before generic
+    display text so a button with text='start' and payload.command='-4' is
+    interpreted as score -4 rather than menu reset.
     """
     if raw in (None, "", b""):
         return ""
@@ -129,34 +128,25 @@ def _payload_text(raw: Any) -> str:
             return value
 
     if isinstance(payload, dict):
-        for key in (
-            "command",
-            "cmd",
-            "action",
-            "button",
-            "value",
-            "text",
-            "label",
-            "payload",
-            "callback",
-            "data",
-            "body",
-        ):
+        command_keys = ("command", "cmd", "action", "value", "data", "payload", "callback", "button", "body")
+        text_keys = ("text", "label")
+        keys = command_keys + text_keys if prefer_command else command_keys[:4] + text_keys + command_keys[4:]
+        for key in keys:
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
             if isinstance(value, dict):
-                nested = _payload_text(value)
+                nested = _payload_text(value, prefer_command=prefer_command)
                 if nested:
                     return nested
             if isinstance(value, list):
                 for item in value:
-                    nested = _payload_text(item)
+                    nested = _payload_text(item, prefer_command=prefer_command)
                     if nested:
                         return nested
     if isinstance(payload, list):
         for item in payload:
-            nested = _payload_text(item)
+            nested = _payload_text(item, prefer_command=prefer_command)
             if nested:
                 return nested
     return ""
@@ -169,7 +159,7 @@ def text_from_vk_payload(raw: Any) -> str:
 
 def text_from_max_payload(raw: Any) -> str:
     """Extract a command-like text from MAX native button/callback payloads."""
-    return _payload_text(raw)
+    return _payload_text(raw, prefer_command=True)
 
 
 def _first_int_from_dict(payload: dict[str, Any], *paths: tuple[str, ...]) -> int | None:
@@ -271,8 +261,7 @@ def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     text = (
-        text_from_max_payload(body.get("text"))
-        or text_from_max_payload(body.get("payload"))
+        text_from_max_payload(body.get("payload"))
         or text_from_max_payload(body.get("button"))
         or text_from_max_payload(body.get("callback"))
         or text_from_max_payload(message.get("payload"))
@@ -283,6 +272,7 @@ def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
         or text_from_max_payload(payload.get("button"))
         or text_from_max_payload(payload.get("callback"))
         or text_from_max_payload(payload.get("text"))
+        or text_from_max_payload(body.get("text"))
     )
     text = normalise_messenger_text(text or "start")
     full_name = " ".join(part for part in [sender.get("first_name"), sender.get("last_name")] if part).strip() or sender.get("name")
