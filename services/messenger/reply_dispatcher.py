@@ -169,6 +169,13 @@ async def send_reply_bundle(
                     target_platform=platform,
                     fallback=platform,
                 )
+                log.info(
+                    "%s next_audio delivery result: user_id=%s transport=%s item=%s",
+                    platform.upper(),
+                    canonical_user_id,
+                    result.transport,
+                    getattr(result.item, "anchor", None),
+                )
                 if result.transport == "none":
                     await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))
             except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
@@ -249,12 +256,31 @@ async def send_reply_bundle(
             continue
 
         if reply.kind == "auto_pre_score":
-            result = await complete_pre_score_and_send(
-                canonical_user_id,
-                platform=platform,
-                score=int(reply.meta.get("score") or "0"),
-                senders=registry,
-            )
+            try:
+                result = await complete_pre_score_and_send(
+                    canonical_user_id,
+                    platform=platform,
+                    score=int(reply.meta.get("score") or "0"),
+                    senders=registry,
+                )
+                log.info(
+                    "%s auto_pre_score delivery result: user_id=%s score=%s ok=%s transport=%s prompt_done=%s",
+                    platform.upper(),
+                    canonical_user_id,
+                    reply.meta.get("score"),
+                    result.ok,
+                    result.transport,
+                    result.prompt_done,
+                )
+            except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
+                log.exception("%s auto_pre_score audio delivery failed", platform.upper())
+                await sender.send_text(
+                    external_user_id,
+                    "⚠️ Оценку получил, но не смог отправить аудио в этот мессенджер. "
+                    "Проверьте MESSENGER_PUBLIC_BASE_URL и настройки отправки медиа.",
+                    **_vk_kwargs(platform, {}, canonical_user_id),
+                )
+                continue
             kwargs: dict[str, Any] = {}
             if platform == "vk" and getattr(result, "prompt_done", False):
                 kwargs.update(_post_audio_control_kwargs("vk"))
@@ -267,6 +293,14 @@ async def send_reply_bundle(
                 platform=platform,
                 score=int(reply.meta.get("score") or "0"),
                 senders=registry,
+            )
+            log.info(
+                "%s auto_post_score result: user_id=%s score=%s ok=%s transport=%s",
+                platform.upper(),
+                canonical_user_id,
+                reply.meta.get("score"),
+                result.ok,
+                result.transport,
             )
             await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))
             continue
