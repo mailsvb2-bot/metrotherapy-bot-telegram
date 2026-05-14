@@ -146,7 +146,7 @@ async def complete_pre_score_and_send(
             mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=None)
             log_audio_timeline_event(int(user_id), event_type='native_audio_sent', sequence_key='full_series', anchor=int(item.anchor), title=item.title, platform=plan.platform, slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'))
             transport = 'max_native_audio_pending'
-        except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery) as exc:
+        except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery):
             log_audio_timeline_event(
                 int(user_id),
                 event_type='native_audio_fallback',
@@ -156,9 +156,30 @@ async def complete_pre_score_and_send(
                 platform=plan.platform,
                 slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'),
             )
-            raise UnsupportedMessengerDelivery(
-                'MAX native .opus audio delivery failed in pre-score flow; refusing link fallback.'
-            ) from exc
+            access_token = issue_or_reuse_audio_access_token(int(user_id), item=item, platform=plan.platform)
+            public_url = build_audio_access_url(access_token)
+            if not public_url:
+                raise UnsupportedMessengerDelivery('MESSENGER_PUBLIC_BASE_URL is empty; cannot deliver auto audio link for MAX')
+            await sender.send_text(
+                plan.external_user_id,
+                f'🎧 Ваш аудиотранс готов: №{item.anchor} — {item.title}\n\n'
+                f'Слушать: {public_url}\n\n'
+                'Это аварийная ссылка на файл: native-отправка MAX сейчас не прошла.\n'
+                'Когда прослушаете, нажмите «✅ Прослушал» или отправьте done / готово / прослушал.',
+                disable_link_preview=False,
+            )
+            mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=access_token)
+            log_audio_timeline_event(
+                int(user_id),
+                event_type='link_sent',
+                sequence_key='full_series',
+                anchor=int(item.anchor),
+                title=item.title,
+                platform=plan.platform,
+                token=access_token,
+                slot=str(session.slot) if session.slot else ('morning' if session.kind == 'work' else 'evening'),
+            )
+            transport = 'max_link'
     else:
         sender = senders.get(MessengerPlatform.VK.value)
         if sender is None:
