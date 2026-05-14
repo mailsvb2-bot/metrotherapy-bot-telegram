@@ -104,12 +104,21 @@ def stable_payload_key(platform: str, payload: dict[str, Any]) -> str:
     return f"{platform}:sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def text_from_vk_payload(raw: Any) -> str:
-    """Extract a command-like text from VK mobile/button payloads."""
+def _payload_text(raw: Any) -> str:
+    """Extract text/command from nested messenger button payloads.
+
+    VK and MAX do not always send a visible message text for native buttons.
+    Some clients send a nested payload object, callback object or button value.
+    This function is intentionally generic and read-only: it extracts the first
+    stable command-like string and leaves semantic normalization to
+    ``normalise_messenger_text``.
+    """
     if raw in (None, "", b""):
         return ""
 
     payload: Any = raw
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "ignore")
     if isinstance(raw, str):
         value = raw.strip()
         if not value:
@@ -120,15 +129,61 @@ def text_from_vk_payload(raw: Any) -> str:
             return value
 
     if isinstance(payload, dict):
-        for key in ("command", "cmd", "action", "button", "value", "text", "payload"):
+        for key in (
+            "command",
+            "cmd",
+            "action",
+            "button",
+            "value",
+            "text",
+            "label",
+            "payload",
+            "callback",
+            "data",
+            "body",
+        ):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
             if isinstance(value, dict):
-                nested = text_from_vk_payload(value)
+                nested = _payload_text(value)
                 if nested:
                     return nested
+            if isinstance(value, list):
+                for item in value:
+                    nested = _payload_text(item)
+                    if nested:
+                        return nested
+    if isinstance(payload, list):
+        for item in payload:
+            nested = _payload_text(item)
+            if nested:
+                return nested
     return ""
+
+
+def text_from_vk_payload(raw: Any) -> str:
+    """Extract a command-like text from VK mobile/button payloads."""
+    return _payload_text(raw)
+
+
+def text_from_max_payload(raw: Any) -> str:
+    """Extract a command-like text from MAX native button/callback payloads."""
+    return _payload_text(raw)
+
+
+def _first_int_from_dict(payload: dict[str, Any], *paths: tuple[str, ...]) -> int | None:
+    for path in paths:
+        current: Any = payload
+        for key in path:
+            if not isinstance(current, dict):
+                current = None
+                break
+            current = current.get(key)
+        result = safe_int(current)
+        if result is not None:
+            return result
+    return None
 
 
 def vk_event_key(payload: dict[str, Any]) -> str:
@@ -147,11 +202,15 @@ def vk_event_key(payload: dict[str, Any]) -> str:
 def max_event_key(payload: dict[str, Any]) -> str:
     message = payload.get("message") or {}
     body = message.get("body") or {}
+    callback = payload.get("callback") or payload.get("button") or payload.get("payload") or {}
+    if not isinstance(callback, dict):
+        callback = {}
+    sender = message.get("sender") or payload.get("sender") or callback.get("sender") or {}
     parts = [
-        str(payload.get("update_id") or payload.get("event_id") or ""),
-        str(message.get("message_id") or message.get("id") or body.get("mid") or ""),
-        str((message.get("sender") or {}).get("user_id") or (message.get("sender") or {}).get("id") or ""),
-        str(message.get("created_at") or payload.get("timestamp") or ""),
+        str(payload.get("update_id") or payload.get("event_id") or payload.get("timestamp") or ""),
+        str(message.get("message_id") or message.get("id") or body.get("mid") or callback.get("id") or ""),
+        str(sender.get("user_id") or sender.get("id") or payload.get("user_id") or payload.get("chat_id") or ""),
+        str(message.get("created_at") or payload.get("created_at") or payload.get("timestamp") or ""),
     ]
     key = ":".join(part for part in parts if part)
     return key or stable_payload_key("max", payload)
@@ -186,16 +245,49 @@ def extract_vk_message(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     message = payload.get("message") or {}
-    sender = message.get("sender") or {}
     body = message.get("body") or {}
-    user_id = sender.get("user_id") or sender.get("id")
-    safe_user_id = safe_int(user_id)
-    if safe_user_id is None:
+    callback = payload.get("callback") or payload.get("button") or payload.get("payload") or {}
+    if not isinstance(callback, dict):
+        callback = {}
+    sender = message.get("sender") or payload.get("sender") or callback.get("sender") or {}
+    if not isinstance(sender, dict):
+        sender = {}
+
+    user_id = _first_int_from_dict(
+        {"message": message, "sender": sender, "payload": payload, "callback": callback, "body": body},
+        ("message", "sender", "user_id"),
+        ("message", "sender", "id"),
+        ("sender", "user_id"),
+        ("sender", "id"),
+        ("callback", "sender", "user_id"),
+        ("callback", "sender", "id"),
+        ("callback", "user", "user_id"),
+        ("callback", "user", "id"),
+        ("payload", "user_id"),
+        ("payload", "chat_id"),
+        ("body", "user_id"),
+    )
+    if user_id is None:
         return None
-    text = normalise_messenger_text((body.get("text") or "").strip())
+
+    text = (
+        text_from_max_payload(body.get("text"))
+        or text_from_max_payload(body.get("payload"))
+        or text_from_max_payload(body.get("button"))
+        or text_from_max_payload(body.get("callback"))
+        or text_from_max_payload(message.get("payload"))
+        or text_from_max_payload(message.get("button"))
+        or text_from_max_payload(message.get("callback"))
+        or text_from_max_payload(callback)
+        or text_from_max_payload(payload.get("payload"))
+        or text_from_max_payload(payload.get("button"))
+        or text_from_max_payload(payload.get("callback"))
+        or text_from_max_payload(payload.get("text"))
+    )
+    text = normalise_messenger_text(text or "start")
     full_name = " ".join(part for part in [sender.get("first_name"), sender.get("last_name")] if part).strip() or sender.get("name")
     return {
-        "user_id": safe_user_id,
+        "user_id": user_id,
         "external_user_id": str(user_id),
         "username": sender.get("username"),
         "display_name": full_name,
@@ -208,6 +300,7 @@ _normalise_messenger_text = normalise_messenger_text
 _safe_int = safe_int
 _stable_payload_key = stable_payload_key
 _text_from_vk_payload = text_from_vk_payload
+_text_from_max_payload = text_from_max_payload
 _vk_event_key = vk_event_key
 _max_event_key = max_event_key
 _extract_vk_message = extract_vk_message
