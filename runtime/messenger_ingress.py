@@ -77,21 +77,47 @@ async def vk_webhook(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+_MAX_PROCESSABLE_UPDATE_TYPES = {
+    "",
+    "message_created",
+    "message_callback",
+    "bot_started",
+    "bot_start",
+    "chat_started",
+    "conversation_started",
+    "button_callback",
+    "callback_query",
+}
+
+
 async def max_webhook(request: web.Request) -> web.Response:
     body = await request.text()
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
+        log.warning("MAX webhook rejected invalid json")
         return web.Response(status=400, text="invalid json")
-    update_type = (payload.get("update_type") or "").strip()
-    if update_type and update_type != "message_created":
+    update_type = (payload.get("update_type") or payload.get("type") or payload.get("event_type") or "").strip()
+    if update_type not in _MAX_PROCESSABLE_UPDATE_TYPES:
+        log.info("MAX webhook ignored: update_type=%r keys=%s", update_type, sorted(payload.keys()))
         return web.json_response({"ok": True})
 
-    if not register_inbound_event("max", max_event_key(payload), payload):
+    event_key = max_event_key(payload)
+    if not register_inbound_event("max", event_key, payload):
+        log.info("MAX webhook duplicate skipped: update_type=%r event_key=%s", update_type, event_key)
         return web.json_response({"ok": True})
 
     extracted = extract_max_message(payload)
     if not extracted:
+        message = payload.get("message") or {}
+        body_payload = message.get("body") if isinstance(message, dict) else None
+        log.warning(
+            "MAX webhook extraction failed: update_type=%r keys=%s message_keys=%s body_type=%s",
+            update_type,
+            sorted(payload.keys()),
+            sorted(message.keys()) if isinstance(message, dict) else [],
+            type(body_payload).__name__,
+        )
         return web.json_response({"ok": True})
 
     canonical_user_id, replies = handle_incoming_text(
@@ -103,10 +129,24 @@ async def max_webhook(request: web.Request) -> web.Response:
         display_name=extracted["display_name"],
         first_name=extracted["first_name"],
     )
+    log.info(
+        "MAX webhook processed: update_type=%r external_user_id=%s canonical_user_id=%s text=%r replies=%s",
+        update_type,
+        extracted["external_user_id"],
+        canonical_user_id,
+        extracted["text"][:120],
+        len(replies),
+    )
     try:
         await send_reply_bundle("max", extracted["external_user_id"], canonical_user_id, replies)
+        log.info(
+            "MAX replies sent: external_user_id=%s canonical_user_id=%s replies=%s",
+            extracted["external_user_id"],
+            canonical_user_id,
+            len(replies),
+        )
     except MessengerTransportError:
         log.exception("MAX send failed")
         log_event(canonical_user_id, "max_send_failed", {})
-    log_event(canonical_user_id, "max_webhook_inbound", {"text": extracted["text"][:120]})
+    log_event(canonical_user_id, "max_webhook_inbound", {"text": extracted["text"][:120], "replies": len(replies)})
     return web.json_response({"ok": True})
