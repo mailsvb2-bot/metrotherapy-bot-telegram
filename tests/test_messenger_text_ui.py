@@ -1,6 +1,14 @@
+import asyncio
+from dataclasses import dataclass
+from pathlib import Path
+
 from services.messenger.text_ui import handle_incoming_text
 from services.messenger.preferences import get_channel_snapshot
 from services.messenger.menu_contract import MAIN_MENU_ACTIONS
+from services.messenger.entrypoints import register_user_entry
+from services.messenger.outbound import SenderRegistry
+from services.mood import create_session
+from services.mood_text_flow import complete_pre_score_and_send
 from services.schema import init_db
 
 
@@ -63,3 +71,73 @@ def test_vk_and_max_accept_context_buttons_by_title():
         _, replies = handle_incoming_text(903002, platform=platform, external_user_id='903002', text='✅ Прослушал')
         assert replies
         assert replies[0].kind in {'text', 'auto_post_score'}
+
+
+@dataclass(frozen=True)
+class FakeAnchoredAudio:
+    anchor: int
+    path: Path
+    clean_title: str
+
+
+class FailingMaxSender:
+    def __init__(self) -> None:
+        self.audio_attempts: list[tuple[str, Path, str | None]] = []
+        self.text_messages: list[tuple[str, str, dict]] = []
+
+    async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs):
+        self.audio_attempts.append((external_user_id, file_path, caption))
+        raise RuntimeError('simulated MAX native audio failure')
+
+    async def send_text(self, external_user_id: str, text: str, **kwargs):
+        self.text_messages.append((external_user_id, text, kwargs))
+        return {'ok': True}
+
+
+def test_max_pre_score_audio_uses_link_fallback_when_native_send_fails(tmp_path, monkeypatch):
+    audio_path = tmp_path / '001 test audio.ogg'
+    audio_path.write_bytes(b'fake-audio')
+
+    user_id = 987654
+    external_user_id = 'max-user-987654'
+
+    register_user_entry(
+        user_id,
+        platform='max',
+        external_user_id=external_user_id,
+        username='max_test_user',
+        first_name='Max',
+    )
+    create_session(
+        user_id,
+        kind='work',
+        source='settings',
+        day='2026-05-14',
+        slot='morning',
+        anchor_id=1,
+    )
+
+    import services.mood_text_flow as flow
+
+    monkeypatch.setattr(flow, 'get_by_anchor', lambda anchor: FakeAnchoredAudio(1, audio_path, 'test audio'))
+    monkeypatch.setattr(flow, 'ensure_max_opus_file', lambda path: path)
+    monkeypatch.setattr(flow, 'issue_or_reuse_audio_access_token', lambda user_id, *, item, platform: 'tok_max_fallback')
+    monkeypatch.setattr(flow, 'build_audio_access_url', lambda token: f'https://example.test/audio/{token}')
+
+    sender = FailingMaxSender()
+    result = asyncio.run(
+        complete_pre_score_and_send(
+            user_id,
+            platform='max',
+            score=-4,
+            senders=SenderRegistry(max=sender),
+        )
+    )
+
+    assert result.ok is True
+    assert result.transport == 'max_link'
+    assert sender.audio_attempts, 'MAX native audio must be attempted first'
+    assert sender.text_messages, 'MAX fallback link must be sent after native failure'
+    assert sender.text_messages[0][0] == external_user_id
+    assert 'https://example.test/audio/tok_max_fallback' in sender.text_messages[0][1]
+    assert 'native-отправка MAX сейчас не прошла' in sender.text_messages[0][1]
