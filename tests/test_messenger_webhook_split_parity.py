@@ -143,19 +143,22 @@ def test_max_score_scale_buttons_are_native_and_payload_safe_for_all_values():
 
     buttons = attachments[0]["payload"]["buttons"]
     flat = [button for row in buttons for button in row]
-    by_command = {
-        str(button.get("payload", {}).get("command")): button
-        for button in flat
-        if str(button.get("payload", {}).get("command", "")).lstrip("-").isdigit()
-    }
+    by_score = {}
+    for button in flat:
+        payload_command = str(button.get("payload", {}).get("command", ""))
+        if not payload_command.startswith("score:"):
+            continue
+        score = messenger_payloads.normalise_messenger_text(payload_command)
+        by_score[score] = button
 
     expected = {str(value) for value in range(-10, 11)}
-    assert set(by_command) == expected
+    assert set(by_score) == expected
 
     for value in range(-10, 11):
-        command = str(value)
+        score = str(value)
         expected_text = f"+{value}" if value > 0 else str(value)
-        assert by_command[command]["text"] == expected_text
+        assert by_score[score]["text"] == expected_text
+        assert by_score[score]["payload"]["command"] == f"score:{value}"
 
         stale_payload = {
             "update_type": "message_created",
@@ -165,10 +168,10 @@ def test_max_score_scale_buttons_are_native_and_payload_safe_for_all_values():
                 "sender": {"user_id": 456},
                 "body": {
                     "text": "start",
-                    "payload": {"command": command},
+                    "payload": {"command": f"score:{value}"},
                 },
             },
         }
 
         extracted = messenger_payloads.extract_max_message(stale_payload)
-        assert extracted["text"] == command
+        assert extracted["text"] == score
