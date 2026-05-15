@@ -120,7 +120,10 @@ def is_score_scale_text(text: str) -> bool:
 
 def is_post_audio_controls_text(text: str) -> bool:
     raw = str(text or "").casefold().replace("ё", "е")
-    return "прослуш" in raw and ("когда дослушаете" in raw or "когда прослушаете" in raw or "аудио" in raw) and ("done" in raw or "готово" in raw or "прослушал" in raw)
+    listened_marker = "прослуш" in raw or "дослуш" in raw
+    done_marker = "done" in raw or "готово" in raw or "прослушал" in raw or "дослушал" in raw
+    audio_marker = "аудио" in raw or "транс" in raw or "файл" in raw
+    return listened_marker and done_marker and audio_marker
 
 
 def first_url(text: str) -> str:
