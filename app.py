@@ -52,6 +52,7 @@ from services.scheduler import start_scheduler
 from services.prewarm import prewarm_audio_cache, prewarm_matplotlib_cache
 from services.scheduler import stop_scheduler
 from services.db_writer import start_db_writer, stop_db_writer
+from services.bg import bind_task_manager
 from runtime.messenger_webhooks import start_messenger_webhook_runtime
 from runtime.telegram_transport import telegram_transport
 from runtime.health_server import start_health_runtime
@@ -69,7 +70,6 @@ from core.middlewares import (
 )
 
 # Важно: не называем модуль handlers.settings как `settings`, чтобы не затереть config.settings.settings
-from handlers import start
 from handlers import (
     start,
     menu,
@@ -171,6 +171,7 @@ async def create_application():
         raise SystemExit("BOT_TOKEN is empty. Put it into .env (see .env.example)")
 
     tm = TaskManager()
+    bind_task_manager(tm)
 
     # Sovereignty (optional): initialize DecisionCore singleton (SelfHealingEngine.tick runs via services.scheduler)
     sovereign_enabled = os.getenv('SOVEREIGN_ENABLED', '0').strip() in {'1','true','yes','on'}
