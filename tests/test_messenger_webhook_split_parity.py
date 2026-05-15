@@ -131,3 +131,44 @@ def test_message_extractors_preserve_vk_and_max_payloads():
     assert messenger_payloads.max_event_key(max_payload) == "u1:m1:456:2026-05-08T00:00:00Z"
     assert messenger_payloads.extract_vk_message(vk_payload)["user_id"] == 123
     assert messenger_payloads.extract_max_message(max_payload)["user_id"] == 456
+
+
+def test_max_score_scale_buttons_are_native_and_payload_safe_for_all_values():
+    from runtime import messenger_max_ui
+
+    attachments = messenger_max_ui.native_keyboard_attachments(
+        "Шкала оценки после прослушивания:\n−10 — хуже, +10 — лучше"
+    )
+    assert attachments
+
+    buttons = attachments[0]["payload"]["buttons"]
+    flat = [button for row in buttons for button in row]
+    by_command = {
+        str(button.get("payload", {}).get("command")): button
+        for button in flat
+        if str(button.get("payload", {}).get("command", "")).lstrip("-").isdigit()
+    }
+
+    expected = {str(value) for value in range(-10, 11)}
+    assert set(by_command) == expected
+
+    for value in range(-10, 11):
+        command = str(value)
+        expected_text = f"+{value}" if value > 0 else str(value)
+        assert by_command[command]["text"] == expected_text
+
+        stale_payload = {
+            "update_type": "message_created",
+            "message": {
+                "message_id": f"m-score-{value}",
+                "created_at": "2026-05-15T00:00:00Z",
+                "sender": {"user_id": 456},
+                "body": {
+                    "text": "start",
+                    "payload": {"command": command},
+                },
+            },
+        }
+
+        extracted = messenger_payloads.extract_max_message(stale_payload)
+        assert extracted["text"] == command
