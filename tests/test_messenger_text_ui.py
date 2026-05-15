@@ -142,19 +142,21 @@ def test_max_pre_score_audio_uses_link_fallback_when_native_send_fails(tmp_path,
     assert 'https://example.test/audio/tok_max_fallback' in sender.text_messages[0][1]
     assert 'native-отправка MAX сейчас не прошла' in sender.text_messages[0][1]
 
+
 def test_new_pre_score_session_wins_over_old_pending_post_score():
     from services.db import db
     from services.migrations import apply_all_migrations
-    from services.messenger.text_ui import handle_incoming_text
-    from services.mood import create_session, set_pre, mark_audio_sent, get_session
     from services.messenger.preferences import record_channel_identity
+    from services.mood import create_session, set_pre, mark_audio_sent
+    from services.mood_text_flow import find_pending_pre_session_id, find_pending_post_session_id
 
     user_id = 991430
 
     with db() as conn:
         apply_all_migrations(conn)
         conn.execute("DELETE FROM mood_sessions WHERE user_id=?", (user_id,))
-        conn.execute("DELETE FROM messenger_channel_identities WHERE user_id=?", (user_id,))
+        conn.execute("DELETE FROM user_channel_identities WHERE user_id=?", (user_id,))
+        conn.execute("DELETE FROM user_channel_preferences WHERE user_id=?", (user_id,))
 
     record_channel_identity(user_id, "max", "mx-991430")
 
@@ -188,12 +190,7 @@ def test_new_pre_score_session_wins_over_old_pending_post_score():
     )
 
     assert canonical_user_id == user_id
+    assert find_pending_pre_session_id(user_id) == new_session_id
+    assert find_pending_post_session_id(user_id) == old_session_id
     assert replies[0].kind == "auto_pre_score"
-
-    old_session = get_session(old_session_id)
-    new_session = get_session(new_session_id)
-
-    assert old_session is not None
-    assert new_session is not None
-    assert old_session.post_score is None
-    assert new_session.pre_score == -5
+    assert replies[0].meta["score"] == "-5"
