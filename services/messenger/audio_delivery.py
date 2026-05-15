@@ -7,7 +7,6 @@ from typing import Any
 from services.messenger.outbound import SenderRegistry, build_delivery_plan, UnsupportedMessengerDelivery
 from services.messenger.platforms import MessengerPlatform
 from services.messenger.max_audio import ensure_max_opus_file
-from services.messenger.audio_links import build_audio_access_url
 from services.messenger.audio_progress import (
     get_progress_snapshot,
     get_next_audio_item,
@@ -15,8 +14,14 @@ from services.messenger.audio_progress import (
     mark_pending_audio_delivery,
     AudioProgressItem,
 )
-from services.messenger.audio_access import issue_or_reuse_audio_access_token
 from services.messenger.timeline import log_audio_timeline_event
+
+
+NATIVE_AUDIO_REQUIRED_MESSAGE = (
+    '⚠️ Не удалось отправить аудио прямо в этот мессенджер. '
+    'Ссылку на аудио я не отправляю: по эталону пользовательского сценария здесь должно быть именно аудио-вложение. '
+    'Попробуйте ещё раз позже или сообщите администратору.'
+)
 
 
 async def _send_telegram_audio(bot: Any, external_user_id: str, item: AudioProgressItem) -> Any:
@@ -197,9 +202,9 @@ async def _send_non_telegram_native(
             caption=_pending_caption(platform, item, replay=replay),
             **_post_audio_control_kwargs(platform),
         )
-    except (AttributeError, RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery):
-        log_audio_timeline_event(int(user_id), event_type="native_audio_fallback", sequence_key="full_series", anchor=int(item.anchor), title=item.title, platform=platform)
-        return None
+    except (AttributeError, RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery) as exc:
+        log_audio_timeline_event(int(user_id), event_type="native_audio_failed", sequence_key="full_series", anchor=int(item.anchor), title=item.title, platform=platform)
+        raise UnsupportedMessengerDelivery(NATIVE_AUDIO_REQUIRED_MESSAGE) from exc
     if pending is None:
         mark_pending_audio_delivery(int(user_id), item=item, platform=platform, token=None)
     log_audio_timeline_event(
@@ -296,43 +301,4 @@ async def send_next_audio_to_user(
     if native_result is not None:
         return native_result
 
-    access_token = issue_or_reuse_audio_access_token(int(user_id), item=item, platform=plan.platform)
-    public_url = build_audio_access_url(access_token)
-    if not public_url:
-        raise UnsupportedMessengerDelivery(
-            'MESSENGER_PUBLIC_BASE_URL is empty; cannot deliver cross-messenger audio link for non-Telegram platforms'
-        )
-    text = (
-        f'🎧 {"Повтор аудио" if replay else "Следующее аудио по вашей общей очереди"}: №{item.anchor} — {item.title}\n\n'
-        f'Слушать: {public_url}\n\n'
-        f'Для {_platform_name(plan.platform)} это аварийная ссылка на файл: native-отправка сейчас не прошла.\n'
-        'После прослушивания нажмите «✅ Прослушал» или отправьте done / готово / прослушал.'
-    )
-    await sender.send_text(
-        plan.external_user_id,
-        text,
-        disable_link_preview=False,
-        **_post_audio_control_kwargs(plan.platform),
-    )
-    if pending is None:
-        mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=access_token)
-    log_audio_timeline_event(
-        int(user_id),
-        event_type="link_replayed" if replay else "link_sent",
-        sequence_key="full_series",
-        anchor=int(item.anchor),
-        title=item.title,
-        platform=plan.platform,
-        token=access_token,
-    )
-    return AudioDeliveryResult(
-        user_id=int(user_id),
-        platform=plan.platform,
-        item=item,
-        transport='messenger_link_replay' if replay else 'messenger_link',
-        message=(
-            f'🎧 Отправил аварийную ссылку на повтор в {_platform_name(plan.platform)}: №{item.anchor} — {item.title}'
-            if replay else
-            f'🎧 Отправил аварийную ссылку в {_platform_name(plan.platform)}: №{item.anchor} — {item.title}'
-        ),
-    )
+    raise UnsupportedMessengerDelivery(NATIVE_AUDIO_REQUIRED_MESSAGE)
