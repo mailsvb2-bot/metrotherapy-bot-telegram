@@ -7,6 +7,25 @@ from typing import Any
 from services.messenger.menu_contract import normalize_menu_command
 
 
+def _score_command_value(value: str) -> str | None:
+    raw = str(value or "").strip().casefold().replace("−", "-")
+    if raw.startswith("score:"):
+        candidate = raw.split(":", 1)[1].strip()
+    elif raw.startswith("score="):
+        candidate = raw.split("=", 1)[1].strip()
+    else:
+        return None
+    if candidate.startswith("+"):
+        candidate = candidate[1:]
+    try:
+        score = int(candidate)
+    except ValueError:
+        return None
+    if -10 <= score <= 10:
+        return str(score)
+    return None
+
+
 def normalise_messenger_text(text: str) -> str:
     """Normalize human/mobile button labels to canonical text commands.
 
@@ -16,6 +35,10 @@ def normalise_messenger_text(text: str) -> str:
     menu, such as demo route choice, weather city and score buttons.
     """
     raw = (text or "").strip()
+    score_command = _score_command_value(raw)
+    if score_command is not None:
+        return score_command
+
     compact = raw.casefold().replace("ё", "е")
     compact = " ".join(compact.split())
     if compact.startswith("+") and compact[1:].isdigit():
@@ -109,7 +132,7 @@ def _payload_text(raw: Any, *, prefer_command: bool = False) -> str:
 
     Native MAX buttons can send both stale display text and a command payload.
     When prefer_command=True, command-like keys are selected before generic
-    display text so a button with text='start' and payload.command='-4' is
+    display text so a button with text='start' and payload.command='score:-4' is
     interpreted as score -4 rather than menu reset.
     """
     if raw in (None, "", b""):
