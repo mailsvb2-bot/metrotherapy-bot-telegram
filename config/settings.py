@@ -50,6 +50,17 @@ def _env(name: str, default: str = "") -> str:
     return v if v is not None and v != "" else default
 
 
+def _env_bool(name: str, default: str = "0") -> bool:
+    """Parse boolean environment variables consistently across runtime settings.
+
+    Accepts the common deployment values used in systemd/GitHub Actions/manual
+    shells: 1/true/yes/on/webhook. This prevents a dangerous split where one
+    runtime resolver treats "true" as enabled while Settings treats it as false.
+    """
+    raw = _env(name, default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "webhook"}
+
+
 @dataclass
 class Settings:
     BOT_TOKEN: str = _env("BOT_TOKEN", "")
@@ -65,18 +76,18 @@ class Settings:
     VK_SECRET: str = _env("VK_SECRET", "")
     VK_GROUP_ID: str = _env("VK_GROUP_ID", "")
     VK_API_VERSION: str = _env("VK_API_VERSION", "5.199")
-    MESSENGER_WEBHOOK_ENABLED: bool = _env("MESSENGER_WEBHOOK_ENABLED", "0") == "1"
+    MESSENGER_WEBHOOK_ENABLED: bool = _env_bool("MESSENGER_WEBHOOK_ENABLED")
     MESSENGER_WEBHOOK_HOST: str = _env("MESSENGER_WEBHOOK_HOST", _env("WEBHOOK_HOST", "0.0.0.0"))
     MESSENGER_WEBHOOK_PORT: int = int(_env("MESSENGER_WEBHOOK_PORT", _env("WEBHOOK_PORT", "8081")))
     TELEGRAM_TRANSPORT: str = (_env("TELEGRAM_TRANSPORT", _env("RUN_MODE", "polling")) or "polling").strip().lower()
-    TELEGRAM_WEBHOOK_ENABLED: bool = _env("TELEGRAM_WEBHOOK_ENABLED", "0") == "1"
+    TELEGRAM_WEBHOOK_ENABLED: bool = _env_bool("TELEGRAM_WEBHOOK_ENABLED")
     TELEGRAM_WEBHOOK_HOST: str = _env("TELEGRAM_WEBHOOK_HOST", _env("WEBHOOK_HOST", "127.0.0.1"))
     TELEGRAM_WEBHOOK_PORT: int = int(_env("TELEGRAM_WEBHOOK_PORT", _env("WEBHOOK_PORT", "8081")))
     TELEGRAM_WEBHOOK_PREFIX: str = _env("TELEGRAM_WEBHOOK_PREFIX", "/telegram-webhook")
     TELEGRAM_WEBHOOK_SECRET_TOKEN: str = _env("TELEGRAM_WEBHOOK_SECRET_TOKEN", "")
     TELEGRAM_WEBHOOK_PUBLIC_BASE_URL: str = _env("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", _env("PUBLIC_BASE_URL", ""))
-    TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES: bool = _env("TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES", "0") == "1"
-    HEALTHCHECK_ENABLED: bool = _env("HEALTHCHECK_ENABLED", "1") == "1"
+    TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES: bool = _env_bool("TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES")
+    HEALTHCHECK_ENABLED: bool = _env_bool("HEALTHCHECK_ENABLED", "1")
     HEALTHCHECK_HOST: str = _env("HEALTHCHECK_HOST", "127.0.0.1")
     HEALTHCHECK_PORT: int = int(_env("HEALTHCHECK_PORT", "8082"))
     MESSENGER_PUBLIC_BASE_URL: str = _env("MESSENGER_PUBLIC_BASE_URL", "")
@@ -133,7 +144,7 @@ class Settings:
     REF_MAX_BONUSES: int = int(_env("REF_MAX_BONUSES", "10"))
 
     ADMIN_IDS: str = _env("ADMIN_IDS", "")
-    PREWARM_ENABLED: bool = _env("PREWARM_ENABLED", "0") == "1"
+    PREWARM_ENABLED: bool = _env_bool("PREWARM_ENABLED")
     PREWARM_CHAT_ID: str = _env("PREWARM_CHAT_ID", "")
 
     # --- AI (OpenAI) ---
