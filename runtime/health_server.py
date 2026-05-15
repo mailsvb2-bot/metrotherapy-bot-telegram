@@ -142,18 +142,20 @@ def _storage_health_fields() -> dict[str, Any]:
 
 
 def build_health_payload() -> tuple[dict[str, Any], int]:
-    db_ok, db_error = _db_ready()
-    schema_ok, schema_error = _schema_ready()
+    """Liveness probe: process is up and can report diagnostics.
+
+    This endpoint intentionally stays lightweight and should not fail because a
+    scheduler/webhook dependency is degraded. Use /readyz for deployment gating.
+    """
     scheduler = _scheduler_snapshot()
     telegram_transport_value = _telegram_transport()
     messenger_webhook_enabled = _messenger_webhook_configured()
     telegram_webhook_enabled = telegram_transport_value == 'webhook'
     webhook_runtime_enabled = bool(messenger_webhook_enabled or telegram_webhook_enabled)
     details: dict[str, Any] = {
-        'ok': bool(db_ok and schema_ok),
+        'ok': True,
         'service': 'metrotherapy',
-        'db_ready': db_ok,
-        'schema_ready': schema_ok,
+        'probe': 'health',
         'db_engine': CONFIG.engine,
         'db_target': redacted_db_target(),
         'telegram_transport': telegram_transport_value,
@@ -165,12 +167,59 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
         **ai_policy_snapshot(),
         **scheduler,
     }
+    return details, 200
+
+
+
+def build_readiness_payload() -> tuple[dict[str, Any], int]:
+    """Readiness probe: dependencies required for serving users are healthy."""
+    db_ok, db_error = _db_ready()
+    schema_ok, schema_error = _schema_ready()
+    scheduler = _scheduler_snapshot()
+    telegram_transport_value = _telegram_transport()
+    messenger_webhook_enabled = _messenger_webhook_configured()
+    telegram_webhook_enabled = telegram_transport_value == 'webhook'
+    webhook_runtime_enabled = bool(messenger_webhook_enabled or telegram_webhook_enabled)
+    app_env = (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower()
+
+    scheduler_ok = bool(scheduler.get('scheduler_loop_task_running'))
+    # In webhook mode, the process will only reach this health runtime after the
+    # ingress runtime has started successfully, so configured == enabled here is
+    # the deployment contract we can assert from this isolated probe.
+    webhook_ok = True
+    if app_env in {'prod', 'production'} and telegram_webhook_enabled:
+        webhook_ok = webhook_runtime_enabled
 
     errors: list[str] = []
     if db_error is not None:
         errors.append(db_error)
     if schema_error is not None:
         errors.append(schema_error)
+    if not scheduler_ok:
+        errors.append('scheduler:not_running')
+    if not webhook_ok:
+        errors.append('webhook:not_ready')
+
+    ready = bool(db_ok and schema_ok and scheduler_ok and webhook_ok)
+    details: dict[str, Any] = {
+        'ok': ready,
+        'service': 'metrotherapy',
+        'probe': 'readiness',
+        'db_ready': db_ok,
+        'schema_ready': schema_ok,
+        'scheduler_ready': scheduler_ok,
+        'webhook_ready': webhook_ok,
+        'db_engine': CONFIG.engine,
+        'db_target': redacted_db_target(),
+        'telegram_transport': telegram_transport_value,
+        'telegram_webhook_enabled': telegram_webhook_enabled,
+        'messenger_webhook_enabled': messenger_webhook_enabled,
+        'webhook_runtime_enabled': webhook_runtime_enabled,
+        'app_env': app_env,
+        **_storage_health_fields(),
+        **ai_policy_snapshot(),
+        **scheduler,
+    }
     if errors:
         details['error'] = ';'.join(errors)
         return details, 500
@@ -182,6 +231,11 @@ async def _health(request: web.Request) -> web.Response:
     return web.json_response(payload, status=status)
 
 
+async def _ready(request: web.Request) -> web.Response:
+    payload, status = build_readiness_payload()
+    return web.json_response(payload, status=status)
+
+
 async def start_health_runtime() -> HealthRuntime | None:
     enabled = (getattr(settings, 'HEALTHCHECK_ENABLED', True) or False)
     if not enabled:
@@ -190,6 +244,8 @@ async def start_health_runtime() -> HealthRuntime | None:
     app = web.Application()
     app.router.add_get('/health', _health)
     app.router.add_get('/healthz', _health)
+    app.router.add_get('/ready', _ready)
+    app.router.add_get('/readyz', _ready)
 
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
