@@ -32,12 +32,6 @@ def _vk_kwargs(platform: str, kwargs: dict[str, Any], canonical_user_id: int) ->
 
 
 def _looks_like_score_scale(text: str) -> bool:
-    """Detect score-scale prompts even when reply metadata is missing.
-
-    Some text-channel flows create the post-audio prompt from mood/session state
-    rather than from a UI keyboard factory. VK must still show the same -10..+10
-    keyboard as Telegram/MAX after the user presses “Прослушал”.
-    """
     raw = str(text or "").casefold().replace("−", "-").replace("ё", "е")
     return "-10" in raw and "10" in raw and (
         "шкал" in raw
@@ -47,13 +41,35 @@ def _looks_like_score_scale(text: str) -> bool:
     )
 
 
-async def _send_max_image_file(external_user_id: str, file_path: Path, *, caption: str) -> Any:
-    """Send a generated PNG chart to MAX as an image attachment.
+def _max_upload_payload(upload_meta: dict[str, Any], uploaded: Any, *, media_type: str) -> dict[str, Any]:
+    """Normalize MAX upload responses into message attachment payload.
 
-    MAX uploads use `type=image` for PNG/JPEG/GIF-like assets.  Audio upload
-    tokens are intentionally not reused here: a progress chart is visual proof,
-    not an audio message.
+    MAX upload endpoints can expose the token either in the initial upload meta,
+    in the multipart upload response, or nested under ``payload``. Keep all
+    provider-specific branching here so audio/chart delivery stays canonical.
     """
+    if isinstance(uploaded, dict):
+        if uploaded.get("token"):
+            return {"token": str(uploaded["token"])}
+        payload = uploaded.get("payload")
+        if isinstance(payload, dict) and payload.get("token"):
+            return {"token": str(payload["token"])}
+        for key in (f"{media_type}_token", "file_token"):
+            if uploaded.get(key):
+                return {"token": str(uploaded[key])}
+    elif uploaded is not None:
+        value = str(uploaded).strip()
+        if value:
+            return {"token": value}
+
+    if isinstance(upload_meta, dict) and upload_meta.get("token"):
+        return {"token": str(upload_meta["token"])}
+
+    raise MessengerTransportError(f"Unexpected MAX {media_type} upload result: meta={upload_meta!r}, uploaded={uploaded!r}")
+
+
+async def _send_max_image_file(external_user_id: str, file_path: Path, *, caption: str) -> Any:
+    """Send a generated PNG chart to MAX as an image attachment."""
     token = (settings.MAX_BOT_TOKEN or "").strip()
     if not token:
         raise MessengerTransportError("MAX_BOT_TOKEN is empty")
@@ -70,9 +86,7 @@ async def _send_max_image_file(external_user_id: str, file_path: Path, *, captio
         raise MessengerTransportError(f"Unexpected MAX image upload response: {upload_meta}")
 
     uploaded = await asyncio.to_thread(multipart_upload, upload_url, token=token, field_name="data", path=file_path)
-    payload = uploaded if isinstance(uploaded, dict) else {"token": str(uploaded)}
-    if "token" not in payload and isinstance(upload_meta, dict) and upload_meta.get("token"):
-        payload = {"token": str(upload_meta["token"])}
+    payload = _max_upload_payload(upload_meta, uploaded, media_type="image")
 
     url = f"https://platform-api.max.ru/messages?user_id={urllib.parse.quote(str(external_user_id))}"
     body = {"text": caption, "attachments": [{"type": "image", "payload": payload}]}
