@@ -26,6 +26,34 @@ def _score_command_value(value: str) -> str | None:
     return None
 
 
+def _plain_score_value(value: str) -> str | None:
+    """Normalize plain score text without breaking legacy demo aliases.
+
+    MAX may send the visible button text instead of payload.command. Negative
+    scores such as "-5" must therefore be accepted before menu normalization;
+    otherwise they can be interpreted as a menu reset. Bare "1" and "2" remain
+    legacy route aliases, while MAX score buttons render them as "+1" and "+2".
+    """
+    raw = str(value or "").strip().casefold().replace("−", "-")
+    if not raw:
+        return None
+    if raw.startswith("+") and raw[1:].isdigit():
+        candidate = raw[1:]
+    elif raw.startswith("-") and raw[1:].isdigit():
+        candidate = raw
+    elif raw == "0" or raw in {"3", "4", "5", "6", "7", "8", "9", "10"}:
+        candidate = raw
+    else:
+        return None
+    try:
+        score = int(candidate)
+    except ValueError:
+        return None
+    if -10 <= score <= 10:
+        return str(score)
+    return None
+
+
 def normalise_messenger_text(text: str) -> str:
     """Normalize human/mobile button labels to canonical text commands.
 
@@ -38,11 +66,12 @@ def normalise_messenger_text(text: str) -> str:
     score_command = _score_command_value(raw)
     if score_command is not None:
         return score_command
+    plain_score = _plain_score_value(raw)
+    if plain_score is not None:
+        return plain_score
 
     compact = raw.casefold().replace("ё", "е")
     compact = " ".join(compact.split())
-    if compact.startswith("+") and compact[1:].isdigit():
-        return compact[1:]
 
     command = normalize_menu_command(compact)
     if command:
