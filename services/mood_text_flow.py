@@ -53,8 +53,6 @@ def find_pending_pre_session_id(user_id: int) -> int | None:
     return int(row['id']) if row else None
 
 
-
-
 def find_pending_post_session_id(user_id: int) -> int | None:
     from services.db import db
     with db() as conn:
@@ -71,6 +69,17 @@ def find_pending_post_session_id(user_id: int) -> int | None:
             (int(user_id),),
         ).fetchone()
     return int(row['id']) if row else None
+
+
+def _after_audio_controls_text(platform: str, item: AudioProgressItem) -> str:
+    platform_title = 'MAX' if platform == MessengerPlatform.MAX.value else 'ВКонтакте' if platform == MessengerPlatform.VK.value else platform
+    return (
+        f'✅ Аудио №{item.anchor} — {item.title} отправлено в {platform_title}.\n\n'
+        'Когда прослушаете — нажмите кнопку «✅ Прослушал» ниже '
+        'или отправьте done / готово / прослушал.\n\n'
+        'После этого я покажу шкалу состояния ПОСЛЕ от −10 до +10.'
+    )
+
 
 @dataclass(frozen=True)
 class MoodTextFlowResult:
@@ -219,6 +228,7 @@ async def complete_pre_score_and_send(
                 f'Слушать: {public_url}\n\n'
                 'Это аварийная ссылка на файл: native-отправка ВКонтакте сейчас не прошла.',
             )
+            mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=access_token)
             log_audio_timeline_event(
                 int(user_id),
                 event_type='link_sent',
@@ -235,14 +245,19 @@ async def complete_pre_score_and_send(
     advance(int(user_id), 'morning' if session.kind == 'work' else 'evening')
     mark_audio_sent(session_id)
     record_audio_delivery(int(user_id), item=item, platform=plan.platform)
-    if transport in {'telegram_audio_pending', 'max_native_audio_pending', 'vk_native_audio_pending'}:
+    if transport == 'telegram_audio_pending':
         message = (
             f'✅ Оценку {score:+d} сохранил. Отправил аудио №{item.anchor} — {item.title}.\n\n'
             'Когда дослушаете, напишите: done / готово / прослушал — и я сразу пришлю следующее.'
         )
         prompt_done = True
+    elif transport in {'max_native_audio_pending', 'vk_native_audio_pending'}:
+        message = _after_audio_controls_text(plan.platform, item)
+        prompt_done = True
     else:
-        message = f'✅ Оценку {score:+d} сохранил. Отправил ваш аудиотранс: №{item.anchor} — {item.title}.'
+        # MAX/VK link fallback already sent a message with the audio URL and the
+        # “Прослушал” instruction. Do not send a second duplicate pre-score text.
+        message = ''
         prompt_done = False
     log_event(int(user_id), 'mood_score', {'stage': 'pre', 'value': int(score), 'kind': session.kind, 'source': session.source, 'platform': delivered_platform})
     return MoodTextFlowResult(True, message, prompt_done=prompt_done, delivered_platform=delivered_platform, transport=transport)
@@ -276,7 +291,7 @@ async def complete_post_score_and_send_next(
     message = (
         f'✅ Оценку после прослушивания {int(score):+d} сохранил.{delta_text}{avg_text}\n\n'
         'Цикл этого аудио завершён.\n\n'
-        'Чтобы продолжить маршрут, нажмите «🎧 Получить аудио» или отправьте continue. '
+        'Сейчас построю график прогресса. Чтобы продолжить маршрут, нажмите «🎧 Получить аудио» или отправьте continue. '
         'Следующее аудио начнётся правильно: сначала шкала состояния ДО прослушивания, потом аудио, потом шкала ПОСЛЕ.'
     )
     transport = 'post_score_saved'
