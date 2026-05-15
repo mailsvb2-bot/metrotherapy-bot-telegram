@@ -590,11 +590,6 @@ def handle_incoming_text(
             replies.append(MessengerReply(kind="next_audio"))
         return int(user_id), replies
 
-    if score_value is not None and action == 'menu':
-        if find_pending_post_session_id(int(user_id)) is not None:
-            action, value = 'post_score', str(score_value)
-        elif find_pending_pre_session_id(int(user_id)) is not None:
-            action, value = 'pre_score', str(score_value)
     payload = value if action == "start" else None
     entry = register_user_entry(
         int(user_id),
@@ -606,6 +601,16 @@ def handle_incoming_text(
         start_payload=payload,
     )
     canonical_user_id = int(entry.user_id)
+
+    if score_value is not None and action == "menu":
+        # Stage routing must happen after canonical registration and must prefer
+        # a newly opened pre-score session over an older delivered-audio
+        # post-score session. Otherwise a fresh demo_work/demo_home cycle can
+        # incorrectly write the score into the previous audio session.
+        if find_pending_pre_session_id(canonical_user_id) is not None:
+            action, value = "pre_score", str(score_value)
+        elif find_pending_post_session_id(canonical_user_id) is not None:
+            action, value = "post_score", str(score_value)
 
     command_text = (text or "").strip()
     command_norm = command_text.casefold().replace("ё", "е")
