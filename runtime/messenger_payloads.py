@@ -178,6 +178,11 @@ def _payload_text(raw: Any, *, prefer_command: bool = False) -> str:
             payload = json.loads(value)
         except json.JSONDecodeError:
             return value
+        if not isinstance(payload, (dict, list)):
+            # JSON scalar strings such as "-5", "0" or "1" are valid JSON.
+            # They are still user-visible text in MAX webhooks and must not be
+            # discarded, otherwise extract_max_message falls back to "start".
+            return value
 
     if isinstance(payload, dict):
         command_keys = ("command", "cmd", "action", "value", "data", "payload", "callback", "button", "body")
