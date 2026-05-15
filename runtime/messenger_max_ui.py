@@ -71,10 +71,17 @@ def weather_city_attachment() -> dict[str, Any]:
 
 
 def score_scale_attachment() -> dict[str, Any]:
+    """MAX score scale with unambiguous numeric payloads.
+
+    Bare commands "1" and "2" are already legacy aliases for demo route choices.
+    Score buttons therefore use the provider payload shape "score:<number>".
+    runtime.messenger_payloads.normalise_messenger_text converts that payload
+    back to the canonical score string before the mood flow sees it.
+    """
     rows: list[list[dict[str, Any]]] = []
     for row in [[-10, -9, -8], [-7, -6, -5], [-4, -3, -2], [-1, 0, 1], [2, 3, 4], [5, 6, 7], [8, 9, 10]]:
         rows.append([
-            max_message_button(("+" if value > 0 else "") + str(value), command=str(value))
+            max_message_button(("+" if value > 0 else "") + str(value), command=f"score:{value}")
             for value in row
         ])
     rows.append([
