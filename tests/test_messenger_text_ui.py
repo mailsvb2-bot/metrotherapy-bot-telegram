@@ -2,13 +2,15 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from services.messenger.text_ui import handle_incoming_text
 from services.messenger.preferences import get_channel_snapshot
 from services.messenger.menu_contract import MAIN_MENU_ACTIONS
 from services.messenger.entrypoints import register_user_entry
-from services.messenger.outbound import SenderRegistry
+from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDelivery
 from services.mood import create_session
-from services.mood_text_flow import complete_pre_score_and_send
+from services.mood_text_flow import complete_pre_score_and_send, NATIVE_AUDIO_REQUIRED_MESSAGE
 from services.schema import init_db
 
 
@@ -94,7 +96,7 @@ class FailingMaxSender:
         return {'ok': True}
 
 
-def test_max_pre_score_audio_uses_link_fallback_when_native_send_fails(tmp_path, monkeypatch):
+def test_max_pre_score_audio_requires_native_audio_and_never_sends_link(tmp_path, monkeypatch):
     audio_path = tmp_path / '001 test audio.ogg'
     audio_path.write_bytes(b'fake-audio')
 
@@ -121,26 +123,21 @@ def test_max_pre_score_audio_uses_link_fallback_when_native_send_fails(tmp_path,
 
     monkeypatch.setattr(flow, 'get_by_anchor', lambda anchor: FakeAnchoredAudio(1, audio_path, 'test audio'))
     monkeypatch.setattr(flow, 'ensure_max_opus_file', lambda path: path)
-    monkeypatch.setattr(flow, 'issue_or_reuse_audio_access_token', lambda user_id, *, item, platform: 'tok_max_fallback')
-    monkeypatch.setattr(flow, 'build_audio_access_url', lambda token: f'https://example.test/audio/{token}')
 
     sender = FailingMaxSender()
-    result = asyncio.run(
-        complete_pre_score_and_send(
-            user_id,
-            platform='max',
-            score=-4,
-            senders=SenderRegistry(max=sender),
+    with pytest.raises(UnsupportedMessengerDelivery) as exc_info:
+        asyncio.run(
+            complete_pre_score_and_send(
+                user_id,
+                platform='max',
+                score=-4,
+                senders=SenderRegistry(max=sender),
+            )
         )
-    )
 
-    assert result.ok is True
-    assert result.transport == 'max_link'
+    assert NATIVE_AUDIO_REQUIRED_MESSAGE in str(exc_info.value)
     assert sender.audio_attempts, 'MAX native audio must be attempted first'
-    assert sender.text_messages, 'MAX fallback link must be sent after native failure'
-    assert sender.text_messages[0][0] == external_user_id
-    assert 'https://example.test/audio/tok_max_fallback' in sender.text_messages[0][1]
-    assert 'native-отправка MAX сейчас не прошла' in sender.text_messages[0][1]
+    assert sender.text_messages == [], 'MAX must not receive audio links when native audio fails'
 
 
 def test_new_pre_score_session_wins_over_old_pending_post_score():
