@@ -20,15 +20,26 @@ def telegram_webhook_prefix() -> str:
 
 
 def telegram_webhook_path() -> str:
+    """Canonical tokenless webhook path.
+
+    Telegram's X-Telegram-Bot-Api-Secret-Token header is the authentication
+    mechanism. Keeping BOT_TOKEN in URLs leaks it into proxy/access logs, shell
+    history and monitoring. The legacy token path is still registered separately
+    by the ingress runtime for a safe transition.
+    """
+    return telegram_webhook_prefix()
+
+
+def telegram_legacy_webhook_path() -> str:
+    """Backward-compatible path used by older nginx/server snippets."""
     return telegram_webhook_prefix() + "/{bot_token}"
 
 
 def telegram_public_webhook_url() -> str:
     base = (getattr(settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
-    token = (getattr(settings, "BOT_TOKEN", "") or "").strip()
-    if not base or not token:
+    if not base:
         return ""
-    return base + telegram_webhook_prefix() + "/" + token
+    return base + telegram_webhook_path()
 
 
 def telegram_secret_ok(request: web.Request) -> bool:
@@ -51,9 +62,10 @@ async def telegram_webhook(request: web.Request) -> web.Response:
         raise web.HTTPServiceUnavailable(text="telegram webhook runtime is not configured")
 
     route_token = (request.match_info.get("bot_token") or "").strip()
-    expected_token = (getattr(settings, "BOT_TOKEN", "") or "").strip()
-    if not expected_token or route_token != expected_token:
-        raise web.HTTPForbidden(text="bad token")
+    if route_token:
+        expected_token = (getattr(settings, "BOT_TOKEN", "") or "").strip()
+        if not expected_token or route_token != expected_token:
+            raise web.HTTPForbidden(text="bad token")
 
     if not telegram_secret_ok(request):
         raise web.HTTPForbidden(text="bad telegram secret")
