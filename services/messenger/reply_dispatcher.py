@@ -129,17 +129,47 @@ async def _send_progress_chart_file(
     )
 
 
+async def _send_progress_chart_or_notice(
+    *,
+    platform: str,
+    sender: Any,
+    external_user_id: str,
+    canonical_user_id: int,
+) -> None:
+    chart_path = build_vk_mood_progress_chart_path(canonical_user_id)
+    if chart_path is None:
+        await sender.send_text(
+            external_user_id,
+            "📈 Пока недостаточно данных для графика. Пройдите цикл: шкала ДО → аудио → Прослушал → шкала ПОСЛЕ.",
+            **_vk_kwargs(platform, {}, canonical_user_id),
+        )
+        return
+
+    try:
+        await _send_progress_chart_file(
+            platform=platform,
+            sender=sender,
+            external_user_id=external_user_id,
+            chart_path=chart_path,
+            caption="📈 Ваш график изменения состояния",
+            canonical_user_id=canonical_user_id,
+        )
+        log.info("%s progress chart sent: user_id=%s path=%s", platform.upper(), canonical_user_id, chart_path)
+    except Exception:  # validator: allow-wide-except
+        log.exception("%s progress chart send failed", platform.upper())
+        await sender.send_text(
+            external_user_id,
+            "⚠️ График построен, но не удалось отправить его в этот мессенджер.",
+            **_vk_kwargs(platform, {}, canonical_user_id),
+        )
+
+
 async def send_reply_bundle(
     platform: str,
     external_user_id: str,
     canonical_user_id: int,
     replies: list[MessengerReply],
 ) -> None:
-    """Dispatch canonical messenger replies to a concrete messenger sender.
-
-    Runtime webhook modules should only normalize ingress and call this service;
-    reply semantics, fallback wording and cross-channel delivery live here.
-    """
     registry = SenderRegistry(max=MaxBotSender(), vk=VkBotSender())
     sender = registry.get(platform)
     if sender is None:
@@ -147,6 +177,8 @@ async def send_reply_bundle(
 
     for reply in replies:
         if reply.kind == "text":
+            if not str(reply.text or "").strip():
+                continue
             kwargs: dict[str, Any] = {}
             if platform == "vk":
                 keyboard_kind = (reply.meta or {}).get("vk_keyboard")
@@ -227,32 +259,12 @@ async def send_reply_bundle(
             continue
 
         if reply.kind == "progress_chart":
-            chart_path = build_vk_mood_progress_chart_path(canonical_user_id)
-            if chart_path is None:
-                await sender.send_text(
-                    external_user_id,
-                    "📈 Пока недостаточно данных для графика. Пройдите цикл: шкала ДО → аудио → Прослушал → шкала ПОСЛЕ.",
-                    **_vk_kwargs(platform, {}, canonical_user_id),
-                )
-                continue
-
-            try:
-                await _send_progress_chart_file(
-                    platform=platform,
-                    sender=sender,
-                    external_user_id=external_user_id,
-                    chart_path=chart_path,
-                    caption="📈 Ваш график изменения состояния",
-                    canonical_user_id=canonical_user_id,
-                )
-                log.info("%s progress chart sent: user_id=%s path=%s", platform.upper(), canonical_user_id, chart_path)
-            except Exception:  # validator: allow-wide-except
-                log.exception("%s progress chart send failed", platform.upper())
-                await sender.send_text(
-                    external_user_id,
-                    "⚠️ График построен, но не удалось отправить его в этот мессенджер.",
-                    **_vk_kwargs(platform, {}, canonical_user_id),
-                )
+            await _send_progress_chart_or_notice(
+                platform=platform,
+                sender=sender,
+                external_user_id=external_user_id,
+                canonical_user_id=canonical_user_id,
+            )
             continue
 
         if reply.kind == "auto_pre_score":
@@ -284,7 +296,8 @@ async def send_reply_bundle(
             kwargs: dict[str, Any] = {}
             if platform == "vk" and getattr(result, "prompt_done", False):
                 kwargs.update(_post_audio_control_kwargs("vk"))
-            await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, kwargs, canonical_user_id))
+            if str(result.message or "").strip():
+                await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, kwargs, canonical_user_id))
             continue
 
         if reply.kind == "auto_post_score":
@@ -302,5 +315,12 @@ async def send_reply_bundle(
                 result.ok,
                 result.transport,
             )
-            await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))
+            if str(result.message or "").strip():
+                await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))
+            await _send_progress_chart_or_notice(
+                platform=platform,
+                sender=sender,
+                external_user_id=external_user_id,
+                canonical_user_id=canonical_user_id,
+            )
             continue
