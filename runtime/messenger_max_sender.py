@@ -55,10 +55,22 @@ class MaxBotSender:
             payload=None,
         )
         upload_url = str(upload_meta.get("url") or "").strip()
-        media_token = str(upload_meta.get("token") or "").strip()
-        if not upload_url or not media_token:
+        if not upload_url:
             raise MessengerTransportError(f"Unexpected MAX upload response: {upload_meta}")
-        await asyncio.to_thread(multipart_upload, upload_url, token=token, field_name="data", path=file_path)
+
+        uploaded = await asyncio.to_thread(multipart_upload, upload_url, token=token, field_name="data", path=file_path)
+        media_token = ""
+        if isinstance(uploaded, dict):
+            media_token = str(uploaded.get("token") or uploaded.get("audio_token") or uploaded.get("file_token") or "").strip()
+            payload = uploaded.get("payload")
+            if not media_token and isinstance(payload, dict):
+                media_token = str(payload.get("token") or "").strip()
+        elif uploaded is not None:
+            media_token = str(uploaded).strip()
+        if not media_token:
+            media_token = str(upload_meta.get("token") or "").strip()
+        if not media_token:
+            raise MessengerTransportError(f"Unexpected MAX audio upload result: meta={upload_meta!r}, uploaded={uploaded!r}")
         store_media_token("max", file_path, media_token, media_type="audio")
         return media_token
 
