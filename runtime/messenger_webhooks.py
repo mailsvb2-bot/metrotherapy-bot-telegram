@@ -12,6 +12,7 @@ from runtime.messenger_media_http import audio_access, audio_media
 from runtime.payment_http import pay_yookassa_web, yookassa_reconciliation_webhook
 from runtime.telegram_transport import telegram_transport
 from runtime.telegram_webhook_runtime import (
+    telegram_legacy_webhook_path,
     telegram_public_webhook_url,
     telegram_webhook,
     telegram_webhook_path,
@@ -65,6 +66,10 @@ def _register_telegram_routes(
     app["telegram_dispatcher"] = dispatcher
     app["task_manager"] = dispatcher.workflow_data.get("task_manager")
     app.router.add_post(telegram_webhook_path(), telegram_webhook)
+    # Transitional compatibility: older deployments used /telegram-webhook/{BOT_TOKEN}.
+    # The public URL now points to the tokenless route, but this keeps existing
+    # reverse-proxy/server snippets working until they are updated.
+    app.router.add_post(telegram_legacy_webhook_path(), telegram_webhook)
     public_url = telegram_public_webhook_url()
     if not public_url:
         raise RuntimeError("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL is required for telegram webhook transport")
