@@ -64,6 +64,10 @@ def main() -> int:
     os.environ.setdefault('METRO_DB_PATH', str(temp_db))
     os.environ.setdefault('BOT_TOKEN', '000000:SMOKE')
     os.environ.setdefault('PAY_PROVIDER_TOKEN', '000000:SMOKE')
+    # CI smoke intentionally runs with APP_ENV=prod to exercise prod fail-fast.
+    # The production settings contract requires an admin identity, so provide a
+    # harmless dummy value for this hermetic no-network smoke run.
+    os.environ.setdefault('ADMIN_IDS', '1')
 
     ok = compileall.compile_dir(str(ROOT), quiet=1)
     if not ok:
