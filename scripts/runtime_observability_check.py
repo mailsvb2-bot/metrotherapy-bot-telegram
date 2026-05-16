@@ -50,7 +50,16 @@ def _service_active(service: str) -> CheckResult:
 def _service_disabled(service: str) -> CheckResult:
     code, out = _run(["systemctl", "is-enabled", service])
     value = out.splitlines()[0].strip() if out else ""
-    return CheckResult(f"service:{service}:disabled", value in {"disabled", "masked"}, value or f"code={code}")
+    normalized = value.lower()
+
+    # The old metrotherapy-bot.service was a duplicate runtime hazard when it
+    # existed next to metrotherapy.service. If the legacy unit is absent, that is
+    # also a safe state: there is no second process owner to disable or mask.
+    if normalized in {"disabled", "masked", "not-found"}:
+        return CheckResult(f"service:{service}:disabled", True, normalized)
+    if code != 0 and ("not-found" in normalized or "no such file" in normalized):
+        return CheckResult(f"service:{service}:disabled", True, "not-found")
+    return CheckResult(f"service:{service}:disabled", False, value or f"code={code}")
 
 
 def _main_pid(service: str) -> str:
@@ -95,8 +104,38 @@ def _journal_errors(minutes: int, *, pid: str = "0") -> str:
     )
 
 
+def _bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _db_readiness_result(payload: dict[str, Any]) -> CheckResult:
+    db_ready = bool(payload.get("db_ready"))
+    db_engine = str(payload.get("db_engine") or "unknown").lower()
+    require_postgres = _bool_env("METRO_OBS_REQUIRE_POSTGRES", False)
+
+    if require_postgres and db_engine != "postgres":
+        return CheckResult(
+            "readiness:db_ready",
+            False,
+            f"db_ready={db_ready} db_engine={db_engine} require_postgres=1",
+        )
+
+    if db_engine == "sqlite":
+        return CheckResult(
+            "readiness:db_ready",
+            db_ready,
+            f"db_ready={db_ready} db_engine=sqlite warning=sqlite_non_prod",
+        )
+
+    return CheckResult("readiness:db_ready", db_ready, f"db_ready={db_ready} db_engine={db_engine}")
+
+
 def collect_results() -> list[CheckResult]:
     health_url = os.getenv("METRO_OBS_HEALTH_URL", "http://127.0.0.1:8082/healthz")
+    ready_url = os.getenv("METRO_OBS_READY_URL", "http://127.0.0.1:8082/readyz")
     webhook_health_url = os.getenv("METRO_OBS_WEBHOOK_HEALTH_URL", "http://127.0.0.1:8081/healthz")
     service = os.getenv("METRO_OBS_SERVICE", "metrotherapy.service")
     duplicate_service = os.getenv("METRO_OBS_DUPLICATE_SERVICE", "metrotherapy-bot.service")
@@ -114,9 +153,31 @@ def collect_results() -> list[CheckResult]:
     ok, detail, payload = _http_json(health_url)
     results.append(CheckResult("http:health", ok and bool(payload and payload.get("ok")), detail))
     if payload:
-        results.append(CheckResult("health:db_ready", bool(payload.get("db_ready")), f"db_engine={payload.get('db_engine')}"))
-        results.append(CheckResult("health:telegram_polling", payload.get("telegram_transport") == "polling" and not bool(payload.get("telegram_webhook_enabled")), f"transport={payload.get('telegram_transport')} webhook={payload.get('telegram_webhook_enabled')}"))
-        results.append(CheckResult("health:messenger_webhook", bool(payload.get("messenger_webhook_enabled")), f"enabled={payload.get('messenger_webhook_enabled')}"))
+        results.append(CheckResult(
+            "health:telegram_polling",
+            payload.get("telegram_transport") == "polling" and not bool(payload.get("telegram_webhook_enabled")),
+            f"transport={payload.get('telegram_transport')} webhook={payload.get('telegram_webhook_enabled')}",
+        ))
+        results.append(CheckResult(
+            "health:messenger_webhook",
+            bool(payload.get("messenger_webhook_enabled")),
+            f"enabled={payload.get('messenger_webhook_enabled')}",
+        ))
+
+    ready_ok, ready_detail, ready_payload = _http_json(ready_url)
+    results.append(CheckResult("http:ready", ready_ok and bool(ready_payload and ready_payload.get("ok")), ready_detail))
+    if ready_payload:
+        results.append(_db_readiness_result(ready_payload))
+        results.append(CheckResult(
+            "readiness:scheduler",
+            bool(ready_payload.get("scheduler_ready")),
+            f"scheduler_ready={ready_payload.get('scheduler_ready')}",
+        ))
+        results.append(CheckResult(
+            "readiness:webhook",
+            bool(ready_payload.get("webhook_ready")),
+            f"webhook_ready={ready_payload.get('webhook_ready')}",
+        ))
 
     ok, detail, payload = _http_json(webhook_health_url)
     results.append(CheckResult("http:webhook_health", ok and bool(payload and payload.get("ok")), detail))
