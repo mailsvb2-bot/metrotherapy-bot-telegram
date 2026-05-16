@@ -220,7 +220,7 @@ async def send_reply_bundle(
                     platform.upper(),
                     canonical_user_id,
                     result.transport,
-                    getattr(result.item, "anchor", None),
+                    getattr(getattr(result, "item", None), "anchor", None),
                 )
                 if result.transport == "none":
                     await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))

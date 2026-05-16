@@ -42,7 +42,7 @@ async def test_health_handler_reports_ok(tmp_path, monkeypatch):
     assert response.status == 200
     assert response.text
     assert 'metrotherapy' in response.text
-    assert 'schema_ready' in response.text
+    assert 'probe' in response.text
     assert 'precise_scheduler_queue_size' in response.text
     assert 'telegram_transport' in response.text
     assert 'telegram_webhook_enabled' in response.text
@@ -60,7 +60,7 @@ async def test_health_handler_reports_db_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(health_server, 'ROOT', tmp_path)
     monkeypatch.setattr(health_server, '_scheduler_snapshot', lambda: {'scheduler_loop_task_running': False, 'precise_scheduler_running': False, 'precise_scheduler_task_running': False, 'precise_scheduler_queue_size': 0})
 
-    response = await health_server._health(None)  # type: ignore[arg-type]
+    response = await health_server._ready(None)  # type: ignore[arg-type]
     assert response.status == 500
     assert 'db:broken' in response.text
 
@@ -93,7 +93,7 @@ def test_build_health_payload_reports_schema_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(health_server, 'ROOT', tmp_path)
     monkeypatch.setattr(health_server, '_scheduler_snapshot', lambda: {'scheduler_loop_task_running': True, 'precise_scheduler_running': True, 'precise_scheduler_task_running': True, 'precise_scheduler_queue_size': 0})
 
-    payload, status = health_server.build_health_payload()
+    payload, status = health_server.build_readiness_payload()
     assert status == 500
     assert payload['db_ready'] is True
     assert payload['schema_ready'] is False

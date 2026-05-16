@@ -19,6 +19,7 @@ class MaxBotSender:
 
     _main_menu_attachment = staticmethod(max_ui.main_menu_attachment)
     _demo_kind_attachment = staticmethod(max_ui.demo_kind_attachment)
+    _score_scale_attachment = staticmethod(max_ui.score_scale_attachment)
 
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         token = (self.token or settings.MAX_BOT_TOKEN or "").strip()

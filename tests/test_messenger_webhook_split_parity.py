@@ -156,8 +156,7 @@ def test_max_score_scale_buttons_are_native_and_payload_safe_for_all_values():
 
     for value in range(-10, 11):
         score = str(value)
-        expected_text = f"+{value}" if value > 0 else str(value)
-        assert by_score[score]["text"] == expected_text
+        assert by_score[score]["text"] == str(value)
         assert by_score[score]["payload"]["command"] == f"score:{value}"
 
         stale_payload = {

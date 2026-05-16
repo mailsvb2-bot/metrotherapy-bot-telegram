@@ -55,7 +55,7 @@ async def test_max_audio_delivery_refuses_link_fallback(monkeypatch) -> None:
 
     senders = SenderRegistry(max=_FailingMaxSender())
 
-    with pytest.raises(UnsupportedMessengerDelivery, match="MAX native audio delivery failed"):
+    with pytest.raises(UnsupportedMessengerDelivery, match="Не удалось отправить аудио прямо"):
         await send_next_audio_to_user(
             1,
             senders=senders,

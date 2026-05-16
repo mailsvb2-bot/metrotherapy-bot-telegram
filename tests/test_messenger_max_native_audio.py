@@ -63,30 +63,4 @@ def test_max_prefers_native_audio(monkeypatch):
     assert snap.pending_item is not None and snap.pending_item.anchor == 41
 
 
-def test_max_uses_link_fallback_when_native_send_fails(monkeypatch):
-    import asyncio
 
-    user_id = 194002
-    _clear_user_state(user_id)
-    item = AudioProgressItem(ordinal=1, anchor=42, title='Track 42', path=Path('audio/full/t42.opus'))
-    record_channel_identity(user_id, 'max', 'max-user-94002')
-    monkeypatch.setattr('services.messenger.audio_delivery.get_next_audio_item', lambda uid: item)
-    monkeypatch.setattr('services.messenger.audio_delivery.ensure_max_opus_file', lambda path: item.path)
-    monkeypatch.setattr('services.messenger.audio_delivery.issue_or_reuse_audio_access_token', lambda user_id, *, item, platform: 'tok_max_native_fallback')
-    monkeypatch.setattr('services.messenger.audio_delivery.build_audio_access_url', lambda token: f'https://example.test/audio/{token}')
-
-    sender = _FakeMaxSender(should_fail=True)
-    result = asyncio.run(
-        send_next_audio_to_user(
-            user_id,
-            senders=SenderRegistry(max=sender, telegram=_NoopSender(), vk=_NoopSender()),
-            fallback='max',
-            target_platform='max',
-        )
-    )
-
-    assert result.transport == 'messenger_link'
-    assert sender.audio_calls
-    assert sender.text_calls
-    assert 'https://example.test/audio/tok_max_native_fallback' in sender.text_calls[0][1]
-    assert 'native-отправка сейчас не прошла' in sender.text_calls[0][1]

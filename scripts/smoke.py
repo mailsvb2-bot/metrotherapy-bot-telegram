@@ -135,6 +135,7 @@ def main() -> int:
     dp.include_router(micro.router)
     dp.include_router(settings_router.router)
     dp.include_router(mood.router)
+    dp.include_router(post_chart.router)
     dp.include_router(diagnostics.router)
     dp.include_router(gift_flow.router)
     dp.include_router(kb_debug.router)
