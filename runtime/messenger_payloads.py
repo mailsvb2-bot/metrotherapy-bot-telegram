@@ -7,6 +7,53 @@ from typing import Any
 from services.messenger.menu_contract import normalize_menu_command
 
 
+def _score_command_value(value: str) -> str | None:
+    raw = str(value or "").strip().casefold().replace("−", "-")
+    if raw.startswith("score:"):
+        candidate = raw.split(":", 1)[1].strip()
+    elif raw.startswith("score="):
+        candidate = raw.split("=", 1)[1].strip()
+    else:
+        return None
+    if candidate.startswith("+"):
+        candidate = candidate[1:]
+    try:
+        score = int(candidate)
+    except ValueError:
+        return None
+    if -10 <= score <= 10:
+        return str(score)
+    return None
+
+
+def _plain_score_value(value: str) -> str | None:
+    """Normalize plain score text without breaking legacy demo aliases.
+
+    MAX may send the visible button text instead of payload.command. Negative
+    scores such as "-5" must therefore be accepted before menu normalization;
+    otherwise they can be interpreted as a menu reset. Bare "1" and "2" remain
+    legacy route aliases, while MAX score buttons render them as "+1" and "+2".
+    """
+    raw = str(value or "").strip().casefold().replace("−", "-")
+    if not raw:
+        return None
+    if raw.startswith("+") and raw[1:].isdigit():
+        candidate = raw[1:]
+    elif raw.startswith("-") and raw[1:].isdigit():
+        candidate = raw
+    elif raw == "0" or raw in {"3", "4", "5", "6", "7", "8", "9", "10"}:
+        candidate = raw
+    else:
+        return None
+    try:
+        score = int(candidate)
+    except ValueError:
+        return None
+    if -10 <= score <= 10:
+        return str(score)
+    return None
+
+
 def normalise_messenger_text(text: str) -> str:
     """Normalize human/mobile button labels to canonical text commands.
 
@@ -16,10 +63,15 @@ def normalise_messenger_text(text: str) -> str:
     menu, such as demo route choice, weather city and score buttons.
     """
     raw = (text or "").strip()
+    score_command = _score_command_value(raw)
+    if score_command is not None:
+        return score_command
+    plain_score = _plain_score_value(raw)
+    if plain_score is not None:
+        return plain_score
+
     compact = raw.casefold().replace("ё", "е")
     compact = " ".join(compact.split())
-    if compact.startswith("+") and compact[1:].isdigit():
-        return compact[1:]
 
     command = normalize_menu_command(compact)
     if command:
@@ -109,7 +161,7 @@ def _payload_text(raw: Any, *, prefer_command: bool = False) -> str:
 
     Native MAX buttons can send both stale display text and a command payload.
     When prefer_command=True, command-like keys are selected before generic
-    display text so a button with text='start' and payload.command='-4' is
+    display text so a button with text='start' and payload.command='score:-4' is
     interpreted as score -4 rather than menu reset.
     """
     if raw in (None, "", b""):
@@ -125,6 +177,11 @@ def _payload_text(raw: Any, *, prefer_command: bool = False) -> str:
         try:
             payload = json.loads(value)
         except json.JSONDecodeError:
+            return value
+        if not isinstance(payload, (dict, list)):
+            # JSON scalar strings such as "-5", "0" or "1" are valid JSON.
+            # They are still user-visible text in MAX webhooks and must not be
+            # discarded, otherwise extract_max_message falls back to "start".
             return value
 
     if isinstance(payload, dict):

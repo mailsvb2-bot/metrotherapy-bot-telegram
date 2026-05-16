@@ -52,7 +52,6 @@ def full_route_attachment() -> dict[str, Any]:
 
 
 def demo_kind_attachment() -> dict[str, Any]:
-    """MAX keyboard for Telegram demo-kind parity."""
     return inline_keyboard_attachment([
         [max_message_button("🚗 Практика на утро / дорогу", command="demo_work")],
         [max_message_button("🌙 Практика на вечер / домой", command="demo_home")],
@@ -71,16 +70,25 @@ def weather_city_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([[max_message_button("⬅️ Назад", command="start")]])
 
 
-def score_scale_attachment() -> dict[str, Any] | None:
-    """MAX numeric score buttons are intentionally disabled.
+def score_scale_attachment() -> dict[str, Any]:
+    """MAX score scale with unambiguous numeric payloads.
 
-    Live OneMe/MAX webhook traces showed that numeric native message buttons can
-    arrive back as stale text='start' instead of the visible numeric value.  A
-    stale start event resets the flow before pre-score/audio delivery.  Until
-    the provider schema is proven with a live raw payload, MAX score input must
-    stay as typed plain text (-10..10), which the parser handles reliably.
+    Bare commands "1" and "2" are already legacy aliases for demo route choices.
+    Score buttons therefore use the provider payload shape "score:<number>".
+    runtime.messenger_payloads.normalise_messenger_text converts that payload
+    back to the canonical score string before the mood flow sees it.
     """
-    return None
+    rows: list[list[dict[str, Any]]] = []
+    for row in [[-10, -9, -8], [-7, -6, -5], [-4, -3, -2], [-1, 0, 1], [2, 3, 4], [5, 6, 7], [8, 9, 10]]:
+        rows.append([
+            max_message_button(("+" if value > 0 else "") + str(value), command=f"score:{value}")
+            for value in row
+        ])
+    rows.append([
+        max_message_button("📈 Мой прогресс", command="progress"),
+        max_message_button("⬅️ Назад", command="start"),
+    ])
+    return inline_keyboard_attachment(rows)
 
 
 def post_audio_attachment() -> dict[str, Any]:
@@ -112,7 +120,10 @@ def is_score_scale_text(text: str) -> bool:
 
 def is_post_audio_controls_text(text: str) -> bool:
     raw = str(text or "").casefold().replace("ё", "е")
-    return "прослуш" in raw and ("когда дослушаете" in raw or "когда прослушаете" in raw or "аудио" in raw) and ("done" in raw or "готово" in raw or "прослушал" in raw)
+    listened_marker = "прослуш" in raw or "дослуш" in raw
+    done_marker = "done" in raw or "готово" in raw or "прослушал" in raw or "дослушал" in raw
+    audio_marker = "аудио" in raw or "транс" in raw or "файл" in raw
+    return listened_marker and done_marker and audio_marker
 
 
 def first_url(text: str) -> str:
@@ -159,7 +170,7 @@ def native_keyboard_attachments(text: str) -> list[dict[str, Any]]:
     if stripped.startswith("🏙 Напишите название города"):
         return [weather_city_attachment()]
     if is_score_scale_text(raw):
-        return []
+        return [score_scale_attachment()]
     if is_post_audio_controls_text(raw):
         return [post_audio_attachment()]
     if stripped.startswith("🎧 Общий прогресс") or "📈 Анализ состояния" in raw:
@@ -170,12 +181,6 @@ def native_keyboard_attachments(text: str) -> list[dict[str, Any]]:
 
 
 def normalize_max_text(text: str) -> str:
-    """Remove VK-only wording from shared MAX/VK text surfaces.
-
-    The canonical text UI is shared by non-Telegram messengers. VK-specific
-    execution details are acceptable for VK, but MAX must not tell the user that
-    the scenario happens only inside VK.
-    """
     raw = str(text or "")
     replacements = {
         "Кнопки ВКонтакте соответствуют": "Кнопки MAX и ВКонтакте соответствуют",
@@ -191,8 +196,6 @@ def normalize_max_text(text: str) -> str:
     }
     for src, dst in replacements.items():
         raw = raw.replace(src, dst)
-    if is_score_scale_text(raw) and "MAX:" not in raw:
-        raw = raw.rstrip() + "\n\nMAX: отправьте оценку обычным сообщением, например -4, 0 или 7."
     return raw
 
 
