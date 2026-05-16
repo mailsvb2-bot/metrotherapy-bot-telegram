@@ -28,3 +28,16 @@ def test_done_command_without_pending_returns_hint():
     canonical_user_id, replies = handle_incoming_text(910002, platform='vk', external_user_id='910002', text='готово')
     assert canonical_user_id == 910002
     assert replies and 'нет аудио' in replies[0].text.lower()
+
+
+def test_vk_done_command_returns_post_score_scale_keyboard():
+    item = AudioProgressItem(ordinal=1, anchor=12, title="A12", path=Path("audio/full/a12.opus"))
+    mark_pending_audio_delivery(910003, item=item, platform='vk', token=None)
+
+    canonical_user_id, replies = handle_incoming_text(910003, platform='vk', external_user_id='910003', text='прослушал')
+
+    assert canonical_user_id == 910003
+    assert replies
+    assert replies[0].kind == 'text'
+    assert 'ПОСЛЕ' in replies[0].text or 'после' in replies[0].text.lower()
+    assert replies[0].meta.get('vk_keyboard') == 'score_scale'

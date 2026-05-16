@@ -47,7 +47,7 @@ def _fmt_score(v):
     return f"{int(v):+d}" if int(v) != 0 else "0"
 
 
-def _trial_outcome_keyboard(user_id: int, kind: str, *, delta: int | None) -> InlineKeyboardMarkup:
+def _trial_outcome_keyboard(user_id: int, kind: str, *, delta: int | None, session_id: int | None = None) -> InlineKeyboardMarkup:
     """Outcome-aware actions after a free demo post-score.
 
     The button set must not promise a free practice when TrialPolicy says both
@@ -56,7 +56,8 @@ def _trial_outcome_keyboard(user_id: int, kind: str, *, delta: int | None) -> In
     """
 
     rows: list[list[InlineKeyboardButton]] = []
-    rows.append([InlineKeyboardButton(text="📈 Посмотреть график изменения", callback_data="settings:state")])
+    chart_callback = f"post:chart:{int(session_id)}" if session_id is not None else "settings:state"
+    rows.append([InlineKeyboardButton(text="📈 Посмотреть график изменения", callback_data=chart_callback)])
 
     try:
         sent = demo_sent_kinds(int(user_id))
@@ -353,7 +354,7 @@ async def mood_answer(cb: CallbackQuery):
             log_event(int(cb.from_user.id), "trial_outcome_recorded", {"kind": kind, "delta": delta, "session_id": sid})
             await cb.message.answer(
                 _trial_outcome_text(pre=pre_score, post=post_score, delta=delta, avg_delta=ad),
-                reply_markup=_trial_outcome_keyboard(int(cb.from_user.id), kind, delta=delta),
+                reply_markup=_trial_outcome_keyboard(int(cb.from_user.id), kind, delta=delta, session_id=sid),
             )
             return
 

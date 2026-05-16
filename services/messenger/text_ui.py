@@ -583,7 +583,12 @@ def handle_incoming_text(
 
         replies = [
             MessengerReply(
-                text=f"✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\n\nОцените состояние после прослушивания: отправьте число от -10 до 10."
+                text=(
+                    f"✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\\n\\n"
+                    "Теперь оцените состояние ПОСЛЕ прослушивания.\\n"
+                    f"{_score_scale_text()}"
+                ),
+                meta={"vk_keyboard": "score_scale"},
             )
         ]
         if norm_platform == "telegram":
