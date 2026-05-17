@@ -69,6 +69,8 @@ def build_setup_status() -> MessengerSetupStatus:
         missing.append('MESSENGER_WEBHOOK_ENABLED=1 or TELEGRAM_TRANSPORT=webhook')
     if _strip(getattr(settings, 'MAX_BOT_LINK_BASE', '')) and '{payload}' not in _strip(getattr(settings, 'MAX_BOT_LINK_BASE', '')):
         warnings.append('MAX_BOT_LINK_BASE не содержит {payload}; проект добавит ?start=..., но шаблон с {payload} надёжнее.')
+    if vk_ok and not _strip(getattr(settings, 'VK_SECRET', '')):
+        warnings.append('VK_SECRET пустой; VK webhook будет работать, но подпись входящих событий не усилена секретом.')
     if public_base and not (public_base.startswith('https://') or public_base.startswith('http://')):
         warnings.append('MESSENGER_PUBLIC_BASE_URL должен быть полным URL, например https://your-domain.tld')
     telegram_public = _strip(getattr(settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', ''))
@@ -117,6 +119,11 @@ def render_setup_text() -> str:
             lines.append(f'• {item}')
     else:
         lines.append('Все основные переменные для Telegram/VK/MAX заданы.')
+    if status.warnings:
+        lines.append('')
+        lines.append('Предупреждения:')
+        for item in status.warnings:
+            lines.append(f'• {item}')
     return '\n'.join(lines)
 
 
