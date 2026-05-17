@@ -19,6 +19,21 @@ def _env_value(name: str, default: str = "") -> str:
     return (os.environ.get(name) or default).strip()
 
 
+def _idempotence_key(*, source: str, external_user_id: str, kind: str, amount_value: str) -> str:
+    """Build YooKassa idempotence key.
+
+    Default behavior intentionally stays request-scoped to preserve current
+    business semantics: a user may buy the same kind more than once. Operators
+    can pass PAYMENT_IDEMPOTENCE_KEY from an order/session layer to make retries
+    of the same checkout request deterministic without risking duplicate
+    provider payments.
+    """
+    explicit = _env_value("PAYMENT_IDEMPOTENCE_KEY") or _env_value("YOOKASSA_IDEMPOTENCE_KEY")
+    if explicit:
+        return explicit[:128]
+    return str(uuid.uuid4())
+
+
 def build_yookassa_receipt(*, amount_value: str, description: str) -> dict:
     """Build fiscal receipt payload for YooKassa.
 
@@ -110,7 +125,12 @@ def create_yookassa_confirmation_url(*, source: str, external_user_id: str, kind
         headers={
             "Authorization": f"Basic {encoded_auth}",
             "Content-Type": "application/json",
-            "Idempotence-Key": str(uuid.uuid4()),
+            "Idempotence-Key": _idempotence_key(
+                source=source,
+                external_user_id=external_user_id,
+                kind=kind,
+                amount_value=amount_value,
+            ),
         },
     )
 
