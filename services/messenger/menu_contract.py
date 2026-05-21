@@ -40,7 +40,7 @@ MAIN_MENU_ACTIONS: tuple[MenuAction, ...] = (
     ),
     MenuAction(
         command="pay",
-        title="💳 Пакеты практик",
+        title="💳 Тарифы",
         telegram_callback="sub:menu",
         vk_color="primary",
         aliases=("тарифы", "пакеты практик", "практики", "оплатить", "оплата", "pay"),
@@ -97,7 +97,7 @@ CONTEXT_ACTIONS: tuple[MenuAction, ...] = (
 
 TELEGRAM_MAIN_LAYOUT: tuple[tuple[str, ...], ...] = (
     ("🌿 Попробовать бесплатно", "🔐 Полный маршрут"),
-    ("💳 Пакеты практик", "🎁 Подарить"),
+    ("💳 Тарифы", "🎁 Подарить"),
     ("📈 Мой прогресс", "🧠 Настройки"),
     ("📣 Посоветовать", "🌤 Погода"),
 )
