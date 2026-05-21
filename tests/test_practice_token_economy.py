@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from runtime.payment_http import _normalize_payment_kind
 from services.payments.ui import kb_practice_packages, practice_packages_text
 from services.practice_token_contract import daily_practice_cost, normalize_delivery_mode, package_by_id
 from services.practice_tokens import (
@@ -31,6 +32,14 @@ def test_delivery_mode_normalization_and_cost():
     assert daily_practice_cost('both') == 2
     assert daily_practice_cost('paused') == 0
     assert daily_practice_cost('morning_only') == 1
+
+
+def test_payment_kind_normalization_promotes_package_links_to_tokens():
+    assert _normalize_payment_kind('subscription', 'practice_20') == 'tokens'
+    assert _normalize_payment_kind('unknown', 'practice_20') == 'tokens'
+    assert _normalize_payment_kind('tokens', 'practice_20') == 'tokens'
+    assert _normalize_payment_kind('subscription', '') == 'subscription'
+    assert _normalize_payment_kind('gift', 'practice_20') == 'gift'
 
 
 def test_grant_tokens_is_idempotent(tmp_path, monkeypatch):
