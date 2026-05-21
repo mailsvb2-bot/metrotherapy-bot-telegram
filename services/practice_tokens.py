@@ -9,6 +9,14 @@ from typing import Any
 from services.db import db, tx
 from services.practice_token_contract import DEFAULT_PRACTICE_PACKAGES, PracticePackage, daily_practice_cost, normalize_delivery_mode, package_by_id
 
+_REQUIRED_SCHEMA_TABLES = frozenset({
+    "practice_wallets",
+    "practice_ledger",
+    "payment_token_grants",
+    "user_practice_preferences",
+    "practice_reservations",
+})
+
 
 @dataclass(frozen=True)
 class PracticeWallet:
@@ -43,11 +51,22 @@ def enforcement_mode() -> str:
 
 
 def ensure_schema(conn: Any) -> None:
-    conn.execute("CREATE TABLE IF NOT EXISTS practice_wallets(user_id INTEGER PRIMARY KEY, available_tokens INTEGER NOT NULL DEFAULT 0, reserved_tokens INTEGER NOT NULL DEFAULT 0, used_tokens INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
-    conn.execute("CREATE TABLE IF NOT EXISTS practice_ledger(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, event_type TEXT NOT NULL, amount INTEGER NOT NULL, balance_after INTEGER NOT NULL, reason TEXT NOT NULL, source TEXT NOT NULL DEFAULT '', package_id TEXT, provider TEXT, provider_payment_id TEXT, idempotency_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
-    conn.execute("CREATE TABLE IF NOT EXISTS payment_token_grants(provider TEXT NOT NULL, provider_payment_id TEXT NOT NULL, user_id INTEGER NOT NULL, package_id TEXT NOT NULL, tokens_granted INTEGER NOT NULL, ledger_id INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(provider, provider_payment_id))")
-    conn.execute("CREATE TABLE IF NOT EXISTS user_practice_preferences(user_id INTEGER PRIMARY KEY, delivery_mode TEXT NOT NULL DEFAULT 'single_daily', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
-    conn.execute("CREATE TABLE IF NOT EXISTS practice_reservations(reservation_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, amount INTEGER NOT NULL, status TEXT NOT NULL, session_id INTEGER, audio_anchor INTEGER, reason TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+    """Validate that migrations created the practice-token schema.
+
+    Runtime services must not create or mutate schema. The tables are owned by
+    services.migrations.practice_token_economy_v1 and should exist before this
+    service is used. Keeping this function as a validator preserves a clear
+    migration/boot contract and avoids hidden runtime DDL.
+    """
+    placeholders = ",".join("?" for _ in _REQUIRED_SCHEMA_TABLES)
+    rows = conn.execute(
+        f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
+        tuple(sorted(_REQUIRED_SCHEMA_TABLES)),
+    ).fetchall()
+    existing = {str(row["name"] if hasattr(row, "keys") else row[0]) for row in rows}
+    missing = sorted(_REQUIRED_SCHEMA_TABLES - existing)
+    if missing:
+        raise RuntimeError(f"practice_token_schema_not_migrated:{','.join(missing)}")
 
 
 def get_active_packages() -> tuple[PracticePackage, ...]:
