@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import urllib.parse
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +16,16 @@ class PracticeWallet:
     available_tokens: int = 0
     reserved_tokens: int = 0
     used_tokens: int = 0
+
+
+@dataclass(frozen=True)
+class PracticeAccessDecision:
+    allowed: bool
+    mode: str
+    reason: str
+    reservation_id: str | None = None
+    message: str = ""
+    warning: str = ""
 
 
 def token_economy_enabled() -> bool:
@@ -36,6 +47,7 @@ def ensure_schema(conn: Any) -> None:
     conn.execute("CREATE TABLE IF NOT EXISTS practice_ledger(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, event_type TEXT NOT NULL, amount INTEGER NOT NULL, balance_after INTEGER NOT NULL, reason TEXT NOT NULL, source TEXT NOT NULL DEFAULT '', package_id TEXT, provider TEXT, provider_payment_id TEXT, idempotency_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
     conn.execute("CREATE TABLE IF NOT EXISTS payment_token_grants(provider TEXT NOT NULL, provider_payment_id TEXT NOT NULL, user_id INTEGER NOT NULL, package_id TEXT NOT NULL, tokens_granted INTEGER NOT NULL, ledger_id INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(provider, provider_payment_id))")
     conn.execute("CREATE TABLE IF NOT EXISTS user_practice_preferences(user_id INTEGER PRIMARY KEY, delivery_mode TEXT NOT NULL DEFAULT 'single_daily', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+    conn.execute("CREATE TABLE IF NOT EXISTS practice_reservations(reservation_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, amount INTEGER NOT NULL, status TEXT NOT NULL, session_id INTEGER, audio_anchor INTEGER, reason TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
 
 
 def get_active_packages() -> tuple[PracticePackage, ...]:
@@ -79,6 +91,15 @@ def get_wallet(user_id: int) -> PracticeWallet:
         return PracticeWallet(int(user_id), 0, 0, 0)
 
 
+def _insert_ledger(conn: Any, *, user_id: int, event_type: str, amount: int, balance_after: int, reason: str, source: str = "", package_id: str | None = None, provider: str | None = None, provider_payment_id: str | None = None, idempotency_key: str) -> int:
+    conn.execute(
+        "INSERT INTO practice_ledger(user_id, event_type, amount, balance_after, reason, source, package_id, provider, provider_payment_id, idempotency_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (int(user_id), event_type, int(amount), int(balance_after), reason, source, package_id, provider, provider_payment_id, idempotency_key),
+    )
+    row = conn.execute("SELECT last_insert_rowid() AS id").fetchone()
+    return int(row["id"] if row else 0)
+
+
 def grant_tokens(user_id: int, *, package_id: str, amount: int, provider: str = "manual", provider_payment_id: str = "", source: str = "", idempotency_key: str | None = None) -> tuple[bool, PracticeWallet, int | None]:
     idempotency_key = idempotency_key or f"grant:{provider}:{provider_payment_id}:{user_id}:{package_id}:{amount}"
     with db() as conn:
@@ -90,11 +111,97 @@ def grant_tokens(user_id: int, *, package_id: str, amount: int, provider: str = 
             wallet = _get_wallet_in_conn(conn, int(user_id))
             balance = int(wallet.available_tokens) + int(amount)
             conn.execute("UPDATE practice_wallets SET available_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (balance, int(user_id)))
-            conn.execute("INSERT INTO practice_ledger(user_id, event_type, amount, balance_after, reason, source, package_id, provider, provider_payment_id, idempotency_key) VALUES(?,?,?,?,?,?,?,?,?,?)", (int(user_id), "grant", int(amount), balance, "payment_succeeded", source, package_id, provider, provider_payment_id, idempotency_key))
-            row = conn.execute("SELECT last_insert_rowid() AS id").fetchone()
-            ledger_id = int(row["id"] if row else 0)
+            ledger_id = _insert_ledger(conn, user_id=int(user_id), event_type="grant", amount=int(amount), balance_after=balance, reason="payment_succeeded", source=source, package_id=package_id, provider=provider, provider_payment_id=provider_payment_id, idempotency_key=idempotency_key)
             wallet_after = _get_wallet_in_conn(conn, int(user_id))
     return True, wallet_after, ledger_id
+
+
+def reserve_practice(user_id: int, *, session_id: int | None = None, audio_anchor: int | None = None, reason: str = "audio_delivery") -> tuple[bool, PracticeWallet, str | None]:
+    reservation_id = f"practice_res_{uuid.uuid4().hex}"
+    with db() as conn:
+        with tx(conn):
+            _ensure_wallet(conn, int(user_id))
+            wallet = _get_wallet_in_conn(conn, int(user_id))
+            if wallet.available_tokens <= 0:
+                return False, wallet, None
+            available_after = int(wallet.available_tokens) - 1
+            reserved_after = int(wallet.reserved_tokens) + 1
+            conn.execute("UPDATE practice_wallets SET available_tokens=?, reserved_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (available_after, reserved_after, int(user_id)))
+            conn.execute("INSERT INTO practice_reservations(reservation_id, user_id, amount, status, session_id, audio_anchor, reason) VALUES(?,?,?,?,?,?,?)", (reservation_id, int(user_id), 1, "reserved", int(session_id) if session_id is not None else None, int(audio_anchor) if audio_anchor is not None else None, reason))
+            _insert_ledger(conn, user_id=int(user_id), event_type="reserve", amount=-1, balance_after=available_after, reason=reason, idempotency_key=f"reserve:{reservation_id}")
+            wallet_after = _get_wallet_in_conn(conn, int(user_id))
+    return True, wallet_after, reservation_id
+
+
+def consume_reservation(reservation_id: str, *, reason: str = "audio_delivery_succeeded") -> bool:
+    if not str(reservation_id or "").strip():
+        return False
+    with db() as conn:
+        with tx(conn):
+            ensure_schema(conn)
+            row = conn.execute("SELECT * FROM practice_reservations WHERE reservation_id=?", (reservation_id,)).fetchone()
+            if not row or str(row["status"]) != "reserved":
+                return False
+            user_id = int(row["user_id"])
+            wallet = _get_wallet_in_conn(conn, user_id)
+            reserved_after = max(0, int(wallet.reserved_tokens) - int(row["amount"]))
+            used_after = int(wallet.used_tokens) + int(row["amount"])
+            conn.execute("UPDATE practice_wallets SET reserved_tokens=?, used_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (reserved_after, used_after, user_id))
+            conn.execute("UPDATE practice_reservations SET status='consumed', updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?", (reservation_id,))
+            _insert_ledger(conn, user_id=user_id, event_type="consume", amount=-int(row["amount"]), balance_after=int(wallet.available_tokens), reason=reason, idempotency_key=f"consume:{reservation_id}")
+    return True
+
+
+def release_reservation(reservation_id: str, *, reason: str = "audio_delivery_failed") -> bool:
+    if not str(reservation_id or "").strip():
+        return False
+    with db() as conn:
+        with tx(conn):
+            ensure_schema(conn)
+            row = conn.execute("SELECT * FROM practice_reservations WHERE reservation_id=?", (reservation_id,)).fetchone()
+            if not row or str(row["status"]) != "reserved":
+                return False
+            user_id = int(row["user_id"])
+            amount = int(row["amount"])
+            wallet = _get_wallet_in_conn(conn, user_id)
+            available_after = int(wallet.available_tokens) + amount
+            reserved_after = max(0, int(wallet.reserved_tokens) - amount)
+            conn.execute("UPDATE practice_wallets SET available_tokens=?, reserved_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (available_after, reserved_after, user_id))
+            conn.execute("UPDATE practice_reservations SET status='released', updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?", (reservation_id,))
+            _insert_ledger(conn, user_id=user_id, event_type="release", amount=amount, balance_after=available_after, reason=reason, idempotency_key=f"release:{reservation_id}")
+    return True
+
+
+def check_and_reserve_for_audio(user_id: int, *, is_demo: bool, session_id: int | None = None, audio_anchor: int | None = None) -> PracticeAccessDecision:
+    mode = enforcement_mode()
+    if is_demo or not token_economy_enabled() or mode == "off":
+        return PracticeAccessDecision(True, mode, "free_demo_or_disabled")
+    wallet = get_wallet(int(user_id))
+    if wallet.available_tokens <= 0:
+        message = (
+            "Для продолжения полного маршрута нужна 1 практика.\n\n"
+            "У вас сейчас: 0 практик.\n\n"
+            "Откройте “💳 Пакеты практик” и выберите 5, 20 или 60 практик."
+        )
+        if mode == "soft":
+            return PracticeAccessDecision(True, mode, "soft_insufficient_balance", warning=message)
+        return PracticeAccessDecision(False, mode, "insufficient_balance", message=message)
+    ok, _wallet_after, reservation_id = reserve_practice(int(user_id), session_id=session_id, audio_anchor=audio_anchor)
+    if not ok:
+        message = "Для продолжения полного маршрута нужна 1 практика. Откройте “💳 Пакеты практик”."
+        if mode == "soft":
+            return PracticeAccessDecision(True, mode, "soft_reserve_failed", warning=message)
+        return PracticeAccessDecision(False, mode, "reserve_failed", message=message)
+    return PracticeAccessDecision(True, mode, "reserved", reservation_id=reservation_id)
+
+
+def finalize_audio_access(decision: PracticeAccessDecision, *, delivered: bool) -> None:
+    if not decision.reservation_id:
+        return
+    if delivered:
+        consume_reservation(decision.reservation_id)
+    else:
+        release_reservation(decision.reservation_id)
 
 
 def grant_tokens_for_payment(*, provider: str, provider_payment_id: str, user_id: int, package_id: str, source: str = "webhook") -> tuple[bool, PracticeWallet, int | None]:
