@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config.settings import settings
@@ -22,7 +24,9 @@ def kb_back(to: str = "menu:main") -> InlineKeyboardMarkup:
 
 def payment_public_base_url() -> str:
     base = (
-        getattr(settings, "PAYMENT_PUBLIC_BASE_URL", "")
+        os.getenv("PAYMENT_PUBLIC_BASE_URL")
+        or os.getenv("MESSENGER_PUBLIC_BASE_URL")
+        or getattr(settings, "PAYMENT_PUBLIC_BASE_URL", "")
         or getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "")
         or "https://metrotherapy-bot.metrotherapy.ru"
     )
