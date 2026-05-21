@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import os
+import urllib.parse
 
 from aiohttp import web
 
 from services.payments.reconciliation import record_yookassa_webhook
 from services.payments.yookassa_checkout import create_yookassa_confirmation_url
+from services.practice_tokens import get_active_packages
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +58,64 @@ def _webhook_secret_ok(request: web.Request) -> bool:
     return _provided_secret(request) == expected
 
 
+def _payment_public_base_url(request: web.Request) -> str:
+    configured = (
+        os.getenv("PAYMENT_PUBLIC_BASE_URL")
+        or os.getenv("MESSENGER_PUBLIC_BASE_URL")
+        or ""
+    ).strip().rstrip("/")
+    if configured:
+        return configured
+    scheme = request.headers.get("X-Forwarded-Proto") or request.scheme or "https"
+    host = request.headers.get("X-Forwarded-Host") or request.host
+    return f"{scheme}://{host}".rstrip("/")
+
+
+def _practice_package_selector_html(request: web.Request, *, source: str, external_user_id: str) -> str:
+    base_url = _payment_public_base_url(request)
+    escaped_user = html.escape(external_user_id or "")
+    links: list[str] = []
+    for package in get_active_packages():
+        query = urllib.parse.urlencode(
+            {
+                "source": source or "messenger",
+                "user_id": external_user_id or "",
+                "kind": "tokens",
+                "package_id": package.package_id,
+            }
+        )
+        url = f"{base_url}/pay/yookassa?{query}"
+        label = f"{package.title} — {package.price_rub:,} ₽".replace(",", " ")
+        links.append(f'<a class="package" href="{html.escape(url)}">{html.escape(label)}</a>')
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Пакеты практик — Метротерапия</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; background: #f6f7fb; color: #111827; }}
+    main {{ max-width: 560px; margin: 0 auto; padding: 28px 18px; }}
+    .card {{ background: #fff; border-radius: 18px; padding: 22px; box-shadow: 0 12px 28px rgba(15, 23, 42, .08); }}
+    h1 {{ font-size: 24px; margin: 0 0 12px; }}
+    p {{ line-height: 1.5; color: #4b5563; }}
+    .package {{ display: block; margin: 12px 0; padding: 15px 16px; border-radius: 14px; background: #111827; color: #fff; text-decoration: none; font-weight: 700; text-align: center; }}
+    .note {{ font-size: 14px; color: #6b7280; margin-top: 16px; }}
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>💳 Пакеты практик</h1>
+      <p>Выберите пакет. 1 практика = одно аудио с оценкой состояния ДО и ПОСЛЕ. Если аудио не отправилось, практика не списывается.</p>
+      {''.join(links)}
+      <p class="note">Пользователь: {escaped_user}. Ритм можно выбрать отдельно: только утро, только вечер или утро + вечер.</p>
+    </section>
+  </main>
+</body>
+</html>"""
+
+
 async def pay_yookassa_web(request: web.Request) -> web.Response:
     source = (request.query.get("source") or "unknown").strip()[:32]
     external_user_id = (request.query.get("user_id") or "").strip()[:64]
@@ -62,6 +123,12 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
     package_id = (request.query.get("package_id") or "").strip()[:64]
     if kind not in {"subscription", "gift", "tokens", "practices", "practice_package"}:
         kind = "subscription"
+
+    if kind == "subscription" and not package_id:
+        return web.Response(
+            text=_practice_package_selector_html(request, source=source, external_user_id=external_user_id),
+            content_type="text/html",
+        )
 
     try:
         confirmation_url = await asyncio.to_thread(
