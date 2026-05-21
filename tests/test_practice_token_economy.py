@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from services.payments.ui import kb_practice_packages, practice_packages_text
 from services.practice_token_contract import daily_practice_cost, normalize_delivery_mode, package_by_id
 from services.practice_tokens import (
     check_and_reserve_for_audio,
@@ -194,6 +195,27 @@ def test_render_packages_text_contains_package_payment_links(tmp_path, monkeypat
     assert '60 практик — 7 900 ₽' in text
     assert 'kind=tokens' in text
     assert 'package_id=practice_20' in text
+
+
+def test_telegram_practice_package_keyboard_uses_yookassa_urls(tmp_path, monkeypatch):
+    monkeypatch.setenv('DB_PATH', str(tmp_path / 'telegram_ui.db'))
+    monkeypatch.setenv('PAYMENT_PUBLIC_BASE_URL', 'https://bot.example')
+
+    text = practice_packages_text(707)
+    keyboard = kb_practice_packages(707, platform='telegram')
+    buttons = [row[0] for row in keyboard.inline_keyboard]
+
+    assert 'Пакеты практик' in text
+    assert 'Ваш баланс: 0 практик' in text
+    assert [button.text for button in buttons[:3]] == [
+        '5 практик — 990 ₽',
+        '20 практик — 3 490 ₽',
+        '60 практик — 7 900 ₽',
+    ]
+    assert buttons[0].url == 'https://bot.example/pay/yookassa?source=telegram&user_id=707&kind=tokens&package_id=practice_5'
+    assert buttons[1].url == 'https://bot.example/pay/yookassa?source=telegram&user_id=707&kind=tokens&package_id=practice_20'
+    assert buttons[2].url == 'https://bot.example/pay/yookassa?source=telegram&user_id=707&kind=tokens&package_id=practice_60'
+    assert buttons[3].callback_data == 'menu:main'
 
 
 def test_payment_url_uses_external_user_id():
