@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from services.db import db, tx
+from services.practice_tokens import grant_tokens_for_payment
 
 log = logging.getLogger(__name__)
 
@@ -46,13 +47,46 @@ class ReconciliationResult:
     problem: str = ""
 
 
+def _grant_practices_if_needed(*, event: str, status: str, payment_id: str, user_id: int, metadata: dict[str, Any]) -> str:
+    kind = str(metadata.get("kind") or "").strip().lower()
+    package_id = str(metadata.get("package_id") or "").strip()
+    succeeded = event == "payment.succeeded" or status == "succeeded"
+    if not succeeded:
+        return ""
+    if kind not in {"tokens", "practices", "practice_package"} and not package_id:
+        return ""
+    if not user_id:
+        return "missing_user_id_for_practice_grant"
+    if not package_id:
+        return "missing_package_id_for_practice_grant"
+    try:
+        inserted, wallet, _ledger_id = grant_tokens_for_payment(
+            provider="yookassa",
+            provider_payment_id=payment_id,
+            user_id=int(user_id),
+            package_id=package_id,
+            source="yookassa_webhook",
+        )
+    except Exception as exc:  # validator: allow-wide-except
+        log.exception("Practice token grant failed for YooKassa payment_id=%s", payment_id)
+        return f"practice_grant_failed:{type(exc).__name__}"
+    log.info(
+        "Practice token grant processed: payment_id=%s user_id=%s package_id=%s inserted=%s balance=%s",
+        payment_id,
+        user_id,
+        package_id,
+        inserted,
+        wallet.available_tokens,
+    )
+    return ""
+
+
 def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
     """Record a YooKassa webhook as an idempotent provider-ledger fact.
 
-    This intentionally does not grant access by itself. Access activation remains
-    owned by the canonical Telegram successful_payment flow until a full web
-    checkout-to-plan contract exists. The webhook is a reconciliation and support
-    surface: it makes external provider state visible and dedupe-safe.
+    For practice package payments, payment.succeeded also grants purchased
+    practices through the single practice token ledger. Duplicate YooKassa
+    webhooks are deduped by provider_payment_id.
     """
     event = str(payload.get("event") or "").strip()
     obj = payload.get("object") or {}
@@ -83,6 +117,16 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
     synthetic_charge_id = f"yookassa:{payment_id}"
     created_at = _utc_now_iso()
     problem = "" if user_id else "missing_user_id"
+
+    grant_problem = _grant_practices_if_needed(
+        event=event,
+        status=status,
+        payment_id=payment_id,
+        user_id=int(user_id),
+        metadata=metadata,
+    )
+    if grant_problem:
+        problem = ";".join(item for item in (problem, grant_problem) if item)
 
     with db() as conn:
         with tx(conn):
