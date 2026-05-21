@@ -15,7 +15,13 @@ from services.events import log_event
 from core.runtime.sovereignty.enforcement import get_current_token
 from services.personalization import get_preface
 
-from services.payments.ui import kb_tariffs, kb_back, kb_pay_selected
+from services.payments.ui import (
+    kb_tariffs,
+    kb_back,
+    kb_pay_selected,
+    kb_practice_packages,
+    practice_packages_text,
+)
 from services.payments.common import yookassa_provider_data_receipt, invoice_link_kb
 
 
@@ -23,15 +29,24 @@ logger = logging.getLogger(__name__)
 
 
 async def cmd_subscribe(message: Message) -> None:
-    await message.answer("💳 Тарифы:", reply_markup=kb_tariffs(message.from_user.id if message.from_user else None))
+    user_id = int(message.from_user.id) if message.from_user else 0
+    await message.answer(
+        practice_packages_text(user_id),
+        reply_markup=kb_practice_packages(user_id, platform="telegram"),
+    )
 
 
 async def sub_menu(cb: CallbackQuery) -> None:
-    preface = await asyncio.to_thread(get_preface, int(cb.from_user.id), 'sub')
-    text = f"{preface}💳 Выберите тариф:"
-    await cb.message.edit_text(text, reply_markup=kb_tariffs(cb.from_user.id))
-    log_event(cb.from_user.id, "view_tariffs", {})
-    log_event(cb.from_user.id, "sub_menu_open", {})
+    user_id = int(cb.from_user.id)
+    preface = await asyncio.to_thread(get_preface, user_id, 'sub')
+    text = f"{preface}{practice_packages_text(user_id)}"
+    await cb.message.edit_text(
+        text,
+        reply_markup=kb_practice_packages(user_id, platform="telegram"),
+        disable_web_page_preview=True,
+    )
+    log_event(cb.from_user.id, "view_practice_packages", {})
+    log_event(cb.from_user.id, "sub_menu_open", {"mode": "practice_packages"})
 
 
 async def sub_pick(cb: CallbackQuery) -> None:
