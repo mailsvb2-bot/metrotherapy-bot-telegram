@@ -12,11 +12,19 @@ from services.payments.yookassa_checkout import create_yookassa_confirmation_url
 log = logging.getLogger(__name__)
 
 
-def _create_yookassa_payment(*, source: str, external_user_id: str, kind: str = "subscription", **_: object) -> str:
+def _create_yookassa_payment(
+    *,
+    source: str,
+    external_user_id: str,
+    kind: str = "subscription",
+    package_id: str | None = None,
+    **_: object,
+) -> str:
     return create_yookassa_confirmation_url(
         source=source,
         external_user_id=external_user_id,
         kind=kind,
+        package_id=package_id,
     )
 
 
@@ -51,7 +59,8 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
     source = (request.query.get("source") or "unknown").strip()[:32]
     external_user_id = (request.query.get("user_id") or "").strip()[:64]
     kind = (request.query.get("kind") or "subscription").strip().casefold()
-    if kind not in {"subscription", "gift"}:
+    package_id = (request.query.get("package_id") or "").strip()[:64]
+    if kind not in {"subscription", "gift", "tokens", "practices", "practice_package"}:
         kind = "subscription"
 
     try:
@@ -60,6 +69,7 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
             source=source,
             external_user_id=external_user_id,
             kind=kind,
+            package_id=package_id or None,
         )
     except Exception as exc:  # validator: allow-wide-except
         log.exception("YooKassa web payment endpoint failed")
@@ -67,7 +77,7 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
             status=500,
             text=(
                 "Не удалось создать платёж YooKassa. "
-                "Проверьте YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY и доступ сервера к api.yookassa.ru. "
+                "Проверьте YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, package_id и доступ сервера к api.yookassa.ru. "
                 f"Ошибка: {type(exc).__name__}"
             ),
             content_type="text/plain",
@@ -80,7 +90,8 @@ async def yookassa_reconciliation_webhook(request: web.Request) -> web.Response:
     """Provider reconciliation endpoint.
 
     This is not a Telegram webhook and does not change Telegram polling mode.
-    It only records external YooKassa payment facts for support/reconciliation.
+    It records external YooKassa payment facts and, for practice-token payments,
+    idempotently grants purchased practices.
     """
     if not _webhook_secret_ok(request):
         return web.json_response({"ok": False, "error": "forbidden"}, status=403)
