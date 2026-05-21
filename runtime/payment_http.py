@@ -14,6 +14,8 @@ from services.practice_tokens import get_active_packages
 
 log = logging.getLogger(__name__)
 
+_ALLOWED_PAYMENT_KINDS = {"subscription", "gift", "tokens", "practices", "practice_package"}
+
 
 def _create_yookassa_payment(
     *,
@@ -29,6 +31,22 @@ def _create_yookassa_payment(
         kind=kind,
         package_id=package_id,
     )
+
+
+def _normalize_payment_kind(kind: str | None, package_id: str | None = None) -> str:
+    """Normalize payment kind before creating a provider checkout.
+
+    Any link that explicitly carries a practice package id is a practice-token
+    checkout, even if an older caller still says kind=subscription. This prevents
+    mixed links like `kind=subscription&package_id=practice_20` from creating a
+    legacy one-off subscription payment and silently ignoring the package id.
+    """
+    normalized = (kind or "subscription").strip().casefold()
+    if normalized not in _ALLOWED_PAYMENT_KINDS:
+        normalized = "subscription"
+    if (package_id or "").strip() and normalized != "gift":
+        return "tokens"
+    return normalized
 
 
 def _webhook_secret() -> str:
@@ -119,10 +137,8 @@ def _practice_package_selector_html(request: web.Request, *, source: str, extern
 async def pay_yookassa_web(request: web.Request) -> web.Response:
     source = (request.query.get("source") or "unknown").strip()[:32]
     external_user_id = (request.query.get("user_id") or "").strip()[:64]
-    kind = (request.query.get("kind") or "subscription").strip().casefold()
     package_id = (request.query.get("package_id") or "").strip()[:64]
-    if kind not in {"subscription", "gift", "tokens", "practices", "practice_package"}:
-        kind = "subscription"
+    kind = _normalize_payment_kind(request.query.get("kind"), package_id)
 
     if kind == "subscription" and not package_id:
         return web.Response(
