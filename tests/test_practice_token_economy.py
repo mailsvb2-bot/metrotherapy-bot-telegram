@@ -210,8 +210,9 @@ def test_telegram_practice_package_keyboard_uses_yookassa_urls(tmp_path, monkeyp
     monkeypatch.setenv('DB_PATH', str(tmp_path / 'telegram_ui.db'))
     monkeypatch.setenv('PAYMENT_PUBLIC_BASE_URL', 'https://bot.example')
 
-    text = practice_packages_text(707)
-    keyboard = kb_practice_packages(707, platform='telegram')
+    user_id = 1707
+    text = practice_packages_text(user_id)
+    keyboard = kb_practice_packages(user_id, platform='telegram')
     buttons = [row[0] for row in keyboard.inline_keyboard]
 
     assert 'Пакеты практик' in text
@@ -221,9 +222,9 @@ def test_telegram_practice_package_keyboard_uses_yookassa_urls(tmp_path, monkeyp
         '20 практик — 3 490 ₽',
         '60 практик — 7 900 ₽',
     ]
-    assert buttons[0].url == 'https://bot.example/pay/yookassa?source=telegram&user_id=707&kind=tokens&package_id=practice_5'
-    assert buttons[1].url == 'https://bot.example/pay/yookassa?source=telegram&user_id=707&kind=tokens&package_id=practice_20'
-    assert buttons[2].url == 'https://bot.example/pay/yookassa?source=telegram&user_id=707&kind=tokens&package_id=practice_60'
+    assert buttons[0].url == 'https://bot.example/pay/yookassa?source=telegram&user_id=1707&kind=tokens&package_id=practice_5'
+    assert buttons[1].url == 'https://bot.example/pay/yookassa?source=telegram&user_id=1707&kind=tokens&package_id=practice_20'
+    assert buttons[2].url == 'https://bot.example/pay/yookassa?source=telegram&user_id=1707&kind=tokens&package_id=practice_60'
     assert buttons[3].callback_data == 'menu:main'
 
 
