@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from services.db import db, tx
+from services.practice_token_contract import package_by_id
 from services.practice_tokens import grant_tokens_for_payment
 
 log = logging.getLogger(__name__)
@@ -47,7 +48,20 @@ class ReconciliationResult:
     problem: str = ""
 
 
-def _grant_practices_if_needed(*, event: str, status: str, payment_id: str, user_id: int, metadata: dict[str, Any]) -> str:
+def _practice_package_payment_problem(*, package_id: str, amount_minor: int, currency: str) -> str:
+    try:
+        package = package_by_id(package_id)
+    except ValueError:
+        return "unknown_package_id_for_practice_grant"
+    if str(currency or "").strip().upper() != "RUB":
+        return "currency_mismatch_for_practice_grant"
+    expected_minor = int(package.price_rub) * 100
+    if int(amount_minor) != expected_minor:
+        return "amount_mismatch_for_practice_grant"
+    return ""
+
+
+def _grant_practices_if_needed(*, event: str, status: str, payment_id: str, user_id: int, metadata: dict[str, Any], amount_minor: int, currency: str) -> str:
     kind = str(metadata.get("kind") or "").strip().lower()
     package_id = str(metadata.get("package_id") or "").strip()
     succeeded = event == "payment.succeeded" or status == "succeeded"
@@ -59,6 +73,9 @@ def _grant_practices_if_needed(*, event: str, status: str, payment_id: str, user
         return "missing_user_id_for_practice_grant"
     if not package_id:
         return "missing_package_id_for_practice_grant"
+    payment_problem = _practice_package_payment_problem(package_id=package_id, amount_minor=amount_minor, currency=currency)
+    if payment_problem:
+        return payment_problem
     try:
         inserted, wallet, _ledger_id = grant_tokens_for_payment(
             provider="yookassa",
@@ -124,6 +141,8 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
         payment_id=payment_id,
         user_id=int(user_id),
         metadata=metadata,
+        amount_minor=amount_minor,
+        currency=currency,
     )
     if grant_problem:
         problem = ";".join(item for item in (problem, grant_problem) if item)
