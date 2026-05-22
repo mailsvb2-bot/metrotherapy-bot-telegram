@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from services.db import db, tx
-from services.practice_token_contract import DEFAULT_PRACTICE_PACKAGES, PracticePackage, daily_practice_cost, normalize_delivery_mode, package_by_id
+from services.practice_token_contract import DEFAULT_PRACTICE_PACKAGES, PracticePackage, daily_practice_cost, normalize_delivery_mode, package_by_id, public_practice_packages
 
 _REQUIRED_SCHEMA_TABLES = frozenset({
     "practice_wallets",
@@ -70,7 +70,7 @@ def ensure_schema(conn: Any) -> None:
 
 
 def get_active_packages() -> tuple[PracticePackage, ...]:
-    return DEFAULT_PRACTICE_PACKAGES
+    return public_practice_packages()
 
 
 def get_package(package_id: str | None) -> PracticePackage:
@@ -200,7 +200,7 @@ def check_and_reserve_for_audio(user_id: int, *, is_demo: bool, session_id: int 
         message = (
             "Для продолжения полного маршрута нужна 1 практика.\n\n"
             "У вас сейчас: 0 практик.\n\n"
-            "Откройте “💳 Пакеты практик” и выберите 5, 20 или 60 практик."
+            "Откройте “💳 Пакеты практик” и выберите комфортный формат продолжения."
         )
         if mode == "soft":
             return PracticeAccessDecision(True, mode, "soft_insufficient_balance", warning=message)
@@ -264,11 +264,16 @@ def payment_url(base_url: str, *, user_id: int, platform: str, external_user_id:
     return f"{base_url.rstrip('/')}/pay/yookassa?{params}"
 
 
+def _price_label(price_rub: int) -> str:
+    return f"{int(price_rub):,} ₽".replace(",", " ")
+
+
 def render_packages_text(user_id: int, *, base_url: str, platform: str, external_user_id: str | None = None) -> str:
     wallet = get_wallet(int(user_id))
-    lines = ["💳 Пакеты практик", "", f"Ваш баланс: {wallet.available_tokens} практик.", "", "1 практика = одно аудио с оценкой состояния ДО и ПОСЛЕ.", "Если аудио не отправилось, практика не списывается.", ""]
+    lines = ["💳 Выберите формат продолжения", "", f"Ваш баланс: {wallet.available_tokens} практик.", "", "1 практика = одно аудио с оценкой состояния ДО и ПОСЛЕ.", "Если аудио не отправилось, практика не списывается.", ""]
     for package in get_active_packages():
-        lines.append(f"{package.title} — {package.price_rub:,} ₽".replace(",", " "))
+        badge = f"{package.badge} " if package.badge else ""
+        lines.append(f"{badge}{package.title} — {_price_label(package.price_rub)}")
         lines.append(package.description)
         lines.append(payment_url(base_url, user_id=int(user_id), platform=platform, external_user_id=external_user_id, package_id=package.package_id))
         lines.append("")
