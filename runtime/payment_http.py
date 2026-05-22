@@ -10,11 +10,13 @@ from aiohttp import web
 
 from services.payments.reconciliation import record_yookassa_webhook
 from services.payments.yookassa_checkout import create_yookassa_confirmation_url
+from services.practice_token_contract import package_by_id
 from services.practice_tokens import get_active_packages
 
 log = logging.getLogger(__name__)
 
 _ALLOWED_PAYMENT_KINDS = {"subscription", "gift", "tokens", "practices", "practice_package"}
+_TOKEN_PAYMENT_KINDS = {"tokens", "practices", "practice_package"}
 
 
 def _create_yookassa_payment(
@@ -47,6 +49,23 @@ def _normalize_payment_kind(kind: str | None, package_id: str | None = None) -> 
     if (package_id or "").strip() and normalized != "gift":
         return "tokens"
     return normalized
+
+
+def _package_error_response(package_id: str) -> web.Response | None:
+    if not package_id:
+        return None
+    try:
+        package_by_id(package_id)
+    except ValueError:
+        return web.Response(
+            status=400,
+            text=(
+                "Неизвестный пакет практик. "
+                "Откройте страницу выбора пакета и выберите 5, 20 или 60 практик."
+            ),
+            content_type="text/plain",
+        )
+    return None
 
 
 def _webhook_secret() -> str:
@@ -145,6 +164,11 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
             text=_practice_package_selector_html(request, source=source, external_user_id=external_user_id),
             content_type="text/html",
         )
+
+    if kind in _TOKEN_PAYMENT_KINDS:
+        package_error = _package_error_response(package_id)
+        if package_error is not None:
+            return package_error
 
     try:
         confirmation_url = await asyncio.to_thread(
