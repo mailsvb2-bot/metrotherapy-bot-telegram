@@ -11,6 +11,13 @@ def test_payment_kind_normalization_promotes_package_links_to_tokens():
     assert _normalize_payment_kind('gift', 'practice_20') == 'gift'
 
 
+def test_missing_practice_package_returns_bad_request():
+    response = _package_error_response('')
+    assert response is not None
+    assert response.status == 400
+    assert 'Не выбран пакет практик' in response.text
+
+
 def test_unknown_practice_package_returns_bad_request():
     response = _package_error_response('practice_unknown')
     assert response is not None
