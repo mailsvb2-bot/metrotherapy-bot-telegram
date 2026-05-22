@@ -12,21 +12,29 @@ def test_amount_to_minor_units_uses_decimal_rounding():
 
 def test_practice_package_webhook_amount_must_match_contract():
     assert _practice_package_payment_problem(
-        package_id='practice_20',
-        amount_minor=349000,
+        package_id='practice_personal_month',
+        amount_minor=2300000,
         currency='RUB',
     ) == ''
     assert _practice_package_payment_problem(
-        package_id='practice_20',
-        amount_minor=99000,
+        package_id='practice_personal_month',
+        amount_minor=1290000,
         currency='RUB',
     ) == 'amount_mismatch_for_practice_grant'
 
 
-def test_practice_package_webhook_currency_must_be_rub():
+def test_legacy_practice_package_webhook_amount_remains_supported():
     assert _practice_package_payment_problem(
         package_id='practice_20',
         amount_minor=349000,
+        currency='RUB',
+    ) == ''
+
+
+def test_practice_package_webhook_currency_must_be_rub():
+    assert _practice_package_payment_problem(
+        package_id='practice_personal_month',
+        amount_minor=2300000,
         currency='USD',
     ) == 'currency_mismatch_for_practice_grant'
 
@@ -47,11 +55,11 @@ def test_successful_repeat_webhook_replaces_stale_problem(tmp_path, monkeypatch)
         'object': {
             'id': payment_id,
             'status': 'succeeded',
-            'amount': {'value': '990.00', 'currency': 'RUB'},
+            'amount': {'value': '12900.00', 'currency': 'RUB'},
             'metadata': {
                 'user_id': '707',
                 'kind': 'tokens',
-                'package_id': 'practice_20',
+                'package_id': 'practice_personal_month',
             },
         },
     }
@@ -60,11 +68,11 @@ def test_successful_repeat_webhook_replaces_stale_problem(tmp_path, monkeypatch)
         'object': {
             'id': payment_id,
             'status': 'succeeded',
-            'amount': {'value': '3490.00', 'currency': 'RUB'},
+            'amount': {'value': '23000.00', 'currency': 'RUB'},
             'metadata': {
                 'user_id': '707',
                 'kind': 'tokens',
-                'package_id': 'practice_20',
+                'package_id': 'practice_personal_month',
             },
         },
     }
@@ -88,4 +96,4 @@ def test_successful_repeat_webhook_replaces_stale_problem(tmp_path, monkeypatch)
         ).fetchone()
 
     assert payment['problem'] == ''
-    assert wallet['available_tokens'] == 20
+    assert wallet['available_tokens'] == 60
