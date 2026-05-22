@@ -10,6 +10,7 @@ from typing import Any
 from services.db import db, tx
 from services.practice_token_contract import package_by_id
 from services.practice_tokens import grant_tokens_for_payment
+from services.premium_entitlements import grant_premium_entitlements_for_payment
 
 log = logging.getLogger(__name__)
 
@@ -86,16 +87,25 @@ def _grant_practices_if_needed(*, event: str, status: str, payment_id: str, user
             package_id=package_id,
             source="yookassa_webhook",
         )
+        premium = grant_premium_entitlements_for_payment(
+            provider="yookassa",
+            provider_payment_id=payment_id,
+            user_id=int(user_id),
+            package_id=package_id,
+            source="yookassa_webhook",
+        )
     except Exception as exc:  # validator: allow-wide-except
-        log.exception("Practice token grant failed for YooKassa payment_id=%s", payment_id)
+        log.exception("Practice token or premium grant failed for YooKassa payment_id=%s", payment_id)
         return f"practice_grant_failed:{type(exc).__name__}"
     log.info(
-        "Practice token grant processed: payment_id=%s user_id=%s package_id=%s inserted=%s balance=%s",
+        "Practice package processed: payment_id=%s user_id=%s package_id=%s inserted=%s balance=%s premium_outbox=%s consultation=%s",
         payment_id,
         user_id,
         package_id,
         inserted,
         wallet.available_tokens,
+        premium.outbox_created,
+        premium.consultation_request_created,
     )
     return ""
 
@@ -116,7 +126,7 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
     status = str(obj.get("status") or "unknown").strip() or "unknown"
     metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
     amount_minor = _amount_to_minor_units(obj.get("amount") if isinstance(obj.get("amount"), dict) else None)
-    currency = str(((obj.get("amount") or {}) if isinstance(obj.get("amount"), dict) else {}).get("currency") or "RUB").strip().upper()
+    currency = str(((obj.get("amount") or {}) if isinstance(obj.get("amount",), dict) else {}).get("currency") or "RUB").strip().upper()
     user_id = _metadata_user_id(metadata)
     kind = str((metadata or {}).get("kind") or "payment").strip() or "payment"
 
