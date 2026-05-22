@@ -33,19 +33,41 @@ def payment_public_base_url() -> str:
     return str(base).strip().rstrip("/")
 
 
+def _price_label(price_rub: int) -> str:
+    return f"{int(price_rub):,} ₽".replace(",", " ")
+
+
+def _package_button_label(package) -> str:
+    prefix = f"{package.badge} " if getattr(package, "badge", "") else ""
+    return f"{prefix}{package.title} — {_price_label(package.price_rub)}"
+
+
 def practice_packages_text(user_id: int) -> str:
     wallet = get_wallet(int(user_id))
-    return (
-        "💳 Пакеты практик\n\n"
-        f"Ваш баланс: {wallet.available_tokens} практик.\n\n"
-        "1 практика = одно аудио с оценкой состояния ДО и ПОСЛЕ.\n"
-        "Если аудио не отправилось, практика не списывается.\n\n"
-        "Выберите пакет ниже:\n"
-        "🌿 5 практик — 990 ₽\n"
-        "🔐 20 практик — 3 490 ₽\n"
-        "🌅🌙 60 практик — 7 900 ₽\n\n"
-        "Ритм выбирается отдельно: только утро, только вечер или утро + вечер."
-    )
+    lines = [
+        "💳 Выберите формат продолжения",
+        "",
+        f"Ваш баланс: {wallet.available_tokens} практик.",
+        "",
+        "1 практика = одно аудио с оценкой состояния ДО и ПОСЛЕ.",
+        "Если аудио не отправилось, практика не списывается.",
+        "",
+        "🌿 Старт без риска — мягкий вход. Если продолжите, стартовый платёж можно зачесть в большой пакет через поддержку.",
+        "🌙 Полный маршрут — основной самостоятельный вариант.",
+        "🎓 Антистресс-система — практики + видеокурс по стрессу.",
+        "👤 Личный антистресс-месяц — практики + видеокурс + 1 консультация 60 минут.",
+        "",
+        "Выберите пакет ниже:",
+    ]
+    for package in get_active_packages():
+        lines.append(f"{package.badge} {package.title} — {_price_label(package.price_rub)}".strip())
+        lines.append(package.description)
+    lines.extend([
+        "",
+        "Ритм выбирается отдельно: только утро, только вечер или утро + вечер.",
+        "Метротерапия не заменяет врача или психотерапию. Если состояние острое, важно обратиться к специалисту.",
+    ])
+    return "\n".join(lines)
 
 
 def kb_practice_packages(user_id: int, *, platform: str = "telegram", external_user_id: str | None = None) -> InlineKeyboardMarkup:
@@ -61,7 +83,7 @@ def kb_practice_packages(user_id: int, *, platform: str = "telegram", external_u
         )
         rows.append([
             InlineKeyboardButton(
-                text=f"{package.title} — {package.price_rub:,} ₽".replace(",", " "),
+                text=_package_button_label(package),
                 url=url,
             )
         ])
