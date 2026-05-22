@@ -68,6 +68,17 @@ def _package_error_response(package_id: str) -> web.Response | None:
     return None
 
 
+def _user_id_error_response(user_id: str) -> web.Response | None:
+    cleaned = (user_id or "").strip()
+    if cleaned.isdigit() and int(cleaned) > 0:
+        return None
+    return web.Response(
+        status=400,
+        text="Не удалось определить пользователя для начисления практик. Откройте оплату из бота.",
+        content_type="text/plain",
+    )
+
+
 def _webhook_secret() -> str:
     return (
         os.getenv("YOOKASSA_WEBHOOK_SECRET")
@@ -166,6 +177,9 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
         )
 
     if kind in _TOKEN_PAYMENT_KINDS:
+        user_error = _user_id_error_response(external_user_id)
+        if user_error is not None:
+            return user_error
         package_error = _package_error_response(package_id)
         if package_error is not None:
             return package_error
