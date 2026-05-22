@@ -9,6 +9,7 @@ from aiohttp import web
 from config.settings import settings
 from runtime.messenger_ingress import max_webhook, vk_webhook
 from runtime.messenger_media_http import audio_access, audio_media
+from runtime.messenger_senders import MaxBotSender, TelegramBotSender, VkBotSender
 from runtime.payment_http import pay_yookassa_web, yookassa_reconciliation_webhook
 from runtime.telegram_transport import telegram_transport
 from runtime.telegram_webhook_runtime import (
@@ -18,6 +19,7 @@ from runtime.telegram_webhook_runtime import (
     telegram_webhook_path,
 )
 from services.messenger.audio_links import AUDIO_ACCESS_PREFIX, AUDIO_MEDIA_PREFIX
+from services.messenger.outbound import SenderRegistry
 
 if TYPE_CHECKING:
     from aiogram import Bot, Dispatcher
@@ -52,6 +54,14 @@ def _register_messenger_routes(app: web.Application) -> None:
     app.router.add_post("/webhooks/max", max_webhook)
     app.router.add_get(f"{AUDIO_MEDIA_PREFIX}{{filename}}", audio_media)
     app.router.add_get(f"{AUDIO_ACCESS_PREFIX}{{token}}", audio_access)
+
+
+def _register_premium_senders(app: web.Application, *, bot: "Bot | None") -> None:
+    app["premium_senders"] = SenderRegistry(
+        telegram=TelegramBotSender(bot) if bot is not None else None,
+        vk=VkBotSender(),
+        max=MaxBotSender(),
+    )
 
 
 def _register_telegram_routes(
@@ -103,6 +113,7 @@ async def start_messenger_webhook_runtime(
 
     app = web.Application()
     _register_health_routes(app)
+    _register_premium_senders(app, bot=bot)
 
     if messenger_enabled:
         _register_messenger_routes(app)
