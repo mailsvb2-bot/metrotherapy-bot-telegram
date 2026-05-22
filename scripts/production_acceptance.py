@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -102,6 +103,21 @@ def _method_probe(name: str, url: str, *, expected_status: int = 405, expected_a
     return AcceptanceResult(name=name, ok=ok, detail=f"status={status} allow={allow}")
 
 
+def _bad_request_probe(name: str, url: str, *, expected_text: str) -> AcceptanceResult:
+    try:
+        request = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            status = int(getattr(response, "status", 0) or 0)
+            body = response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        status = int(exc.code)
+        body = exc.read().decode("utf-8", "replace") if exc.fp else ""
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return AcceptanceResult(name=name, ok=False, detail=f"{type(exc).__name__}: {exc}")
+    ok = status == 400 and expected_text in body
+    return AcceptanceResult(name=name, ok=ok, detail=f"status={status} body={body[:200]}")
+
+
 def collect_results() -> list[AcceptanceResult]:
     public_base = os.getenv("METRO_PUBLIC_BOT_BASE_URL", os.getenv("MESSENGER_PUBLIC_BASE_URL", "https://metrotherapy-bot.metrotherapy.ru")).rstrip("/")
     results: list[AcceptanceResult] = []
@@ -113,6 +129,8 @@ def collect_results() -> list[AcceptanceResult]:
     results.append(_http_json("http:local_ready", "http://127.0.0.1:8082/readyz", readiness=True))
     results.append(_http_json("http:local_webhook_health", "http://127.0.0.1:8081/healthz"))
     if public_base:
+        payment_query = urllib.parse.urlencode({"source": "acceptance", "user_id": "1", "kind": "tokens"})
+        results.append(_bad_request_probe("http:public_payment_route", f"{public_base}/pay/yookassa?{payment_query}", expected_text="Не выбран пакет практик"))
         results.append(_method_probe("http:vk_webhook_get_rejected", f"{public_base}/webhooks/vk"))
         results.append(_method_probe("http:max_webhook_get_rejected", f"{public_base}/webhooks/max"))
     return results
