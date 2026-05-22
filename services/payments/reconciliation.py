@@ -4,6 +4,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 from services.db import db, tx
@@ -22,9 +23,10 @@ def _amount_to_minor_units(amount: dict[str, Any] | None) -> int:
         return 0
     raw = str(amount.get("value") or "0").replace(",", ".").strip()
     try:
-        return int(round(float(raw) * 100))
-    except ValueError:
+        value = Decimal(raw).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError):
         return 0
+    return int(value * 100)
 
 
 def _metadata_user_id(metadata: dict[str, Any] | None) -> int:
@@ -157,7 +159,7 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
                 conn.execute(
                     """
                     UPDATE payments
-                    SET provider_status=?, provider_event_id=?, provider_raw=?, reconciled_at=?, problem=COALESCE(NULLIF(problem,''), ?)
+                    SET provider_status=?, provider_event_id=?, provider_raw=?, reconciled_at=?, problem=?
                     WHERE provider_charge_id=? OR telegram_charge_id=?
                     """.strip(),
                     (status, provider_event_id, raw, created_at, problem, payment_id, synthetic_charge_id),
