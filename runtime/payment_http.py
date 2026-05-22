@@ -52,8 +52,12 @@ def _normalize_payment_kind(kind: str | None, package_id: str | None = None) -> 
 
 
 def _package_error_response(package_id: str) -> web.Response | None:
-    if not package_id:
-        return None
+    if not (package_id or "").strip():
+        return web.Response(
+            status=400,
+            text="Не выбран пакет практик. Откройте страницу выбора пакета и выберите 5, 20 или 60 практик.",
+            content_type="text/plain",
+        )
     try:
         package_by_id(package_id)
     except ValueError:
