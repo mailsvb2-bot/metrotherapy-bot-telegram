@@ -12,6 +12,7 @@ from services.payments.reconciliation import record_yookassa_webhook
 from services.payments.yookassa_checkout import create_yookassa_confirmation_url
 from services.practice_token_contract import package_by_id
 from services.practice_tokens import get_active_packages
+from services.premium_delivery import flush_premium_delivery_outbox
 
 log = logging.getLogger(__name__)
 
@@ -211,6 +212,19 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
     raise web.HTTPFound(location=confirmation_url)
 
 
+async def _flush_premium_delivery_best_effort(request: web.Request) -> None:
+    senders = request.app.get("premium_senders")
+    if senders is None:
+        return
+    try:
+        result = await flush_premium_delivery_outbox(senders=senders, limit=20)
+    except Exception:  # validator: allow-wide-except
+        log.exception("Premium delivery outbox flush failed")
+        return
+    if result.sent or result.failed or result.skipped:
+        log.info("Premium delivery flush: sent=%s failed=%s skipped=%s", result.sent, result.failed, result.skipped)
+
+
 async def yookassa_reconciliation_webhook(request: web.Request) -> web.Response:
     """Provider reconciliation endpoint.
 
@@ -230,6 +244,8 @@ async def yookassa_reconciliation_webhook(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": "bad_payload"}, status=400)
 
     result = await asyncio.to_thread(record_yookassa_webhook, payload)
+    if result.ok and not result.problem:
+        await _flush_premium_delivery_best_effort(request)
     status = 200 if result.ok else 400
     return web.json_response(
         {
