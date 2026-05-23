@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 import urllib.parse
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from services.db import db, tx
@@ -24,6 +26,7 @@ class PracticeWallet:
     available_tokens: int = 0
     reserved_tokens: int = 0
     used_tokens: int = 0
+    refunded_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,14 @@ class PracticeAccessDecision:
     reservation_id: str | None = None
     message: str = ""
     warning: str = ""
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _reservation_expiry(minutes: int = 45) -> str:
+    return (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=int(minutes))).isoformat()
 
 
 def token_economy_enabled() -> bool:
@@ -79,23 +90,24 @@ def get_package(package_id: str | None) -> PracticePackage:
 
 def _wallet_from_row(row: Any, user_id: int) -> PracticeWallet:
     if not row:
-        return PracticeWallet(int(user_id), 0, 0, 0)
+        return PracticeWallet(int(user_id), 0, 0, 0, 0)
     return PracticeWallet(
         int(row["user_id"]),
         int(row["available_tokens"]),
         int(row["reserved_tokens"]),
         int(row["used_tokens"]),
+        int(row["refunded_tokens"] if "refunded_tokens" in row.keys() else 0),
     )
 
 
 def _ensure_wallet(conn: Any, user_id: int) -> None:
     ensure_schema(conn)
-    conn.execute("INSERT OR IGNORE INTO practice_wallets(user_id, available_tokens, reserved_tokens, used_tokens) VALUES(?,?,?,?)", (int(user_id), 0, 0, 0))
+    conn.execute("INSERT OR IGNORE INTO practice_wallets(user_id, available_tokens, reserved_tokens, used_tokens, refunded_tokens) VALUES(?,?,?,?,?)", (int(user_id), 0, 0, 0, 0))
 
 
 def _get_wallet_in_conn(conn: Any, user_id: int) -> PracticeWallet:
     row = conn.execute(
-        "SELECT user_id, available_tokens, reserved_tokens, used_tokens FROM practice_wallets WHERE user_id=?",
+        "SELECT user_id, available_tokens, reserved_tokens, used_tokens, refunded_tokens FROM practice_wallets WHERE user_id=?",
         (int(user_id),),
     ).fetchone()
     return _wallet_from_row(row, int(user_id))
@@ -107,13 +119,53 @@ def get_wallet(user_id: int) -> PracticeWallet:
             _ensure_wallet(conn, int(user_id))
             return _get_wallet_in_conn(conn, int(user_id))
     except Exception:  # validator: allow-wide-except
-        return PracticeWallet(int(user_id), 0, 0, 0)
+        return PracticeWallet(int(user_id), 0, 0, 0, 0)
 
 
-def _insert_ledger(conn: Any, *, user_id: int, event_type: str, amount: int, balance_after: int, reason: str, source: str = "", package_id: str | None = None, provider: str | None = None, provider_payment_id: str | None = None, idempotency_key: str) -> int:
+def _insert_ledger(
+    conn: Any,
+    *,
+    user_id: int,
+    event_type: str,
+    amount: int,
+    balance_after: int,
+    reason: str,
+    source: str = "",
+    package_id: str | None = None,
+    provider: str | None = None,
+    provider_payment_id: str | None = None,
+    idempotency_key: str,
+    reserved_after: int = 0,
+    session_id: int | None = None,
+    audio_anchor: int | None = None,
+    reservation_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> int:
     conn.execute(
-        "INSERT INTO practice_ledger(user_id, event_type, amount, balance_after, reason, source, package_id, provider, provider_payment_id, idempotency_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (int(user_id), event_type, int(amount), int(balance_after), reason, source, package_id, provider, provider_payment_id, idempotency_key),
+        """
+        INSERT INTO practice_ledger(
+            user_id, event_type, amount, balance_after, reserved_after,
+            reason, source, package_id, provider, provider_payment_id,
+            session_id, audio_anchor, reservation_id, idempotency_key, metadata_json
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """.strip(),
+        (
+            int(user_id),
+            event_type,
+            int(amount),
+            int(balance_after),
+            int(reserved_after),
+            reason,
+            source,
+            package_id,
+            provider,
+            provider_payment_id,
+            session_id,
+            audio_anchor,
+            reservation_id,
+            idempotency_key,
+            json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
+        ),
     )
     row = conn.execute("SELECT last_insert_rowid() AS id").fetchone()
     return int(row["id"] if row else 0)
@@ -130,13 +182,28 @@ def grant_tokens(user_id: int, *, package_id: str, amount: int, provider: str = 
             wallet = _get_wallet_in_conn(conn, int(user_id))
             balance = int(wallet.available_tokens) + int(amount)
             conn.execute("UPDATE practice_wallets SET available_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (balance, int(user_id)))
-            ledger_id = _insert_ledger(conn, user_id=int(user_id), event_type="grant", amount=int(amount), balance_after=balance, reason="payment_succeeded", source=source, package_id=package_id, provider=provider, provider_payment_id=provider_payment_id, idempotency_key=idempotency_key)
             wallet_after = _get_wallet_in_conn(conn, int(user_id))
+            ledger_id = _insert_ledger(
+                conn,
+                user_id=int(user_id),
+                event_type="grant",
+                amount=int(amount),
+                balance_after=wallet_after.available_tokens,
+                reserved_after=wallet_after.reserved_tokens,
+                reason="payment_succeeded",
+                source=source,
+                package_id=package_id,
+                provider=provider,
+                provider_payment_id=provider_payment_id,
+                idempotency_key=idempotency_key,
+                metadata={"provider_payment_id": provider_payment_id, "package_id": package_id},
+            )
     return True, wallet_after, ledger_id
 
 
 def reserve_practice(user_id: int, *, session_id: int | None = None, audio_anchor: int | None = None, reason: str = "audio_delivery") -> tuple[bool, PracticeWallet, str | None]:
     reservation_id = f"practice_res_{uuid.uuid4().hex}"
+    expires_at = _reservation_expiry()
     with db() as conn:
         with tx(conn):
             _ensure_wallet(conn, int(user_id))
@@ -146,9 +213,22 @@ def reserve_practice(user_id: int, *, session_id: int | None = None, audio_ancho
             available_after = int(wallet.available_tokens) - 1
             reserved_after = int(wallet.reserved_tokens) + 1
             conn.execute("UPDATE practice_wallets SET available_tokens=?, reserved_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (available_after, reserved_after, int(user_id)))
-            conn.execute("INSERT INTO practice_reservations(reservation_id, user_id, amount, status, session_id, audio_anchor, reason) VALUES(?,?,?,?,?,?,?)", (reservation_id, int(user_id), 1, "reserved", int(session_id) if session_id is not None else None, int(audio_anchor) if audio_anchor is not None else None, reason))
-            _insert_ledger(conn, user_id=int(user_id), event_type="reserve", amount=-1, balance_after=available_after, reason=reason, idempotency_key=f"reserve:{reservation_id}")
+            conn.execute("INSERT INTO practice_reservations(reservation_id, user_id, amount, status, session_id, audio_anchor, reason, expires_at) VALUES(?,?,?,?,?,?,?,?)", (reservation_id, int(user_id), 1, "reserved", int(session_id) if session_id is not None else None, int(audio_anchor) if audio_anchor is not None else None, reason, expires_at))
             wallet_after = _get_wallet_in_conn(conn, int(user_id))
+            _insert_ledger(
+                conn,
+                user_id=int(user_id),
+                event_type="reserve",
+                amount=-1,
+                balance_after=wallet_after.available_tokens,
+                reserved_after=wallet_after.reserved_tokens,
+                reason=reason,
+                idempotency_key=f"reserve:{reservation_id}",
+                session_id=session_id,
+                audio_anchor=audio_anchor,
+                reservation_id=reservation_id,
+                metadata={"expires_at": expires_at},
+            )
     return True, wallet_after, reservation_id
 
 
@@ -167,7 +247,20 @@ def consume_reservation(reservation_id: str, *, reason: str = "audio_delivery_su
             used_after = int(wallet.used_tokens) + int(row["amount"])
             conn.execute("UPDATE practice_wallets SET reserved_tokens=?, used_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (reserved_after, used_after, user_id))
             conn.execute("UPDATE practice_reservations SET status='consumed', updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?", (reservation_id,))
-            _insert_ledger(conn, user_id=user_id, event_type="consume", amount=-int(row["amount"]), balance_after=int(wallet.available_tokens), reason=reason, idempotency_key=f"consume:{reservation_id}")
+            wallet_after = _get_wallet_in_conn(conn, user_id)
+            _insert_ledger(
+                conn,
+                user_id=user_id,
+                event_type="consume",
+                amount=-int(row["amount"]),
+                balance_after=wallet_after.available_tokens,
+                reserved_after=wallet_after.reserved_tokens,
+                reason=reason,
+                idempotency_key=f"consume:{reservation_id}",
+                session_id=row["session_id"],
+                audio_anchor=row["audio_anchor"],
+                reservation_id=reservation_id,
+            )
     return True
 
 
@@ -187,7 +280,20 @@ def release_reservation(reservation_id: str, *, reason: str = "audio_delivery_fa
             reserved_after = max(0, int(wallet.reserved_tokens) - amount)
             conn.execute("UPDATE practice_wallets SET available_tokens=?, reserved_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (available_after, reserved_after, user_id))
             conn.execute("UPDATE practice_reservations SET status='released', updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?", (reservation_id,))
-            _insert_ledger(conn, user_id=user_id, event_type="release", amount=amount, balance_after=available_after, reason=reason, idempotency_key=f"release:{reservation_id}")
+            wallet_after = _get_wallet_in_conn(conn, user_id)
+            _insert_ledger(
+                conn,
+                user_id=user_id,
+                event_type="release",
+                amount=amount,
+                balance_after=wallet_after.available_tokens,
+                reserved_after=wallet_after.reserved_tokens,
+                reason=reason,
+                idempotency_key=f"release:{reservation_id}",
+                session_id=row["session_id"],
+                audio_anchor=row["audio_anchor"],
+                reservation_id=reservation_id,
+            )
     return True
 
 
