@@ -173,13 +173,19 @@ def grant_premium_entitlements_for_payment(*, user_id: int, package_id: str, pro
     return PremiumGrantResult(video_granted=video_granted, consultation_granted=consultation_granted, outbox_created=outbox_created, consultation_request_created=consultation_request_created)
 
 
-def pending_delivery(limit: int = 20) -> list[dict[str, Any]]:
+def pending_delivery(limit: int = 20, *, user_id: int | None = None) -> list[dict[str, Any]]:
     with db() as conn:
         ensure_schema(conn)
-        rows = conn.execute(
-            "SELECT id, user_id, platform, external_user_id, delivery_kind, title, body, attempts, last_error FROM premium_delivery_outbox WHERE status='pending' ORDER BY id ASC LIMIT ?",
-            (int(limit),),
-        ).fetchall()
+        if user_id is None:
+            rows = conn.execute(
+                "SELECT id, user_id, platform, external_user_id, delivery_kind, title, body, attempts, last_error FROM premium_delivery_outbox WHERE status='pending' ORDER BY id ASC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, user_id, platform, external_user_id, delivery_kind, title, body, attempts, last_error FROM premium_delivery_outbox WHERE status='pending' AND user_id=? ORDER BY id ASC LIMIT ?",
+                (int(user_id), int(limit)),
+            ).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -197,11 +203,17 @@ def mark_delivery_failed(delivery_id: int, error: str) -> None:
             conn.execute("UPDATE premium_delivery_outbox SET attempts=attempts+1, last_error=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (str(error)[:500], int(delivery_id)))
 
 
-def consultation_requests_summary(limit: int = 20) -> list[dict[str, Any]]:
+def consultation_requests_summary(limit: int = 20, *, user_id: int | None = None) -> list[dict[str, Any]]:
     with db() as conn:
         ensure_schema(conn)
-        rows = conn.execute(
-            "SELECT id, user_id, platform, external_user_id, package_id, provider_payment_id, status, contact_payload, created_at FROM consultation_requests ORDER BY id DESC LIMIT ?",
-            (int(limit),),
-        ).fetchall()
+        if user_id is None:
+            rows = conn.execute(
+                "SELECT id, user_id, platform, external_user_id, package_id, provider_payment_id, status, contact_payload, created_at FROM consultation_requests ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, user_id, platform, external_user_id, package_id, provider_payment_id, status, contact_payload, created_at FROM consultation_requests WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                (int(user_id), int(limit)),
+            ).fetchall()
     return [dict(row) for row in rows]
