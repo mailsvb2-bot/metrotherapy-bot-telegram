@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 from services.db import db, tx
+from services.messenger.platforms import normalize_platform
 from services.practice_token_contract import package_by_id
 from services.practice_tokens import grant_tokens_for_payment
 from services.premium_entitlements import grant_premium_entitlements_for_payment
@@ -38,6 +39,12 @@ def _metadata_user_id(metadata: dict[str, Any] | None) -> int:
         if value.isdigit():
             return int(value)
     return 0
+
+
+def _metadata_platform(metadata: dict[str, Any] | None) -> str:
+    if not metadata:
+        return "telegram"
+    return normalize_platform(str(metadata.get("source") or metadata.get("platform") or "telegram"))
 
 
 @dataclass(frozen=True)
@@ -93,6 +100,7 @@ def _grant_practices_if_needed(*, event: str, status: str, payment_id: str, user
             user_id=int(user_id),
             package_id=package_id,
             source="yookassa_webhook",
+            fallback_platform=_metadata_platform(metadata),
         )
     except Exception as exc:  # validator: allow-wide-except
         log.exception("Practice token or premium grant failed for YooKassa payment_id=%s", payment_id)
@@ -125,8 +133,9 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
     payment_id = str(obj.get("id") or payload.get("id") or "").strip()
     status = str(obj.get("status") or "unknown").strip() or "unknown"
     metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
-    amount_minor = _amount_to_minor_units(obj.get("amount") if isinstance(obj.get("amount"), dict) else None)
-    currency = str(((obj.get("amount") or {}) if isinstance(obj.get("amount",), dict) else {}).get("currency") or "RUB").strip().upper()
+    amount_obj = obj.get("amount") if isinstance(obj.get("amount"), dict) else None
+    amount_minor = _amount_to_minor_units(amount_obj)
+    currency = str((amount_obj or {}).get("currency") or "RUB").strip().upper()
     user_id = _metadata_user_id(metadata)
     kind = str((metadata or {}).get("kind") or "payment").strip() or "payment"
 
