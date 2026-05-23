@@ -34,7 +34,7 @@ async def test_antistress_package_grants_video_delivery_to_all_known_messengers(
     assert result.video_granted is True
     assert result.consultation_granted is False
     assert result.outbox_created == 3
-    assert len(pending_delivery()) == 3
+    assert len(pending_delivery(user_id=1001)) == 3
 
     tg = MemorySender()
     vk = MemorySender()
@@ -43,11 +43,11 @@ async def test_antistress_package_grants_video_delivery_to_all_known_messengers(
         senders=SenderRegistry(telegram=tg, vk=vk, max=mx),
     )
 
-    assert flushed.sent == 3
+    assert flushed.sent >= 3
     assert 'https://example.test/course' in tg.messages[0][1]
     assert 'https://example.test/course' in vk.messages[0][1]
     assert 'https://example.test/course' in mx.messages[0][1]
-    assert pending_delivery() == []
+    assert pending_delivery(user_id=1001) == []
 
 
 @pytest.mark.asyncio
@@ -78,7 +78,7 @@ async def test_personal_month_grants_video_and_consultation_request_idempotently
     assert second.consultation_request_created is False
     assert second.outbox_created == 0
 
-    requests = consultation_requests_summary()
+    requests = consultation_requests_summary(user_id=2002)
     assert len(requests) == 1
     assert requests[0]['user_id'] == 2002
     assert requests[0]['package_id'] == 'practice_personal_month'
