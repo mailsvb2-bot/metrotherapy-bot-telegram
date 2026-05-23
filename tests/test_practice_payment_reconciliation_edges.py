@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from services.db import db
 from services.payments.reconciliation import _amount_to_minor_units, _practice_package_payment_problem, record_yookassa_webhook
+from services.premium_entitlements import CONSULTATION_ENTITLEMENT, VIDEO_ENTITLEMENT, consultation_requests_summary, pending_delivery
 
 
 def test_amount_to_minor_units_uses_decimal_rounding():
@@ -47,8 +48,9 @@ def test_practice_package_webhook_unknown_package_is_problem():
     ) == 'unknown_package_id_for_practice_grant'
 
 
-def test_successful_repeat_webhook_replaces_stale_problem(tmp_path, monkeypatch):
+def test_successful_repeat_webhook_replaces_stale_problem_and_grants_premium(tmp_path, monkeypatch):
     monkeypatch.setenv('DB_PATH', str(tmp_path / 'reconciliation.db'))
+    monkeypatch.setenv('STRESS_VIDEO_COURSE_URL', 'https://example.test/course')
     payment_id = 'pay-stale-problem-1'
     bad_payload = {
         'event': 'payment.succeeded',
@@ -80,6 +82,8 @@ def test_successful_repeat_webhook_replaces_stale_problem(tmp_path, monkeypatch)
     first = record_yookassa_webhook(bad_payload)
     assert first.problem == 'amount_mismatch_for_practice_grant'
     assert first.inserted is True
+    assert pending_delivery() == []
+    assert consultation_requests_summary() == []
 
     second = record_yookassa_webhook(good_payload)
     assert second.problem == ''
@@ -94,6 +98,19 @@ def test_successful_repeat_webhook_replaces_stale_problem(tmp_path, monkeypatch)
             'SELECT available_tokens FROM practice_wallets WHERE user_id=?',
             (707,),
         ).fetchone()
+        entitlements = conn.execute(
+            'SELECT entitlement_type FROM premium_entitlements WHERE user_id=? ORDER BY entitlement_type',
+            (707,),
+        ).fetchall()
 
     assert payment['problem'] == ''
     assert wallet['available_tokens'] == 60
+    assert [row['entitlement_type'] for row in entitlements] == [CONSULTATION_ENTITLEMENT, VIDEO_ENTITLEMENT]
+    deliveries = pending_delivery()
+    assert len(deliveries) == 2
+    assert any(item['delivery_kind'] == 'video_course_access' and 'https://example.test/course' in item['body'] for item in deliveries)
+    assert any(item['delivery_kind'] == 'consultation_user_notice' for item in deliveries)
+    requests = consultation_requests_summary()
+    assert len(requests) == 1
+    assert requests[0]['user_id'] == 707
+    assert '60 минут' in requests[0]['contact_payload']
