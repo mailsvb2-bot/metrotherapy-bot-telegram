@@ -9,7 +9,7 @@ Base branch:
 
 Current known green proof from server:
 
-- full pytest: `228 passed`
+- full pytest: `229 passed`
 - `scripts/production_acceptance.py`: OK
 - `scripts/runtime_observability_check.py`: OK
 - public `/pay/yookassa` route reaches backend and uses the current premium package ladder copy
@@ -38,7 +38,7 @@ Current known green proof from server:
 | `feature/practice-token-economy-v2` | canonical green base | Keep as source of truth until main PR is opened. |
 | `feature/practice-token-economy` | diverged; old token economy | Do not merge. Salvaged in this branch: `refunded_tokens`, reservation expiry, richer ledger metadata and reservation audit fields. Do not import old public pricing/UI. |
 | `pricing/practices` | diverged; older practice package split | Do not merge. Salvage only future admin-package ideas if needed. |
-| `canon/trial-funnel-outcome-guard-v2` | diverged; contains funnel/stress tooling | Do not merge. Salvage policy ideas and stress scripts after import review. |
+| `canon/trial-funnel-outcome-guard-v2` | diverged; contains funnel/stress tooling | Do not merge. Salvaged in this branch: isolated DB stress probe and safe ingress stress probe. Do not import old production acceptance script. |
 | `feature/max-messenger-canonical` | large diverged MAX/VK/Telegram rewrite | Do not merge. Salvage tests and interface ideas only after current runtime parity is locked. |
 | `fix/vk-score-surface-20260506-221916` | large diverged VK/MAX score surface | Do not merge. Salvage edge-case tests only. |
 | `refactor/split-messenger-webhooks` | diverged refactor | Do not merge. Use as blueprint for future split, not as code source. |
@@ -86,6 +86,21 @@ Reason:
 - current `tests/test_messenger_webhook_split_parity.py` already includes the donor branch keyboard/payload parity checks;
 - current branch also has stronger MAX score button coverage, so importing the old runtime payload file would be a regression risk.
 
+### Wave 4 — safe stress probe salvage
+
+Source: `canon/trial-funnel-outcome-guard-v2`.
+
+Integrated safely:
+
+- `scripts/stress_db.py`: isolated database stress probe that writes only into `stress_probe_events`, tags rows by `run_id`, and deletes its own rows by default;
+- `scripts/stress_ingress.py`: safe ingress stress probe for health endpoints and ignored VK/MAX events.
+
+Explicitly not imported:
+
+- old `scripts/production_acceptance.py`, because the current main-candidate acceptance script is newer and already aligned with the premium package ladder;
+- `services/funnel2.py` changes and `trial_funnel_policy.py`, pending separate policy review;
+- any script as an automatic deploy gate. These probes are manual P1 diagnostics only.
+
 ## Integration order
 
 ### P0 — main candidate proof
@@ -98,7 +113,7 @@ Reason:
 
 1. Add missing tests that do not require old runtime architecture.
 2. Add ledger metadata fields only via additive migration and compatibility tests. Done in Wave 2.
-3. Add stress scripts only if they compile without non-standard dependencies and do not mutate runtime state by default.
+3. Add stress scripts only if they compile without non-standard dependencies and do not mutate runtime state by default. Done in Wave 4.
 
 ### P2 — risky salvage
 
