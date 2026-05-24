@@ -36,7 +36,7 @@ Current known green proof from server:
 | Source branch | Status | Decision |
 | --- | --- | --- |
 | `feature/practice-token-economy-v2` | canonical green base | Keep as source of truth until main PR is opened. |
-| `feature/practice-token-economy` | diverged; old token economy | Do not merge. Salvage only ledger ideas: `refunded_tokens`, reservation expiry, richer ledger metadata. |
+| `feature/practice-token-economy` | diverged; old token economy | Do not merge. Salvaged in this branch: `refunded_tokens`, reservation expiry, richer ledger metadata and reservation audit fields. Do not import old public pricing/UI. |
 | `pricing/practices` | diverged; older practice package split | Do not merge. Salvage only future admin-package ideas if needed. |
 | `canon/trial-funnel-outcome-guard-v2` | diverged; contains funnel/stress tooling | Do not merge. Salvage policy ideas and stress scripts after import review. |
 | `feature/max-messenger-canonical` | large diverged MAX/VK/Telegram rewrite | Do not merge. Salvage tests and interface ideas only after current runtime parity is locked. |
@@ -44,6 +44,35 @@ Current known green proof from server:
 | `refactor/split-messenger-webhooks` | diverged refactor | Do not merge. Use as blueprint for future split, not as code source. |
 | `fix/p1-vk-buttons-contract` | small diverged patch | Candidate for early test salvage after inspecting current payload code. |
 | branches with `ahead_by=0` versus `feature/practice-token-economy-v2` | already absorbed/behind | Keep as archival until `main` cut is complete, then delete after confirmation. |
+
+## Completed integration waves
+
+### Wave 1 — integration contract
+
+- Added `docs/MAIN_CANDIDATE_INTEGRATION_MAP.md`.
+- Added `docs/MAIN_CANDIDATE_CLOSURE_CHECKLIST.md`.
+
+### Wave 2 — token ledger audit salvage
+
+Source: `feature/practice-token-economy`.
+
+Integrated safely:
+
+- additive migration `practice_token_audit_v2`;
+- `practice_wallets.refunded_tokens`;
+- `practice_ledger.reserved_after`;
+- `practice_ledger.metadata_json`;
+- `practice_ledger.session_id`;
+- `practice_ledger.audio_anchor`;
+- `practice_ledger.reservation_id`;
+- `practice_reservations.expires_at`;
+- regression test for grant/reserve/consume audit context.
+
+Explicitly not imported:
+
+- old public package prices;
+- old DB-backed package catalog as source of truth;
+- old UI/payment copy.
 
 ## Integration order
 
@@ -56,7 +85,7 @@ Current known green proof from server:
 ### P1 — safe salvage
 
 1. Add missing tests that do not require old runtime architecture.
-2. Add ledger metadata fields only via additive migration and compatibility tests.
+2. Add ledger metadata fields only via additive migration and compatibility tests. Done in Wave 2.
 3. Add stress scripts only if they compile without non-standard dependencies and do not mutate runtime state by default.
 
 ### P2 — risky salvage
