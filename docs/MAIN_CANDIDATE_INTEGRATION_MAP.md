@@ -42,7 +42,7 @@ Current known green proof from server:
 | `feature/max-messenger-canonical` | large diverged MAX/VK/Telegram rewrite | Do not merge. Salvage tests and interface ideas only after current runtime parity is locked. |
 | `fix/vk-score-surface-20260506-221916` | large diverged VK/MAX score surface | Do not merge. Salvage edge-case tests only. |
 | `refactor/split-messenger-webhooks` | diverged refactor | Do not merge. Use as blueprint for future split, not as code source. |
-| `fix/p1-vk-buttons-contract` | small diverged patch | Candidate for early test salvage after inspecting current payload code. |
+| `fix/p1-vk-buttons-contract` | audited | No merge needed. Current branch already contains the useful VK keyboard/payload parity tests and stronger MAX score payload coverage. |
 | branches with `ahead_by=0` versus `feature/practice-token-economy-v2` | already absorbed/behind | Keep as archival until `main` cut is complete, then delete after confirmation. |
 
 ## Completed integration waves
@@ -73,6 +73,18 @@ Explicitly not imported:
 - old public package prices;
 - old DB-backed package catalog as source of truth;
 - old UI/payment copy.
+
+### Wave 3 — VK buttons branch audit
+
+Source: `fix/p1-vk-buttons-contract`.
+
+Decision: no code import.
+
+Reason:
+
+- current `runtime/messenger_payloads.py` already preserves VK payload extraction, menu command normalization, nested payload extraction and MAX native score payload behavior;
+- current `tests/test_messenger_webhook_split_parity.py` already includes the donor branch keyboard/payload parity checks;
+- current branch also has stronger MAX score button coverage, so importing the old runtime payload file would be a regression risk.
 
 ## Integration order
 
