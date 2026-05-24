@@ -71,6 +71,7 @@ class Settings:
     MAX_BOT_TOKEN: str = _env("MAX_BOT_TOKEN", "")
     MAX_BOT_NAME: str = _env("MAX_BOT_NAME", "")
     MAX_BOT_LINK_BASE: str = _env("MAX_BOT_LINK_BASE", "")
+    MAX_API_BASE_URL: str = _env("MAX_API_BASE_URL", "https://platform-api.max.ru")
     VK_GROUP_TOKEN: str = _env("VK_GROUP_TOKEN", "")
     VK_CONFIRMATION_TOKEN: str = _env("VK_CONFIRMATION_TOKEN", "")
     VK_SECRET: str = _env("VK_SECRET", "")
