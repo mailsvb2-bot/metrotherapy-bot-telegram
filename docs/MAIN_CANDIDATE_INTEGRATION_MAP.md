@@ -38,7 +38,7 @@ Current known green proof from server:
 | `feature/practice-token-economy-v2` | canonical green base | Keep as source of truth until main PR is opened. |
 | `feature/practice-token-economy` | diverged; old token economy | Do not merge. Salvaged in this branch: `refunded_tokens`, reservation expiry, richer ledger metadata and reservation audit fields. Do not import old public pricing/UI. |
 | `pricing/practices` | diverged; older practice package split | Do not merge. Salvage only future admin-package ideas if needed. |
-| `canon/trial-funnel-outcome-guard-v2` | diverged; contains funnel/stress tooling | Do not merge. Salvaged in this branch: isolated DB stress probe and safe ingress stress probe. Do not import old production acceptance script. |
+| `canon/trial-funnel-outcome-guard-v2` | audited | Do not merge. Safe pieces are already present or salvaged: isolated DB stress probe, safe ingress stress probe, pure trial funnel policy with tests. Do not import old production acceptance script or old funnel runtime changes. |
 | `feature/max-messenger-canonical` | large diverged MAX/VK/Telegram rewrite | Do not merge. Salvage tests and interface ideas only after current runtime parity is locked. |
 | `fix/vk-score-surface-20260506-221916` | large diverged VK/MAX score surface | Do not merge. Salvage edge-case tests only. |
 | `refactor/split-messenger-webhooks` | diverged refactor | Do not merge. Use as blueprint for future split, not as code source. |
@@ -98,8 +98,20 @@ Integrated safely:
 Explicitly not imported:
 
 - old `scripts/production_acceptance.py`, because the current main-candidate acceptance script is newer and already aligned with the premium package ladder;
-- `services/funnel2.py` changes and `trial_funnel_policy.py`, pending separate policy review;
+- `services/funnel2.py` changes, pending separate runtime-flow review;
 - any script as an automatic deploy gate. These probes are manual P1 diagnostics only.
+
+### Wave 5 — trial funnel policy audit
+
+Source: `canon/trial-funnel-outcome-guard-v2`.
+
+Decision: no code import.
+
+Reason:
+
+- `services/trial_funnel_policy.py` is already present in this branch as a pure policy surface;
+- `tests/test_trial_funnel_policy.py` already covers missing outcome, negative outcome, neutral outcome, positive outcome and non-sales steps;
+- old `services/funnel2.py` runtime changes remain intentionally out of scope until a separate scheduled-funnel integration review.
 
 ## Integration order
 
@@ -120,6 +132,7 @@ Explicitly not imported:
 1. MAX/VK/Telegram unified interface refactor.
 2. Split `runtime/messenger_webhooks.py` into smaller modules.
 3. DB-backed practice package admin surface.
+4. Scheduled funnel runtime integration with `trial_funnel_policy.py`.
 
 ## Main PR stop-condition
 
