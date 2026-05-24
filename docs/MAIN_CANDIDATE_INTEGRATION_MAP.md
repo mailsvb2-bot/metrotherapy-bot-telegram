@@ -39,7 +39,7 @@ Current known green proof from server:
 | `feature/practice-token-economy` | diverged; old token economy | Do not merge. Salvaged in this branch: `refunded_tokens`, reservation expiry, richer ledger metadata and reservation audit fields. Do not import old public pricing/UI. |
 | `pricing/practices` | audited | Do not merge. It contains old DB-backed package catalog and old `practice_5/practice_20/practice_60` pricing. Keep only the future idea of admin-controlled package catalog, after an admin/control-plane surface exists. |
 | `canon/trial-funnel-outcome-guard-v2` | audited | Do not merge. Safe pieces are already present or salvaged: isolated DB stress probe, safe ingress stress probe, pure trial funnel policy with tests. Do not import old production acceptance script or old funnel runtime changes. |
-| `feature/max-messenger-canonical` | large diverged MAX/VK/Telegram rewrite | Do not merge. Salvage tests and interface ideas only after current runtime parity is locked. |
+| `feature/max-messenger-canonical` | partially salvaged | Do not merge. Salvaged only current-architecture messenger preflight checks. Do not import old runtime/webhook/sender rewrites or the old `interfaces/messaging` tree. |
 | `fix/vk-score-surface-20260506-221916` | large diverged VK/MAX score surface | Do not merge. Salvage edge-case tests only. |
 | `refactor/split-messenger-webhooks` | diverged refactor | Do not merge. Use as blueprint for future split, not as code source. |
 | `fix/p1-vk-buttons-contract` | audited | No merge needed. Current branch already contains the useful VK keyboard/payload parity tests and stronger MAX score payload coverage. |
@@ -130,6 +130,22 @@ Future salvage idea:
 
 - DB-backed package catalog may become useful only after there is an admin/control-plane package editor and tests that preserve the current premium ladder.
 
+### Wave 7 — messenger preflight salvage
+
+Source: `feature/max-messenger-canonical`.
+
+Integrated safely:
+
+- `services/messenger/preflight.py`: current-architecture Telegram/MAX/VK configuration preflight checks;
+- `tests/test_messenger_preflight.py`: regression tests for missing MAX/VK/Telegram configuration, VK secret warning, legacy MAX API domain warning and all-channel ordering.
+
+Explicitly not imported:
+
+- old `interfaces/messaging` tree;
+- old MAX/VK/Telegram runtime adapters;
+- old `runtime/messenger_webhooks.py` and `runtime/messenger_senders.py` rewrites;
+- patch scripts that mutate runtime files.
+
 ## Integration order
 
 ### P0 — main candidate proof
@@ -143,6 +159,7 @@ Future salvage idea:
 1. Add missing tests that do not require old runtime architecture.
 2. Add ledger metadata fields only via additive migration and compatibility tests. Done in Wave 2.
 3. Add stress scripts only if they compile without non-standard dependencies and do not mutate runtime state by default. Done in Wave 4.
+4. Add current-architecture messenger preflight checks. Done in Wave 7.
 
 ### P2 — risky salvage
 
