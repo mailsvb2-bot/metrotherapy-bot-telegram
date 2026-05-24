@@ -37,7 +37,7 @@ Current known green proof from server:
 | --- | --- | --- |
 | `feature/practice-token-economy-v2` | canonical green base | Keep as source of truth until main PR is opened. |
 | `feature/practice-token-economy` | diverged; old token economy | Do not merge. Salvaged in this branch: `refunded_tokens`, reservation expiry, richer ledger metadata and reservation audit fields. Do not import old public pricing/UI. |
-| `pricing/practices` | diverged; older practice package split | Do not merge. Salvage only future admin-package ideas if needed. |
+| `pricing/practices` | audited | Do not merge. It contains old DB-backed package catalog and old `practice_5/practice_20/practice_60` pricing. Keep only the future idea of admin-controlled package catalog, after an admin/control-plane surface exists. |
 | `canon/trial-funnel-outcome-guard-v2` | audited | Do not merge. Safe pieces are already present or salvaged: isolated DB stress probe, safe ingress stress probe, pure trial funnel policy with tests. Do not import old production acceptance script or old funnel runtime changes. |
 | `feature/max-messenger-canonical` | large diverged MAX/VK/Telegram rewrite | Do not merge. Salvage tests and interface ideas only after current runtime parity is locked. |
 | `fix/vk-score-surface-20260506-221916` | large diverged VK/MAX score surface | Do not merge. Salvage edge-case tests only. |
@@ -112,6 +112,23 @@ Reason:
 - `services/trial_funnel_policy.py` is already present in this branch as a pure policy surface;
 - `tests/test_trial_funnel_policy.py` already covers missing outcome, negative outcome, neutral outcome, positive outcome and non-sales steps;
 - old `services/funnel2.py` runtime changes remain intentionally out of scope until a separate scheduled-funnel integration review.
+
+### Wave 6 — pricing practices branch audit
+
+Source: `pricing/practices`.
+
+Decision: no code import.
+
+Reason:
+
+- donor branch is 67 commits behind this main-candidate;
+- donor branch introduces a DB-backed `practice_packages` catalog, but with old package ids and prices (`practice_5`, `practice_20`, `practice_60`);
+- donor branch introduces separate `payment_intents` / `payment_practice_grants` surfaces while this branch already has canonical YooKassa reconciliation, token grants, premium entitlements and delivery outbox;
+- importing this branch would risk a second source of truth for package pricing.
+
+Future salvage idea:
+
+- DB-backed package catalog may become useful only after there is an admin/control-plane package editor and tests that preserve the current premium ladder.
 
 ## Integration order
 
