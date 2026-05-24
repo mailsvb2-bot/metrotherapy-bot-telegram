@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+
+from services.db import db
 from runtime.payment_http import _normalize_payment_kind
 from services.payments.ui import kb_practice_packages, practice_packages_text
 from services.practice_token_contract import daily_practice_cost, normalize_delivery_mode, package_by_id, public_practice_packages
@@ -69,6 +72,7 @@ def test_grant_tokens_is_idempotent(tmp_path, monkeypatch):
     assert inserted is True
     assert ledger_id is not None
     assert wallet.available_tokens == 7
+    assert wallet.refunded_tokens == 0
 
     inserted_again, wallet_again, _ = grant_tokens(
         101,
@@ -137,6 +141,37 @@ def test_reserve_release_lifecycle(tmp_path, monkeypatch):
     assert wallet_after.reserved_tokens == 0
     assert wallet_after.used_tokens == 0
     assert release_reservation(str(reservation_id)) is False
+
+
+def test_practice_token_audit_fields_capture_reservation_context(tmp_path, monkeypatch):
+    monkeypatch.setenv('DB_PATH', str(tmp_path / 'audit_fields.db'))
+
+    grant_tokens(515, package_id='practice_start_7', amount=2, provider='test', provider_payment_id='audit-pay', idempotency_key='grant:audit')
+    ok, wallet, reservation_id = reserve_practice(515, session_id=111, audio_anchor=222)
+    assert ok is True
+    assert wallet.available_tokens == 1
+    assert reservation_id
+    assert consume_reservation(str(reservation_id)) is True
+
+    with db() as conn:
+        wallet_row = conn.execute('SELECT * FROM practice_wallets WHERE user_id=?', (515,)).fetchone()
+        reservation = conn.execute('SELECT * FROM practice_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
+        rows = conn.execute('SELECT * FROM practice_ledger WHERE user_id=? ORDER BY id ASC', (515,)).fetchall()
+
+    assert wallet_row['refunded_tokens'] == 0
+    assert reservation['expires_at']
+    assert [row['event_type'] for row in rows] == ['grant', 'reserve', 'consume']
+    reserve = rows[1]
+    consume = rows[2]
+    assert reserve['reserved_after'] == 1
+    assert reserve['session_id'] == 111
+    assert reserve['audio_anchor'] == 222
+    assert reserve['reservation_id'] == reservation_id
+    assert json.loads(reserve['metadata_json'])['expires_at'] == reservation['expires_at']
+    assert consume['reserved_after'] == 0
+    assert consume['session_id'] == 111
+    assert consume['audio_anchor'] == 222
+    assert consume['reservation_id'] == reservation_id
 
 
 def test_access_guard_hard_blocks_without_balance(tmp_path, monkeypatch):
