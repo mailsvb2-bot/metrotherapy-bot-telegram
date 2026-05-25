@@ -36,6 +36,27 @@ Last confirmed server proof:
 - [ ] `practice_personal_month` successful webhook grants 60 practices, video entitlement, consultation entitlement and admin-visible consultation request.
 - [ ] Duplicate webhook does not double-grant practices or premium entitlements in the live database.
 
+Recommended closure command for checkout redirects:
+
+```bash
+python scripts/live_payment_closure_probe.py --check-checkout --package all --user-id 201126430 --source telegram
+```
+
+Recommended closure command for synthetic live webhook/database proof:
+
+```bash
+python scripts/live_payment_closure_probe.py \
+  --apply-webhooks \
+  --allow-live-db-mutation \
+  --package practice_60 \
+  --package practice_antistress_60 \
+  --package practice_personal_month \
+  --user-id 201126430 \
+  --source telegram
+```
+
+The webhook command intentionally requires `--allow-live-db-mutation` because it writes test payment/grant/entitlement rows into the configured application database.
+
 ## P0 — messenger proof
 
 - [x] Telegram polling runtime is active and not conflicting with another bot instance according to observability check.
