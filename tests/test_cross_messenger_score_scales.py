@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from runtime.messenger_senders import MaxBotSender
+from runtime.messenger_max_ui import score_scale_attachment
 from runtime.messenger_vk_ui import vk_score_scale_keyboard_json
 from services.mood_text_flow import parse_score_text
 
@@ -11,15 +11,14 @@ EXPECTED_SCORES = list(range(-10, 11))
 
 
 def _max_score_values() -> list[int]:
-    attachment = MaxBotSender._score_scale_attachment()
+    attachment = score_scale_attachment()
     values: list[int] = []
     for row in attachment["payload"]["buttons"]:
         for button in row:
-            text = str(button["text"])
-            try:
-                values.append(int(text))
-            except ValueError:
-                pass
+            payload = button.get("payload") or {}
+            command = str(payload.get("command") or "")
+            if command.startswith("score:"):
+                values.append(int(command.split(":", 1)[1]))
     return values
 
 
