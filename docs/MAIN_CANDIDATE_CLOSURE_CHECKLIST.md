@@ -58,7 +58,19 @@ python scripts/live_payment_closure_probe.py \
   --source telegram
 ```
 
-The webhook command intentionally requires `--allow-live-db-mutation` because it writes test payment/grant/entitlement rows into the configured application database.
+Recommended closure command for duplicate-webhook idempotency proof:
+
+```bash
+python scripts/live_payment_idempotency_probe.py \
+  --allow-live-db-mutation \
+  --package practice_60 \
+  --package practice_antistress_60 \
+  --package practice_personal_month \
+  --user-id 201126430 \
+  --source telegram
+```
+
+The webhook/idempotency commands intentionally require `--allow-live-db-mutation` because they write synthetic payment/grant/entitlement rows into the configured application database.
 
 ## P0 — messenger proof
 
