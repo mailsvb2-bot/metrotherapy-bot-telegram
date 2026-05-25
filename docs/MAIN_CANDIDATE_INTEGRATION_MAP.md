@@ -41,7 +41,7 @@ Current known green proof from server:
 | `canon/trial-funnel-outcome-guard-v2` | audited | Do not merge. Safe pieces are already present or salvaged: isolated DB stress probe, safe ingress stress probe, pure trial funnel policy with tests. Do not import old production acceptance script or old funnel runtime changes. |
 | `feature/max-messenger-canonical` | partially salvaged | Do not merge. Salvaged only current-architecture messenger preflight checks. Do not import old runtime/webhook/sender rewrites or the old `interfaces/messaging` tree. |
 | `fix/vk-score-surface-20260506-221916` | partially salvaged | Do not merge. Salvaged only cross-messenger score-scale parity test. Do not import old runtime/webhook/sender rewrites. |
-| `refactor/split-messenger-webhooks` | diverged refactor | Do not merge. Use as blueprint for future split, not as code source. |
+| `refactor/split-messenger-webhooks` | audited | Do not merge. Current branch already contains the useful split-parity tests, rewritten as direct contract tests instead of legacy-vs-new comparisons. Keep the branch only as a future decomposition blueprint. |
 | `fix/p1-vk-buttons-contract` | audited | No merge needed. Current branch already contains the useful VK keyboard/payload parity tests and stronger MAX score payload coverage. |
 | branches with `ahead_by=0` versus `feature/practice-token-economy-v2` | already absorbed/behind | Keep as archival until `main` cut is complete, then delete after confirmation. |
 
@@ -161,6 +161,23 @@ Explicitly not imported:
 - old `interfaces/messaging` tree;
 - old MAX/VK sender/runtime rewrites;
 - old `core/engine.py`, `handlers/demo.py`, `services/mood_text_flow.py` changes from the donor branch.
+
+### Wave 9 — messenger webhooks split audit
+
+Source: `refactor/split-messenger-webhooks`.
+
+Decision: no code import.
+
+Reason:
+
+- donor branch is 308 commits behind this main-candidate;
+- donor branch rewrites `runtime/messenger_webhooks.py` heavily and depends on old legacy-vs-new parity comparisons;
+- current branch already has `runtime/messenger_payloads.py`, `runtime/messenger_vk_ui.py` and direct behavior tests in `tests/test_messenger_webhook_split_parity.py`;
+- importing the donor branch would risk removing newer payment, premium, webhook and observability behavior.
+
+Future salvage idea:
+
+- use the donor branch as a decomposition blueprint only if `runtime/messenger_webhooks.py` is split again after main candidate stabilization.
 
 ## Integration order
 
