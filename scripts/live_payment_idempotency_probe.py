@@ -186,7 +186,9 @@ def _expected_snapshot_delta(package: PracticePackage) -> dict[str, int]:
         expected["premium_outbox"] = 1
     elif package.package_id == "practice_personal_month":
         expected["premium_entitlements"] = 2
-        expected["premium_outbox"] = 1
+        # Personal month creates two user-facing delivery notices:
+        # video_course_access + consultation_user_notice.
+        expected["premium_outbox"] = 2
         expected["consultation_requests"] = 1
     return expected
 
