@@ -12,6 +12,7 @@ Last confirmed server proof:
 - public `/pay/yookassa` route reaches backend and returns the current premium package-ladder copy
 - public checkout redirect proof: all four public packages return `302` to YooMoney/YooKassa
 - synthetic YooKassa webhook proof: `practice_60`, `practice_antistress_60` and `practice_personal_month` grant expected live DB rows
+- duplicate YooKassa webhook proof: repeated webhooks return `inserted=false` and produce zero second deltas for wallet, payment, grant, ledger, entitlement, outbox and consultation request rows
 - `git status --short`: clean after final deploy check
 
 ## P0 — repository proof
@@ -37,7 +38,7 @@ Last confirmed server proof:
 - [x] `practice_antistress_60` successful webhook grants 60 practices and video entitlement.
 - [x] `practice_antistress_60` successful webhook creates/flushes video-course delivery outbox.
 - [x] `practice_personal_month` successful webhook grants 60 practices, video entitlement, consultation entitlement and admin-visible consultation request.
-- [ ] Duplicate webhook does not double-grant practices or premium entitlements in the live database.
+- [x] Duplicate webhook does not double-grant practices, payments, grants, ledger rows, premium entitlements, delivery outbox rows or consultation requests in the live database.
 
 Recommended closure command for checkout redirects:
 
@@ -117,5 +118,4 @@ The codebase is green enough to be a main candidate, but these live-flow checks 
 1. Real Telegram package-button flow.
 2. Real VK package-link flow.
 3. Real MAX package-link flow.
-4. Duplicate webhook idempotency proof in the live database.
-5. Admin UI/report proof for consultation requests and payment problems.
+4. Admin UI/report proof for consultation requests and payment problems.
