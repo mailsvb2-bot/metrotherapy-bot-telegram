@@ -88,14 +88,16 @@ def test_admin_payment_report_empty_state(tmp_path, monkeypatch):
     # The DB path is owned by services.db/core.paths at import time in this
     # project. Therefore this empty-state check must not depend on per-test
     # environment DB swapping. Use an isolated user filter instead: the admin
-    # report should render an empty consultation slice for a user with no rows.
+    # report should render an empty per-user slice for a user with no rows.
     init_db()
 
     report = build_admin_payment_report(limit=20, user_id=987654321)
     text = render_admin_payment_report_text(report)
 
-    assert report.payment_problem_count >= 0
+    assert report.payment_problem_count == 0
     assert report.consultation_request_count == 0
     assert 'Админ-отчёт по оплатам' in text
+    assert 'Проблемные платежи: 0' in text
     assert 'Заявки на консультацию: 0' in text
+    assert 'нет записей, требующих внимания' in text
     assert 'нет новых заявок' in text
