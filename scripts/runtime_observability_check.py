@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -86,21 +87,58 @@ def _port_owner(port: int) -> str:
     return out
 
 
-def _journal_errors(minutes: int, *, pid: str = "0") -> str:
-    pattern = "error|exception|traceback|failed|critical|address already in use|conflict|Application crashed"
-    code, out = _run([
-        "sh",
-        "-lc",
-        f"journalctl -u metrotherapy.service --since '{minutes} minutes ago' --no-pager -l | grep -Ei '{pattern}' || true",
-    ], timeout=20)
+def _nonzero_failed_counter(line: str) -> bool:
+    """Return true only for failed counters that are actually non-zero.
 
-    if not out.strip() or not pid or pid == "0":
+    Runtime summaries often contain benign INFO lines such as
+    "Premium delivery flush: sent=2 failed=0 skipped=0". Grepping for the word
+    "failed" made observability fail even though the counter explicitly said 0.
+    """
+    lowered = line.lower()
+    for match in re.finditer(r"\bfailed\s*[=:]\s*(\d+)\b", lowered):
+        try:
+            if int(match.group(1)) > 0:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _journal_line_is_error(line: str) -> bool:
+    lowered = line.lower()
+    if _nonzero_failed_counter(line):
+        return True
+    if "failed=0" in lowered or "failed: 0" in lowered:
+        lowered = lowered.replace("failed=0", "").replace("failed: 0", "")
+    return any(
+        token in lowered
+        for token in (
+            " | error | ",
+            " | critical | ",
+            "traceback",
+            "exception",
+            "address already in use",
+            "telegramconflicterror",
+            "application crashed",
+            " unhandled ",
+        )
+    )
+
+
+def _journal_errors(minutes: int, *, pid: str = "0") -> str:
+    code, out = _run(
+        ["journalctl", "-u", "metrotherapy.service", "--since", f"{minutes} minutes ago", "--no-pager", "-l"],
+        timeout=20,
+    )
+    if code != 0:
         return out
+    if not out.strip() or not pid or pid == "0":
+        return "\n".join(line for line in out.splitlines() if _journal_line_is_error(line))
 
     current_pid_marker = f"python[{pid}]"
     return "\n".join(
         line for line in out.splitlines()
-        if current_pid_marker in line
+        if current_pid_marker in line and _journal_line_is_error(line)
     )
 
 
