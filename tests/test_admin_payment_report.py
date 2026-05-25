@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from services.admin_payment_report import build_admin_payment_report, render_admin_payment_report_text
-from services.db import db, tx
 from services.messenger.preferences import record_channel_identity
 from services.payments.reconciliation import record_yookassa_webhook
+from services.schema_core import init_db
 
 
 def _succeeded_payment(payment_id: str, *, user_id: int, package_id: str, amount: str, source: str = 'telegram') -> dict:
@@ -85,10 +85,10 @@ def test_admin_payment_report_shows_payment_problem_and_consultation_request(tmp
 def test_admin_payment_report_empty_state(tmp_path, monkeypatch):
     monkeypatch.setenv('DB_PATH', str(tmp_path / 'admin-report-empty.db'))
 
-    # Trigger base schema/migrations through a harmless direct DB open path.
-    with db() as conn:
-        with tx(conn):
-            conn.execute('SELECT 1')
+    # The admin report is read-only and expects the normal application schema to
+    # exist. Empty-state proof should initialize the DB through the canonical
+    # startup schema/migration entrypoint, not with ad-hoc test table creation.
+    init_db()
 
     report = build_admin_payment_report(limit=20)
     text = render_admin_payment_report_text(report)
