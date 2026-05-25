@@ -10,6 +10,7 @@ Last confirmed server proof:
 - `scripts/production_acceptance.py`: OK
 - `scripts/runtime_observability_check.py`: OK after service restart
 - public `/pay/yookassa` route reaches backend and returns the current premium package-ladder copy
+- `git status --short`: clean after final deploy check
 
 ## P0 — repository proof
 
@@ -19,7 +20,7 @@ Last confirmed server proof:
 - [x] `python scripts/production_acceptance.py` passes on the target server.
 - [x] `python scripts/runtime_observability_check.py` passes after service restart.
 - [x] `integration/main-candidate-v1` is not behind `main`.
-- [ ] `git status` is clean on the server after final deploy check.
+- [x] `git status` is clean on the server after final deploy check.
 
 ## P0 — payment and package proof
 
@@ -84,4 +85,3 @@ The codebase is green enough to be a main candidate, but these live-flow checks 
 5. YooKassa successful webhook for `practice_60` into the live database.
 6. YooKassa successful webhook for `practice_antistress_60` into the live database and premium delivery outbox.
 7. YooKassa successful webhook for `practice_personal_month` into the live database, premium entitlements and consultation request admin surface.
-8. Final `git status --short` clean check on the target server.
