@@ -9,7 +9,7 @@ Base branch:
 
 Current known green proof from server:
 
-- full pytest: `229 passed`
+- full pytest: `234 passed`
 - `scripts/production_acceptance.py`: OK
 - `scripts/runtime_observability_check.py`: OK
 - public `/pay/yookassa` route reaches backend and uses the current premium package ladder copy
@@ -40,7 +40,7 @@ Current known green proof from server:
 | `pricing/practices` | audited | Do not merge. It contains old DB-backed package catalog and old `practice_5/practice_20/practice_60` pricing. Keep only the future idea of admin-controlled package catalog, after an admin/control-plane surface exists. |
 | `canon/trial-funnel-outcome-guard-v2` | audited | Do not merge. Safe pieces are already present or salvaged: isolated DB stress probe, safe ingress stress probe, pure trial funnel policy with tests. Do not import old production acceptance script or old funnel runtime changes. |
 | `feature/max-messenger-canonical` | partially salvaged | Do not merge. Salvaged only current-architecture messenger preflight checks. Do not import old runtime/webhook/sender rewrites or the old `interfaces/messaging` tree. |
-| `fix/vk-score-surface-20260506-221916` | large diverged VK/MAX score surface | Do not merge. Salvage edge-case tests only. |
+| `fix/vk-score-surface-20260506-221916` | partially salvaged | Do not merge. Salvaged only cross-messenger score-scale parity test. Do not import old runtime/webhook/sender rewrites. |
 | `refactor/split-messenger-webhooks` | diverged refactor | Do not merge. Use as blueprint for future split, not as code source. |
 | `fix/p1-vk-buttons-contract` | audited | No merge needed. Current branch already contains the useful VK keyboard/payload parity tests and stronger MAX score payload coverage. |
 | branches with `ahead_by=0` versus `feature/practice-token-economy-v2` | already absorbed/behind | Keep as archival until `main` cut is complete, then delete after confirmation. |
@@ -137,7 +137,8 @@ Source: `feature/max-messenger-canonical`.
 Integrated safely:
 
 - `services/messenger/preflight.py`: current-architecture Telegram/MAX/VK configuration preflight checks;
-- `tests/test_messenger_preflight.py`: regression tests for missing MAX/VK/Telegram configuration, VK secret warning, legacy MAX API domain warning and all-channel ordering.
+- `tests/test_messenger_preflight.py`: regression tests for missing MAX/VK/Telegram configuration, VK secret warning, legacy MAX API domain warning and all-channel ordering;
+- `config.settings.MAX_API_BASE_URL` as the canonical preflight setting for MAX API base URL.
 
 Explicitly not imported:
 
@@ -145,6 +146,21 @@ Explicitly not imported:
 - old MAX/VK/Telegram runtime adapters;
 - old `runtime/messenger_webhooks.py` and `runtime/messenger_senders.py` rewrites;
 - patch scripts that mutate runtime files.
+
+### Wave 8 — score surface parity salvage
+
+Source: `fix/vk-score-surface-20260506-221916`.
+
+Integrated safely:
+
+- strengthened `tests/test_cross_messenger_score_scales.py` so Telegram parser, VK score keyboard and MAX score keyboard are locked to the same `-10..+10` score range;
+- MAX assertion now checks `payload.command == score:<number>`, not only visible button text, preserving the split between legacy route commands `1/2` and mood score payloads.
+
+Explicitly not imported:
+
+- old `interfaces/messaging` tree;
+- old MAX/VK sender/runtime rewrites;
+- old `core/engine.py`, `handlers/demo.py`, `services/mood_text_flow.py` changes from the donor branch.
 
 ## Integration order
 
@@ -160,6 +176,7 @@ Explicitly not imported:
 2. Add ledger metadata fields only via additive migration and compatibility tests. Done in Wave 2.
 3. Add stress scripts only if they compile without non-standard dependencies and do not mutate runtime state by default. Done in Wave 4.
 4. Add current-architecture messenger preflight checks. Done in Wave 7.
+5. Add cross-messenger score-scale parity tests. Done in Wave 8.
 
 ### P2 — risky salvage
 
