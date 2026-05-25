@@ -5,21 +5,22 @@ This checklist must be completed before `integration/main-candidate-v1` is merge
 Last confirmed server proof:
 
 - branch: `integration/main-candidate-v1`
-- relation to `main`: ahead by 75 commits, behind by 0 commits
-- full pytest: `234 passed`
+- relation to `main`: ahead by 90 commits, behind by 0 commits
+- full pytest: `236 passed`
 - `scripts/production_acceptance.py`: OK
 - `scripts/runtime_observability_check.py`: OK after service restart
 - public `/pay/yookassa` route reaches backend and returns the current premium package-ladder copy
 - public checkout redirect proof: all four public packages return `302` to YooMoney/YooKassa
 - synthetic YooKassa webhook proof: `practice_60`, `practice_antistress_60` and `practice_personal_month` grant expected live DB rows
 - duplicate YooKassa webhook proof: repeated webhooks return `inserted=false` and produce zero second deltas for wallet, payment, grant, ledger, entitlement, outbox and consultation request rows
+- admin payment report proof: provider payment problems and personal consultation requests are visible in the read-only admin report surface
 - `git status --short`: clean after final deploy check
 
 ## P0 — repository proof
 
 - [x] Branch is based on the latest green `feature/practice-token-economy-v2` commit.
 - [x] `python -m compileall -q app.py main.py config core handlers interfaces keyboards runtime scripts services tests tools` passes through `scripts/production_acceptance.py`.
-- [x] `python -m pytest -q` passes on the target server: `234 passed`.
+- [x] `python -m pytest -q` passes on the target server: `236 passed`.
 - [x] `python scripts/production_acceptance.py` passes on the target server.
 - [x] `python scripts/runtime_observability_check.py` passes after service restart.
 - [x] `integration/main-candidate-v1` is not behind `main`.
@@ -85,9 +86,9 @@ The webhook/idempotency commands intentionally require `--allow-live-db-mutation
 
 ## P0 — admin/control-plane proof
 
-- [ ] Admin payment report shows provider payment problems.
+- [x] Admin payment report shows provider payment problems.
 - [x] Live DB contains consultation request for `practice_personal_month` with `status=new`.
-- [ ] Admin UI/report can identify `user_id`, platform, external user id, package id and payment id for each consultation request.
+- [x] Admin UI/report can identify `user_id`, platform, external user id, package id and payment id for each consultation request.
 
 ## P1 — salvage candidates after main candidate stabilizes
 
@@ -118,4 +119,3 @@ The codebase is green enough to be a main candidate, but these live-flow checks 
 1. Real Telegram package-button flow.
 2. Real VK package-link flow.
 3. Real MAX package-link flow.
-4. Admin UI/report proof for consultation requests and payment problems.
