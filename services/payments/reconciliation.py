@@ -236,36 +236,44 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
     )
 
 
-def payment_problem_summary(limit: int = 20) -> list[dict[str, Any]]:
-    """Return recent payment records that need admin attention."""
+def _row_to_payment_problem(row: Any) -> dict[str, Any]:
+    if isinstance(row, dict):
+        return dict(row)
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "provider_charge_id": row[2],
+        "payload": row[3],
+        "amount": row[4],
+        "currency": row[5],
+        "provider_status": row[6],
+        "problem": row[7],
+        "reconciled_at": row[8],
+        "created_at": row[9],
+    }
+
+
+def payment_problem_summary(limit: int = 20, *, user_id: int | None = None) -> list[dict[str, Any]]:
+    """Return recent payment records that need admin attention.
+
+    When user_id is provided, the report is scoped to that user. This keeps
+    user-specific admin surfaces consistent with consultation request filtering
+    and prevents stale global problems from leaking into per-user reports.
+    """
+    base_query = """
+        SELECT id, user_id, provider_charge_id, payload, amount, currency,
+               provider_status, problem, reconciled_at, created_at
+        FROM payments
+        WHERE (COALESCE(problem, '') <> ''
+           OR provider_status IN ('canceled', 'waiting_for_capture'))
+    """.strip()
+    params: list[Any] = []
+    if user_id is not None:
+        base_query += " AND user_id=?"
+        params.append(int(user_id))
+    base_query += " ORDER BY id DESC LIMIT ?"
+    params.append(int(limit))
+
     with db() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, user_id, provider_charge_id, payload, amount, currency,
-                   provider_status, problem, reconciled_at, created_at
-            FROM payments
-            WHERE COALESCE(problem, '') <> ''
-               OR provider_status IN ('canceled', 'waiting_for_capture')
-            ORDER BY id DESC
-            LIMIT ?
-            """.strip(),
-            (int(limit),),
-        ).fetchall()
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        if isinstance(row, dict):
-            out.append(dict(row))
-        else:
-            out.append({
-                "id": row[0],
-                "user_id": row[1],
-                "provider_charge_id": row[2],
-                "payload": row[3],
-                "amount": row[4],
-                "currency": row[5],
-                "provider_status": row[6],
-                "problem": row[7],
-                "reconciled_at": row[8],
-                "created_at": row[9],
-            })
-    return out
+        rows = conn.execute(base_query, tuple(params)).fetchall()
+    return [_row_to_payment_problem(row) for row in rows]
