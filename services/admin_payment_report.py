@@ -40,7 +40,7 @@ class AdminPaymentReport:
 
 
 def build_admin_payment_report(*, limit: int = 20, user_id: int | None = None) -> AdminPaymentReport:
-    payment_problems = payment_problem_summary(limit=limit)
+    payment_problems = payment_problem_summary(limit=limit, user_id=user_id)
     consultation_requests = consultation_requests_summary(limit=limit, user_id=user_id)
     return AdminPaymentReport(
         payment_problems=tuple(dict(item) for item in payment_problems),
