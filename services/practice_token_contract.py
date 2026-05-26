@@ -38,20 +38,38 @@ VALID_DELIVERY_MODES = frozenset({
 })
 
 
+MORNING_RU = "\u0443\u0442\u0440\u043e"
+MORNING_ONLY_RU = "\u0442\u043e\u043b\u044c\u043a\u043e \u0443\u0442\u0440\u043e"
+EVENING_RU = "\u0432\u0435\u0447\u0435\u0440"
+EVENING_ONLY_RU = "\u0442\u043e\u043b\u044c\u043a\u043e \u0432\u0435\u0447\u0435\u0440"
+BOTH_RU = "\u0443\u0442\u0440\u043e + \u0432\u0435\u0447\u0435\u0440"
+PAUSE_RU = "\u043f\u0430\u0443\u0437\u0430"
+
+
 def normalize_delivery_mode(raw: str | None) -> str:
-    value = (raw or "").strip().casefold().replace("ё", "е")
+    value = (raw or "").strip().casefold().replace("\u0451", "\u0435")
     aliases = {
         "": "single_daily",
         "1": "single_daily",
         "single": "single_daily",
         "single_daily": "single_daily",
+        "one": "single_daily",
+        "once": "single_daily",
         "morning": "morning_only",
         "morning_only": "morning_only",
+        MORNING_RU: "morning_only",
+        MORNING_ONLY_RU: "morning_only",
         "evening": "evening_only",
         "evening_only": "evening_only",
+        EVENING_RU: "evening_only",
+        EVENING_ONLY_RU: "evening_only",
         "both": "both",
+        MORNING_RU + " " + EVENING_RU: "both",
+        MORNING_RU + "+" + EVENING_RU: "both",
+        BOTH_RU: "both",
         "pause": "paused",
         "paused": "paused",
+        PAUSE_RU: "paused",
     }
     return aliases.get(value, "single_daily")
 
