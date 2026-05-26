@@ -38,13 +38,7 @@ def payment_insert_values(
     decision_id: str | None,
     correlation_id: str | None,
 ) -> tuple[Any, ...]:
-    """Return values in the exact order expected by the payments INSERT.
-
-    This tiny helper is intentionally kept near the payment hook because the
-    order of created_at / decision_id / correlation_id is a production data
-    contract. A previous regression swapped these values and broke payment
-    attribution, so tests lock the order explicitly.
-    """
+    """Return values in the exact order expected by the payments INSERT."""
     return (
         int(user_id),
         telegram_charge_id,
@@ -89,7 +83,6 @@ def _expected_minor_amount_from_plan(plan: dict[str, Any] | None) -> int:
         price_rub = int(plan.get("price") or 0)
     except (TypeError, ValueError):
         return 0
-    # Keep compatibility with historical DB rows that stored rubles as kopecks.
     if price_rub >= 50000 and price_rub % 100 == 0:
         price_rub = price_rub // 100
     return int(price_rub) * 100 if price_rub > 0 else 0
@@ -162,8 +155,17 @@ def validate_pre_checkout_invoice(*, payload: str | None, currency: str | None, 
     return None
 
 
+async def _answer_pre_checkout_temporarily_unavailable(pre: PreCheckoutQuery) -> None:
+    try:
+        await pre.answer(
+            ok=False,
+            error_message="Платёж временно недоступен. Попробуйте ещё раз через минуту.",
+        )
+    except (TelegramAPIError, asyncio.TimeoutError):
+        logger.exception("pre_checkout_query negative answer failed")
+
+
 async def pre_checkout(pre: PreCheckoutQuery) -> None:
-    # Важно отвечать быстро (<=10 сек)
     payload = getattr(pre, "invoice_payload", "") or ""
     currency = getattr(pre, "currency", None)
     total_amount = getattr(pre, "total_amount", None)
@@ -197,21 +199,17 @@ async def pre_checkout(pre: PreCheckoutQuery) -> None:
         await pre.answer(ok=True)
     except (TelegramAPIError, asyncio.TimeoutError):
         logger.exception("pre_checkout_query answer failed")
-    except (sqlite3.Error, RuntimeError, ValueError, TypeError):
+    except (sqlite3.Error, RuntimeError):
         logger.exception("pre_checkout_query validation failed")
-        try:
-            await pre.answer(
-                ok=False,
-                error_message="Платёж временно недоступен. Попробуйте ещё раз через минуту.",
-            )
-        except (TelegramAPIError, asyncio.TimeoutError):
-            logger.exception("pre_checkout_query negative answer failed")
+        await _answer_pre_checkout_temporarily_unavailable(pre)
+    except (ValueError, TypeError):
+        logger.exception("pre_checkout_query validation failed")
+        await _answer_pre_checkout_temporarily_unavailable(pre)
 
 
 async def successful_payment(message: Message) -> None:
     sp = message.successful_payment
     payload = (sp.invoice_payload or "").strip()
-    # Decision attribution: payload may include |d=<decision_id>|c=<correlation_id>
     decision_id = None
     correlation_id = None
     if '|d=' in payload:
@@ -229,11 +227,8 @@ async def successful_payment(message: Message) -> None:
             correlation_id = None
     log_event(message.from_user.id, "invoice_paid", {"payload": payload, "amount": sp.total_amount})
 
-    # Idempotency: protect from duplicate successful_payment updates
     charge_id = (getattr(sp, "telegram_payment_charge_id", "") or "").strip()
     provider_id = (getattr(sp, "provider_payment_charge_id", "") or "").strip()
-    # We run the critical part in a single transaction to avoid half-states.
-    # Scheduling/notifications can be done after commit.
     with db() as conn:
         try:
             conn.execute("BEGIN")
@@ -259,12 +254,9 @@ async def successful_payment(message: Message) -> None:
                     conn.execute("ROLLBACK")
                     return
 
-            # Gift payment
             if payload.startswith("gift:"):
                 code = payload.split(":", 1)[1].strip()
                 mark_gift_paid_tx(conn, code, payment_id=charge_id or provider_id or None)
-
-                # Bonus for gifting (idempotent via gift_bonus_log PK)
                 g = conn.execute(
                     "SELECT days, recipient_id FROM gift_codes WHERE code=?",
                     (code,),
@@ -286,7 +278,6 @@ async def successful_payment(message: Message) -> None:
                     applied = conn.execute("SELECT changes() AS n").fetchone()["n"]
                     if int(applied) == 1:
                         grant_tx(conn, int(message.from_user.id), "both", int(bonus))
-                        # bookkeeping (best-effort): bonus_grants table
                         conn.execute(
                             "INSERT INTO bonus_grants(user_id, days, source, related_user_id, granted_at_utc) VALUES(?,?,?,?,datetime('now'))",
                             (int(message.from_user.id), int(bonus), "gift", int(recipient_id) if recipient_id is not None else None),
@@ -298,7 +289,6 @@ async def successful_payment(message: Message) -> None:
                 await deliver_gift_message(message, code)
                 return
 
-            # Subscription payment
             plan_id = 0
             if payload.startswith("sub:"):
                 try:
@@ -322,7 +312,6 @@ async def successful_payment(message: Message) -> None:
             raise
 
     if plan:
-        # paid_at for analytics
         try:
             paid_at = utc_now().replace(tzinfo=None, microsecond=0).isoformat()
             with db() as conn:
@@ -333,7 +322,6 @@ async def successful_payment(message: Message) -> None:
         except (sqlite3.Error, RuntimeError):
             logger.exception("failed to set paid_at")
 
-        # reminder 3 days before expires
         try:
             from datetime import datetime, timedelta
             with db() as conn:
@@ -354,14 +342,12 @@ async def successful_payment(message: Message) -> None:
             from services.jobs import cancel_funnel2
             cancel_funnel2(message.from_user.id)
         except ImportError:
-            # Funnel 2.0 может быть отключён/не поставлен — это допустимо.
             logger.debug("cancel_funnel2 import unavailable", exc_info=True)
         except (RuntimeError, ValueError):
             logger.exception("cancel_funnel2 failed")
 
         clear_plan(message.from_user.id)
 
-        # Funnel 2.0: 3 days after expiry
         try:
             from datetime import datetime, timedelta
             with db() as conn:
@@ -377,7 +363,6 @@ async def successful_payment(message: Message) -> None:
         except (sqlite3.Error, RuntimeError):
             logger.exception("funnel2 schedule failed")
 
-        # Referral bonus
         referrer = get_referrer(message.from_user.id)
         if referrer and not reward_already_given(message.from_user.id) and can_reward_referrer(referrer):
             bought_days = int(plan["days"])
