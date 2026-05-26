@@ -42,6 +42,13 @@ def test_delivery_mode_costs():
     assert daily_practice_cost("paused") == 0
 
 
+def test_localized_delivery_mode_aliases():
+    assert normalize_delivery_mode("\u0443\u0442\u0440\u043e") == "morning_only"
+    assert normalize_delivery_mode("\u0432\u0435\u0447\u0435\u0440") == "evening_only"
+    assert normalize_delivery_mode("\u0443\u0442\u0440\u043e + \u0432\u0435\u0447\u0435\u0440") == "both"
+    assert normalize_delivery_mode("\u043f\u0430\u0443\u0437\u0430") == "paused"
+
+
 def test_unknown_package_rejected():
     with pytest.raises(ValueError):
         package_by_id("missing")
