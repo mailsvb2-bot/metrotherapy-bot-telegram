@@ -7,8 +7,8 @@ Default mode deliberately avoids real user-message events. It sends:
 - ignored VK/MAX POST events that must not trigger outbound messages;
 - invalid JSON probes with expected 400 responses.
 
-The script intentionally avoids asyncio.create_task because the project runtime
-contract reserves unmanaged background tasks for canonical owners only.
+The script uses bounded gather-based probes and does not start unmanaged
+background jobs outside the canonical runtime owners.
 """
 
 import argparse
