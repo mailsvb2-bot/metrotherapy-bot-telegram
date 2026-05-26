@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramNetworkError
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BufferedInputFile, CallbackQuery
 
 from core.callback_utils import safe_answer_callback
@@ -27,8 +27,10 @@ async def post_score_chart(cb: CallbackQuery) -> None:
     """
     try:
         await safe_answer_callback(cb, "Готовлю график…")
-    except (TelegramAPIError, TelegramBadRequest, TelegramNetworkError, asyncio.TimeoutError):
+    except TelegramAPIError:
         log.debug("post chart callback answer failed", exc_info=True)
+    except asyncio.TimeoutError:
+        log.debug("post chart callback answer timed out", exc_info=True)
 
     raw = cb.data or ""
     try:
@@ -58,6 +60,15 @@ async def post_score_chart(cb: CallbackQuery) -> None:
             reply_markup=kb_menu_only(),
         )
         log.info("Telegram post-score chart sent: user_id=%s session_id=%s path=%s", user_id, session_id, chart_path)
-    except (TelegramAPIError, TelegramBadRequest, TelegramNetworkError, OSError, RuntimeError, ValueError):
+    except TelegramAPIError:
         log.exception("Telegram post-score chart send failed")
+        await cb.message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())
+    except OSError:
+        log.exception("Telegram post-score chart file read failed")
+        await cb.message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())
+    except RuntimeError:
+        log.exception("Telegram post-score chart runtime failed")
+        await cb.message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())
+    except ValueError:
+        log.exception("Telegram post-score chart value failed")
         await cb.message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())
