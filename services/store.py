@@ -7,20 +7,36 @@ from datetime import datetime
 from core.time_utils import utc_now
 from pathlib import Path
 
-from core.paths import LOGS_DIR
+from core.paths import ROOT
 from services.db import db, tx
 from services.subscription import is_active, get_scope
 from services.events import log_event
 
-LOG_FILE = Path(os.getenv("STORE_LOG_PATH") or (LOGS_DIR / "store.log"))
+
+def _store_log_path() -> Path | None:
+    if (os.getenv("STORE_LOG_DISABLED") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return None
+    raw = (os.getenv("STORE_LOG_PATH") or "").strip()
+    if raw:
+        path = Path(raw)
+    else:
+        path = Path("/var/log/metrotherapy/store.log")
+    if not path.is_absolute():
+        path = ROOT / path
+    return path
 
 
 def _log(msg: str):
+    log_path = _store_log_path()
+    if log_path is None:
+        return
     try:
-        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with LOG_FILE.open("a", encoding="utf-8") as f:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
             f.write(f"{utc_now().isoformat()} {msg}\n")
-    except (OSError, TypeError, ValueError):
+    except PermissionError:
+        logging.getLogger(__name__).debug("store log write skipped: permission denied for %s", log_path)
+    except OSError:
         logging.getLogger(__name__).exception("store log write failed")
 
 
