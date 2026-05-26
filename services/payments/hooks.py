@@ -3,14 +3,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-import urllib.parse
 from typing import Any
 
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import Message, PreCheckoutQuery, InlineKeyboardButton
+from aiogram.types import Message, PreCheckoutQuery
 
 from core.time_utils import utc_now
-from keyboards.inline import kb_main
 from services.db import db
 from services.plan_store import get_plan_id, clear_plan
 from services.plans import get_plan_by_id
@@ -18,13 +16,11 @@ from services.subscription import grant, grant_tx
 from services.jobs import cancel_funnel, add_job, cancel_jobs
 from services.events import log_event
 from services.referrals import get_referrer, reward_already_given, mark_reward_given, can_reward_referrer
-from services.bonuses import add_grant
 from services.gifts import mark_gift_paid_tx
-from services.gift_store import get_target, clear_target
-from services.promo_texts import get_gift_template
+from services.gift_store import clear_target
 from config.settings import settings
 
-from services.payments.ui import kb_after_paid, kb, kb_back
+from services.payments.ui import kb_after_paid
 from services.payments.gift import deliver_gift_message
 
 logger = logging.getLogger(__name__)
@@ -62,22 +58,154 @@ def payment_insert_values(
     )
 
 
+def _base_payment_payload(payload: str | None) -> str:
+    """Strip DecisionCore attribution suffix from Telegram invoice payload."""
+    raw = (payload or "").strip()
+    if "|" not in raw:
+        return raw
+    return raw.split("|", 1)[0].strip()
+
+
+def _row_value(row: Any, key: str, index: int, default: Any = None) -> Any:
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        return row.get(key, default)
+    if hasattr(row, "keys"):
+        try:
+            return row[key]
+        except (KeyError, TypeError, IndexError):
+            pass
+    try:
+        return row[index]
+    except (TypeError, KeyError, IndexError):
+        return default
+
+
+def _expected_minor_amount_from_plan(plan: dict[str, Any] | None) -> int:
+    if not plan or not plan.get("is_active"):
+        return 0
+    try:
+        price_rub = int(plan.get("price") or 0)
+    except (TypeError, ValueError):
+        return 0
+    # Keep compatibility with historical DB rows that stored rubles as kopecks.
+    if price_rub >= 50000 and price_rub % 100 == 0:
+        price_rub = price_rub // 100
+    return int(price_rub) * 100 if price_rub > 0 else 0
+
+
+def _gift_plan_id_by_code(code: str) -> int:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT plan_id, paid, status FROM gift_codes WHERE code=? LIMIT 1",
+            (code,),
+        ).fetchone()
+    if row is None:
+        return 0
+    try:
+        if int(_row_value(row, "paid", 1, 0) or 0) == 1:
+            return 0
+    except (TypeError, ValueError):
+        return 0
+    try:
+        return int(_row_value(row, "plan_id", 0, 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def validate_pre_checkout_invoice(*, payload: str | None, currency: str | None, total_amount: int | None) -> str | None:
+    """Return None when Telegram pre-checkout invoice is still valid.
+
+    This is the last synchronous guard before Telegram finalizes a payment.
+    It protects against stale invoice buttons after an admin changes/deactivates
+    tariffs and against malformed payloads that would otherwise be accepted and
+    only fail after money movement.
+    """
+    if (currency or "").strip().upper() != "RUB":
+        return "Платёж отклонён: поддерживается только RUB. Обновите тариф и попробуйте снова."
+
+    try:
+        requested_amount = int(total_amount or 0)
+    except (TypeError, ValueError):
+        return "Платёж отклонён: некорректная сумма. Обновите тариф и попробуйте снова."
+    if requested_amount <= 0:
+        return "Платёж отклонён: сумма должна быть больше нуля. Обновите тариф и попробуйте снова."
+
+    base_payload = _base_payment_payload(payload)
+
+    plan_id = 0
+    if base_payload.startswith("sub:"):
+        try:
+            plan_id = int(base_payload.split(":", 1)[1].strip() or 0)
+        except (TypeError, ValueError):
+            plan_id = 0
+    elif base_payload.startswith("gift:"):
+        code = base_payload.split(":", 1)[1].strip()
+        if not code:
+            return "Платёж отклонён: подарочный код не найден. Создайте подарок заново."
+        plan_id = _gift_plan_id_by_code(code)
+        if not plan_id:
+            return "Платёж отклонён: подарок устарел или уже оплачен. Создайте подарок заново."
+    else:
+        return "Платёж отклонён: неизвестный тип платежа. Выберите тариф заново."
+
+    if not plan_id:
+        return "Платёж отклонён: тариф не найден. Выберите тариф заново."
+
+    plan = get_plan_by_id(int(plan_id))
+    expected_amount = _expected_minor_amount_from_plan(plan)
+    if expected_amount <= 0:
+        return "Платёж отклонён: тариф недоступен. Выберите тариф заново."
+    if requested_amount != expected_amount:
+        return "Цена изменилась. Пожалуйста, откройте тарифы и сформируйте платёж заново."
+    return None
+
+
 async def pre_checkout(pre: PreCheckoutQuery) -> None:
     # Важно отвечать быстро (<=10 сек)
+    payload = getattr(pre, "invoice_payload", "") or ""
+    currency = getattr(pre, "currency", None)
+    total_amount = getattr(pre, "total_amount", None)
     try:
         logger.info(
             "pre_checkout_query: uid=%s currency=%s total=%s payload=%s",
             getattr(pre.from_user, "id", None),
-            getattr(pre, "currency", None),
-            getattr(pre, "total_amount", None),
-            (getattr(pre, "invoice_payload", "") or "")[:64],
+            currency,
+            total_amount,
+            payload[:64],
         )
     except (AttributeError, TypeError, ValueError):
         logger.exception("pre_checkout_query log failed")
+
     try:
+        error_message = await asyncio.to_thread(
+            validate_pre_checkout_invoice,
+            payload=payload,
+            currency=currency,
+            total_amount=total_amount,
+        )
+        if error_message:
+            logger.warning(
+                "pre_checkout_query rejected: uid=%s reason=%s payload=%s",
+                getattr(getattr(pre, "from_user", None), "id", None),
+                error_message,
+                payload[:64],
+            )
+            await pre.answer(ok=False, error_message=error_message)
+            return
         await pre.answer(ok=True)
     except (TelegramAPIError, asyncio.TimeoutError):
         logger.exception("pre_checkout_query answer failed")
+    except (sqlite3.Error, RuntimeError, ValueError, TypeError):
+        logger.exception("pre_checkout_query validation failed")
+        try:
+            await pre.answer(
+                ok=False,
+                error_message="Платёж временно недоступен. Попробуйте ещё раз через минуту.",
+            )
+        except (TelegramAPIError, asyncio.TimeoutError):
+            logger.exception("pre_checkout_query negative answer failed")
 
 
 async def successful_payment(message: Message) -> None:
@@ -91,11 +219,14 @@ async def successful_payment(message: Message) -> None:
             parts = payload.split('|')
             base = parts[0]
             for p in parts[1:]:
-                if p.startswith('d='): decision_id = p[2:] or None
-                if p.startswith('c='): correlation_id = p[2:] or None
+                if p.startswith('d='):
+                    decision_id = p[2:] or None
+                if p.startswith('c='):
+                    correlation_id = p[2:] or None
             payload = base
         except (AttributeError, TypeError, ValueError):
-            decision_id = None; correlation_id = None
+            decision_id = None
+            correlation_id = None
     log_event(message.from_user.id, "invoice_paid", {"payload": payload, "amount": sp.total_amount})
 
     # Idempotency: protect from duplicate successful_payment updates
