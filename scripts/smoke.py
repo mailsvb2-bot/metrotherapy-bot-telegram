@@ -28,6 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+SMOKE_BOT_TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
+
 
 def _cleanup_release_artifacts() -> None:
     for d in ROOT.rglob('__pycache__'):
@@ -62,7 +64,7 @@ def main() -> int:
     os.environ.setdefault('VALIDATOR_RELEASE_MODE', '1')
     temp_db = Path(tempfile.gettempdir()) / f"metro_smoke_{os.getpid()}.db"
     os.environ.setdefault('METRO_DB_PATH', str(temp_db))
-    os.environ.setdefault('BOT_TOKEN', '000000:SMOKE')
+    os.environ.setdefault('BOT_TOKEN', SMOKE_BOT_TOKEN)
     os.environ.setdefault('PAY_PROVIDER_TOKEN', '000000:SMOKE')
     # CI smoke intentionally runs with APP_ENV=prod to exercise prod fail-fast.
     # The production settings contract requires an admin identity, so provide a
@@ -106,7 +108,7 @@ def main() -> int:
         except TokenValidationError:
             token = ''
     if not token:
-        token = '000000:SMOKE'
+        token = SMOKE_BOT_TOKEN
     bot = Bot(token=token)
     dp = Dispatcher()
 
@@ -117,7 +119,7 @@ def main() -> int:
         start, menu, text_input, payments, demo, audio,
         admin, admin_stats, admin_inline, share, weather,
         info, micro, settings as settings_router, mood,
-        diagnostics, gift_flow, kb_debug, messenger_audio,
+        post_chart, diagnostics, gift_flow, kb_debug, messenger_audio,
     )
 
     dp.include_router(start.router)
