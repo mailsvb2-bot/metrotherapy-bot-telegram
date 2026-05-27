@@ -11,6 +11,7 @@ from services.practice_tokens import (
     payment_url,
     release_reservation,
     render_packages_text,
+    render_rhythm_text,
     reserve_practice,
     set_delivery_mode,
 )
@@ -148,7 +149,7 @@ def test_delivery_mode_is_saved():
     assert get_delivery_mode(90303) == "paused"
 
 
-def test_render_packages_text_contains_package_payment_links():
+def test_render_packages_text_contains_canonical_package_payment_links():
     text = render_packages_text(
         90404,
         base_url="https://bot.example",
@@ -156,14 +157,29 @@ def test_render_packages_text_contains_package_payment_links():
         external_user_id="404",
     )
 
-    assert "Current balance:" in text
-    assert "Start package" in text
-    assert "Full route" in text
-    assert "Anti-stress system" in text
-    assert "Personal month" in text
+    assert "\ud83d\udcb3 \u041f\u0430\u043a\u0435\u0442\u044b \u043f\u0440\u0430\u043a\u0442\u0438\u043a" in text
+    assert "1 \u043f\u0440\u0430\u043a\u0442\u0438\u043a\u0430 = \u043e\u0434\u043d\u043e \u0430\u0443\u0434\u0438\u043e" in text
+    assert "\u0421\u0435\u0439\u0447\u0430\u0441 \u0443 \u0432\u0430\u0441:" in text
+    assert "\u0421\u0442\u0430\u0440\u0442\u043e\u0432\u044b\u0439 \u043f\u0430\u043a\u0435\u0442 \u2014 1 900 \u20bd" in text
+    assert "\u041f\u043e\u043b\u043d\u044b\u0439 \u043c\u0430\u0440\u0448\u0440\u0443\u0442 \u2014 7 900 \u20bd" in text
+    assert "\u0410\u043d\u0442\u0438\u0441\u0442\u0440\u0435\u0441\u0441-\u0441\u0438\u0441\u0442\u0435\u043c\u0430 \u2014 12 900 \u20bd" in text
+    assert "\u041f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u044c\u043d\u044b\u0439 \u043c\u0435\u0441\u044f\u0446 \u2014 23 000 \u20bd" in text
     assert "kind=tokens" in text
+    assert "package_id=practice_start_7" in text
     assert "package_id=practice_60" in text
+    assert "package_id=practice_antistress_60" in text
+    assert "package_id=practice_personal_month" in text
+    assert "package_id=practice_5" not in text
     assert "package_id=practice_20" not in text
+
+
+def test_render_rhythm_text_is_localized():
+    text = render_rhythm_text(90405)
+
+    assert "\ud83d\udd52 \u0420\u0438\u0442\u043c \u043f\u0440\u0430\u043a\u0442\u0438\u043a" in text
+    assert "\ud83c\udf05 \u0422\u043e\u043b\u044c\u043a\u043e \u0443\u0442\u0440\u043e" in text
+    assert "\ud83c\udf19 \u0422\u043e\u043b\u044c\u043a\u043e \u0432\u0435\u0447\u0435\u0440" in text
+    assert "\u23f8 \u041f\u0430\u0443\u0437\u0430" in text
 
 
 def test_payment_url_uses_external_user_id():
