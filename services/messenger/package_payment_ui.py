@@ -110,11 +110,21 @@ def gift_package_text(*, user_id: int, platform: str, external_user_id: str | No
     return "\n".join(lines).strip()
 
 
+_PRICE_LABEL_RE = re.compile(r"\b\d[\d\s]*\s*₽\b")
+
+
+def _looks_like_package_label(value: str) -> bool:
+    raw = str(value or "").strip()
+    return "—" in raw and "₽" in raw and bool(_PRICE_LABEL_RE.search(raw))
+
+
 def extract_labeled_urls(text: str) -> tuple[tuple[str, str], ...]:
     """Extract (label, url) pairs from package texts.
 
-    The label is the nearest non-empty line before the URL, which keeps the
-    function provider-agnostic for VK and MAX keyboard renderers.
+    Package text uses a stable three-line block: label, description, URL.
+    The provider keyboard label must use the priced package label, not the
+    intermediate description. Legacy one-link payment texts intentionally fall
+    back in provider adapters and are not treated as package bundles.
     """
     lines = [line.strip() for line in str(text or "").splitlines()]
     pairs: list[tuple[str, str]] = []
@@ -123,7 +133,9 @@ def extract_labeled_urls(text: str) -> tuple[tuple[str, str], ...]:
             continue
         label = "Открыть"
         for previous in reversed(lines[:idx]):
-            if previous and not previous.startswith("http"):
+            if not previous or previous.startswith("http"):
+                continue
+            if _looks_like_package_label(previous):
                 label = previous
                 break
         pairs.append((label, line.rstrip(".,;")))
