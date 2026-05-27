@@ -10,6 +10,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from threading import Thread
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+SCHEMA_PATH = SCRIPT_DIR / "stress_db_schema.sql"
+
 
 @dataclass(frozen=True)
 class DbStressReport:
@@ -28,9 +31,7 @@ def _init(path: Path) -> None:
     with sqlite3.connect(str(path), timeout=30, check_same_thread=False) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS stress_events(id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, worker INTEGER NOT NULL, n INTEGER NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)"
-        )
+        conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         conn.commit()
 
 
