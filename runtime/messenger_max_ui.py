@@ -135,7 +135,8 @@ def first_url(text: str) -> str:
 def _labeled_link_rows(text: str) -> list[list[dict[str, Any]]]:
     rows: list[list[dict[str, Any]]] = []
     for label, url in extract_labeled_urls(text):
-        rows.append([max_link_button(label, url)])
+        if label != "Открыть":
+            rows.append([max_link_button(label, url)])
     return rows
 
 
