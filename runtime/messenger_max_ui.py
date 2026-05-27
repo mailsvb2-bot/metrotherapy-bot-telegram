@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from services.messenger.menu_contract import MAIN_MENU_ACTIONS, max_numbered_menu_text
+from services.messenger.package_payment_ui import extract_labeled_urls
 
 
 def max_message_button(text: str, *, command: str | None = None) -> dict[str, Any]:
@@ -131,21 +132,27 @@ def first_url(text: str) -> str:
     return match.group(0).rstrip(".,;") if match else ""
 
 
+def _labeled_link_rows(text: str) -> list[list[dict[str, Any]]]:
+    rows: list[list[dict[str, Any]]] = []
+    for label, url in extract_labeled_urls(text):
+        rows.append([max_link_button(label, url)])
+    return rows
+
+
 def link_action_attachment(text: str) -> dict[str, Any] | None:
-    url = first_url(text)
+    raw = str(text or "")
+    url = first_url(raw)
     if not url:
         return None
-    if str(text or "").lstrip().startswith("💳 Оплата"):
-        return inline_keyboard_attachment([
-            [max_link_button("💳 Оплатить", url)],
-            [max_message_button("🎧 Получить аудио", command="continue"), max_message_button("⬅️ Меню", command="start")],
-        ])
-    if str(text or "").lstrip().startswith("🎁 Подарить"):
-        return inline_keyboard_attachment([
-            [max_link_button("🎁 Оплатить подарок", url)],
-            [max_message_button("📣 Посоветовать", command="share"), max_message_button("⬅️ Меню", command="start")],
-        ])
-    if str(text or "").lstrip().startswith("↗️ Поделиться"):
+    if raw.lstrip().startswith("💳"):
+        rows = _labeled_link_rows(raw) or [[max_link_button("💳 Оплатить", url)]]
+        rows.append([max_message_button("🎧 Получить аудио", command="continue"), max_message_button("⬅️ Меню", command="start")])
+        return inline_keyboard_attachment(rows)
+    if raw.lstrip().startswith("🎁"):
+        rows = _labeled_link_rows(raw) or [[max_link_button("🎁 Оплатить подарок", url)]]
+        rows.append([max_message_button("📣 Посоветовать", command="share"), max_message_button("⬅️ Меню", command="start")])
+        return inline_keyboard_attachment(rows)
+    if raw.lstrip().startswith("↗️ Поделиться"):
         return inline_keyboard_attachment([
             [max_link_button("↗️ Открыть ссылку", url)],
             [max_message_button("⬅️ Меню", command="start")],
