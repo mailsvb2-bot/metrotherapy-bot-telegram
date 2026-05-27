@@ -18,6 +18,7 @@ from services.migrations.messenger_media_assets_v6 import apply as _apply_messen
 from services.migrations.user_delivery_preferences_v6 import apply as _apply_delivery_preferences_v6
 from services.migrations.admin_ad_links_v1 import apply as _apply_admin_ad_links_v1
 from services.migrations.practice_token_economy_v1 import apply as _apply_practice_token_economy_v1
+from services.migrations.practice_token_audit_v2 import apply as _apply_practice_token_audit_v2
 from services.migrations.premium_entitlements_v1 import apply as _apply_premium_entitlements_v1
 
 
@@ -45,5 +46,6 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_delivery_preferences_v6(conn)
     _apply_admin_ad_links_v1(conn)
     _apply_practice_token_economy_v1(conn)
+    _apply_practice_token_audit_v2(conn)
     _apply_premium_entitlements_v1(conn)
     _apply_price(conn)

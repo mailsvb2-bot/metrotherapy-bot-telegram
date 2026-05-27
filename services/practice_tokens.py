@@ -415,19 +415,41 @@ def payment_url(base_url: str, *, user_id: int, platform: str, external_user_id:
 
 
 def _price_label(price_rub: int) -> str:
-    return f"{int(price_rub):,} RUB".replace(",", " ")
+    return f"{int(price_rub):,} ₽".replace(",", " ")
+
+
+def _mode_title(mode: str) -> str:
+    normalized = normalize_delivery_mode(mode)
+    if normalized == "morning_only":
+        return "только утро"
+    if normalized == "evening_only":
+        return "только вечер"
+    if normalized == "both":
+        return "утро + вечер"
+    if normalized == "paused":
+        return "пауза"
+    return "1 практика в день"
 
 
 def render_packages_text(user_id: int, *, base_url: str, platform: str, external_user_id: str | None = None) -> str:
     wallet = get_wallet(int(user_id))
+    mode = get_delivery_mode(int(user_id))
+    cost = daily_practice_cost(mode)
+    days = "пауза" if cost <= 0 else f"примерно на {wallet.available_tokens // cost} дн. при текущем ритме"
     lines = [
-        "Practice packages",
+        "💳 Пакеты практик",
         "",
-        f"Current balance: {wallet.available_tokens} practices.",
+        "1 практика = одно аудио с оценкой состояния ДО и ПОСЛЕ.",
+        "Если аудио не отправилось, практика не списывается.",
         "",
+        f"Сейчас у вас: {wallet.available_tokens} практик.",
+        f"Ритм: {_mode_title(mode)} ({days}).",
+        "",
+        "Выберите пакет:",
     ]
     for package in get_active_packages():
-        lines.append(f"{package.title} - {_price_label(package.price_rub)}")
+        lines.append("")
+        lines.append(f"{package.title} — {_price_label(package.price_rub)}")
         lines.append(package.description)
         lines.append(
             payment_url(
@@ -438,8 +460,11 @@ def render_packages_text(user_id: int, *, base_url: str, platform: str, external
                 package_id=package.package_id,
             )
         )
-        lines.append("")
-    lines.append("Delivery rhythm can be changed separately.")
+    lines.extend([
+        "",
+        "После оплаты практики будут начислены на баланс.",
+        "Ритм можно менять: только утро, только вечер, утро + вечер или пауза.",
+    ])
     return "\n".join(lines).strip()
 
 
@@ -447,10 +472,14 @@ def render_rhythm_text(user_id: int) -> str:
     mode = get_delivery_mode(int(user_id))
     wallet = get_wallet(int(user_id))
     cost = daily_practice_cost(mode)
-    days = "-" if cost <= 0 else str(wallet.available_tokens // cost)
+    days = "практики не расходуются, пока стоит пауза" if cost <= 0 else f"баланса хватит примерно на {wallet.available_tokens // cost} дн."
     return (
-        "Practice rhythm\n\n"
-        f"Mode: {mode}.\n"
-        f"Balance: {wallet.available_tokens} practices.\n"
-        f"Estimated days: {days}."
+        "🕒 Ритм практик\n\n"
+        f"Сейчас: {_mode_title(mode)}.\n"
+        f"Баланс: {wallet.available_tokens} практик; {days}.\n\n"
+        "Можно выбрать:\n"
+        "🌅 Только утро — 1 практика в день\n"
+        "🌙 Только вечер — 1 практика в день\n"
+        "🌅🌙 Утро + вечер — 2 практики в день\n"
+        "⏸ Пауза — ничего не отправлять"
     )

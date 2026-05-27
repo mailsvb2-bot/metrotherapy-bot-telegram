@@ -16,10 +16,10 @@ class PracticePackage:
 
 
 DEFAULT_PRACTICE_PACKAGES: tuple[PracticePackage, ...] = (
-    PracticePackage("practice_start_7", "Start package", "7 practices.", 7, 1900, 10, True, ""),
-    PracticePackage("practice_60", "Full route", "60 practices.", 60, 7900, 20, True, ""),
-    PracticePackage("practice_antistress_60", "Anti-stress system", "60 practices plus video course.", 60, 12900, 30, True, ""),
-    PracticePackage("practice_personal_month", "Personal month", "60 practices plus video course plus consultation request.", 60, 23000, 40, True, ""),
+    PracticePackage("practice_start_7", "Стартовый пакет", "7 практик. Мягкий вход и проверка формата.", 7, 1900, 10, True, ""),
+    PracticePackage("practice_60", "Полный маршрут", "60 практик. Базовый месячный маршрут.", 60, 7900, 20, True, ""),
+    PracticePackage("practice_antistress_60", "Антистресс-система", "60 практик + доступ к видеокурсу.", 60, 12900, 30, True, ""),
+    PracticePackage("practice_personal_month", "Персональный месяц", "60 практик + видеокурс + заявка на консультацию.", 60, 23000, 40, True, ""),
 )
 
 LEGACY_PRACTICE_PACKAGES: tuple[PracticePackage, ...] = (

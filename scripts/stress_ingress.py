@@ -2,10 +2,13 @@ from __future__ import annotations
 
 """Safe ingress stress probe for Metrotherapy runtime.
 
-Default mode deliberately avoids real user-message events. It sends:
-- concurrent GET requests to local/public health endpoints;
+Default mode deliberately avoids real user-message events and external network
+traffic. It sends concurrent GET requests to local health endpoints only.
+
+When --base-url is explicitly supplied, it also sends:
+- public health GET requests;
 - ignored VK/MAX POST events that must not trigger outbound messages;
-- invalid JSON probes with expected 400 responses.
+- invalid JSON probes with expected 400 responses when requested.
 
 The script uses bounded gather-based probes and does not start unmanaged
 background jobs outside the canonical runtime owners.
@@ -112,12 +115,15 @@ def _summarize(results: list[ProbeResult]) -> dict[str, Any]:
 
 
 def _probe_specs(args: argparse.Namespace) -> list[dict[str, Any]]:
-    base = args.base_url.rstrip("/")
+    base = (args.base_url or "").strip().rstrip("/")
     headers = {"Content-Type": "application/json"}
     specs: list[dict[str, Any]] = []
     for i in range(args.requests):
         specs.append({"target": "local_health", "method": "GET", "url": args.local_health_url, "expect_status": {200}})
-        specs.append({"target": "local_webhook_health", "method": "GET", "url": args.local_webhook_health_url, "expect_status": {200}})
+        if args.local_webhook_health_url:
+            specs.append({"target": "local_webhook_health", "method": "GET", "url": args.local_webhook_health_url, "expect_status": {200}})
+        if not base:
+            continue
         specs.append({"target": "public_health", "method": "GET", "url": f"{base}/healthz", "expect_status": {200}})
         specs.append({
             "target": "vk_ignored_post",
@@ -168,6 +174,7 @@ async def run(args: argparse.Namespace) -> int:
         "elapsed_sec": elapsed,
         "requests_per_target": args.requests,
         "concurrency": args.concurrency,
+        "public_targets_enabled": bool((args.base_url or "").strip()),
         "targets": summary,
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -176,11 +183,11 @@ async def run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="https://metrotherapy-bot.metrotherapy.ru")
+    parser.add_argument("--base-url", default="", help="Optional public base URL. Empty means local health checks only.")
     parser.add_argument("--local-health-url", default="http://127.0.0.1:8082/healthz")
     parser.add_argument("--local-webhook-health-url", default="http://127.0.0.1:8081/healthz")
-    parser.add_argument("--requests", type=int, default=100, help="Requests per target")
-    parser.add_argument("--concurrency", type=int, default=25)
+    parser.add_argument("--requests", type=int, default=25, help="Requests per enabled target")
+    parser.add_argument("--concurrency", type=int, default=10)
     parser.add_argument("--include-invalid-json", action="store_true")
     args = parser.parse_args()
     if args.requests <= 0:
