@@ -157,7 +157,7 @@ def test_render_packages_text_contains_canonical_package_payment_links():
         external_user_id="404",
     )
 
-    assert "\ud83d\udcb3 \u041f\u0430\u043a\u0435\u0442\u044b \u043f\u0440\u0430\u043a\u0442\u0438\u043a" in text
+    assert "\u041f\u0430\u043a\u0435\u0442\u044b \u043f\u0440\u0430\u043a\u0442\u0438\u043a" in text
     assert "1 \u043f\u0440\u0430\u043a\u0442\u0438\u043a\u0430 = \u043e\u0434\u043d\u043e \u0430\u0443\u0434\u0438\u043e" in text
     assert "\u0421\u0435\u0439\u0447\u0430\u0441 \u0443 \u0432\u0430\u0441:" in text
     assert "\u0421\u0442\u0430\u0440\u0442\u043e\u0432\u044b\u0439 \u043f\u0430\u043a\u0435\u0442 \u2014 1 900 \u20bd" in text
@@ -176,10 +176,10 @@ def test_render_packages_text_contains_canonical_package_payment_links():
 def test_render_rhythm_text_is_localized():
     text = render_rhythm_text(90405)
 
-    assert "\ud83d\udd52 \u0420\u0438\u0442\u043c \u043f\u0440\u0430\u043a\u0442\u0438\u043a" in text
-    assert "\ud83c\udf05 \u0422\u043e\u043b\u044c\u043a\u043e \u0443\u0442\u0440\u043e" in text
-    assert "\ud83c\udf19 \u0422\u043e\u043b\u044c\u043a\u043e \u0432\u0435\u0447\u0435\u0440" in text
-    assert "\u23f8 \u041f\u0430\u0443\u0437\u0430" in text
+    assert "\u0420\u0438\u0442\u043c \u043f\u0440\u0430\u043a\u0442\u0438\u043a" in text
+    assert "\u0422\u043e\u043b\u044c\u043a\u043e \u0443\u0442\u0440\u043e" in text
+    assert "\u0422\u043e\u043b\u044c\u043a\u043e \u0432\u0435\u0447\u0435\u0440" in text
+    assert "\u041f\u0430\u0443\u0437\u0430" in text
 
 
 def test_payment_url_uses_external_user_id():
