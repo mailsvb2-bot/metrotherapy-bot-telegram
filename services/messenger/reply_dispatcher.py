@@ -18,6 +18,7 @@ from runtime.messenger_vk_ui import (
 from services.events import log_event
 from services.messenger.audio_delivery import send_next_audio_to_user, _post_audio_control_kwargs
 from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDelivery
+from services.messenger.package_payment_ui import gift_package_text, package_payment_text
 from services.messenger.progress_charts import build_vk_mood_progress_chart_path
 from services.messenger.provider_transport import json_request, multipart_upload
 from services.messenger.text_ui import MessengerReply
@@ -39,6 +40,16 @@ def _looks_like_score_scale(text: str) -> bool:
         or "состояни" in raw
         or "после прослуш" in raw
     )
+
+
+def _canonical_payment_text(platform: str, canonical_user_id: int, external_user_id: str, text: str) -> str:
+    """Upgrade legacy VK/MAX payment texts to the canonical 4-package surface."""
+    stripped = str(text or "").lstrip()
+    if stripped.startswith("💳"):
+        return package_payment_text(user_id=canonical_user_id, platform=platform, external_user_id=external_user_id)
+    if stripped.startswith("🎁"):
+        return gift_package_text(user_id=canonical_user_id, platform=platform, external_user_id=external_user_id)
+    return text
 
 
 def _max_upload_payload(upload_meta: dict[str, Any], uploaded: Any, *, media_type: str) -> dict[str, Any]:
@@ -191,20 +202,21 @@ async def send_reply_bundle(
 
     for reply in replies:
         if reply.kind == "text":
-            if not str(reply.text or "").strip():
+            text = _canonical_payment_text(platform, canonical_user_id, external_user_id, reply.text)
+            if not str(text or "").strip():
                 continue
             kwargs: dict[str, Any] = {}
             if platform == "vk":
                 keyboard_kind = (reply.meta or {}).get("vk_keyboard")
                 if keyboard_kind == "demo_kind":
                     kwargs["keyboard_json"] = vk_demo_kind_keyboard_json()
-                elif keyboard_kind == "score_scale" or _looks_like_score_scale(reply.text):
+                elif keyboard_kind == "score_scale" or _looks_like_score_scale(text):
                     kwargs["keyboard_json"] = vk_score_scale_keyboard_json()
                 elif keyboard_kind == "weather":
                     kwargs["keyboard_json"] = vk_weather_keyboard_json()
                 elif keyboard_kind == "weather_city":
                     kwargs["keyboard_json"] = vk_weather_city_keyboard_json()
-            await sender.send_text(external_user_id, reply.text, **_vk_kwargs(platform, kwargs, canonical_user_id))
+            await sender.send_text(external_user_id, text, **_vk_kwargs(platform, kwargs, canonical_user_id))
             continue
 
         if reply.kind == "next_audio":
