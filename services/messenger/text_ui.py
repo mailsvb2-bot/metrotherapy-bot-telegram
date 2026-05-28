@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import urllib.parse
 
 from config.settings import settings
 from services.personalization import get_preface
@@ -19,6 +18,7 @@ from services.messenger.entrypoints import register_user_entry
 from services.messenger.links import build_messenger_targets, build_switch_targets
 from services.messenger.platforms import normalize_platform, platform_title
 from services.messenger.menu_contract import normalize_menu_command
+from services.messenger.package_payment_ui import gift_package_text, package_payment_text
 from services.messenger.preferences import get_channel_snapshot, set_preferred_platform
 from services.messenger.audio_progress import get_progress_snapshot, SEQUENCE_FULL_SERIES, confirm_pending_audio_delivery
 from services.messenger.timeline import get_recent_audio_timeline
@@ -108,67 +108,21 @@ def _share_text(user_id: int) -> str:
     return "\n".join(lines)
 
 
-def _payment_public_base_url() -> str:
-    base = (
-        getattr(settings, "PAYMENT_PUBLIC_BASE_URL", "")
-        or getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "")
-        or "https://metrotherapy-bot.metrotherapy.ru"
-    )
-    return str(base).strip().rstrip("/")
-
-
-def _payment_url(user_id: int, *, platform: str, external_user_id: str | None, kind: str) -> str:
-    public_id = (external_user_id or "").strip() or str(user_id)
-    params = urllib.parse.urlencode(
-        {
-            "source": platform or "messenger",
-            "user_id": public_id,
-            "kind": kind,
-        }
-    )
-    return f"{_payment_public_base_url()}/pay/yookassa?{params}"
-
-
 def _payment_text(user_id: int, *, platform: str, external_user_id: str | None) -> str:
-    url = _payment_url(
-        int(user_id),
-        platform=platform,
+    """Canonical public payment surface for Telegram/VK/MAX text UI."""
+    return package_payment_text(
+        user_id=int(user_id),
+        platform=normalize_platform(platform),
         external_user_id=external_user_id,
-        kind="subscription",
-    )
-    return (
-        "💳 Оплата доступа к Метротерапии\n\n"
-        "Нажмите ссылку ниже, чтобы открыть безопасную оплату YooKassa:\n"
-        f"{url}\n\n"
-        "После оплаты вернитесь сюда и нажмите «🎧 Получить аудио»."
     )
 
 
 def _gift_text(user_id: int, *, platform: str, external_user_id: str | None) -> str:
-    gift_payment_url = _payment_url(
-        int(user_id),
-        platform=platform,
+    """Canonical public gift/payment surface for Telegram/VK/MAX text UI."""
+    return gift_package_text(
+        user_id=int(user_id),
+        platform=normalize_platform(platform),
         external_user_id=external_user_id,
-        kind="gift",
-    )
-    share_url = (
-        "https://vk.com/share.php?"
-        + urllib.parse.urlencode(
-            {
-                "url": "https://metrotherapy.ru",
-                "title": "Метротерапия",
-                "comment": "Дарю тебе короткую аудиопрактику Метротерапии.",
-            }
-        )
-    )
-    return (
-        "🎁 Подарить Метротерапию\n\n"
-        "1. Сначала оплатите подарок по ссылке:\n"
-        f"{gift_payment_url}\n\n"
-        "2. Потом отправьте человеку ссылку на проект:\n"
-        f"{share_url}\n\n"
-        "Позже можно усилить это до полноценного выбора друга внутри VK, "
-        "но сейчас это рабочий безопасный контур: оплата + ссылка для передачи."
     )
 
 
