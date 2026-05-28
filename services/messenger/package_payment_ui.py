@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 
-from config.settings import settings
+from services.payments.public_url import payment_public_base_url
 from services.practice_token_contract import PracticePackage, public_practice_packages
 from services.practice_tokens import payment_url
 
@@ -22,22 +21,12 @@ class PackagePaymentLink:
         return f"{self.title} — {_price_label(self.price_rub)}"
 
 
-def _public_base_url() -> str:
-    return (
-        os.getenv("MESSENGER_PUBLIC_BASE_URL", "").strip()
-        or os.getenv("PAYMENT_PUBLIC_BASE_URL", "").strip()
-        or os.getenv("PUBLIC_BASE_URL", "").strip()
-        or str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
-        or str(getattr(settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "") or "").strip()
-    ).rstrip("/")
-
-
 def _price_label(price_rub: int) -> str:
     return f"{int(price_rub):,} ₽".replace(",", " ")
 
 
 def package_payment_links(*, user_id: int, platform: str, external_user_id: str | None = None) -> tuple[PackagePaymentLink, ...]:
-    base_url = _public_base_url()
+    base_url = payment_public_base_url()
     items: list[PackagePaymentLink] = []
     for package in public_practice_packages():
         items.append(_package_link(package, base_url=base_url, user_id=user_id, platform=platform, external_user_id=external_user_id))
@@ -92,7 +81,7 @@ def gift_package_text(*, user_id: int, platform: str, external_user_id: str | No
     lines = [
         "🎁 Подарить Метротерапию",
         "",
-        "Публичная gift-витрина показывает те же 4 актуальных пакета, что и Telegram. Сейчас оплата идёт через общий package checkout; после оплаты можно отправить человеку ссылку на проект или switch-ссылку.",
+        "Подарочная витрина использует те же 4 актуальных пакета, что и Telegram. После оплаты можно отправить человеку ссылку на проект или switch-ссылку; полноценный claim-flow будет отдельным gift-контуром.",
         "",
     ]
     for item in package_payment_links(user_id=int(user_id), platform=platform, external_user_id=external_user_id):
