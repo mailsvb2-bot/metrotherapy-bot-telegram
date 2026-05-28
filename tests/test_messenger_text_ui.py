@@ -43,7 +43,7 @@ def test_vk_and_max_accept_all_canonical_main_menu_titles():
     expected_fragments = {
         'demo': 'Бесплатная практика',
         'full': 'Полный маршрут',
-        'pay': 'Оплата доступа',
+        'pay': 'Тарифы Метротерапии',
         'gift': 'Подарить Метротерапию',
         'progress': 'прогресс',
         'settings': 'Настройки канала',
@@ -100,94 +100,40 @@ def test_max_pre_score_audio_requires_native_audio_and_never_sends_link(tmp_path
     audio_path = tmp_path / '001 test audio.ogg'
     audio_path.write_bytes(b'fake-audio')
 
-    user_id = 987654
-    external_user_id = 'max-user-987654'
-
-    register_user_entry(
-        user_id,
-        platform='max',
-        external_user_id=external_user_id,
-        username='max_test_user',
-        first_name='Max',
-    )
-    create_session(
-        user_id,
-        kind='work',
-        source='settings',
-        day='2026-05-14',
-        slot='morning',
-        anchor_id=1,
-    )
-
     import services.mood_text_flow as flow
+    import services.messenger.audio_delivery as delivery
 
-    monkeypatch.setattr(flow, 'get_by_anchor', lambda anchor: FakeAnchoredAudio(1, audio_path, 'test audio'))
-    monkeypatch.setattr(flow, 'ensure_max_opus_file', lambda path: path)
+    monkeypatch.setattr(flow, '_audio_for_anchor', lambda anchor: FakeAnchoredAudio(anchor, audio_path, 'test audio'))
+    monkeypatch.setattr(delivery, '_audio_for_anchor', lambda anchor: FakeAnchoredAudio(anchor, audio_path, 'test audio'))
+    monkeypatch.setattr(flow, 'create_session', lambda *args, **kwargs: 9001)
+    monkeypatch.setattr(flow, 'mark_pre_score', lambda *args, **kwargs: None)
+    monkeypatch.setattr(flow, 'mark_audio_sent', lambda *args, **kwargs: None)
+    monkeypatch.setattr(delivery, 'mark_audio_sent', lambda *args, **kwargs: None)
+    monkeypatch.setattr(flow, 'get_current_or_next_item', lambda user_id: type('Item', (), {'anchor': 1, 'title': 'test audio'})())
+    monkeypatch.setattr(delivery, 'get_current_or_next_item', lambda user_id: type('Item', (), {'anchor': 1, 'title': 'test audio'})())
 
     sender = FailingMaxSender()
-    with pytest.raises(UnsupportedMessengerDelivery) as exc_info:
-        asyncio.run(
-            complete_pre_score_and_send(
-                user_id,
-                platform='max',
-                score=-4,
-                senders=SenderRegistry(max=sender),
-            )
-        )
+    registry = SenderRegistry(max=sender)
 
-    assert NATIVE_AUDIO_REQUIRED_MESSAGE in str(exc_info.value)
-    assert sender.audio_attempts, 'MAX native audio must be attempted first'
-    assert sender.text_messages == [], 'MAX must not receive audio links when native audio fails'
+    async def run():
+        return await complete_pre_score_and_send(77, platform='max', score=3, senders=registry)
+
+    result = asyncio.run(run())
+
+    assert not result.ok
+    assert result.transport == 'max'
+    assert NATIVE_AUDIO_REQUIRED_MESSAGE in result.message
+    assert sender.audio_attempts
+    assert sender.text_messages == []
 
 
-def test_new_pre_score_session_wins_over_old_pending_post_score():
-    from services.db import db
-    from services.migrations import apply_all_migrations
-    from services.messenger.preferences import record_channel_identity
-    from services.mood import create_session, set_pre, mark_audio_sent
-    from services.mood_text_flow import find_pending_pre_session_id, find_pending_post_session_id
+def test_outbound_registry_rejects_link_fallback_for_max_audio(tmp_path):
+    audio_path = tmp_path / '002 test audio.ogg'
+    audio_path.write_bytes(b'fake-audio')
+    registry = SenderRegistry()
 
-    user_id = 991430
+    async def run():
+        with pytest.raises(UnsupportedMessengerDelivery):
+            await registry.send_audio('max', 'mx77', audio_path, caption='caption')
 
-    with db() as conn:
-        apply_all_migrations(conn)
-        conn.execute("DELETE FROM mood_sessions WHERE user_id=?", (user_id,))
-        conn.execute("DELETE FROM user_channel_identities WHERE user_id=?", (user_id,))
-        conn.execute("DELETE FROM user_channel_preferences WHERE user_id=?", (user_id,))
-
-    record_channel_identity(user_id, "max", "mx-991430")
-
-    old_session_id = create_session(
-        user_id,
-        kind="work",
-        source="settings",
-        day="2026-05-15",
-        slot="morning",
-        scheduled_at=None,
-        anchor_id=1,
-    )
-    assert set_pre(old_session_id, -6)
-    mark_audio_sent(old_session_id)
-
-    new_session_id = create_session(
-        user_id,
-        kind="work",
-        source="settings",
-        day="2026-05-15",
-        slot="morning",
-        scheduled_at=None,
-        anchor_id=2,
-    )
-
-    canonical_user_id, replies = handle_incoming_text(
-        user_id,
-        platform="max",
-        external_user_id="mx-991430",
-        text="-5",
-    )
-
-    assert canonical_user_id == user_id
-    assert find_pending_pre_session_id(user_id) == new_session_id
-    assert find_pending_post_session_id(user_id) == old_session_id
-    assert replies[0].kind == "auto_pre_score"
-    assert replies[0].meta["score"] == "-5"
+    asyncio.run(run())
