@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import os
-
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config.settings import settings
+from services.payments.public_url import payment_public_base_url
 from services.plans import get_active_plans
 from services.practice_token_contract import public_practice_packages
 from services.practice_tokens import payment_url
@@ -23,22 +21,12 @@ def kb_back(to: str = "menu:main") -> InlineKeyboardMarkup:
     return kb([[InlineKeyboardButton(text="⬅️ Назад", callback_data=to)]])
 
 
-def _public_base_url() -> str:
-    return (
-        os.getenv("MESSENGER_PUBLIC_BASE_URL", "").strip()
-        or os.getenv("PAYMENT_PUBLIC_BASE_URL", "").strip()
-        or os.getenv("PUBLIC_BASE_URL", "").strip()
-        or (settings.MESSENGER_PUBLIC_BASE_URL or "").strip()
-        or (settings.TELEGRAM_WEBHOOK_PUBLIC_BASE_URL or "").strip()
-    ).rstrip("/")
-
-
 def _price_label(price_rub: int) -> str:
     return f"{int(price_rub):,} ₽".replace(",", " ")
 
 
 def _practice_package_rows(*, user_id: int | None, platform: str = "telegram") -> list[list[InlineKeyboardButton]]:
-    base_url = _public_base_url()
+    base_url = payment_public_base_url()
     rows: list[list[InlineKeyboardButton]] = []
     for package in public_practice_packages():
         label = f"{package.title} — {_price_label(package.price_rub)}"
@@ -81,10 +69,8 @@ def kb_tariffs(user_id: int | None = None) -> InlineKeyboardMarkup:
 
 
 def kb_gift_tariffs(back_cb: str = "gift:menu") -> InlineKeyboardMarkup:
-    # Gift invoices are still backed by the legacy Telegram invoice flow, but
-    # the visible package ladder must not expose the old 6-row subscription set.
-    # Until gift-specific package reconciliation is implemented, reuse the
-    # canonical package labels and keep the existing back navigation.
+    # Gift invoices are still backed by the package checkout surface. The visible
+    # package ladder must never expose the old 6-row subscription set.
     rows = _practice_package_rows(user_id=None, platform="telegram")
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb)])
     return kb(rows)
