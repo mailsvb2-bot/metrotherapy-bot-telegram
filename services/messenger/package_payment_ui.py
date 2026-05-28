@@ -29,7 +29,6 @@ def _public_base_url() -> str:
         or os.getenv("PUBLIC_BASE_URL", "").strip()
         or str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
         or str(getattr(settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "") or "").strip()
-        or "https://metrotherapy-bot.metrotherapy.ru"
     ).rstrip("/")
 
 
@@ -110,7 +109,7 @@ def gift_package_text(*, user_id: int, platform: str, external_user_id: str | No
     return "\n".join(lines).strip()
 
 
-_PRICE_LABEL_RE = re.compile(r"\b\d[\d\s]*\s*₽\b")
+_PRICE_LABEL_RE = re.compile(r"\d[\d\s]*\s*₽")
 
 
 def _looks_like_package_label(value: str) -> bool:
@@ -119,13 +118,6 @@ def _looks_like_package_label(value: str) -> bool:
 
 
 def extract_labeled_urls(text: str) -> tuple[tuple[str, str], ...]:
-    """Extract (label, url) pairs from package texts.
-
-    Package text uses a stable three-line block: label, description, URL.
-    The provider keyboard label must use the priced package label, not the
-    intermediate description. Legacy one-link payment texts intentionally fall
-    back in provider adapters and are not treated as package bundles.
-    """
     lines = [line.strip() for line in str(text or "").splitlines()]
     pairs: list[tuple[str, str]] = []
     for idx, line in enumerate(lines):
