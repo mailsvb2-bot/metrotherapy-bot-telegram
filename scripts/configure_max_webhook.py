@@ -27,10 +27,6 @@ def _env(name: str, default: str = "") -> str:
     return (os.environ.get(name) or default).strip()
 
 
-def _bool_env(name: str, default: str = "0") -> bool:
-    return _env(name, default).lower() in {"1", "true", "yes", "on"}
-
-
 def _append_query(url: str, params: dict[str, str]) -> str:
     parsed = urllib.parse.urlsplit(url)
     query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
@@ -42,6 +38,29 @@ def _append_query(url: str, params: dict[str, str]) -> str:
         urllib.parse.urlencode(query),
         parsed.fragment,
     ))
+
+
+def _redact_secret_in_url(url: str) -> str:
+    parsed = urllib.parse.urlsplit(str(url or ""))
+    pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    redacted = [(key, "***MASKED***" if key == "secret" else value) for key, value in pairs]
+    return urllib.parse.urlunsplit((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        urllib.parse.urlencode(redacted),
+        parsed.fragment,
+    ))
+
+
+def _redact_secrets(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _redact_secrets(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_secrets(item) for item in value]
+    if isinstance(value, str) and "secret=" in value:
+        return _redact_secret_in_url(value)
+    return value
 
 
 def build_max_webhook_url(public_base_url: str, webhook_secret: str) -> str:
@@ -146,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Configure MAX webhook URL with MAX_WEBHOOK_SECRET.")
     parser.add_argument("--apply", action="store_true", help="Call MAX_SET_WEBHOOK_URL instead of dry-run output.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON output.")
+    parser.add_argument("--show-secret", action="store_true", help="Print the full webhook secret in output. Avoid in logs/chats.")
     args = parser.parse_args(argv)
 
     try:
@@ -157,17 +177,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
+    output = result if args.show_secret else _redact_secrets(result)
     if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
     else:
         print("MAX webhook configuration result:")
-        for key, value in result.items():
-            if key == "webhook_url":
-                # Do not leak the secret by default in human output.
-                parsed = urllib.parse.urlsplit(str(value))
-                query = urllib.parse.parse_qs(parsed.query)
-                if "secret" in query:
-                    value = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "secret=***MASKED***", parsed.fragment))
+        for key, value in output.items():
             print(f"{key}: {value}")
     return 0 if result.get("ok") else 1
 
