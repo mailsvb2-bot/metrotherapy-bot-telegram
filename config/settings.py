@@ -219,6 +219,15 @@ def _fail_fast_prod_config() -> None:
         if not (settings.TELEGRAM_WEBHOOK_PREFIX or '').strip().startswith('/'):
             raise SystemExit('TELEGRAM_WEBHOOK_PREFIX must start with / in prod webhook mode')
 
+    messenger_webhook = bool(settings.MESSENGER_WEBHOOK_ENABLED)
+    if messenger_webhook:
+        if not (settings.MESSENGER_PUBLIC_BASE_URL or '').strip():
+            missing.append('MESSENGER_PUBLIC_BASE_URL')
+        if (settings.VK_GROUP_TOKEN or settings.VK_GROUP_ID) and not (settings.VK_SECRET or '').strip():
+            missing.append('VK_SECRET')
+        if settings.MAX_BOT_TOKEN and not (settings.MAX_WEBHOOK_SECRET or '').strip():
+            missing.append('MAX_WEBHOOK_SECRET')
+
     if not bool(settings.HEALTHCHECK_ENABLED):
         raise SystemExit('HEALTHCHECK_ENABLED must be 1 in prod')
 
