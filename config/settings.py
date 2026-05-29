@@ -69,6 +69,7 @@ class Settings:
     # --- Multi-messenger routing ---
     TELEGRAM_BOT_USERNAME: str = _env("TELEGRAM_BOT_USERNAME", "")
     MAX_BOT_TOKEN: str = _env("MAX_BOT_TOKEN", "")
+    MAX_WEBHOOK_SECRET: str = _env("MAX_WEBHOOK_SECRET", "")
     MAX_BOT_NAME: str = _env("MAX_BOT_NAME", "")
     MAX_BOT_LINK_BASE: str = _env("MAX_BOT_LINK_BASE", "")
     VK_GROUP_TOKEN: str = _env("VK_GROUP_TOKEN", "")
