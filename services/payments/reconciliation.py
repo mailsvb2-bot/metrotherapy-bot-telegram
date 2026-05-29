@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 from services.db import db, tx
+from services.gift_claims import is_gift_token, mark_gift_paid, normalize_gift_token
 from services.messenger.platforms import normalize_platform
 from services.practice_token_contract import package_by_id
 from services.practice_tokens import grant_tokens_for_payment
@@ -71,6 +72,40 @@ def _practice_package_payment_problem(*, package_id: str, amount_minor: int, cur
     return ""
 
 
+def _mark_paid_gift_if_needed(
+    *,
+    event: str,
+    status: str,
+    payment_id: str,
+    user_id: int,
+    metadata: dict[str, Any],
+    package_id: str,
+) -> str:
+    succeeded = event == "payment.succeeded" or status == "succeeded"
+    if not succeeded:
+        return ""
+    gift_token = normalize_gift_token(str(metadata.get("gift_token") or ""))
+    if not gift_token:
+        return ""
+    if not is_gift_token(gift_token):
+        return "invalid_gift_token"
+    if not package_id:
+        return "missing_package_id_for_gift_claim"
+    try:
+        mark_gift_paid(
+            gift_token=gift_token,
+            buyer_user_id=int(user_id or 0),
+            package_id=package_id,
+            provider="yookassa",
+            provider_payment_id=payment_id,
+            source_platform=_metadata_platform(metadata),
+        )
+    except (RuntimeError, ValueError) as exc:
+        log.exception("Gift paid mark failed for YooKassa payment_id=%s", payment_id)
+        return f"gift_mark_failed:{type(exc).__name__}"
+    return ""
+
+
 def _grant_practices_if_needed(
     *,
     event: str,
@@ -99,6 +134,19 @@ def _grant_practices_if_needed(
     )
     if payment_problem:
         return payment_problem
+    gift_problem = _mark_paid_gift_if_needed(
+        event=event,
+        status=status,
+        payment_id=payment_id,
+        user_id=user_id,
+        metadata=metadata,
+        package_id=package_id,
+    )
+    if gift_problem:
+        return gift_problem
+    if normalize_gift_token(str(metadata.get("gift_token") or "")):
+        log.info("Gift package paid; direct buyer grant skipped: payment_id=%s user_id=%s package_id=%s", payment_id, user_id, package_id)
+        return ""
     try:
         inserted, wallet, _ledger_id = grant_tokens_for_payment(
             provider="yookassa",
@@ -134,9 +182,10 @@ def _grant_practices_if_needed(
 def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
     """Record a YooKassa webhook as an idempotent provider-ledger fact.
 
-    For practice package payments, payment.succeeded also grants purchased
-    practices through the single practice token ledger. Duplicate YooKassa
-    webhooks are deduped by provider_payment_id.
+    For practice package payments, payment.succeeded grants purchased practices
+    through the single practice token ledger. Gift package payments are marked as
+    paid and are granted to the recipient only when the gift token is claimed.
+    Duplicate YooKassa webhooks are deduped by provider_payment_id.
     """
     event = str(payload.get("event") or "").strip()
     obj = payload.get("object") or {}
