@@ -64,11 +64,12 @@ def check_telegram_preflight() -> MessengerPreflightStatus:
 
 def check_vk_preflight() -> MessengerPreflightStatus:
     required = ["VK_GROUP_TOKEN", "VK_CONFIRMATION_TOKEN", "VK_GROUP_ID"]
-    if bool(_value("MESSENGER_WEBHOOK_ENABLED", False)):
+    webhook_enabled = bool(_value("MESSENGER_WEBHOOK_ENABLED", False))
+    if webhook_enabled:
         required.append("MESSENGER_PUBLIC_BASE_URL")
     missing = _missing(*required)
     warnings: list[str] = []
-    if bool(_value("MESSENGER_WEBHOOK_ENABLED", False)) and not str(_value("VK_SECRET", "") or "").strip():
+    if webhook_enabled and not str(_value("VK_SECRET", "") or "").strip():
         warnings.append("VK_SECRET is not configured; VK webhook secret verification is not enforced")
     return MessengerPreflightStatus(
         channel="vk",
@@ -81,10 +82,13 @@ def check_vk_preflight() -> MessengerPreflightStatus:
 
 def check_max_preflight() -> MessengerPreflightStatus:
     required = ["MAX_BOT_TOKEN", "MAX_BOT_LINK_BASE"]
-    if bool(_value("MESSENGER_WEBHOOK_ENABLED", False)):
+    webhook_enabled = bool(_value("MESSENGER_WEBHOOK_ENABLED", False))
+    if webhook_enabled:
         required.append("MESSENGER_PUBLIC_BASE_URL")
     missing = _missing(*required)
     warnings: list[str] = []
+    if webhook_enabled and not str(_value("MAX_WEBHOOK_SECRET", "") or "").strip():
+        warnings.append("MAX_WEBHOOK_SECRET is not configured; MAX webhook secret verification is not enforced")
     api_base = str(_value("MAX_API_BASE_URL", "") or "").strip()
     if "botapi.max.ru" in api_base:
         warnings.append("MAX_API_BASE_URL uses legacy botapi.max.ru domain")
