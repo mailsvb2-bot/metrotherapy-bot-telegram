@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import urllib.parse
 from pathlib import Path
 from typing import Any
 
-from config.settings import settings
 from runtime.messenger_senders import MaxBotSender, VkBotSender, MessengerTransportError
 from runtime.messenger_vk_ui import (
     vk_demo_kind_keyboard_json,
@@ -16,11 +14,11 @@ from runtime.messenger_vk_ui import (
     with_vk_keyboard,
 )
 from services.events import log_event
-from services.messenger.audio_delivery import send_next_audio_to_user, _post_audio_control_kwargs
+from services.messenger.audio_delivery import send_next_audio_to_user
+from services.messenger.audio_progress import confirm_pending_audio_delivery
 from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDelivery
 from services.messenger.package_payment_ui import gift_package_text, package_payment_text
 from services.messenger.progress_charts import build_vk_mood_progress_chart_path
-from services.messenger.provider_transport import json_request, multipart_upload
 from services.messenger.text_ui import MessengerReply
 from services.mood_text_flow import complete_pre_score_and_send, complete_post_score_and_send_next
 from services.weather import get_weather_text_async, set_city
@@ -55,78 +53,6 @@ def _canonical_payment_text(platform: str, canonical_user_id: int, external_user
     return text
 
 
-def _max_upload_payload(upload_meta: dict[str, Any], uploaded: Any, *, media_type: str) -> dict[str, Any]:
-    """Normalize MAX upload responses into message attachment payload.
-
-    MAX upload endpoints can expose the token either in the initial upload meta,
-    in the multipart upload response, or nested under ``payload``. Keep all
-    provider-specific branching here so audio/chart delivery stays canonical.
-    """
-    if isinstance(uploaded, dict):
-        if uploaded.get("token"):
-            return {"token": str(uploaded["token"])}
-        payload = uploaded.get("payload")
-        if isinstance(payload, dict) and payload.get("token"):
-            return {"token": str(payload["token"])}
-        for key in (f"{media_type}_token", "file_token"):
-            if uploaded.get(key):
-                return {"token": str(uploaded[key])}
-    elif uploaded is not None:
-        value = str(uploaded).strip()
-        if value:
-            return {"token": value}
-
-    if isinstance(upload_meta, dict) and upload_meta.get("token"):
-        return {"token": str(upload_meta["token"])}
-
-    raise MessengerTransportError(f"Unexpected MAX {media_type} upload result: meta={upload_meta!r}, uploaded={uploaded!r}")
-
-
-async def _send_max_image_file(external_user_id: str, file_path: Path, *, caption: str) -> Any:
-    """Send a generated PNG chart to MAX as an image attachment."""
-    token = (settings.MAX_BOT_TOKEN or "").strip()
-    if not token:
-        raise MessengerTransportError("MAX_BOT_TOKEN is empty")
-
-    upload_meta = await asyncio.to_thread(
-        json_request,
-        "https://platform-api.max.ru/uploads?type=image",
-        method="POST",
-        headers={"Authorization": token},
-        payload=None,
-    )
-    upload_url = str(upload_meta.get("url") or "").strip()
-    if not upload_url:
-        raise MessengerTransportError(f"Unexpected MAX image upload response: {upload_meta}")
-
-    uploaded = await asyncio.to_thread(multipart_upload, upload_url, token=token, field_name="data", path=file_path)
-    payload = _max_upload_payload(upload_meta, uploaded, media_type="image")
-
-    url = f"https://platform-api.max.ru/messages?user_id={urllib.parse.quote(str(external_user_id))}"
-    body = {"text": caption, "attachments": [{"type": "image", "payload": payload}]}
-
-    delays = (0.0, 0.8, 1.6, 2.4)
-    last_error: Exception | None = None
-    for delay in delays:
-        if delay:
-            await asyncio.sleep(delay)
-        try:
-            data = await asyncio.to_thread(json_request, url, method="POST", headers={"Authorization": token}, payload=body)
-        except (OSError, ValueError, TypeError) as exc:  # pragma: no cover
-            last_error = exc
-            continue
-        if isinstance(data, dict) and data.get("code") == "attachment.not.ready":
-            last_error = MessengerTransportError(str(data))
-            continue
-        if isinstance(data, dict) and data.get("error"):
-            raise MessengerTransportError(str(data["error"]))
-        return data.get("message", data) if isinstance(data, dict) else data
-
-    if last_error is not None:
-        raise last_error if isinstance(last_error, MessengerTransportError) else MessengerTransportError(str(last_error))
-    raise MessengerTransportError("MAX image chart send failed without details")
-
-
 async def _send_progress_chart_file(
     *,
     platform: str,
@@ -136,8 +62,8 @@ async def _send_progress_chart_file(
     caption: str,
     canonical_user_id: int,
 ) -> None:
-    if platform == "max":
-        await _send_max_image_file(external_user_id, chart_path, caption=caption)
+    if platform == "max" and hasattr(sender, "send_image_file"):
+        await sender.send_image_file(external_user_id, chart_path, caption=caption)
         return
 
     if hasattr(sender, "send_document_file"):
@@ -307,24 +233,34 @@ async def send_reply_bundle(
 
         if reply.kind == "audio_confirmed_next":
             result = confirm_pending_audio_delivery(canonical_user_id, platform=platform)
-            await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))
-            if result.next_audio_ready:
-                try:
-                    sent = await send_next_audio_to_user(
-                        canonical_user_id,
-                        senders=registry,
-                        target_platform=platform,
-                        fallback=platform,
-                    )
-                    if sent.transport == "none":
-                        await sender.send_text(external_user_id, sent.message, **_vk_kwargs(platform, {}, canonical_user_id))
-                except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
-                    log.exception("%s next audio after confirm failed", platform.upper())
-                    await sender.send_text(
-                        external_user_id,
-                        "⚠️ Подтверждение сохранено, но следующее аудио не отправилось. Напишите: continue",
-                        **_vk_kwargs(platform, {}, canonical_user_id),
-                    )
+            if result is None:
+                await sender.send_text(
+                    external_user_id,
+                    "ℹ️ Сейчас нет аудио, ожидающего подтверждения.",
+                    **_vk_kwargs(platform, {}, canonical_user_id),
+                )
+                continue
+            await sender.send_text(
+                external_user_id,
+                f"✅ Подтвердил аудио №{result.anchor} — {result.title}.",
+                **_vk_kwargs(platform, {}, canonical_user_id),
+            )
+            try:
+                sent = await send_next_audio_to_user(
+                    canonical_user_id,
+                    senders=registry,
+                    target_platform=platform,
+                    fallback=platform,
+                )
+                if sent.transport == "none":
+                    await sender.send_text(external_user_id, sent.message, **_vk_kwargs(platform, {}, canonical_user_id))
+            except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
+                log.exception("%s next audio after confirm failed", platform.upper())
+                await sender.send_text(
+                    external_user_id,
+                    "⚠️ Подтверждение сохранено, но следующее аудио не отправилось. Напишите: continue",
+                    **_vk_kwargs(platform, {}, canonical_user_id),
+                )
             continue
 
         log_event(canonical_user_id, f"{platform}_unsupported_reply_kind", {"kind": reply.kind})
