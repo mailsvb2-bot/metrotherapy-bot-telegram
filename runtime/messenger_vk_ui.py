@@ -5,6 +5,7 @@ from typing import Any
 
 from config.settings import ADMIN_IDS
 from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS, main_menu_commands
+from services.messenger.package_payment_ui import extract_labeled_urls
 
 
 def _button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
@@ -18,9 +19,20 @@ def _button(label: str, command: str, color: str = "secondary") -> dict[str, Any
     }
 
 
-def _keyboard(rows: list[list[dict[str, Any]]]) -> str:
+def _open_link_button(label: str, url: str) -> dict[str, Any]:
+    return {
+        "action": {
+            "type": "open_link",
+            "label": str(label or "Открыть")[:40],
+            "link": str(url or ""),
+            "payload": json.dumps({"url": str(url or "")}, ensure_ascii=False),
+        }
+    }
+
+
+def _keyboard(rows: list[list[dict[str, Any]]], *, inline: bool = False) -> str:
     return json.dumps(
-        {"one_time": False, "inline": False, "buttons": rows},
+        {"one_time": False, "inline": inline, "buttons": rows},
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -97,7 +109,21 @@ def full_route_keyboard_json() -> str:
     ])
 
 
+def vk_payment_keyboard_json(text: str) -> str | None:
+    links = extract_labeled_urls(text)
+    if not links:
+        return None
+    rows: list[list[dict[str, Any]]] = []
+    for label, url in links[:4]:
+        rows.append([_open_link_button(label, url)])
+    rows.append([_button("⬅️ Меню", "start", "secondary")])
+    return _keyboard(rows, inline=True)
+
+
 def prepare_vk_keyboard_json(keyboard_json: str, *, external_user_id: str, text: str) -> str:
+    payment_keyboard = vk_payment_keyboard_json(text)
+    if payment_keyboard is not None:
+        return payment_keyboard
     if (text or "").lstrip().startswith("🔐 Полный маршрут"):
         return full_route_keyboard_json()
     return telegram_main_parity_keyboard_json(keyboard_json)
@@ -179,6 +205,9 @@ def vk_score_scale_keyboard_json() -> str:
 def vk_text_send_kwargs(platform: str, text: str = "", *, user_id: int | None = None) -> dict[str, Any]:
     if platform != "vk":
         return {}
+    payment_keyboard = vk_payment_keyboard_json(text)
+    if payment_keyboard is not None:
+        return {"keyboard_json": payment_keyboard}
     return {"keyboard_json": vk_main_keyboard_json(user_id)}
 
 
@@ -186,7 +215,12 @@ def with_vk_keyboard(platform: str, kwargs: dict[str, Any], *, user_id: int | No
     if platform != "vk":
         return kwargs
     enriched = dict(kwargs)
-    enriched.setdefault("keyboard_json", vk_main_keyboard_json(user_id))
+    text = str(enriched.pop("_text_for_keyboard", "") or "")
+    payment_keyboard = vk_payment_keyboard_json(text)
+    if payment_keyboard is not None:
+        enriched["keyboard_json"] = payment_keyboard
+    else:
+        enriched.setdefault("keyboard_json", vk_main_keyboard_json(user_id))
     return enriched
 
 
