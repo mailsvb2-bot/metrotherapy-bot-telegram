@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from config.settings import ADMIN_IDS
 from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS, main_menu_commands
 from services.messenger.package_payment_ui import extract_labeled_urls
 
@@ -36,13 +35,6 @@ def _keyboard(rows: list[list[dict[str, Any]]], *, inline: bool = False) -> str:
         ensure_ascii=False,
         separators=(",", ":"),
     )
-
-
-def _is_admin(user_id: int | None) -> bool:
-    try:
-        return user_id is not None and int(user_id) in {int(item) for item in ADMIN_IDS}
-    except (TypeError, ValueError):
-        return False
 
 
 def button_command(button: Any) -> str:
@@ -130,13 +122,12 @@ def prepare_vk_keyboard_json(keyboard_json: str, *, external_user_id: str, text:
 
 
 def vk_main_keyboard_json(user_id: int | None = None) -> str:
-    """Persistent VK keyboard aligned with Telegram ``kb_main``.
+    """Persistent VK user keyboard aligned with Telegram ``kb_main``.
 
-    The main menu is rendered from the canonical cross-messenger contract, not
-    from a handwritten duplicate. Context-only controls such as “Получить аудио”
-    and “Прослушал” are intentionally excluded from the main menu and are shown
-    only in route/audio contexts.
+    Admin/control-plane surfaces intentionally stay Telegram-only. VK is a user
+    channel; even ADMIN_IDS do not receive admin buttons here.
     """
+    _ = user_id
     rows: list[list[dict[str, Any]]] = []
     actions = list(MAIN_MENU_ACTIONS)
     for idx in range(0, len(actions), 2):
@@ -144,8 +135,6 @@ def vk_main_keyboard_json(user_id: int | None = None) -> str:
             _button(action.title, action.command, action.vk_color)
             for action in actions[idx:idx + 2]
         ])
-    if _is_admin(user_id):
-        rows.append([_button("🛠 Панель", "admin", "primary")])
     return _keyboard(rows)
 
 
