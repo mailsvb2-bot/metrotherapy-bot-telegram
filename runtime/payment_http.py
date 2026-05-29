@@ -12,24 +12,40 @@ from services.practice_token_contract import package_by_id
 
 log = logging.getLogger(__name__)
 
-_ALLOWED_PAYMENT_KINDS = {"subscription", "gift", "tokens", "practices", "practice_package"}
 _TOKEN_PAYMENT_KINDS = {"tokens", "practices", "practice_package"}
+_LEGACY_PAYMENT_KINDS = {"subscription", "gift"}
+_ALLOWED_PAYMENT_KINDS = _TOKEN_PAYMENT_KINDS | _LEGACY_PAYMENT_KINDS
+
+
+def legacy_public_payment_kinds_enabled() -> bool:
+    raw = (os.getenv("ENABLE_LEGACY_PUBLIC_PAYMENT_KINDS") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _normalize_payment_kind(kind: str | None, package_id: str | None = None) -> str:
-    normalized = (kind or "subscription").strip().casefold()
+    normalized = (kind or "tokens").strip().casefold()
     if normalized not in _ALLOWED_PAYMENT_KINDS:
-        normalized = "subscription"
-    if (package_id or "").strip() and normalized != "gift":
+        normalized = "tokens"
+    if (package_id or "").strip():
         return "tokens"
     return normalized
+
+
+def _legacy_kind_error_response(kind: str) -> web.Response | None:
+    if kind in _LEGACY_PAYMENT_KINDS and not legacy_public_payment_kinds_enabled():
+        return web.Response(
+            status=410,
+            text="Legacy public payment kind is disabled. Use practice package checkout.",
+            content_type="text/plain",
+        )
+    return None
 
 
 def _create_yookassa_payment(
     *,
     source: str,
     external_user_id: str,
-    kind: str = "subscription",
+    kind: str = "tokens",
     package_id: str | None = None,
     **_: object,
 ) -> str:
@@ -102,6 +118,10 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
     external_user_id = (request.query.get("user_id") or "").strip()[:64]
     package_id = (request.query.get("package_id") or "").strip()[:64]
     kind = _normalize_payment_kind(request.query.get("kind"), package_id)
+
+    legacy_error = _legacy_kind_error_response(kind)
+    if legacy_error is not None:
+        return legacy_error
 
     if kind in _TOKEN_PAYMENT_KINDS:
         user_error = _user_id_error_response(external_user_id)
