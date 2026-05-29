@@ -47,6 +47,7 @@ def _create_yookassa_payment(
     external_user_id: str,
     kind: str = "tokens",
     package_id: str | None = None,
+    gift_token: str | None = None,
     **_: object,
 ) -> str:
     return create_yookassa_confirmation_url(
@@ -54,6 +55,7 @@ def _create_yookassa_payment(
         external_user_id=external_user_id,
         kind=kind,
         package_id=package_id,
+        gift_token=gift_token,
     )
 
 
@@ -117,6 +119,7 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
     source = (request.query.get("source") or "unknown").strip()[:32]
     external_user_id = (request.query.get("user_id") or "").strip()[:64]
     package_id = (request.query.get("package_id") or "").strip()[:64]
+    gift_token = (request.query.get("gift_token") or "").strip()[:80]
     kind = _normalize_payment_kind(request.query.get("kind"), package_id)
 
     legacy_error = _legacy_kind_error_response(kind)
@@ -138,6 +141,7 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
             external_user_id=external_user_id,
             kind=kind,
             package_id=package_id or None,
+            gift_token=gift_token or None,
         )
     except Exception as exc:  # validator: allow-wide-except
         log.exception("YooKassa web payment endpoint failed")
