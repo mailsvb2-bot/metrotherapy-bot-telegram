@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from dataclasses import dataclass
 
 from services.payments.public_url import payment_public_base_url
@@ -15,6 +16,7 @@ class PackagePaymentLink:
     description: str
     price_rub: int
     url: str
+    gift_token: str = ""
 
     @property
     def label(self) -> str:
@@ -25,11 +27,31 @@ def _price_label(price_rub: int) -> str:
     return f"{int(price_rub):,} ₽".replace(",", " ")
 
 
-def package_payment_links(*, user_id: int, platform: str, external_user_id: str | None = None) -> tuple[PackagePaymentLink, ...]:
+def _new_gift_token() -> str:
+    return f"gift_{uuid.uuid4().hex}"
+
+
+def package_payment_links(
+    *,
+    user_id: int,
+    platform: str,
+    external_user_id: str | None = None,
+    as_gift: bool = False,
+) -> tuple[PackagePaymentLink, ...]:
     base_url = payment_public_base_url()
     items: list[PackagePaymentLink] = []
     for package in public_practice_packages():
-        items.append(_package_link(package, base_url=base_url, user_id=user_id, platform=platform, external_user_id=external_user_id))
+        gift_token = _new_gift_token() if as_gift else ""
+        items.append(
+            _package_link(
+                package,
+                base_url=base_url,
+                user_id=user_id,
+                platform=platform,
+                external_user_id=external_user_id,
+                gift_token=gift_token,
+            )
+        )
     return tuple(items)
 
 
@@ -40,18 +62,21 @@ def _package_link(
     user_id: int,
     platform: str,
     external_user_id: str | None,
+    gift_token: str = "",
 ) -> PackagePaymentLink:
     return PackagePaymentLink(
         package_id=package.package_id,
         title=package.title,
         description=package.description,
         price_rub=package.price_rub,
+        gift_token=gift_token,
         url=payment_url(
             base_url,
             user_id=int(user_id),
             platform=platform,
             external_user_id=external_user_id,
             package_id=package.package_id,
+            gift_token=gift_token or None,
         ),
     )
 
@@ -81,18 +106,20 @@ def gift_package_text(*, user_id: int, platform: str, external_user_id: str | No
     lines = [
         "🎁 Подарить Метротерапию",
         "",
-        "Подарочная витрина использует те же 4 актуальных пакета, что и Telegram. После оплаты можно отправить человеку ссылку на проект или switch-ссылку; полноценный claim-flow будет отдельным gift-контуром.",
+        "Выберите пакет ниже. После успешной оплаты будет активна подарочная claim-ссылка вида claim gift_... — отправьте её человеку, которому дарите практики.",
         "",
     ]
-    for item in package_payment_links(user_id=int(user_id), platform=platform, external_user_id=external_user_id):
+    for item in package_payment_links(user_id=int(user_id), platform=platform, external_user_id=external_user_id, as_gift=True):
+        claim_text = f"claim {item.gift_token}" if item.gift_token else "claim-ссылка будет создана после оплаты"
         lines.extend([
             item.label,
             item.description,
             item.url,
+            f"После оплаты отправьте получателю: {claim_text}",
             "",
         ])
     lines.extend([
-        "Ссылка на проект для отправки человеку: https://metrotherapy.ru",
+        "Получатель может отправить эту claim-команду в Telegram/VK/MAX. После активации пакет закрепится за его профилем.",
         "Если нужен перенос прогресса между Telegram/VK/MAX — отправьте: switch",
     ])
     return "\n".join(lines).strip()
