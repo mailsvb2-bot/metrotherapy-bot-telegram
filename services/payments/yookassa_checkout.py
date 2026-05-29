@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 import uuid
 
+from services.gift_claims import is_gift_token, normalize_gift_token
 from services.practice_token_contract import package_by_id
 
 log = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ def create_yookassa_confirmation_url(
     external_user_id: str,
     kind: str = "subscription",
     package_id: str | None = None,
+    gift_token: str | None = None,
 ) -> str:
     """Create a YooKassa payment and return the redirect confirmation URL."""
     shop_id = _env_value("YOOKASSA_SHOP_ID")
@@ -88,6 +90,10 @@ def create_yookassa_confirmation_url(
     kind = (kind or "subscription").strip().lower()
     intent_id = f"pi_{uuid.uuid4().hex}"
     package = None
+    normalized_gift_token = normalize_gift_token(gift_token)
+    if normalized_gift_token and not is_gift_token(normalized_gift_token):
+        raise YooKassaCheckoutError("Invalid gift token")
+
     if kind in {"tokens", "practices", "practice_package"}:
         kind = "tokens"
         package = package_by_id(package_id)
@@ -112,6 +118,8 @@ def create_yookassa_confirmation_url(
     }
     if package is not None:
         metadata.update({"package_id": package.package_id, "tokens": str(package.tokens)})
+    if normalized_gift_token:
+        metadata.update({"gift_token": normalized_gift_token, "gift": "1"})
 
     payload = {
         "amount": {"value": amount_value, "currency": "RUB"},
@@ -158,11 +166,12 @@ def create_yookassa_confirmation_url(
         raise YooKassaCheckoutError("YooKassa response without confirmation_url")
 
     log.info(
-        "YooKassa payment created: source=%s external_user_id=%s kind=%s amount=%s package_id=%s",
+        "YooKassa payment created: source=%s external_user_id=%s kind=%s amount=%s package_id=%s gift=%s",
         source,
         external_user_id,
         kind,
         amount_value,
         package.package_id if package else None,
+        bool(normalized_gift_token),
     )
     return str(confirmation_url)
