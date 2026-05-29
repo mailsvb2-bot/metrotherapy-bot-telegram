@@ -28,8 +28,11 @@ from services.weather import get_weather_text_async, set_city
 log = logging.getLogger(__name__)
 
 
-def _vk_kwargs(platform: str, kwargs: dict[str, Any], canonical_user_id: int) -> dict[str, Any]:
-    return with_vk_keyboard(platform, kwargs, user_id=canonical_user_id)
+def _vk_kwargs(platform: str, kwargs: dict[str, Any], canonical_user_id: int, text: str = "") -> dict[str, Any]:
+    enriched = dict(kwargs)
+    if text:
+        enriched.setdefault("_text_for_keyboard", text)
+    return with_vk_keyboard(platform, enriched, user_id=canonical_user_id)
 
 
 def _looks_like_score_scale(text: str) -> bool:
@@ -169,7 +172,6 @@ async def _send_progress_chart_or_notice(
             **_vk_kwargs(platform, {}, canonical_user_id),
         )
         return
-
     try:
         await _send_progress_chart_file(
             platform=platform,
@@ -216,7 +218,7 @@ async def send_reply_bundle(
                     kwargs["keyboard_json"] = vk_weather_keyboard_json()
                 elif keyboard_kind == "weather_city":
                     kwargs["keyboard_json"] = vk_weather_city_keyboard_json()
-            await sender.send_text(external_user_id, text, **_vk_kwargs(platform, kwargs, canonical_user_id))
+            await sender.send_text(external_user_id, text, **_vk_kwargs(platform, kwargs, canonical_user_id, text=text))
             continue
 
         if reply.kind == "next_audio":
@@ -258,28 +260,10 @@ async def send_reply_bundle(
 
         if reply.kind == "weather_set_city":
             city = (reply.meta or {}).get("city", "").strip()
-            if not city:
-                await sender.send_text(
-                    external_user_id,
-                    "Пожалуйста, напишите название города текстом.",
-                    **_vk_kwargs(platform, {"keyboard_json": vk_weather_city_keyboard_json()} if platform == "vk" else {}, canonical_user_id),
-                )
-                continue
-
-            ok, info = await asyncio.to_thread(set_city, canonical_user_id, city)
-            if not ok:
-                await sender.send_text(
-                    external_user_id,
-                    "❌ " + str(info),
-                    **_vk_kwargs(platform, {"keyboard_json": vk_weather_city_keyboard_json()} if platform == "vk" else {}, canonical_user_id),
-                )
-                continue
-
-            log_event(canonical_user_id, "weather_city_set", {"city": str(info), "platform": platform})
-            txt = await get_weather_text_async(canonical_user_id, timeout_sec=2.0)
+            txt = await asyncio.to_thread(set_city, canonical_user_id, city)
             await sender.send_text(
                 external_user_id,
-                f"✅ Город принят: {info}.\n\n{txt}",
+                txt,
                 **_vk_kwargs(platform, {"keyboard_json": vk_weather_keyboard_json()} if platform == "vk" else {}, canonical_user_id),
             )
             continue
@@ -293,60 +277,54 @@ async def send_reply_bundle(
             )
             continue
 
-        if reply.kind == "auto_pre_score":
+        if reply.kind == "pre_score_result":
+            score = int((reply.meta or {}).get("score", "0") or 0)
+            session_id = int((reply.meta or {}).get("session_id", "0") or 0)
             try:
-                result = await complete_pre_score_and_send(
-                    canonical_user_id,
-                    platform=platform,
-                    score=int(reply.meta.get("score") or "0"),
-                    senders=registry,
-                )
-                log.info(
-                    "%s auto_pre_score delivery result: user_id=%s score=%s ok=%s transport=%s prompt_done=%s",
-                    platform.upper(),
-                    canonical_user_id,
-                    reply.meta.get("score"),
-                    result.ok,
-                    result.transport,
-                    result.prompt_done,
-                )
-            except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
-                log.exception("%s auto_pre_score audio delivery failed", platform.upper())
+                await complete_pre_score_and_send(canonical_user_id, score, session_id=session_id, target_platform=platform)
+            except Exception:  # validator: allow-wide-except
+                log.exception("%s pre-score flow failed", platform.upper())
                 await sender.send_text(
                     external_user_id,
-                    "⚠️ Оценку получил, но не смог отправить аудио в этот мессенджер. "
-                    "Проверьте MESSENGER_PUBLIC_BASE_URL и настройки отправки медиа.",
+                    "⚠️ Оценку сохранил, но не смог отправить аудио. Напишите: continue",
                     **_vk_kwargs(platform, {}, canonical_user_id),
                 )
-                continue
-            kwargs: dict[str, Any] = {}
-            if platform == "vk" and getattr(result, "prompt_done", False):
-                kwargs.update(_post_audio_control_kwargs("vk"))
-            if str(result.message or "").strip():
-                await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, kwargs, canonical_user_id))
             continue
 
-        if reply.kind == "auto_post_score":
-            result = await complete_post_score_and_send_next(
-                canonical_user_id,
-                platform=platform,
-                score=int(reply.meta.get("score") or "0"),
-                senders=registry,
-            )
-            log.info(
-                "%s auto_post_score result: user_id=%s score=%s ok=%s transport=%s",
-                platform.upper(),
-                canonical_user_id,
-                reply.meta.get("score"),
-                result.ok,
-                result.transport,
-            )
-            if str(result.message or "").strip():
-                await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))
-            await _send_progress_chart_or_notice(
-                platform=platform,
-                sender=sender,
-                external_user_id=external_user_id,
-                canonical_user_id=canonical_user_id,
-            )
+        if reply.kind == "post_score_result":
+            score = int((reply.meta or {}).get("score", "0") or 0)
+            session_id = int((reply.meta or {}).get("session_id", "0") or 0)
+            try:
+                await complete_post_score_and_send_next(canonical_user_id, score, session_id=session_id, target_platform=platform)
+            except Exception:  # validator: allow-wide-except
+                log.exception("%s post-score flow failed", platform.upper())
+                await sender.send_text(
+                    external_user_id,
+                    "⚠️ Оценку после прослушивания сохранил, но не смог отправить следующее аудио. Напишите: continue",
+                    **_vk_kwargs(platform, {}, canonical_user_id),
+                )
             continue
+
+        if reply.kind == "audio_confirmed_next":
+            result = confirm_pending_audio_delivery(canonical_user_id, platform=platform)
+            await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))
+            if result.next_audio_ready:
+                try:
+                    sent = await send_next_audio_to_user(
+                        canonical_user_id,
+                        senders=registry,
+                        target_platform=platform,
+                        fallback=platform,
+                    )
+                    if sent.transport == "none":
+                        await sender.send_text(external_user_id, sent.message, **_vk_kwargs(platform, {}, canonical_user_id))
+                except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
+                    log.exception("%s next audio after confirm failed", platform.upper())
+                    await sender.send_text(
+                        external_user_id,
+                        "⚠️ Подтверждение сохранено, но следующее аудио не отправилось. Напишите: continue",
+                        **_vk_kwargs(platform, {}, canonical_user_id),
+                    )
+            continue
+
+        log_event(canonical_user_id, f"{platform}_unsupported_reply_kind", {"kind": reply.kind})
