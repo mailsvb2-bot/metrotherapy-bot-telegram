@@ -8,6 +8,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 from services.acquisition_attribution import start_attribution_meta
+from services.gift_claims import claim_gift_token, is_gift_token, normalize_gift_token
 from services.messenger.entrypoints import register_user_entry
 from services.events import log_event
 
@@ -80,6 +81,19 @@ def _register_user_entry_safe(message: Message, payload: str) -> None:
         )
 
 
+def _claim_gift_safe(message: Message, token: str) -> str:
+    user_id = _user_id(message)
+    if user_id is None:
+        return "Подарок можно активировать только из личного профиля пользователя."
+    _register_user_entry_safe(message, token)
+    result = claim_gift_token(gift_token=token, recipient_user_id=int(user_id), platform="telegram")
+    try:
+        log_event(int(user_id), "gift_claim_attempt", {"status": result.status, "package_id": result.package_id})
+    except Exception:
+        log.debug("gift claim event skipped", exc_info=True)
+    return result.message
+
+
 async def _open_main_menu_fail_open(message: Message, *, fallback_text: str = START_FALLBACK_TEXT) -> None:
     """Open the Telegram entry menu even if personalization/analytics are broken.
 
@@ -109,7 +123,14 @@ async def start_cmd(message: Message):
     if len(parts) == 2:
         payload = parts[1].strip()
 
-    # Gift/referral/bridge payloads still need entry registration before special handling.
+    token = normalize_gift_token(payload)
+    if is_gift_token(token):
+        text = await asyncio.to_thread(_claim_gift_safe, message, token)
+        await message.answer(text, reply_markup=kb_main(user_id=_user_id(message)))
+        await _open_main_menu_fail_open(message)
+        return
+
+    # Legacy short gift/referral payloads still need entry registration before special handling.
     if payload.startswith("gift_"):
         await asyncio.to_thread(_register_user_entry_safe, message, payload)
         code = payload.replace("gift_", "").strip()
@@ -139,6 +160,13 @@ async def start_cmd(message: Message):
     await _open_main_menu_fail_open(message)
     await asyncio.to_thread(_register_user_entry_safe, message, payload)
     await asyncio.to_thread(_log_safe, _user_id(message), "funnel_start_command", start_attribution_meta(payload))
+
+
+@router.message(lambda message: is_gift_token(normalize_gift_token(getattr(message, "text", ""))))
+async def claim_gift_text(message: Message):
+    token = normalize_gift_token(message.text or "")
+    text = await asyncio.to_thread(_claim_gift_safe, message, token)
+    await message.answer(text, reply_markup=kb_main(user_id=_user_id(message)))
 
 
 @router.message(F.text.casefold().in_({"start", "/start", "старт", "начать", "начать заново", "меню", "menu"}))
