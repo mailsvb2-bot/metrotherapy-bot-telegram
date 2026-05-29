@@ -43,11 +43,11 @@ def test_vk_main_keyboard_does_not_leak_context_audio_controls():
     assert "done" not in commands
 
 
-def test_vk_admin_keyboard_matches_telegram_admin_surface(monkeypatch):
-    monkeypatch.setattr("runtime.messenger_vk_ui.ADMIN_IDS", [12345])
+def test_vk_admin_keyboard_is_not_exposed_outside_telegram():
     labels = _vk_labels(vk_main_keyboard_json(12345))
-    assert "🛠 Панель" in labels
-    assert "admin" in _vk_commands(vk_main_keyboard_json(12345))
+    commands = set(_vk_commands(vk_main_keyboard_json(12345)))
+    assert "🛠 Панель" not in labels
+    assert "admin" not in commands
 
 
 def test_vk_demo_kind_labels_match_telegram_demo_kind_surface():
