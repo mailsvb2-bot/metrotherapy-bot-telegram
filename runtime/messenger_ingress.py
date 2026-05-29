@@ -22,6 +22,24 @@ from services.messenger.webhook_dedupe import register_inbound_event
 log = logging.getLogger(__name__)
 
 
+def _provided_max_secret(request: web.Request, payload: dict) -> str:
+    return (
+        request.headers.get("X-Max-Webhook-Secret")
+        or request.headers.get("X-Webhook-Secret")
+        or request.headers.get("X-Metrotherapy-Webhook-Secret")
+        or request.query.get("secret")
+        or payload.get("secret")
+        or ""
+    ).strip()
+
+
+def _max_secret_ok(request: web.Request, payload: dict) -> bool:
+    expected = (getattr(settings, "MAX_WEBHOOK_SECRET", "") or "").strip()
+    if not expected:
+        return True
+    return _provided_max_secret(request, payload) == expected
+
+
 async def vk_webhook(request: web.Request) -> web.Response:
     body = await request.text()
     try:
@@ -97,6 +115,12 @@ async def max_webhook(request: web.Request) -> web.Response:
     except json.JSONDecodeError:
         log.warning("MAX webhook rejected invalid json")
         return web.Response(status=400, text="invalid json")
+    if not isinstance(payload, dict):
+        log.warning("MAX webhook rejected non-object json")
+        return web.Response(status=400, text="bad payload")
+    if not _max_secret_ok(request, payload):
+        log.warning("MAX webhook rejected: bad secret")
+        return web.json_response({"ok": False, "error": "forbidden"}, status=403)
     update_type = (payload.get("update_type") or payload.get("type") or payload.get("event_type") or "").strip()
     if update_type not in _MAX_PROCESSABLE_UPDATE_TYPES:
         log.info("MAX webhook ignored: update_type=%r keys=%s", update_type, sorted(payload.keys()))
