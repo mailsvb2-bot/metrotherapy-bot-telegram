@@ -21,10 +21,33 @@ class MaxBotSender:
     _demo_kind_attachment = staticmethod(max_ui.demo_kind_attachment)
     _score_scale_attachment = staticmethod(max_ui.score_scale_attachment)
 
-    async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
+    def _token(self) -> str:
         token = (self.token or settings.MAX_BOT_TOKEN or "").strip()
         if not token:
             raise MessengerTransportError("MAX_BOT_TOKEN is empty")
+        return token
+
+    @staticmethod
+    def _upload_payload(upload_meta: dict[str, Any], uploaded: Any, *, media_type: str) -> dict[str, Any]:
+        if isinstance(uploaded, dict):
+            if uploaded.get("token"):
+                return {"token": str(uploaded["token"])}
+            payload = uploaded.get("payload")
+            if isinstance(payload, dict) and payload.get("token"):
+                return {"token": str(payload["token"])}
+            for key in (f"{media_type}_token", "file_token"):
+                if uploaded.get(key):
+                    return {"token": str(uploaded[key])}
+        elif uploaded is not None:
+            value = str(uploaded).strip()
+            if value:
+                return {"token": value}
+        if isinstance(upload_meta, dict) and upload_meta.get("token"):
+            return {"token": str(upload_meta["token"])}
+        raise MessengerTransportError(f"Unexpected MAX {media_type} upload result: meta={upload_meta!r}, uploaded={uploaded!r}")
+
+    async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
+        token = self._token()
         url = f"https://platform-api.max.ru/messages?user_id={urllib.parse.quote(str(external_user_id))}"
         attachments = list(kwargs.get("attachments") or max_ui.native_keyboard_attachments(str(text or "")))
         payload: dict[str, Any] = {"text": max_ui.prepare_text(text, has_native_keyboard=bool(attachments))}
@@ -41,49 +64,42 @@ class MaxBotSender:
             raise MessengerTransportError(str(data["error"]))
         return data["message"] if isinstance(data, dict) and data.get("message") is not None else data
 
-    async def _ensure_audio_token(self, file_path: Path) -> str:
-        cached = get_cached_media_token("max", file_path, media_type="audio")
+    async def _ensure_media_token(self, file_path: Path, *, media_type: str) -> str:
+        cached = get_cached_media_token("max", file_path, media_type=media_type)
         if cached is not None:
             return cached.remote_token
-        token = (self.token or settings.MAX_BOT_TOKEN or "").strip()
-        if not token:
-            raise MessengerTransportError("MAX_BOT_TOKEN is empty")
+        token = self._token()
         upload_meta = await asyncio.to_thread(
             json_request,
-            "https://platform-api.max.ru/uploads?type=audio",
+            f"https://platform-api.max.ru/uploads?type={urllib.parse.quote(media_type)}",
             method="POST",
             headers={"Authorization": token},
             payload=None,
         )
         upload_url = str(upload_meta.get("url") or "").strip()
         if not upload_url:
-            raise MessengerTransportError(f"Unexpected MAX upload response: {upload_meta}")
-
+            raise MessengerTransportError(f"Unexpected MAX {media_type} upload response: {upload_meta}")
         uploaded = await asyncio.to_thread(multipart_upload, upload_url, token=token, field_name="data", path=file_path)
-        media_token = ""
-        if isinstance(uploaded, dict):
-            media_token = str(uploaded.get("token") or uploaded.get("audio_token") or uploaded.get("file_token") or "").strip()
-            payload = uploaded.get("payload")
-            if not media_token and isinstance(payload, dict):
-                media_token = str(payload.get("token") or "").strip()
-        elif uploaded is not None:
-            media_token = str(uploaded).strip()
+        media_token = str(self._upload_payload(upload_meta, uploaded, media_type=media_type).get("token") or "").strip()
         if not media_token:
-            media_token = str(upload_meta.get("token") or "").strip()
-        if not media_token:
-            raise MessengerTransportError(f"Unexpected MAX audio upload result: meta={upload_meta!r}, uploaded={uploaded!r}")
-        store_media_token("max", file_path, media_token, media_type="audio")
+            raise MessengerTransportError(f"Unexpected MAX {media_type} upload result: meta={upload_meta!r}, uploaded={uploaded!r}")
+        store_media_token("max", file_path, media_token, media_type=media_type)
         return media_token
 
-    async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
-        token = (self.token or settings.MAX_BOT_TOKEN or "").strip()
-        if not token:
-            raise MessengerTransportError("MAX_BOT_TOKEN is empty")
-        media_token = await self._ensure_audio_token(file_path)
+    async def _send_media_payload(
+        self,
+        external_user_id: str,
+        *,
+        text: str,
+        media_type: str,
+        media_token: str,
+        notify: bool | None = None,
+    ) -> Any:
+        token = self._token()
         url = f"https://platform-api.max.ru/messages?user_id={urllib.parse.quote(str(external_user_id))}"
-        payload: dict[str, Any] = {"text": caption or "", "attachments": [{"type": "audio", "payload": {"token": media_token}}]}
-        if kwargs.get("notify") is not None:
-            payload["notify"] = bool(kwargs["notify"])
+        payload: dict[str, Any] = {"text": text, "attachments": [{"type": media_type, "payload": {"token": media_token}}]}
+        if notify is not None:
+            payload["notify"] = bool(notify)
         delays = (0.0, 0.8, 1.6, 2.4)
         last_error: Exception | None = None
         for delay in delays:
@@ -99,7 +115,27 @@ class MaxBotSender:
                 continue
             if isinstance(data, dict) and data.get("error"):
                 raise MessengerTransportError(str(data["error"]))
-            return data.get("message", data)
+            return data.get("message", data) if isinstance(data, dict) else data
         if last_error is not None:
             raise last_error if isinstance(last_error, MessengerTransportError) else MessengerTransportError(str(last_error))
-        raise MessengerTransportError("MAX audio send failed without details")
+        raise MessengerTransportError(f"MAX {media_type} send failed without details")
+
+    async def send_image_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
+        media_token = await self._ensure_media_token(file_path, media_type="image")
+        return await self._send_media_payload(
+            external_user_id,
+            text=caption or "",
+            media_type="image",
+            media_token=media_token,
+            notify=kwargs.get("notify"),
+        )
+
+    async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
+        media_token = await self._ensure_media_token(file_path, media_type="audio")
+        return await self._send_media_payload(
+            external_user_id,
+            text=caption or "",
+            media_type="audio",
+            media_token=media_token,
+            notify=kwargs.get("notify"),
+        )
