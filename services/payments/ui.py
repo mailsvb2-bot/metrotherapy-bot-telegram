@@ -3,7 +3,6 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from services.payments.public_url import payment_public_base_url
-from services.plans import get_active_plans
 from services.practice_token_contract import public_practice_packages
 from services.practice_tokens import payment_url
 
@@ -54,45 +53,17 @@ def _practice_package_rows(*, user_id: int | None, platform: str = "telegram") -
 
 
 def kb_tariffs(user_id: int | None = None) -> InlineKeyboardMarkup:
-    """Public tariff surface.
-
-    The public app UI must show the canonical practice package ladder, not the
-    legacy six-row `plans` subscription table (`morning_5`, `both_20`, etc.).
-    Payment is routed through the public YooKassa package endpoint so the same
-    token/premium reconciliation path is used across Telegram/VK/MAX.
-    """
+    """Public tariff surface: canonical 4-package practice ladder only."""
     rows = _practice_package_rows(user_id=user_id, platform="telegram")
-    rows.append([InlineKeyboardButton(text="🎁 Подарить подписку другу", callback_data="gift:menu")])
-    rows.append([InlineKeyboardButton(text="📣 Посоветовать Метротерапию", callback_data="share:menu")])
+    rows.append([InlineKeyboardButton(text="🎁 Подарить", callback_data="gift:menu")])
+    rows.append([InlineKeyboardButton(text="📣 Посоветовать", callback_data="share:menu")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")])
     return kb(rows)
 
 
 def kb_gift_tariffs(back_cb: str = "gift:menu") -> InlineKeyboardMarkup:
-    # Gift invoices are still backed by the package checkout surface. The visible
-    # package ladder must never expose the old 6-row subscription set.
     rows = _practice_package_rows(user_id=None, platform="telegram")
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb)])
-    return kb(rows)
-
-
-def kb_legacy_db_tariffs(user_id: int | None = None) -> InlineKeyboardMarkup:
-    """Legacy DB tariff keyboard kept for admin/debug compatibility only."""
-    plans = get_active_plans()
-
-    rows: list[list[InlineKeyboardButton]] = []
-    for p in plans:
-        title = p.get("title") or f"{p.get('scope')}:{p.get('days')}"
-        price = int(p.get("price") or 0)
-        label = f"{title} — {price} ₽"
-        rows.append([
-            InlineKeyboardButton(
-                text=label,
-                callback_data=f"sub:buy:{int(p['id'])}:{price}",
-            )
-        ])
-
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")])
     return kb(rows)
 
 
