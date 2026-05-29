@@ -15,8 +15,10 @@ from runtime.messenger_payloads import (
     vk_event_key,
 )
 from services.events import log_event
+from services.gift_claims import claim_gift_token, is_gift_token, normalize_gift_token
+from services.messenger.entrypoints import register_user_entry
 from services.messenger.reply_dispatcher import send_reply_bundle
-from services.messenger.text_ui import handle_incoming_text
+from services.messenger.text_ui import MessengerReply, handle_incoming_text
 from services.messenger.webhook_dedupe import register_inbound_event
 
 log = logging.getLogger(__name__)
@@ -38,6 +40,24 @@ def _max_secret_ok(request: web.Request, payload: dict) -> bool:
     if not expected:
         return True
     return _provided_max_secret(request, payload) == expected
+
+
+def _claim_replies_if_needed(*, platform: str, extracted: dict) -> tuple[int, list[MessengerReply]] | None:
+    text = normalise_messenger_text(extracted["text"])
+    token = normalize_gift_token(text)
+    if not is_gift_token(token):
+        return None
+    entry = register_user_entry(
+        extracted["user_id"],
+        platform=platform,
+        external_user_id=extracted["external_user_id"],
+        username=extracted["username"],
+        display_name=extracted["display_name"],
+        first_name=extracted["first_name"],
+        start_payload=token,
+    )
+    result = claim_gift_token(gift_token=token, recipient_user_id=int(entry.user_id), platform=platform)
+    return int(entry.user_id), [MessengerReply(text=result.message)]
 
 
 async def vk_webhook(request: web.Request) -> web.Response:
@@ -62,15 +82,19 @@ async def vk_webhook(request: web.Request) -> web.Response:
     if not extracted:
         return web.Response(text="ok")
 
-    canonical_user_id, replies = handle_incoming_text(
-        extracted["user_id"],
-        platform="vk",
-        external_user_id=extracted["external_user_id"],
-        text=normalise_messenger_text(extracted["text"]),
-        username=extracted["username"],
-        display_name=extracted["display_name"],
-        first_name=extracted["first_name"],
-    )
+    claim_result = _claim_replies_if_needed(platform="vk", extracted=extracted)
+    if claim_result is not None:
+        canonical_user_id, replies = claim_result
+    else:
+        canonical_user_id, replies = handle_incoming_text(
+            extracted["user_id"],
+            platform="vk",
+            external_user_id=extracted["external_user_id"],
+            text=normalise_messenger_text(extracted["text"]),
+            username=extracted["username"],
+            display_name=extracted["display_name"],
+            first_name=extracted["first_name"],
+        )
 
     log.info(
         "VK message_new processed: external_user_id=%s canonical_user_id=%s text=%r replies=%s",
@@ -144,15 +168,19 @@ async def max_webhook(request: web.Request) -> web.Response:
         )
         return web.json_response({"ok": True})
 
-    canonical_user_id, replies = handle_incoming_text(
-        extracted["user_id"],
-        platform="max",
-        external_user_id=extracted["external_user_id"],
-        text=normalise_messenger_text(extracted["text"]),
-        username=extracted["username"],
-        display_name=extracted["display_name"],
-        first_name=extracted["first_name"],
-    )
+    claim_result = _claim_replies_if_needed(platform="max", extracted=extracted)
+    if claim_result is not None:
+        canonical_user_id, replies = claim_result
+    else:
+        canonical_user_id, replies = handle_incoming_text(
+            extracted["user_id"],
+            platform="max",
+            external_user_id=extracted["external_user_id"],
+            text=normalise_messenger_text(extracted["text"]),
+            username=extracted["username"],
+            display_name=extracted["display_name"],
+            first_name=extracted["first_name"],
+        )
     log.info(
         "MAX webhook processed: update_type=%r external_user_id=%s canonical_user_id=%s text=%r replies=%s",
         update_type,
