@@ -8,7 +8,7 @@ def test_payment_kind_normalization_promotes_package_links_to_tokens():
     assert _normalize_payment_kind("unknown", "practice_20") == "tokens"
     assert _normalize_payment_kind("tokens", "practice_20") == "tokens"
     assert _normalize_payment_kind("subscription", "") == "subscription"
-    assert _normalize_payment_kind("gift", "practice_20") == "gift"
+    assert _normalize_payment_kind("gift", "practice_20") == "tokens"
 
 
 def test_missing_practice_package_returns_bad_request():

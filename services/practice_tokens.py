@@ -48,10 +48,15 @@ def token_economy_enabled() -> bool:
 
 
 def enforcement_mode() -> str:
-    raw = (os.getenv("TOKEN_ENFORCEMENT_MODE") or "off").strip().lower()
-    if raw in {"hard", "1", "true", "on"}:
+    raw = os.getenv("TOKEN_ENFORCEMENT_MODE")
+    if raw is None or not raw.strip():
+        app_env = (os.getenv("APP_ENV") or "dev").strip().lower()
+        return "soft" if app_env in {"prod", "production"} else "off"
+
+    normalized = raw.strip().lower()
+    if normalized in {"hard", "1", "true", "on"}:
         return "hard"
-    if raw in {"soft", "warn", "warning"}:
+    if normalized in {"soft", "warn", "warning"}:
         return "soft"
     return "off"
 
