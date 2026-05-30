@@ -4,9 +4,14 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from runtime.messenger_max_sender import MaxBotSender
 from runtime.messenger_vk_sender import VkBotSender
