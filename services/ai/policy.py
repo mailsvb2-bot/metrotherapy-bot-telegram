@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from config.settings import settings
@@ -36,7 +37,21 @@ AI_ADMIN_MARKETING_SYSTEM_PROMPT = (
 )
 
 
+def _env_bool(name: str, default: int | str = 1) -> bool:
+    raw = os.getenv(name)
+    value = str(default if raw is None else raw).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def ai_enabled_from_settings() -> bool:
+    """Return live AI switch.
+
+    Settings are created at import time, while tests and systemd probes may update
+    env later in the same process. Read AI_ENABLED from os.environ first so
+    provider detection and health snapshots reflect the active process env.
+    """
+    if "AI_ENABLED" in os.environ:
+        return _env_bool("AI_ENABLED", 1)
     try:
         return int(getattr(settings, "AI_ENABLED", 1) or 0) == 1
     except (TypeError, ValueError):
