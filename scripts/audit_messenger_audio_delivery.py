@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sqlite3
 import time
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -87,6 +88,17 @@ def load_candidates(*, platforms: tuple[str, ...], limit: int, only_preferred: b
     ]
 
 
+def _audit_error(candidate: Candidate, exc: BaseException) -> CandidateAudit:
+    return CandidateAudit(
+        candidate.user_id,
+        candidate.platform,
+        candidate.external_user_id,
+        False,
+        "audit_error",
+        problem=f"{type(exc).__name__}:{exc}",
+    )
+
+
 def audit_candidate(candidate: Candidate) -> CandidateAudit:
     try:
         plan = build_delivery_plan(candidate.user_id, fallback=candidate.platform, preferred_platform=candidate.platform)
@@ -115,8 +127,18 @@ def audit_candidate(candidate: Candidate) -> CandidateAudit:
             next_anchor=int(next_item.anchor),
             pending_anchor=int(pending.anchor) if pending else None,
         )
-    except Exception as exc:  # validator: allow-wide-except
-        return CandidateAudit(candidate.user_id, candidate.platform, candidate.external_user_id, False, "audit_error", problem=f"{type(exc).__name__}:{exc}")
+    except sqlite3.Error as exc:
+        return _audit_error(candidate, exc)
+    except RuntimeError as exc:
+        return _audit_error(candidate, exc)
+    except ValueError as exc:
+        return _audit_error(candidate, exc)
+    except TypeError as exc:
+        return _audit_error(candidate, exc)
+    except KeyError as exc:
+        return _audit_error(candidate, exc)
+    except AttributeError as exc:
+        return _audit_error(candidate, exc)
 
 
 async def send_candidate(candidate: Candidate, *, dry_run: bool, retries: int, retry_delay_sec: float) -> SendResult:
@@ -165,10 +187,18 @@ async def send_candidate(candidate: Candidate, *, dry_run: bool, retries: int, r
                 anchor=int(result.item.anchor) if result.item else None,
                 problem="" if result.transport != "none" else result.message,
             )
-        except (UnsupportedMessengerDelivery, RuntimeError, OSError, ValueError, TypeError) as exc:
+        except UnsupportedMessengerDelivery as exc:
             last_problem = f"attempt={attempt}:{type(exc).__name__}:{exc}"
-            if attempt < attempts:
-                await asyncio.sleep(max(0.0, float(retry_delay_sec)))
+        except RuntimeError as exc:
+            last_problem = f"attempt={attempt}:{type(exc).__name__}:{exc}"
+        except OSError as exc:
+            last_problem = f"attempt={attempt}:{type(exc).__name__}:{exc}"
+        except ValueError as exc:
+            last_problem = f"attempt={attempt}:{type(exc).__name__}:{exc}"
+        except TypeError as exc:
+            last_problem = f"attempt={attempt}:{type(exc).__name__}:{exc}"
+        if attempt < attempts:
+            await asyncio.sleep(max(0.0, float(retry_delay_sec)))
     return SendResult(
         user_id=candidate.user_id,
         platform=candidate.platform,
