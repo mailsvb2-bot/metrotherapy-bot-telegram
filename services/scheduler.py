@@ -5,6 +5,7 @@ import asyncio
 import heapq
 import logging
 import os
+import sqlite3
 import time
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
@@ -42,7 +43,11 @@ def _tm_create(coro: Awaitable[None]) -> asyncio.Task:
                 log.exception("Background task callback failed task=%s", _coro_name(coro))
                 return
             if exc is not None:
-                log.exception("Background task crashed task=%s", _coro_name(coro), exc_info=exc)
+                log.error(
+                    "Background task crashed task=%s",
+                    _coro_name(coro),
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
 
         t.add_done_callback(_done_cb)
         return t
@@ -159,6 +164,49 @@ def scheduler_health_snapshot() -> dict[str, bool | int]:
 # This file still keeps PreciseScheduler for in-memory timers (if ever used).
 
 
+async def _run_ux_guard_tick() -> None:
+    """Run UX guard once without allowing diagnostics failures to kill scheduler.
+
+    UX guard is intentionally best-effort and read-only. It must never become the
+    owner of scheduler liveness: stale schemas, temporary DB locks, validator bugs
+    or unexpected analytics exceptions should be visible in logs but must not stop
+    auto-audio, jobs, payments follow-ups or engine ticks.
+    """
+    from services.ai.ux_guard import analyze
+    from services.db import get_db
+
+    app_env = (os.getenv("APP_ENV") or "dev").lower()
+    timeout = 2.0 if app_env == "prod" else 5.0
+
+    def _run() -> None:
+        # Enforce read-only mode even if analyze() misbehaves.
+        with get_db() as conn:
+            try:
+                conn.execute("PRAGMA query_only=ON")
+            except (sqlite3.Error, OSError, RuntimeError):  # validator: allow-wide-except
+                # SQLite/Postgres compatibility path may not support this PRAGMA.
+                pass
+            analyze(conn)
+
+    await asyncio.wait_for(asyncio.to_thread(_run), timeout=timeout)
+
+
+async def _safe_ux_guard_tick() -> None:
+    try:
+        await _run_ux_guard_tick()
+    except asyncio.TimeoutError:
+        log.warning("UX guard timed out")
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e).lower():
+            log.debug("UX guard skipped until schema is ready", exc_info=True)
+            return
+        log.exception("UX guard DB operational error")
+    except (sqlite3.Error, RuntimeError, OSError, ValueError, TypeError, AttributeError, KeyError):
+        log.exception("UX guard failed")
+    except Exception:  # validator: allow-wide-except
+        log.exception("UX guard unexpected failure")
+
+
 async def _background_loop(bot: 'Bot') -> None:
     """Non-SLA background ticks (reduced frequency).
 
@@ -226,33 +274,7 @@ async def _background_loop(bot: 'Bot') -> None:
         interval = max(10.0, interval)  # never spam
         if now_m - last_ux_guard >= interval:
             last_ux_guard = now_m
-            try:
-                from services.ai.ux_guard import analyze
-                from services.db import get_db
-
-                def _run() -> None:
-                    # Enforce read-only mode even if analyze() misbehaves.
-                    with get_db() as conn:
-                        try:
-                            conn.execute("PRAGMA query_only=ON")
-                        except (OSError, RuntimeError):  # validator: allow-wide-except
-                            # SQLite может не поддерживать query_only в старых версиях/сборках.
-                            pass
-                        analyze(conn)
-
-                # Do not steal event loop budget.
-                timeout = 2.0 if app_env == "prod" else 5.0
-                await asyncio.wait_for(asyncio.to_thread(_run), timeout=timeout)
-            except (asyncio.TimeoutError, RuntimeError, OSError) as e:
-                # Если БД старая и таблицы ещё не создан..., не заспамливаем лог.
-                try:
-                    import sqlite3
-
-                    if isinstance(e, sqlite3.OperationalError) and "no such table" in str(e).lower():
-                        continue
-                except asyncio.TimeoutError:
-                    pass
-                logging.getLogger(__name__).exception("Unhandled exception")
+            await _safe_ux_guard_tick()
 
 
 def start_scheduler(bot: 'Bot') -> None:
