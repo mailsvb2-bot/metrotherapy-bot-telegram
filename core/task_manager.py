@@ -27,7 +27,10 @@ class TaskManager:
         try:
             exc = task.exception()
             if exc:
-                log.exception("Background task failed", exc_info=exc)
+                log.error(
+                    "Background task failed",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
         except asyncio.CancelledError:
             pass
         except (asyncio.InvalidStateError, RuntimeError):  # validator: allow-except-exception
