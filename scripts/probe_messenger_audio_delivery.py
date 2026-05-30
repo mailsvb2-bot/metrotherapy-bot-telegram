@@ -52,6 +52,23 @@ def _target_user_id(platform: str, explicit: str | None) -> str:
     return _env(env_name)
 
 
+def _probe_failure(
+    *,
+    platform: str,
+    external_user_id: str,
+    audio_path: Path,
+    exc: BaseException,
+) -> ProbeTargetResult:
+    return ProbeTargetResult(
+        platform=platform,
+        ok=False,
+        dry_run=False,
+        external_user_id=external_user_id,
+        audio_path=str(audio_path),
+        problem=f"{type(exc).__name__}:{exc}",
+    )
+
+
 async def _send(platform: str, external_user_id: str, audio_path: Path, *, caption: str, dry_run: bool) -> ProbeTargetResult:
     if not external_user_id:
         return ProbeTargetResult(
@@ -75,15 +92,16 @@ async def _send(platform: str, external_user_id: str, audio_path: Path, *, capti
     sender: Any = VkBotSender() if platform == "vk" else MaxBotSender()
     try:
         response = await sender.send_audio_file(external_user_id, audio_path, caption=caption)
-    except Exception as exc:  # validator: allow-wide-except
-        return ProbeTargetResult(
-            platform=platform,
-            ok=False,
-            dry_run=False,
-            external_user_id=external_user_id,
-            audio_path=str(audio_path),
-            problem=f"{type(exc).__name__}:{exc}",
-        )
+    except RuntimeError as exc:
+        return _probe_failure(platform=platform, external_user_id=external_user_id, audio_path=audio_path, exc=exc)
+    except OSError as exc:
+        return _probe_failure(platform=platform, external_user_id=external_user_id, audio_path=audio_path, exc=exc)
+    except ValueError as exc:
+        return _probe_failure(platform=platform, external_user_id=external_user_id, audio_path=audio_path, exc=exc)
+    except TypeError as exc:
+        return _probe_failure(platform=platform, external_user_id=external_user_id, audio_path=audio_path, exc=exc)
+    except AttributeError as exc:
+        return _probe_failure(platform=platform, external_user_id=external_user_id, audio_path=audio_path, exc=exc)
     return ProbeTargetResult(
         platform=platform,
         ok=True,
