@@ -9,6 +9,7 @@ from services.ai_copywriter import generate_ab_texts
 
 def test_openai_client_respects_ai_enabled(monkeypatch):
     monkeypatch.setattr(settings, "AI_ENABLED", 0)
+    monkeypatch.setenv("AI_ENABLED", "0")
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test")
 
     assert OpenAIClient.from_settings() is None
@@ -35,6 +36,7 @@ def test_ai_copywriter_falls_back_when_disabled(monkeypatch):
 
 def test_ai_provider_router_selects_yandex(monkeypatch):
     monkeypatch.setattr(settings, "AI_ENABLED", 1)
+    monkeypatch.setenv("AI_ENABLED", "1")
     monkeypatch.setenv("AI_PROVIDER", "yandex")
     monkeypatch.setenv("YANDEX_API_KEY", "test-yandex-key")
     monkeypatch.setenv("YANDEX_FOLDER_ID", "folder-1")
@@ -50,6 +52,7 @@ def test_ai_provider_router_selects_yandex(monkeypatch):
 
 def test_ai_policy_snapshot_reports_provider_without_secret(monkeypatch):
     monkeypatch.setattr(settings, "AI_ENABLED", 1)
+    monkeypatch.setenv("AI_ENABLED", "1")
     monkeypatch.setenv("AI_PROVIDER", "yandex")
     monkeypatch.setenv("YANDEX_API_KEY", "test-yandex-key")
     monkeypatch.setenv("YANDEX_FOLDER_ID", "folder-1")
