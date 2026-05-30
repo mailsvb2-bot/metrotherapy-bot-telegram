@@ -5,6 +5,7 @@ import urllib.error
 
 from services.ai.providers.base import AIProviderConfig
 from services.ai.providers.openai_compatible import OpenAICompatibleProvider
+from services.ai.providers import router
 
 
 def test_deepseek_openai_compatible_provider_disables_thinking_by_default(monkeypatch):
@@ -78,6 +79,33 @@ def test_deepseek_openai_compatible_provider_can_enable_thinking(monkeypatch):
 
     assert provider.chat([{"role": "user", "content": "hello"}]) == "ok"
     assert "thinking" not in captured["payload"]
+
+
+def test_deepseek_provider_alias_uses_dedicated_env(monkeypatch):
+    monkeypatch.setenv("AI_ENABLED", "1")
+    monkeypatch.setenv("AI_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+
+    assert router.provider_name() == "deepseek"
+    assert router.provider_configured("deepseek") is True
+
+    provider = router.build_ai_provider()
+    assert isinstance(provider, OpenAICompatibleProvider)
+    assert provider.config.name == "deepseek"
+    assert provider.config.model == "deepseek-chat"
+    assert provider.config.base_url == "https://api.deepseek.com/v1"
+
+
+def test_deepseek_provider_auto_detects_deepseek_key(monkeypatch):
+    monkeypatch.setenv("AI_ENABLED", "1")
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+    assert router.provider_name() == "deepseek"
+    assert router.provider_configured() is True
 
 
 def test_openai_compatible_provider_returns_none_on_http_error(monkeypatch):
