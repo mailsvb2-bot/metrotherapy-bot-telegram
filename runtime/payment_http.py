@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 
@@ -59,6 +60,10 @@ def _create_yookassa_payment(
     )
 
 
+def _is_prod() -> bool:
+    return (os.getenv("APP_ENV", "dev") or "dev").strip().lower() in {"prod", "production"}
+
+
 def _webhook_secret() -> str:
     return (
         os.getenv("YOOKASSA_WEBHOOK_SECRET")
@@ -69,21 +74,32 @@ def _webhook_secret() -> str:
 
 
 def _provided_secret(request: web.Request) -> str:
-    return (
+    header_secret = (
         request.headers.get("X-Metrotherapy-Webhook-Secret")
         or request.headers.get("X-Webhook-Secret")
-        or request.query.get("secret")
         or ""
     ).strip()
+    if header_secret:
+        return header_secret
+
+    # Production rule: secrets must never travel through query strings because
+    # query parameters commonly land in nginx access logs, browser history,
+    # monitoring traces and support screenshots. The query fallback is kept only
+    # for local/dev compatibility tests.
+    if _is_prod():
+        return ""
+    return (request.query.get("secret") or "").strip()
 
 
 def _webhook_secret_ok(request: web.Request) -> bool:
     expected = _webhook_secret()
     # Prod must be explicit. In dev/test, an empty secret keeps local tests simple.
-    prod = (os.getenv("APP_ENV", "dev") or "dev").strip().lower() in {"prod", "production"}
     if not expected:
-        return not prod
-    return _provided_secret(request) == expected
+        return not _is_prod()
+    actual = _provided_secret(request)
+    if not actual:
+        return False
+    return hmac.compare_digest(actual, expected)
 
 
 def _package_error_response(package_id: str) -> web.Response | None:
