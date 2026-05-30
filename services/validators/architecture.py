@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 from pathlib import Path
 
@@ -38,6 +39,7 @@ EXCLUDED_SCAN_DIR_NAMES = {
     ".venv",
     "venv",
     "env",
+    ".env",
     "site-packages",
     "dist-packages",
     "node_modules",
@@ -109,6 +111,35 @@ def validate_no_embedded_secrets(*, strict: bool = True) -> None:
             bad.append(str(p.relative_to(PROJECT_ROOT)).replace("\\", "/"))
     if bad:
         msg = "Embedded live-looking secrets found in repository files: " + ", ".join(sorted(set(bad))[:30])
+        if strict:
+            raise ValidationError(msg)
+
+
+def validate_public_payment_base_url(*, strict: bool = True) -> None:
+    """Production payment links must never silently degrade into relative URLs."""
+    app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
+    release_mode = os.getenv("VALIDATOR_RELEASE_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
+    messenger_enabled = os.getenv("MESSENGER_WEBHOOK_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+    required = os.getenv("PAYMENT_PUBLIC_URL_REQUIRED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+    # Release-mode CI stays hermetic unless the contract is explicitly requested;
+    # real prod deployments with messenger/payment ingress must provide a public HTTPS base.
+    if not (required or (app_env in {"prod", "production"} and messenger_enabled and not release_mode)):
+        return
+
+    base = (
+        os.getenv("PAYMENT_PUBLIC_BASE_URL", "").strip()
+        or os.getenv("MESSENGER_PUBLIC_BASE_URL", "").strip()
+        or os.getenv("PUBLIC_BASE_URL", "").strip()
+        or os.getenv("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "").strip()
+    )
+    if not base:
+        msg = "Public payment base URL is required: set PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL"
+        if strict:
+            raise ValidationError(msg)
+        return
+    if not base.startswith("https://"):
+        msg = "Public payment base URL must start with https://"
         if strict:
             raise ValidationError(msg)
 
@@ -200,6 +231,7 @@ def validate_runtime_has_no_raw_network(*, strict: bool = True) -> None:
 
 def validate_architecture_contracts(*, strict: bool = True) -> None:
     validate_no_embedded_secrets(strict=strict)
+    validate_public_payment_base_url(strict=strict)
     validate_single_decision_core(strict=strict)
     validate_no_duplicate_fsm_states(strict=strict)
     validate_runtime_has_no_raw_network(strict=strict)
