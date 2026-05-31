@@ -22,6 +22,7 @@ Environment=MESSENGER_WEBHOOK_PORT=8081
 Environment=METRO_DB_ENGINE=sqlite
 Environment=DATABASE_URL=
 Environment=METRO_DB_PATH=/var/lib/metrotherapy/data.db
+Environment=MPLCONFIGDIR=/var/lib/metrotherapy/mplcache
 Environment=LOG_PATH=/var/log/metrotherapy/app.log
 ExecStart=/opt/metrotherapy/.venv/bin/python main.py
 Restart=always
