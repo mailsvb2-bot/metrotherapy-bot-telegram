@@ -46,15 +46,20 @@ def _run(cmd: list[str], *, env: Mapping[str, str] | None = None) -> str:
 
 
 def _decode_error_body(exc: urllib.error.HTTPError) -> str:
-    body = exc.read().decode("utf-8", errors="replace")
-    return body[:1000]
+    return exc.read().decode("utf-8", errors="replace")
+
+
+def _truncate(value: str, *, limit: int = 1000) -> str:
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "...<truncated>"
 
 
 def _parse_json_body(*, url: str, body: str) -> dict:
     try:
         return json.loads(body)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} invalid_json={body[:300]}") from exc
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} invalid_json={_truncate(body, limit=300)}") from exc
 
 
 def _http_json(url: str) -> dict:
@@ -66,7 +71,7 @@ def _http_json(url: str) -> dict:
         payload = _parse_json_body(url=url, body=body) if body.strip().startswith("{") else None
         if payload is not None:
             raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} status={exc.code} payload={payload}") from exc
-        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} status={exc.code} body={body}") from exc
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} status={exc.code} body={_truncate(body)}") from exc
     except urllib.error.URLError as exc:
         raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} err={exc}") from exc
     payload = _parse_json_body(url=url, body=body)
