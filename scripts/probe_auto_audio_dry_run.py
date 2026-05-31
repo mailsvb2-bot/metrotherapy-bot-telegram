@@ -15,7 +15,13 @@ path that precedes a scheduled auto-audio prompt:
 
 import argparse
 import os
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from services.audio_anchor import pick_for_slot
 from services.db import db, mark_delivery_once, was_delivered
