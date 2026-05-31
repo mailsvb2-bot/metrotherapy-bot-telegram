@@ -18,9 +18,15 @@ without mutating user-facing state or talking to external providers.
 
 import argparse
 import os
+import sys
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from core.time_utils import utc_now_iso
 from services.db import db, mark_delivery_once, was_delivered
