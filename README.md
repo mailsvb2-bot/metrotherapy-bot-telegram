@@ -2,6 +2,16 @@
 
 Проект бота на **Aiogram 3**. Этот архив зафиксирован как **канон v16**.
 
+## Production ingress contract
+
+Канонический production-режим для Telegram: **polling**.
+
+- `TELEGRAM_TRANSPORT=polling`
+- `TELEGRAM_WEBHOOK_ENABLED=0`
+- Telegram updates не принимаются через public webhook в production.
+- Локальный aiohttp ingress может использоваться для MAX/VK, YooKassa reconciliation и media/audio links, но не должен становиться Telegram update ingress в production.
+- Telegram webhook-код в репозитории остаётся compatibility/dev capability, а не production-contract.
+
 ## Структура
 - `main.py` — запуск
 - `app.py` — сборка приложения (DP, роутеры, scheduler, init_db)
