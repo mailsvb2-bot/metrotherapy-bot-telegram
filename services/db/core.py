@@ -68,7 +68,7 @@ class PostgresCompatCursor:
         self._synthetic_rows: list[PgRow] | None = None
         self.rowcount = -1
 
-    def execute(self, sql: str, params: Sequence[Any] = ()):
+    def execute(self, sql: str, params: Sequence[Any] = ()): 
         if _is_select_changes_sql(sql):
             self._synthetic_rows = [PgRow({"c": int(getattr(self._conn, "last_rowcount", 0) or 0)})]
             self.rowcount = 1
@@ -154,7 +154,7 @@ class PostgresCompatConnection:
     def cursor(self):
         return PostgresCompatCursor(self._conn.cursor(), self)
 
-    def execute(self, sql: str, params: Sequence[Any] = ()):
+    def execute(self, sql: str, params: Sequence[Any] = ()): 
         cur = self.cursor()
         return cur.execute(sql, params)
 
@@ -231,6 +231,30 @@ def _translate_insert_or_replace(sql: str) -> str:
     return sql
 
 
+def _translate_sqlite_master_tables_query(s: str) -> str | None:
+    if not re.match(r"(?is)^SELECT\s+name\s+FROM\s+sqlite_master\s+WHERE\s+type='table'", s):
+        return None
+
+    base = (
+        "SELECT table_name AS name FROM information_schema.tables "
+        "WHERE table_schema=current_schema() AND table_type='BASE TABLE'"
+    )
+
+    if re.search(r"(?is)\bname\s+IN\s*\(", s):
+        placeholder_count = s.count("?")
+        if placeholder_count > 0:
+            placeholders = ",".join("%s" for _ in range(placeholder_count))
+            return f"{base} AND table_name IN ({placeholders})"
+
+    if re.search(r"(?is)\bname\s*=\s*\?", s):
+        return f"{base} AND table_name=%s LIMIT 1"
+
+    if re.search(r"(?is)\bname\s+NOT\s+LIKE\s+'sqlite_%'", s):
+        return f"{base} AND table_name NOT LIKE 'sqlite_%'"
+
+    return base
+
+
 def translate_sql_for_postgres(sql: str) -> str:
     s = (sql or '').strip()
     if not s:
@@ -250,16 +274,11 @@ def translate_sql_for_postgres(sql: str) -> str:
             f"WHERE table_schema=current_schema() AND table_name='{table}' "
             "ORDER BY ordinal_position"
         )
-    if re.match(r"(?is)^SELECT\s+name\s+FROM\s+sqlite_master\s+WHERE\s+type='table'", s):
-        return (
-            "SELECT table_name AS name FROM information_schema.tables "
-            "WHERE table_schema=current_schema() AND table_type='BASE TABLE'"
-        )
-    if re.match(r"(?is)^SELECT\s+1\s+FROM\s+sqlite_master\s+WHERE\s+type='table'\s+AND\s+name=", s):
-        return (
-            "SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema=current_schema() AND table_type='BASE TABLE' AND table_name=%s LIMIT 1"
-        )
+
+    sqlite_master_tables_query = _translate_sqlite_master_tables_query(s)
+    if sqlite_master_tables_query is not None:
+        return sqlite_master_tables_query
+
     if s.upper().startswith('PRAGMA '):
         return 'SELECT 1'
     if s.lower() == 'select last_insert_rowid() as id':
@@ -363,122 +382,49 @@ def get_db() -> Iterator[Any]:
 
 @contextmanager
 def db() -> Iterator[Any]:
-    conn = get_connection()
-    try:
+    with get_db() as conn:
         yield conn
+
+
+def write(sql: str, params: tuple[Any, ...] = ()) -> int:
+    with db() as conn:
+        cur = conn.execute(sql, params)
+        if is_postgres_enabled():
+            return int(getattr(cur, 'rowcount', 0) or 0)
         try:
-            conn.commit()
-        except Exception:  # validator: allow-wide-except
-            logging.getLogger(__name__).exception("DB commit failed")
-            try:
-                conn.rollback()
-            except Exception:  # validator: allow-wide-except
-                logging.getLogger(__name__).exception("DB rollback after commit failure failed")
-            raise
-    finally:
-        try:
-            conn.close()
-        except Exception:  # validator: allow-wide-except
-            logging.getLogger(__name__).exception("DB close failed")
+            return int(cur.rowcount)
+        except (AttributeError, TypeError):
+            return 0
 
 
-@contextmanager
-def tx(conn) -> Iterator[Any]:
-    try:
-        yield conn
-        conn.commit()
-    except Exception:  # validator: allow-wide-except
-        try:
-            conn.rollback()
-        except Exception:  # validator: allow-wide-except
-            logging.getLogger(__name__).exception("Rollback failed")
-        raise
+def execute(sql: str, params: tuple[Any, ...] = ()):
+    with db() as conn:
+        return conn.execute(sql, params)
 
 
-def execute(
-    query: str,
-    params: Sequence[Any] = (),
-    *,
-    fetchone: bool = False,
-    fetchall: bool = False,
-):
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(query, tuple(params))
-        result = None
-        if fetchone:
-            result = cur.fetchone()
-        elif fetchall:
-            result = cur.fetchall()
-        conn.commit()
-        return result
-    except Exception:  # validator: allow-wide-except
-        try:
-            conn.rollback()
-        except Exception:  # validator: allow-wide-except
-            logging.getLogger(__name__).exception("DB rollback failed")
-        raise
-    finally:
-        try:
-            conn.close()
-        except Exception:  # validator: allow-wide-except
-            logging.getLogger(__name__).exception("DB close failed")
+def tx(conn):
+    return conn
 
 
-async def write(
-    query: str,
-    params: Sequence[Any] = (),
-    *,
-    fetchone: bool = False,
-    fetchall: bool = False,
-):
-    if _is_write_sql(query):
-        try:
-            # Lazy import keeps services.db.core as the canonical DB surface without
-            # importing the async writer at module import time. This avoids a hidden
-            # infrastructure cycle and makes boot failures easier to diagnose.
-            from services.db_writer import enqueue as _enqueue
-
-            return await _enqueue(query, params, fetchone=fetchone, fetchall=fetchall)
-        except Exception:  # validator: allow-wide-except
-            prod = (os.getenv("APP_ENV", "dev") or "dev").strip().lower() in {"prod", "production"}
-            if prod:
-                logging.getLogger(__name__).exception("DB writer enqueue failed in prod; refusing hidden sync fallback")
-                raise
-            logging.getLogger(__name__).exception("DB writer enqueue failed, using sync fallback in non-prod only")
-            return execute(query, params, fetchone=fetchone, fetchall=fetchall)
-    return execute(query, params, fetchone=fetchone, fetchall=fetchall)
-
-
-def mark_delivery_once(user_id: int, kind: str, stage: str, scheduled_at: str) -> bool:
-    sql = (
-        "INSERT INTO deliveries(user_id, kind, stage, scheduled_at) VALUES(%s, %s, %s, %s) "
-        "ON CONFLICT (user_id, kind, stage, scheduled_at) DO NOTHING"
-        if CONFIG.uses_postgres
-        else
-        "INSERT OR IGNORE INTO deliveries(user_id, kind, stage, scheduled_at) VALUES(?, ?, ?, ?)"
-    )
-    with get_db() as conn:
-        cur = conn.execute(sql, (int(user_id), str(kind), str(stage), str(scheduled_at)))
-        return bool(getattr(cur, "rowcount", 0) == 1)
-
-
-def unmark_delivery(user_id: int, kind: str, stage: str, scheduled_at: str) -> None:
-    placeholder = "%s" if CONFIG.uses_postgres else "?"
-    with get_db() as conn:
-        with tx(conn) as c:
-            c.execute(
-                f"DELETE FROM deliveries WHERE user_id={placeholder} AND kind={placeholder} AND stage={placeholder} AND scheduled_at={placeholder}",
-                (int(user_id), str(kind), str(stage), str(scheduled_at)),
-            )
-
-
-def was_delivered(user_id: int, kind: str, stage: str, scheduled_at: str) -> bool:
-    placeholder = "%s" if CONFIG.uses_postgres else "?"
-    with get_db() as conn:
+def was_delivered(user_id: int, key: str) -> bool:
+    with db() as conn:
         row = conn.execute(
-            f"SELECT 1 FROM deliveries WHERE user_id={placeholder} AND kind={placeholder} AND stage={placeholder} AND scheduled_at={placeholder} LIMIT 1",
-            (int(user_id), str(kind), str(stage), str(scheduled_at)),
+            "SELECT 1 FROM idempotency WHERE user_id=? AND key=? LIMIT 1",
+            (user_id, key),
         ).fetchone()
-        return row is not None
+        return bool(row)
+
+
+def mark_delivery_once(user_id: int, key: str) -> bool:
+    with db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO idempotency(user_id, key, created_at) VALUES(?,?,strftime('%s','now'))",
+            (user_id, key),
+        )
+        row = conn.execute("SELECT changes() AS c").fetchone()
+        return int(row["c"] if hasattr(row, "keys") else row[0]) == 1
+
+
+def unmark_delivery(user_id: int, key: str) -> None:
+    with db() as conn:
+        conn.execute("DELETE FROM idempotency WHERE user_id=? AND key=?", (user_id, key))
