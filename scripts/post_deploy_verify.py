@@ -90,7 +90,7 @@ def main() -> int:
 
     if not args.skip_pytest:
         print("==> pytest", flush=True)
-        print(_run([sys.executable, "-m", "pytest", "-q"]))
+        print(_run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]))
 
     strict_env = {
         "APP_ENV": "prod",
