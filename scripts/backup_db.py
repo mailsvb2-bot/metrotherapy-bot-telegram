@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+ROOT_PATH = Path(__file__).resolve().parents[1]
+if str(ROOT_PATH) not in sys.path:
+    sys.path.insert(0, str(ROOT_PATH))
 
 from core.paths import DB_PATH, ROOT
 from services.db.runtime import is_postgres_enabled, redacted_db_target
