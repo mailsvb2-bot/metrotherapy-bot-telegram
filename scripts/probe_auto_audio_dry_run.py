@@ -47,6 +47,18 @@ def _cleanup_probe_rows(*, user_id: int) -> None:
         conn.execute("DELETE FROM users WHERE user_id=?", (int(user_id),))
 
 
+def _ensure_probe_user(*, user_id: int) -> None:
+    with db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO users(user_id, work_time, home_time) VALUES(?,?,?)",
+            (int(user_id), "08:30", "19:30"),
+        )
+        conn.execute(
+            "UPDATE users SET work_time=?, home_time=? WHERE user_id=?",
+            ("08:30", "19:30", int(user_id)),
+        )
+
+
 def run_probe(*, user_id: int = DEFAULT_PROBE_USER_ID, slot: str = DEFAULT_SLOT, keep_artifacts: bool = False) -> int:
     init_db()
     slot = (slot or DEFAULT_SLOT).strip().lower()
@@ -57,11 +69,7 @@ def run_probe(*, user_id: int = DEFAULT_PROBE_USER_ID, slot: str = DEFAULT_SLOT,
 
     # A users row keeps channel/timezone preference code paths deterministic and
     # mirrors real users without requiring a messenger identity.
-    with db() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO users(user_id, work_time, home_time) VALUES(?,?,?)",
-            (int(user_id), "08:30", "19:30"),
-        )
+    _ensure_probe_user(user_id=int(user_id))
 
     grant(int(user_id), "both", 1, source=PROBE_SOURCE)
     if not has_access(int(user_id), slot):
