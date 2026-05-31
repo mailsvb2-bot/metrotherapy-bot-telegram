@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.paths import DB_PATH, ROOT
+from services.db.runtime import is_postgres_enabled, redacted_db_target
 
 
 
@@ -32,6 +33,13 @@ def _prune_old_backups(backup_dir: Path, keep: int) -> int:
 
 
 def main() -> int:
+    if is_postgres_enabled():
+        print(
+            'SKIP: METRO_DB_ENGINE=postgres uses pg_dump backups, not SQLite backup_db.py. '
+            f'Target={redacted_db_target()}'
+        )
+        return 0
+
     source = Path(DB_PATH)
     backup_dir = _backup_dir()
     backup_dir.mkdir(parents=True, exist_ok=True)
