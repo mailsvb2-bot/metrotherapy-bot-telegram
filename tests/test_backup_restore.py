@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from scripts import backup_db, restore_db
 
 
@@ -36,8 +38,10 @@ def test_backup_and_restore_roundtrip(tmp_path, monkeypatch):
 
     monkeypatch.setattr(backup_db, 'DB_PATH', db_path)
     monkeypatch.setattr(backup_db, 'ROOT', tmp_path)
+    monkeypatch.setattr(backup_db, 'is_postgres_enabled', lambda: False)
     monkeypatch.setattr(restore_db, 'DB_PATH', db_path)
     monkeypatch.setattr(restore_db, 'ROOT', tmp_path)
+    monkeypatch.setattr(restore_db, 'is_postgres_enabled', lambda: False)
 
     assert backup_db.main() == 0
     backup_file = restore_db._latest_backup()
@@ -64,6 +68,7 @@ def test_backup_prunes_old_files(tmp_path):
     ]
 
 
+
 def test_restore_verify_and_safety_copy(tmp_path, monkeypatch):
     db_path = tmp_path / 'data' / 'data.db'
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,9 +80,33 @@ def test_restore_verify_and_safety_copy(tmp_path, monkeypatch):
 
     monkeypatch.setattr(restore_db, 'DB_PATH', db_path)
     monkeypatch.setattr(restore_db, 'ROOT', tmp_path)
+    monkeypatch.setattr(restore_db, 'is_postgres_enabled', lambda: False)
 
     assert restore_db.main(['--from-path', str(backup_path), '--verify']) == 0
     assert _read_value(db_path) == 'restored'
     safety = sorted((tmp_path / 'backups').glob('pre_restore_*.db'))
     assert safety, 'expected pre-restore safety backup to be created'
     assert _read_value(safety[-1]) == 'current'
+
+
+
+def test_sqlite_backup_script_skips_in_postgres_mode(monkeypatch, capsys):
+    monkeypatch.setattr(backup_db, 'is_postgres_enabled', lambda: True)
+    monkeypatch.setattr(backup_db, 'redacted_db_target', lambda: 'postgresql://metrotherapy:***@127.0.0.1:5432/metrotherapy')
+
+    assert backup_db.main() == 0
+
+    out = capsys.readouterr().out
+    assert 'SKIP: METRO_DB_ENGINE=postgres uses pg_dump backups' in out
+    assert 'postgresql://metrotherapy:***@127.0.0.1:5432/metrotherapy' in out
+
+
+
+def test_sqlite_restore_script_refuses_in_postgres_mode(monkeypatch):
+    monkeypatch.setattr(restore_db, 'is_postgres_enabled', lambda: True)
+    monkeypatch.setattr(restore_db, 'redacted_db_target', lambda: 'postgresql://metrotherapy:***@127.0.0.1:5432/metrotherapy')
+
+    with pytest.raises(SystemExit) as exc:
+        restore_db.main([])
+
+    assert 'REFUSE: METRO_DB_ENGINE=postgres uses pg_dump/psql restore' in str(exc.value)
