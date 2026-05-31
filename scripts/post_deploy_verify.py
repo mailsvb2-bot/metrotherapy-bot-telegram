@@ -45,16 +45,31 @@ def _run(cmd: list[str], *, env: Mapping[str, str] | None = None) -> str:
     return output.strip()
 
 
+def _decode_error_body(exc: urllib.error.HTTPError) -> str:
+    body = exc.read().decode("utf-8", errors="replace")
+    return body[:1000]
+
+
+def _parse_json_body(*, url: str, body: str) -> dict:
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} invalid_json={body[:300]}") from exc
+
+
 def _http_json(url: str) -> dict:
     try:
         with urllib.request.urlopen(url, timeout=5) as response:  # nosec B310 - local operator-provided probe URL
             body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        body = _decode_error_body(exc)
+        payload = _parse_json_body(url=url, body=body) if body.strip().startswith("{") else None
+        if payload is not None:
+            raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} status={exc.code} payload={payload}") from exc
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} status={exc.code} body={body}") from exc
     except urllib.error.URLError as exc:
         raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} err={exc}") from exc
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} invalid_json={body[:300]}") from exc
+    payload = _parse_json_body(url=url, body=body)
     if payload.get("ok") is not True:
         raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} payload={payload}")
     return payload
