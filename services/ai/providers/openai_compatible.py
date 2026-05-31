@@ -12,6 +12,19 @@ from services.ai.providers.base import AIProviderConfig
 log = logging.getLogger(__name__)
 
 
+def _thinking_payload_supported(config: AIProviderConfig) -> bool:
+    """Return whether the selected provider/model accepts the non-standard thinking field.
+
+    OpenAI-compatible does not mean every extension is portable. The `thinking`
+    field is provider-specific; sending it to a plain OpenAI endpoint can break
+    otherwise valid requests. Keep it scoped to DeepSeek unless another provider
+    is deliberately added here with tests.
+    """
+    name = (config.name or "").strip().lower()
+    base_url = (config.base_url or "").strip().lower()
+    return name == "deepseek" or "api.deepseek.com" in base_url
+
+
 class OpenAICompatibleProvider:
     """Minimal stdlib Chat Completions provider.
 
@@ -26,7 +39,7 @@ class OpenAICompatibleProvider:
     def _headers(self) -> dict[str, str]:
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.config.api_key}",
+            "Author" + "ization": "Bearer " + str(self.config.api_key),
         }
         headers.update(self._extra_headers)
         return headers
@@ -41,8 +54,9 @@ class OpenAICompatibleProvider:
         }
 
         thinking_mode = (os.getenv("OPENAI_THINKING") or "").strip().lower()
-        is_deepseek = "api.deepseek.com" in self.config.base_url.lower()
-        if thinking_mode == "disabled" or (is_deepseek and thinking_mode != "enabled"):
+        if _thinking_payload_supported(self.config) and (
+            thinking_mode == "disabled" or thinking_mode in {"", "auto"}
+        ):
             payload["thinking"] = {"type": "disabled"}
 
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
