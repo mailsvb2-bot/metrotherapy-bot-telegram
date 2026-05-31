@@ -22,9 +22,35 @@ def _env_value(name: str, default: str = "") -> str:
     return (os.environ.get(name) or default).strip()
 
 
+def _is_prod() -> bool:
+    return (_env_value("APP_ENV", "dev") or "dev").lower() in {"prod", "production"}
+
+
+def _truthy_env(name: str, default: str = "0") -> bool:
+    return (_env_value(name, default) or default).lower() in {"1", "true", "yes", "on"}
+
+
+def _explicit_idempotence_key_allowed() -> bool:
+    """Allow static YooKassa idempotence keys only for intentional non-prod probes.
+
+    A process-wide PAYMENT_IDEMPOTENCE_KEY/YOOKASSA_IDEMPOTENCE_KEY is useful for
+    local/manual replay drills, but it is dangerous in production: unrelated
+    checkout attempts can collapse into one provider-side idempotent operation.
+    Production requests must use the per-intent key derived below.
+    """
+    if not _is_prod():
+        return True
+    return _truthy_env("ALLOW_STATIC_PAYMENT_IDEMPOTENCE_KEY_IN_PROD")
+
+
 def _idempotence_key(*, source: str, external_user_id: str, kind: str, amount_value: str, intent_id: str | None = None) -> str:
     explicit = _env_value("PAYMENT_IDEMPOTENCE_KEY") or _env_value("YOOKASSA_IDEMPOTENCE_KEY")
     if explicit:
+        if not _explicit_idempotence_key_allowed():
+            raise YooKassaCheckoutError(
+                "Static YooKassa idempotence key is forbidden in prod. "
+                "Unset PAYMENT_IDEMPOTENCE_KEY/YOOKASSA_IDEMPOTENCE_KEY or use an explicit guarded drill flag."
+            )
         return explicit[:128]
     if intent_id:
         return f"metrotherapy:{intent_id}"[:128]
