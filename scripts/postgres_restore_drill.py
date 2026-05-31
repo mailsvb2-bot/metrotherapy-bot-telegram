@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -14,6 +16,7 @@ REQUIRED_TABLES = (
     "deliveries",
 )
 DEFAULT_BACKUP_DIR = Path(os.getenv("METRO_POSTGRES_BACKUP_DIR", "/var/backups/metrotherapy/postgres"))
+SUPPORTED_SUFFIXES = (".dump", ".sql", ".sql.gz")
 
 
 def _target_url() -> str:
@@ -25,26 +28,58 @@ def _target_url() -> str:
     return value.strip()
 
 
+def _is_supported_backup(path: Path) -> bool:
+    name = path.name.lower()
+    return any(name.endswith(suffix) for suffix in SUPPORTED_SUFFIXES)
+
+
 def latest_backup(*, backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path:
-    files = sorted(backup_dir.glob("*.dump"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(
+        (path for path in backup_dir.iterdir() if path.is_file() and _is_supported_backup(path)),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ) if backup_dir.exists() else []
     if not files:
-        raise SystemExit(f"No Postgres backups found in {backup_dir}")
+        raise SystemExit(f"No Postgres backups found in {backup_dir}; expected one of: {', '.join(SUPPORTED_SUFFIXES)}")
     return files[0]
 
 
-def _run(cmd: list[str]) -> str:
-    proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+def _run(cmd: list[str], *, input_text: str | None = None) -> str:
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True, input=input_text)
     out = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
         raise SystemExit(out.strip() or proc.returncode)
     return out.strip()
 
 
+def _reset_target_database(target: str) -> None:
+    reset_sql = "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"
+    _run(["psql", target, "--set", "ON_ERROR_STOP=1", "--command", reset_sql])
+
+
+def _restore_backup(*, dump_path: Path, target: str) -> None:
+    lower_name = dump_path.name.lower()
+    if lower_name.endswith(".dump"):
+        _run(["pg_restore", "--clean", "--if-exists", "--no-owner", "--no-privileges", "--dbname", target, str(dump_path)])
+        return
+    if lower_name.endswith(".sql.gz"):
+        with gzip.open(dump_path, "rt", encoding="utf-8") as fh:
+            sql_text = fh.read()
+        _reset_target_database(target)
+        _run(["psql", target, "--set", "ON_ERROR_STOP=1"], input_text=sql_text)
+        return
+    if lower_name.endswith(".sql"):
+        _reset_target_database(target)
+        _run(["psql", target, "--set", "ON_ERROR_STOP=1", "--file", str(dump_path)])
+        return
+    raise SystemExit(f"Unsupported backup format: {dump_path}")
+
+
 def restore_drill(*, dump_path: Path) -> None:
     if not dump_path.exists():
         raise SystemExit(f"Backup file not found: {dump_path}")
     target = _target_url()
-    _run(["pg_restore", "--clean", "--if-exists", "--no-owner", "--no-privileges", "--dbname", target, str(dump_path)])
+    _restore_backup(dump_path=dump_path, target=target)
     table_sql = "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema()"
     out = _run(["psql", target, "--tuples-only", "--no-align", "--command", table_sql])
     tables = {line.strip() for line in out.splitlines() if line.strip()}
@@ -55,9 +90,9 @@ def restore_drill(*, dump_path: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Restore a pg_dump into a non-production drill database and verify core tables")
-    parser.add_argument("dump_path", nargs="?", help="Path to a .dump file. Use --latest to restore the newest backup.")
-    parser.add_argument("--latest", action="store_true", help="Restore the newest .dump from METRO_POSTGRES_BACKUP_DIR")
+    parser = argparse.ArgumentParser(description="Restore a pg_dump backup into a non-production drill database and verify core tables")
+    parser.add_argument("dump_path", nargs="?", help="Path to a .dump, .sql, or .sql.gz file. Use --latest to restore the newest backup.")
+    parser.add_argument("--latest", action="store_true", help="Restore the newest backup from METRO_POSTGRES_BACKUP_DIR")
     parser.add_argument("--backup-dir", default=str(DEFAULT_BACKUP_DIR))
     args = parser.parse_args()
     dump = latest_backup(backup_dir=Path(args.backup_dir)) if args.latest else Path(args.dump_path or "")
