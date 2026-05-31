@@ -19,8 +19,10 @@ It does not modify systemd units and does not send Telegram messages.
 import argparse
 import json
 import os
+import socket
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Mapping
@@ -48,7 +50,7 @@ def _http_json(url: str) -> dict:
     try:
         with urllib.request.urlopen(url, timeout=5) as response:  # nosec B310 - local operator-provided probe URL
             body = response.read().decode("utf-8")
-    except Exception as exc:  # validator: allow-wide-except
+    except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
         raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} err={exc}") from exc
     try:
         payload = json.loads(body)
