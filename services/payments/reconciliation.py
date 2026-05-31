@@ -59,6 +59,10 @@ class ReconciliationResult:
     problem: str = ""
 
 
+def _problem_join(*items: str) -> str:
+    return ";".join(item for item in items if item)
+
+
 def _practice_package_payment_problem(*, package_id: str, amount_minor: int, currency: str) -> str:
     try:
         package = package_by_id(package_id)
@@ -179,6 +183,69 @@ def _grant_practices_if_needed(
     return ""
 
 
+def _record_payment_fact(
+    *,
+    payment_id: str,
+    synthetic_charge_id: str,
+    user_id: int,
+    kind: str,
+    amount_minor: int,
+    currency: str,
+    status: str,
+    provider_event_id: str,
+    raw: str,
+    reconciled_at: str,
+    problem: str,
+) -> bool:
+    """Insert/update the provider payment ledger fact before side-effect grants.
+
+    Grants are separately idempotent and may use their own DB transactions. The
+    payment fact must therefore exist first, so a process crash between fact and
+    grant is recoverable by replaying the provider webhook.
+    """
+    with db() as conn:
+        with tx(conn):
+            row = conn.execute(
+                "SELECT id FROM payments WHERE provider_charge_id=? OR telegram_charge_id=? LIMIT 1",
+                (payment_id, synthetic_charge_id),
+            ).fetchone()
+            if row:
+                conn.execute(
+                    """
+                    UPDATE payments
+                    SET provider_status=?, provider_event_id=?, provider_raw=?, reconciled_at=?, problem=?
+                    WHERE provider_charge_id=? OR telegram_charge_id=?
+                    """.strip(),
+                    (status, provider_event_id, raw, reconciled_at, problem, payment_id, synthetic_charge_id),
+                )
+                return False
+
+            conn.execute(
+                """
+                INSERT INTO payments(
+                    user_id, telegram_charge_id, provider_charge_id, payload,
+                    amount, currency, created_at,
+                    provider_status, provider_event_id, provider_raw, reconciled_at, problem
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """.strip(),
+                (
+                    int(user_id),
+                    synthetic_charge_id,
+                    payment_id,
+                    f"yookassa:{kind}",
+                    int(amount_minor),
+                    currency,
+                    reconciled_at,
+                    status,
+                    provider_event_id,
+                    raw,
+                    reconciled_at,
+                    problem,
+                ),
+            )
+            return True
+
+
 def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
     """Record a YooKassa webhook as an idempotent provider-ledger fact.
 
@@ -216,7 +283,21 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
     provider_event_id = f"yookassa:{payment_id}:{event or status}"
     synthetic_charge_id = f"yookassa:{payment_id}"
     created_at = _utc_now_iso()
-    problem = "" if user_id else "missing_user_id"
+    preliminary_problem = "" if user_id else "missing_user_id"
+
+    inserted = _record_payment_fact(
+        payment_id=payment_id,
+        synthetic_charge_id=synthetic_charge_id,
+        user_id=int(user_id),
+        kind=kind,
+        amount_minor=amount_minor,
+        currency=currency,
+        status=status,
+        provider_event_id=provider_event_id,
+        raw=raw,
+        reconciled_at=created_at,
+        problem=preliminary_problem,
+    )
 
     grant_problem = _grant_practices_if_needed(
         event=event,
@@ -227,57 +308,21 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
         amount_minor=amount_minor,
         currency=currency,
     )
-    if grant_problem:
-        problem = ";".join(item for item in (problem, grant_problem) if item)
-
-    with db() as conn:
-        with tx(conn):
-            row = conn.execute(
-                "SELECT id FROM payments WHERE provider_charge_id=? OR telegram_charge_id=? LIMIT 1",
-                (payment_id, synthetic_charge_id),
-            ).fetchone()
-            if row:
-                conn.execute(
-                    """
-                    UPDATE payments
-                    SET provider_status=?, provider_event_id=?, provider_raw=?, reconciled_at=?, problem=?
-                    WHERE provider_charge_id=? OR telegram_charge_id=?
-                    """.strip(),
-                    (status, provider_event_id, raw, created_at, problem, payment_id, synthetic_charge_id),
-                )
-                return ReconciliationResult(
-                    ok=True,
-                    provider="yookassa",
-                    provider_payment_id=payment_id,
-                    status=status,
-                    event=event,
-                    inserted=False,
-                    problem=problem,
-                )
-
-            conn.execute(
-                """
-                INSERT INTO payments(
-                    user_id, telegram_charge_id, provider_charge_id, payload,
-                    amount, currency, created_at,
-                    provider_status, provider_event_id, provider_raw, reconciled_at, problem
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-                """.strip(),
-                (
-                    int(user_id),
-                    synthetic_charge_id,
-                    payment_id,
-                    f"yookassa:{kind}",
-                    int(amount_minor),
-                    currency,
-                    created_at,
-                    status,
-                    provider_event_id,
-                    raw,
-                    created_at,
-                    problem,
-                ),
-            )
+    problem = _problem_join(preliminary_problem, grant_problem)
+    if problem != preliminary_problem:
+        _record_payment_fact(
+            payment_id=payment_id,
+            synthetic_charge_id=synthetic_charge_id,
+            user_id=int(user_id),
+            kind=kind,
+            amount_minor=amount_minor,
+            currency=currency,
+            status=status,
+            provider_event_id=provider_event_id,
+            raw=raw,
+            reconciled_at=created_at,
+            problem=problem,
+        )
 
     log.info(
         "YooKassa webhook reconciled: payment_id=%s status=%s event=%s user_id=%s problem=%s",
@@ -293,7 +338,7 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
         provider_payment_id=payment_id,
         status=status,
         event=event,
-        inserted=True,
+        inserted=inserted,
         problem=problem,
     )
 
