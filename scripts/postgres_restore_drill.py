@@ -4,8 +4,8 @@ import argparse
 import gzip
 import os
 import subprocess
-import tempfile
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 
 REQUIRED_TABLES = (
@@ -17,15 +17,40 @@ REQUIRED_TABLES = (
 )
 DEFAULT_BACKUP_DIR = Path(os.getenv("METRO_POSTGRES_BACKUP_DIR", "/var/backups/metrotherapy/postgres"))
 SUPPORTED_SUFFIXES = (".dump", ".sql", ".sql.gz")
+FORBIDDEN_DRILL_DB_NAMES = {"postgres", "template0", "template1"}
+
+
+def _database_name_from_url(value: str) -> str:
+    parsed = urlparse(value.strip())
+    return unquote((parsed.path or "").lstrip("/")).strip()
 
 
 def _target_url() -> str:
     value = os.getenv("METRO_RESTORE_DRILL_DATABASE_URL") or os.getenv("RESTORE_DATABASE_URL") or ""
-    if not value.strip():
+    target = value.strip()
+    if not target:
         raise SystemExit("METRO_RESTORE_DRILL_DATABASE_URL is required. Never point it to production.")
-    if value == (os.getenv("DATABASE_URL") or ""):
+
+    production_url = (os.getenv("DATABASE_URL") or "").strip()
+    if production_url and target == production_url:
         raise SystemExit("Restore drill target equals DATABASE_URL; refusing to touch production database")
-    return value.strip()
+
+    target_db = _database_name_from_url(target)
+    production_db = _database_name_from_url(production_url) if production_url else ""
+    if not target_db:
+        raise SystemExit("Restore drill target database name is empty; refusing to continue")
+    if target_db in FORBIDDEN_DRILL_DB_NAMES:
+        raise SystemExit(f"Restore drill target database name is forbidden: {target_db}")
+    if production_db and target_db == production_db:
+        raise SystemExit(
+            "Restore drill target database name matches production database; refusing to touch production database"
+        )
+    if "drill" not in target_db and "restore" not in target_db and "test" not in target_db:
+        raise SystemExit(
+            "Restore drill target database name must clearly be non-production "
+            "and include one of: drill, restore, test"
+        )
+    return target
 
 
 def _is_supported_backup(path: Path) -> bool:
