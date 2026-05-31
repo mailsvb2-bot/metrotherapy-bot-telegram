@@ -11,6 +11,8 @@ must keep the old public API available from this package.
 The canonical implementation of the DB helpers lives in :mod:`services.db.core`.
 """
 
+from typing import Any
+
 
 # Re-export the public DB helpers expected across the codebase.
 from services.db.core import (  # noqa: F401
@@ -21,15 +23,57 @@ from services.db.core import (  # noqa: F401
     get_connection,
     get_db,
     get_db_ro,
-    mark_delivery_once,
     tx,
-    unmark_delivery,
-    was_delivered,
     write,
 )
 
+
+def _delivery_key(*parts: Any) -> str:
+    """Build the canonical idempotency key used by delivery/job callers.
+
+    Backward compatibility is intentional:
+    - legacy code used ``mark_delivery_once(user_id, key)``;
+    - newer scheduler/audio code uses semantic parts such as
+      ``mark_delivery_once(user_id, kind, stage, scheduled_at)``.
+
+    The package public API owns that compatibility so runtime callers do not
+    drift into split implementations or per-call ad-hoc joins.
+    """
+    cleaned = [str(p).strip() for p in parts if str(p).strip()]
+    if not cleaned:
+        raise ValueError("delivery idempotency key must not be empty")
+    return ":".join(cleaned)
+
+
+def was_delivered(user_id: int, *key_parts: Any) -> bool:
+    key = _delivery_key(*key_parts)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM idempotency WHERE user_id=? AND key=? LIMIT 1",
+            (int(user_id), key),
+        ).fetchone()
+        return bool(row)
+
+
+def mark_delivery_once(user_id: int, *key_parts: Any) -> bool:
+    key = _delivery_key(*key_parts)
+    with db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO idempotency(user_id, key, created_at) VALUES(?,?,strftime('%s','now'))",
+            (int(user_id), key),
+        )
+        row = conn.execute("SELECT changes() AS c").fetchone()
+        return int(row["c"] if hasattr(row, "keys") else row[0]) == 1
+
+
+def unmark_delivery(user_id: int, *key_parts: Any) -> None:
+    key = _delivery_key(*key_parts)
+    with db() as conn:
+        conn.execute("DELETE FROM idempotency WHERE user_id=? AND key=?", (int(user_id), key))
+
+
 # Schema split package (DDL-only)
-from services.db import schema  # noqa: F401
+from services.db import schema  # noqa: F401,E402
 
 # Make the package itself callable for legacy ``from services import db``
 # compatibility without shadowing the ``services.db`` package namespace.
@@ -44,4 +88,3 @@ class _CallableDbPackage(_types.ModuleType):
 
 
 _sys.modules[__name__].__class__ = _CallableDbPackage
-
