@@ -232,7 +232,7 @@ def _translate_insert_or_replace(sql: str) -> str:
 
 
 def _translate_sqlite_master_tables_query(s: str) -> str | None:
-    if not re.match(r"(?is)^SELECT\s+name\s+FROM\s+sqlite_master\s+WHERE\s+type='table'", s):
+    if not re.match(r"(?is)^SELECT\s+(?:name|1)\s+FROM\s+sqlite_master\s+WHERE\s+type='table'", s):
         return None
 
     base = (
