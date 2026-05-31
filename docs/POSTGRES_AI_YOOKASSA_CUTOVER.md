@@ -62,7 +62,7 @@ set -a
 source /etc/metrotherapy/metrotherapy.env
 set +a
 METRO_DB_ENGINE=postgres python - <<'PY'
-from services.db import init_db
+from services.schema_core import init_db
 init_db()
 print('postgres_schema_ok')
 PY
@@ -89,13 +89,14 @@ Provider examples:
 
 ```env
 AI_ENABLED=1
-AI_PROVIDER=openai
-OPENAI_API_KEY=<secret>
-OPENAI_MODEL=gpt-4.1-mini
-OPENAI_BASE_URL=https://api.openai.com/v1
+AI_PROVIDER=deepseek
+DEEPSEEK_API_KEY=<secret>
+DEEPSEEK_MODEL=deepseek-chat
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+OPENAI_THINKING=disabled
 ```
 
-or use Yandex/GigaChat envs already supported by `services.ai.providers.router`.
+or use Yandex/GigaChat/OpenAI-compatible envs already supported by `services.ai.providers.router`.
 
 After changing env:
 
