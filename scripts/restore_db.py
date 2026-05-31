@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.paths import DB_PATH, ROOT
+from services.db.runtime import is_postgres_enabled, redacted_db_target
 
 
 
@@ -28,6 +29,7 @@ def _integrity_check(path: Path) -> None:
             raise SystemExit(f'Integrity check failed for {path}: {row}')
     finally:
         conn.close()
+
 
 
 def _restore(source: Path, target: Path) -> None:
@@ -54,6 +56,12 @@ def _restore(source: Path, target: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if is_postgres_enabled():
+        raise SystemExit(
+            'REFUSE: METRO_DB_ENGINE=postgres uses pg_dump/psql restore, not SQLite restore_db.py. '
+            f'Target={redacted_db_target()}'
+        )
+
     parser = argparse.ArgumentParser(description='Restore Metrotherapy SQLite DB from backup')
     parser.add_argument('--from-path', dest='from_path', default='', help='Path to backup .db file')
     parser.add_argument('--verify', action='store_true', help='Run PRAGMA integrity_check after restore')
