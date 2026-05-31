@@ -9,6 +9,7 @@ that were previously run manually after deploy into one repeatable command:
 - production validator;
 - smoke bootstrap;
 - DB-backed scheduler/idempotency probe;
+- auto-audio dry-run probe without Telegram sends;
 - optional Postgres restore drill;
 - local health/readiness HTTP probes.
 
@@ -84,6 +85,9 @@ def main() -> int:
 
     print("==> scheduler job probe", flush=True)
     print(_run([sys.executable, "scripts/probe_scheduler_job_live.py"]))
+
+    print("==> auto-audio dry-run probe", flush=True)
+    print(_run([sys.executable, "scripts/probe_auto_audio_dry_run.py"]))
 
     if args.restore_drill:
         print("==> postgres restore drill", flush=True)
