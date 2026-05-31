@@ -402,8 +402,17 @@ def execute(sql: str, params: tuple[Any, ...] = ()):
         return conn.execute(sql, params)
 
 
+@contextmanager
 def tx(conn):
-    return conn
+    """Nested transaction scope that never owns connection lifecycle.
+
+    Historically callers used `with db() as conn: with tx(conn): ...` while tx()
+    returned the raw sqlite connection. SQLite's connection context manager commits
+    but does not close, so this pattern survived. PostgresCompatConnection closes
+    in __exit__, therefore returning conn from tx() closes the outer connection
+    before get_db() can commit. Commit/rollback/close ownership belongs to get_db().
+    """
+    yield conn
 
 
 def was_delivered(user_id: int, key: str) -> bool:
