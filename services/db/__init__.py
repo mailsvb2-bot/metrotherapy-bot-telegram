@@ -11,6 +11,7 @@ must keep the old public API available from this package.
 The canonical implementation of the DB helpers lives in :mod:`services.db.core`.
 """
 
+import time
 from typing import Any
 
 
@@ -57,10 +58,11 @@ def was_delivered(user_id: int, *key_parts: Any) -> bool:
 
 def mark_delivery_once(user_id: int, *key_parts: Any) -> bool:
     key = _delivery_key(*key_parts)
+    created_at = int(time.time())
     with db() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO idempotency(user_id, key, created_at) VALUES(?,?,strftime('%s','now'))",
-            (int(user_id), key),
+            "INSERT OR IGNORE INTO idempotency(user_id, key, created_at) VALUES(?,?,?)",
+            (int(user_id), key, created_at),
         )
         row = conn.execute("SELECT changes() AS c").fetchone()
         return int(row["c"] if hasattr(row, "keys") else row[0]) == 1
