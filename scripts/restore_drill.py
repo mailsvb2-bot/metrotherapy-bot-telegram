@@ -11,9 +11,17 @@ import sqlite3
 import tempfile
 
 from scripts import backup_db, restore_db
+from services.db.runtime import is_postgres_enabled, redacted_db_target
 
 
 def main() -> int:
+    if is_postgres_enabled():
+        print(
+            'SKIP: METRO_DB_ENGINE=postgres uses pg_dump/psql restore drills, not SQLite restore_drill.py. '
+            f'Target={redacted_db_target()}'
+        )
+        return 0
+
     backup = restore_db._latest_backup()
     if backup is None or not backup.exists():
         backup_db.main()
