@@ -80,7 +80,7 @@ def test_max_score_payload_value_reaches_pre_score_transition():
         user_id,
         platform="max",
         external_user_id=str(user_id),
-        text="1",
+        text="+1",
     )
 
     assert canonical_user_id == user_id
