@@ -177,7 +177,11 @@ def vk_weather_city_keyboard_json() -> str:
 
 
 def vk_score_scale_keyboard_json() -> str:
-    """VK keyboard for mood score scale parity."""
+    """VK keyboard for mood score scale parity.
+
+    Visible labels match Telegram (+1/+2), while payloads use score:<number> so
+    1/2 cannot be mistaken for demo route aliases.
+    """
     rows: list[list[dict[str, Any]]] = []
     for row in [
         [-10, -9, -8],
@@ -189,7 +193,7 @@ def vk_score_scale_keyboard_json() -> str:
         [8, 9, 10],
     ]:
         rows.append([
-            _button(_score_label(value), str(value), "primary" if value == 0 else "secondary")
+            _button(_score_label(value), f"score:{value}", "primary" if value == 0 else "secondary")
             for value in row
         ])
     rows.append([
