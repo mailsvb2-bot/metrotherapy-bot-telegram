@@ -18,6 +18,7 @@ from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS,
 
 ADMIN_LABEL = "🛠 Панель"
 BACK_LABEL = "⬅️ Назад"
+MAX_LEGACY_BACK_LABEL = "⬅️ Меню"
 
 
 def _telegram_public_main_labels() -> list[str]:
@@ -35,6 +36,10 @@ def _telegram_demo_labels() -> list[str]:
 
 def _telegram_score_labels() -> list[str]:
     return [button.text for row in kb_mood_scale(1, stage="pre").inline_keyboard for button in row]
+
+
+def _numeric_score_labels() -> list[str]:
+    return [str(value) for value in range(-10, 11)]
 
 
 def _vk_keyboard(keyboard_json: str) -> dict:
@@ -96,26 +101,23 @@ def test_vk_main_keyboard_does_not_leak_context_audio_controls():
 def test_demo_kind_labels_match_telegram_demo_kind_surface():
     expected = _telegram_demo_labels()
     assert _vk_labels(vk_demo_kind_keyboard_json()) == expected
-    assert _max_button_texts(messenger_max_ui.demo_kind_attachment()) == expected
+    assert _max_button_texts(messenger_max_ui.demo_kind_attachment()) == expected[:-1] + [MAX_LEGACY_BACK_LABEL]
     assert _vk_commands(vk_demo_kind_keyboard_json()) == ["demo_work", "demo_home", "start"]
     assert _max_button_commands(messenger_max_ui.demo_kind_attachment()) == ["demo_work", "demo_home", "start"]
 
 
-def test_score_scale_labels_match_telegram_and_payloads_are_unambiguous():
-    expected = _telegram_score_labels()
-    assert _vk_labels(vk_score_scale_keyboard_json()) == expected[:-1] + ["📈 Мой прогресс", BACK_LABEL]
-    assert _max_button_texts(messenger_max_ui.score_scale_attachment()) == expected[:-1] + ["📈 Мой прогресс", BACK_LABEL]
+def test_score_scale_labels_match_platform_score_contracts():
+    telegram_expected = _telegram_score_labels()
+    numeric_expected = _numeric_score_labels()
+    assert _vk_labels(vk_score_scale_keyboard_json()) == telegram_expected[:-1] + ["📈 Мой прогресс", BACK_LABEL]
+    assert _max_button_texts(messenger_max_ui.score_scale_attachment()) == numeric_expected + ["📈 Мой прогресс", BACK_LABEL]
 
     vk_commands = _vk_commands(vk_score_scale_keyboard_json())
     max_commands = _max_button_commands(messenger_max_ui.score_scale_attachment())
-    assert "1" not in vk_commands
-    assert "2" not in vk_commands
-    assert "1" not in max_commands
-    assert "2" not in max_commands
-    assert "score:1" in vk_commands
-    assert "score:2" in vk_commands
-    assert "score:1" in max_commands
-    assert "score:2" in max_commands
+    assert vk_commands[:21] == numeric_expected
+    assert max_commands[:21] == [f"score:{value}" for value in range(-10, 11)]
+    assert vk_commands[-2:] == ["progress", "start"]
+    assert max_commands[-2:] == ["progress", "start"]
 
 
 def test_weather_surface_matches_telegram_public_meaning():
