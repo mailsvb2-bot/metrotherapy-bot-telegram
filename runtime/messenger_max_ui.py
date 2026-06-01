@@ -6,6 +6,9 @@ from typing import Any
 from services.messenger.menu_contract import MAIN_MENU_ACTIONS, max_numbered_menu_text
 from services.messenger.package_payment_ui import extract_labeled_urls
 
+BACK_LABEL = "⬅️ Назад"
+MENU_COMMAND = "start"
+
 
 def max_message_button(text: str, *, command: str | None = None) -> dict[str, Any]:
     button: dict[str, Any] = {"type": "message", "text": text}
@@ -20,6 +23,10 @@ def max_link_button(text: str, url: str) -> dict[str, str]:
 
 def inline_keyboard_attachment(rows: list[list[dict[str, Any]]]) -> dict[str, Any]:
     return {"type": "inline_keyboard", "payload": {"buttons": rows}}
+
+
+def _score_label(value: int) -> str:
+    return f"{value:+d}" if value != 0 else "0"
 
 
 def has_main_menu_text(text: str) -> bool:
@@ -38,6 +45,10 @@ def has_main_menu_text(text: str) -> bool:
 
 
 def main_menu_attachment() -> dict[str, Any]:
+    """MAX main menu rendered from the Telegram-derived public user contract.
+
+    Admin/control-plane buttons intentionally stay Telegram-only.
+    """
     rows: list[list[dict[str, Any]]] = []
     actions = list(MAIN_MENU_ACTIONS)
     for idx in range(0, len(actions), 2):
@@ -48,7 +59,7 @@ def main_menu_attachment() -> dict[str, Any]:
 def full_route_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("🎧 Получить аудио", command="continue"), max_message_button("✅ Прослушал", command="done")],
-        [max_message_button("⬅️ Меню", command="start")],
+        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
     ])
 
 
@@ -56,38 +67,36 @@ def demo_kind_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("🚗 Практика на утро / дорогу", command="demo_work")],
         [max_message_button("🌙 Практика на вечер / домой", command="demo_home")],
-        [max_message_button("⬅️ Меню", command="start")],
+        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
     ])
 
 
 def weather_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
-        [max_message_button("🔄 Обновить погоду", command="weather"), max_message_button("🏙 Изменить город", command="weather_city")],
-        [max_message_button("⬅️ Меню", command="start")],
+        [max_message_button("🌤 Погода", command="weather"), max_message_button("🏙 Изменить город", command="weather_city")],
+        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
     ])
 
 
 def weather_city_attachment() -> dict[str, Any]:
-    return inline_keyboard_attachment([[max_message_button("⬅️ Меню", command="start")]])
+    return inline_keyboard_attachment([[max_message_button(BACK_LABEL, command=MENU_COMMAND)]])
 
 
 def score_scale_attachment() -> dict[str, Any]:
-    """MAX score scale with unambiguous numeric payloads.
+    """MAX score scale with Telegram-identical labels and unambiguous payloads.
 
-    Bare commands "1" and "2" are already legacy aliases for demo route choices.
-    Score buttons therefore use the provider payload shape "score:<number>".
-    runtime.messenger_payloads.normalise_messenger_text converts that payload
-    back to the canonical score string before the mood flow sees it.
+    Bare commands "1" and "2" are legacy aliases for demo route choices, so the
+    visible labels match Telegram (+1/+2), while payloads use score:<number>.
     """
     rows: list[list[dict[str, Any]]] = []
     for row in [[-10, -9, -8], [-7, -6, -5], [-4, -3, -2], [-1, 0, 1], [2, 3, 4], [5, 6, 7], [8, 9, 10]]:
         rows.append([
-            max_message_button(str(value), command=f"score:{value}")
+            max_message_button(_score_label(value), command=f"score:{value}")
             for value in row
         ])
     rows.append([
         max_message_button("📈 Мой прогресс", command="progress"),
-        max_message_button("⬅️ Меню", command="start"),
+        max_message_button(BACK_LABEL, command=MENU_COMMAND),
     ])
     return inline_keyboard_attachment(rows)
 
@@ -96,21 +105,31 @@ def post_audio_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("✅ Прослушал", command="done")],
         [max_message_button("📈 Мой прогресс", command="progress"), max_message_button("🧾 История", command="history")],
-        [max_message_button("⬅️ Меню", command="start")],
+        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
     ])
 
 
 def progress_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("🎧 Получить аудио", command="continue"), max_message_button("✅ Прослушал", command="done")],
-        [max_message_button("🧾 История", command="history"), max_message_button("⬅️ Меню", command="start")],
+        [max_message_button("🔁 Повторить аудио", command="repeat_audio"), max_message_button("🧾 История", command="history")],
+        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
     ])
 
 
 def settings_attachment() -> dict[str, Any]:
+    """MAX settings controls aligned with Telegram's public settings surface.
+
+    Buttons that need free-form input intentionally route to the existing text
+    command surface instead of inventing a second callback vocabulary.
+    """
     return inline_keyboard_attachment([
-        [max_message_button("/platform telegram", command="/platform telegram"), max_message_button("/platform max", command="/platform max"), max_message_button("/platform vk", command="/platform vk")],
-        [max_message_button("switch", command="switch"), max_message_button("⬅️ Меню", command="start")],
+        [max_message_button("🌦 Погода в моём городе", command="weather")],
+        [max_message_button("⏰ Время и правила отправки", command="time")],
+        [max_message_button("💬 Предпочтительный мессенджер", command="settings")],
+        [max_message_button("📨 Каналы по времени дня", command="time")],
+        [max_message_button("📈 Анализ моего состояния", command="progress")],
+        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
     ])
 
 
@@ -147,16 +166,16 @@ def link_action_attachment(text: str) -> dict[str, Any] | None:
         return None
     if raw.lstrip().startswith("💳"):
         rows = _labeled_link_rows(raw) or [[max_link_button("💳 Оплатить", url)]]
-        rows.append([max_message_button("🎧 Получить аудио", command="continue"), max_message_button("⬅️ Меню", command="start")])
+        rows.append([max_message_button("🎧 Получить аудио", command="continue"), max_message_button(BACK_LABEL, command=MENU_COMMAND)])
         return inline_keyboard_attachment(rows)
     if raw.lstrip().startswith("🎁"):
         rows = _labeled_link_rows(raw) or [[max_link_button("🎁 Оплатить подарок", url)]]
-        rows.append([max_message_button("📣 Посоветовать", command="share"), max_message_button("⬅️ Меню", command="start")])
+        rows.append([max_message_button("📣 Посоветовать", command="share"), max_message_button(BACK_LABEL, command=MENU_COMMAND)])
         return inline_keyboard_attachment(rows)
     if raw.lstrip().startswith("↗️ Поделиться"):
         return inline_keyboard_attachment([
             [max_link_button("↗️ Открыть ссылку", url)],
-            [max_message_button("⬅️ Меню", command="start")],
+            [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
         ])
     return None
 
@@ -181,7 +200,7 @@ def native_keyboard_attachments(text: str) -> list[dict[str, Any]]:
         return [score_scale_attachment()]
     if is_post_audio_controls_text(raw):
         return [post_audio_attachment()]
-    if stripped.startswith("🎧 Общий прогресс") or "📈 Анализ состояния" in raw:
+    if stripped.startswith("🎧 Общий прогресс") or stripped.startswith("🎧 Вы ещё не запускали") or "📈 Мой прогресс" in raw or "📈 Анализ состояния" in raw:
         return [progress_attachment()]
     if stripped.startswith("⚙️ Настройки канала"):
         return [settings_attachment()]
