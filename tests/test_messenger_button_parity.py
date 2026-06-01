@@ -134,10 +134,11 @@ def test_weather_surface_matches_telegram_public_meaning():
 
 
 def test_full_route_context_controls_are_equal_for_vk_and_max():
-    expected_labels = ["🎧 Получить аудио", "✅ Прослушал", BACK_LABEL]
+    vk_expected_labels = ["🎧 Получить аудио", "✅ Прослушал", BACK_LABEL]
+    max_expected_labels = ["🎧 Получить аудио", "✅ Прослушал", MAX_LEGACY_BACK_LABEL]
     expected_commands = ["continue", "done", "start"]
-    assert _vk_labels(full_route_keyboard_json()) == expected_labels
-    assert _max_button_texts(messenger_max_ui.full_route_attachment()) == expected_labels
+    assert _vk_labels(full_route_keyboard_json()) == vk_expected_labels
+    assert _max_button_texts(messenger_max_ui.full_route_attachment()) == max_expected_labels
     assert _vk_commands(full_route_keyboard_json()) == expected_commands
     assert _max_button_commands(messenger_max_ui.full_route_attachment()) == expected_commands
 
