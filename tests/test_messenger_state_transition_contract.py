@@ -82,7 +82,7 @@ def test_max_score_payload_value_reaches_pre_score_transition():
         user_id,
         platform="max",
         external_user_id=str(user_id),
-        text="1",
+        text="+1",
     )
 
     assert canonical_user_id == user_id
@@ -95,8 +95,30 @@ def test_repeat_button_command_routes_to_replay_reply_kind_after_audio_history()
     user_id = _new_user(-930301, platform="vk")
     with db() as conn:
         conn.execute(
-            "INSERT INTO messenger_audio_progress(user_id, sequence_key, anchor, title, audio_path, status, platform) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, "full_series", 1, "fixture audio", "audio/full/1.ogg", "confirmed", "vk"),
+            """
+            INSERT INTO user_audio_progress(
+                user_id, sequence_key, last_anchor, last_title, last_path, last_platform,
+                delivered_at, updated_at, last_confirmed_at,
+                pending_anchor, pending_title, pending_path, pending_platform, pending_token, pending_delivered_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """.strip(),
+            (
+                user_id,
+                "full_series",
+                1,
+                "fixture audio",
+                "audio/full/1.ogg",
+                "vk",
+                "2026-06-01T00:00:00+00:00",
+                "2026-06-01T00:00:00+00:00",
+                "2026-06-01T00:00:00+00:00",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
         )
 
     canonical_user_id, replies = handle_incoming_text(
