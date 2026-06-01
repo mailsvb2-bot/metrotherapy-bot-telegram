@@ -74,8 +74,8 @@ def demo_kind_attachment() -> dict[str, Any]:
 
 def weather_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
-        [max_message_button("🌤 Погода", command="weather"), max_message_button("🏙 Изменить город", command="weather_city")],
-        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
+        [max_message_button("🔄 Обновить погоду", command="weather"), max_message_button("🏙 Изменить город", command="weather_city")],
+        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
     ])
 
 
@@ -142,8 +142,8 @@ def is_score_scale_text(text: str) -> bool:
 def is_post_audio_controls_text(text: str) -> bool:
     raw = str(text or "").casefold().replace("ё", "е")
     listened_marker = "прослуш" in raw or "дослуш" in raw
-    done_marker = "done" in raw or "готово" in raw or "прослушал" in raw or "дослушал" in raw
-    audio_marker = "аудио" in raw or "транс" in raw or "файл" in raw
+    done_marker = "done" in raw or "готово" in raw or "прослушал" in raw or "дослушал"
+    audio_marker = "аудио" in raw or "транс" in raw or "файл"
     return listened_marker and done_marker and audio_marker
 
 
