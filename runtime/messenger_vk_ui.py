@@ -206,7 +206,7 @@ def vk_score_scale_keyboard_json() -> str:
 def vk_progress_keyboard_json() -> str:
     return _keyboard([
         [_button("🎧 Получить аудио", "continue", "primary"), _button("✅ Прослушал", "done", "positive")],
-        [_button("🔁 Повторить аудио", "repeat_audio", "secondary"), _button("🧾 История", "history", "secondary")],
+        [_button("🔁 Повторить аудио", "repeat", "secondary"), _button("🧾 История", "history", "secondary")],
         [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
     ])
 
