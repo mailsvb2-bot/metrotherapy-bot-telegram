@@ -6,6 +6,9 @@ from typing import Any
 from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS, main_menu_commands
 from services.messenger.package_payment_ui import extract_labeled_urls
 
+BACK_LABEL = "⬅️ Назад"
+MENU_COMMAND = "start"
+
 
 def _button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
     return {
@@ -37,6 +40,10 @@ def _keyboard(rows: list[list[dict[str, Any]]], *, inline: bool = False) -> str:
     )
 
 
+def _score_label(value: int) -> str:
+    return f"{value:+d}" if value != 0 else "0"
+
+
 def button_command(button: Any) -> str:
     if not isinstance(button, dict):
         return ""
@@ -53,9 +60,10 @@ def button_command(button: Any) -> str:
                 return command.strip()
     label = str(action.get("label") or "").strip().casefold().replace("ё", "е")
     label_aliases = {action.title.casefold().replace("ё", "е"): action.command for action in MAIN_MENU_ACTIONS + CONTEXT_ACTIONS}
-    label_aliases["⬅️ меню"] = "start"
-    label_aliases["⬅️ назад"] = "start"
-    label_aliases["назад"] = "start"
+    label_aliases[BACK_LABEL.casefold().replace("ё", "е")] = MENU_COMMAND
+    label_aliases["⬅️ меню"] = MENU_COMMAND
+    label_aliases["⬅️ назад"] = MENU_COMMAND
+    label_aliases["назад"] = MENU_COMMAND
     return label_aliases.get(label, "")
 
 
@@ -97,7 +105,7 @@ def telegram_main_parity_keyboard_json(keyboard_json: str) -> str:
 def full_route_keyboard_json() -> str:
     return _keyboard([
         [_button("🎧 Получить аудио", "continue", "primary"), _button("✅ Прослушал", "done", "positive")],
-        [_button("⬅️ Назад", "start", "secondary")],
+        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
     ])
 
 
@@ -108,7 +116,7 @@ def vk_payment_keyboard_json(text: str) -> str | None:
     rows: list[list[dict[str, Any]]] = []
     for label, url in links[:4]:
         rows.append([_open_link_button(label, url)])
-    rows.append([_button("⬅️ Меню", "start", "secondary")])
+    rows.append([_button(BACK_LABEL, MENU_COMMAND, "secondary")])
     return _keyboard(rows, inline=True)
 
 
@@ -148,7 +156,7 @@ def vk_demo_kind_keyboard_json() -> str:
     return _keyboard([
         [_button("🚗 Практика на утро / дорогу", "demo_work", "positive")],
         [_button("🌙 Практика на вечер / домой", "demo_home", "primary")],
-        [_button("⬅️ Назад", "start", "secondary")],
+        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
     ])
 
 
@@ -156,16 +164,16 @@ def vk_weather_keyboard_json() -> str:
     """VK weather keyboard aligned with Telegram weather entry surface."""
     return _keyboard([
         [
-            _button("🔄 Обновить погоду", "weather", "primary"),
+            _button("🌤 Погода", "weather", "primary"),
             _button("🏙 Изменить город", "weather_city", "secondary"),
         ],
-        [_button("⬅️ Назад", "start", "secondary")],
+        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
     ])
 
 
 def vk_weather_city_keyboard_json() -> str:
     """VK keyboard while waiting for city input."""
-    return _keyboard([[_button("⬅️ Назад", "start", "secondary")]])
+    return _keyboard([[_button(BACK_LABEL, MENU_COMMAND, "secondary")]])
 
 
 def vk_score_scale_keyboard_json() -> str:
@@ -181,14 +189,33 @@ def vk_score_scale_keyboard_json() -> str:
         [8, 9, 10],
     ]:
         rows.append([
-            _button(("+" if value > 0 else "") + str(value), str(value), "primary" if value == 0 else "secondary")
+            _button(_score_label(value), str(value), "primary" if value == 0 else "secondary")
             for value in row
         ])
     rows.append([
         _button("📈 Мой прогресс", "progress", "primary"),
-        _button("⬅️ Назад", "start", "secondary"),
+        _button(BACK_LABEL, MENU_COMMAND, "secondary"),
     ])
     return _keyboard(rows)
+
+
+def vk_progress_keyboard_json() -> str:
+    return _keyboard([
+        [_button("🎧 Получить аудио", "continue", "primary"), _button("✅ Прослушал", "done", "positive")],
+        [_button("🔁 Повторить аудио", "repeat_audio", "secondary"), _button("🧾 История", "history", "secondary")],
+        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
+    ])
+
+
+def vk_settings_keyboard_json() -> str:
+    return _keyboard([
+        [_button("🌦 Погода в моём городе", "weather", "primary")],
+        [_button("⏰ Время и правила отправки", "time", "secondary")],
+        [_button("💬 Предпочтительный мессенджер", "settings", "secondary")],
+        [_button("📨 Каналы по времени дня", "time", "secondary")],
+        [_button("📈 Анализ моего состояния", "progress", "primary")],
+        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
+    ])
 
 
 def vk_text_send_kwargs(platform: str, text: str = "", *, user_id: int | None = None) -> dict[str, Any]:
@@ -208,6 +235,10 @@ def with_vk_keyboard(platform: str, kwargs: dict[str, Any], *, user_id: int | No
     payment_keyboard = vk_payment_keyboard_json(text)
     if payment_keyboard is not None:
         enriched["keyboard_json"] = payment_keyboard
+    elif text.lstrip().startswith("🎧 Общий прогресс") or text.lstrip().startswith("🎧 Вы ещё не запускали") or "📈 Мой прогресс" in text or "📈 Анализ состояния" in text:
+        enriched.setdefault("keyboard_json", vk_progress_keyboard_json())
+    elif text.lstrip().startswith("⚙️ Настройки канала"):
+        enriched.setdefault("keyboard_json", vk_settings_keyboard_json())
     else:
         enriched.setdefault("keyboard_json", vk_main_keyboard_json(user_id))
     return enriched
@@ -222,4 +253,8 @@ def keyboard_for_reply_kind(kind: str | None) -> str | None:
         return vk_weather_keyboard_json()
     if kind == "weather_city":
         return vk_weather_city_keyboard_json()
+    if kind == "progress":
+        return vk_progress_keyboard_json()
+    if kind == "settings":
+        return vk_settings_keyboard_json()
     return None
