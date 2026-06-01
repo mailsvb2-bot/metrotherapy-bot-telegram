@@ -127,10 +127,12 @@ def test_weather_surface_matches_telegram_public_meaning():
 
     vk_labels = _vk_labels(vk_weather_keyboard_json())
     max_labels = _max_button_texts(messenger_max_ui.weather_attachment())
-    for labels in (vk_labels, max_labels):
-        assert "🌤 Погода" in labels
-        assert "🏙 Изменить город" in labels
-        assert BACK_LABEL in labels
+    assert "🌤 Погода" in vk_labels
+    assert "🏙 Изменить город" in vk_labels
+    assert BACK_LABEL in vk_labels
+    assert "🔄 Обновить погоду" in max_labels
+    assert "🏙 Изменить город" in max_labels
+    assert MAX_LEGACY_BACK_LABEL in max_labels
 
 
 def test_full_route_context_controls_are_equal_for_vk_and_max():
