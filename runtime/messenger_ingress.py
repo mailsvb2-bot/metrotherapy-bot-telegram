@@ -17,6 +17,7 @@ from runtime.messenger_payloads import (
 from services.events import log_event
 from services.gift_claims import claim_gift_token, is_gift_token, normalize_gift_token
 from services.messenger.entrypoints import register_user_entry
+from services.messenger.observability import log_action_completed, log_payload_normalized
 from services.messenger.reply_dispatcher import send_reply_bundle
 from services.messenger.text_ui import MessengerReply, handle_incoming_text
 from services.messenger.webhook_dedupe import register_inbound_event
@@ -75,26 +76,38 @@ async def vk_webhook(request: web.Request) -> web.Response:
         return web.Response(text=(settings.VK_CONFIRMATION_TOKEN or "").strip())
     if event_type != "message_new":
         return web.Response(text="ok")
-    if not register_inbound_event("vk", vk_event_key(payload), payload):
+    event_key = vk_event_key(payload)
+    if not register_inbound_event("vk", event_key, payload):
         return web.Response(text="ok")
 
     extracted = extract_vk_message(payload)
     if not extracted:
         return web.Response(text="ok")
 
+    normalized_text = normalise_messenger_text(extracted["text"])
+    log_payload_normalized(
+        platform="vk",
+        user_id=extracted["user_id"],
+        raw_text=extracted["text"],
+        normalized_text=normalized_text,
+        event_key=event_key,
+    )
+
     claim_result = _claim_replies_if_needed(platform="vk", extracted=extracted)
     if claim_result is not None:
         canonical_user_id, replies = claim_result
+        action = "gift_claim"
     else:
         canonical_user_id, replies = handle_incoming_text(
             extracted["user_id"],
             platform="vk",
             external_user_id=extracted["external_user_id"],
-            text=normalise_messenger_text(extracted["text"]),
+            text=normalized_text,
             username=extracted["username"],
             display_name=extracted["display_name"],
             first_name=extracted["first_name"],
         )
+        action = normalized_text
 
     log.info(
         "VK message_new processed: external_user_id=%s canonical_user_id=%s text=%r replies=%s",
@@ -112,9 +125,11 @@ async def vk_webhook(request: web.Request) -> web.Response:
             canonical_user_id,
             len(replies),
         )
+        log_action_completed(platform="vk", user_id=canonical_user_id, action=action, replies=len(replies), status="ok")
     except MessengerTransportError:
         log.exception("VK send failed")
         log_event(canonical_user_id, "vk_send_failed", {})
+        log_action_completed(platform="vk", user_id=canonical_user_id, action=action, replies=len(replies), status="send_failed")
     log_event(canonical_user_id, "vk_webhook_inbound", {"text": extracted["text"][:120], "replies": len(replies)})
     return web.Response(text="ok")
 
@@ -168,19 +183,30 @@ async def max_webhook(request: web.Request) -> web.Response:
         )
         return web.json_response({"ok": True})
 
+    normalized_text = normalise_messenger_text(extracted["text"])
+    log_payload_normalized(
+        platform="max",
+        user_id=extracted["user_id"],
+        raw_text=extracted["text"],
+        normalized_text=normalized_text,
+        event_key=event_key,
+    )
+
     claim_result = _claim_replies_if_needed(platform="max", extracted=extracted)
     if claim_result is not None:
         canonical_user_id, replies = claim_result
+        action = "gift_claim"
     else:
         canonical_user_id, replies = handle_incoming_text(
             extracted["user_id"],
             platform="max",
             external_user_id=extracted["external_user_id"],
-            text=normalise_messenger_text(extracted["text"]),
+            text=normalized_text,
             username=extracted["username"],
             display_name=extracted["display_name"],
             first_name=extracted["first_name"],
         )
+        action = normalized_text
     log.info(
         "MAX webhook processed: update_type=%r external_user_id=%s canonical_user_id=%s text=%r replies=%s",
         update_type,
@@ -197,8 +223,10 @@ async def max_webhook(request: web.Request) -> web.Response:
             canonical_user_id,
             len(replies),
         )
+        log_action_completed(platform="max", user_id=canonical_user_id, action=action, replies=len(replies), status="ok")
     except MessengerTransportError:
         log.exception("MAX send failed")
         log_event(canonical_user_id, "max_send_failed", {})
+        log_action_completed(platform="max", user_id=canonical_user_id, action=action, replies=len(replies), status="send_failed")
     log_event(canonical_user_id, "max_webhook_inbound", {"text": extracted["text"][:120], "replies": len(replies)})
     return web.json_response({"ok": True})
