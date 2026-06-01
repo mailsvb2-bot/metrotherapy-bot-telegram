@@ -142,7 +142,7 @@ def test_full_route_context_controls_are_equal_for_vk_and_max():
 
 def test_progress_context_controls_are_equal_for_vk_and_max():
     expected_labels = ["🎧 Получить аудио", "✅ Прослушал", "🔁 Повторить аудио", "🧾 История", BACK_LABEL]
-    expected_commands = ["continue", "done", "repeat_audio", "history", "start"]
+    expected_commands = ["continue", "done", "repeat", "history", "start"]
     assert _vk_labels(vk_progress_keyboard_json()) == expected_labels
     assert _max_button_texts(messenger_max_ui.progress_attachment()) == expected_labels
     assert _vk_commands(vk_progress_keyboard_json()) == expected_commands
