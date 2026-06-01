@@ -60,7 +60,7 @@ def main_menu_attachment() -> dict[str, Any]:
 def full_route_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("🎧 Получить аудио", command="continue"), max_message_button("✅ Прослушал", command="done")],
-        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
+        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
     ])
 
 
