@@ -22,7 +22,7 @@ def _score_command_value(value: str) -> str | None:
     except ValueError:
         return None
     if -10 <= score <= 10:
-        return str(score)
+        return f"+{score}" if score in {1, 2} else str(score)
     return None
 
 
@@ -32,7 +32,8 @@ def _plain_score_value(value: str) -> str | None:
     MAX may send the visible button text instead of payload.command. Negative
     scores such as "-5" must therefore be accepted before menu normalization;
     otherwise they can be interpreted as a menu reset. Bare "1" and "2" remain
-    legacy route aliases, while MAX score buttons render them as "+1" and "+2".
+    legacy route aliases, while MAX score button payloads render as score:1 and
+    score:2 and normalize to +1/+2.
     """
     raw = str(value or "").strip().casefold().replace("−", "-")
     if not raw:
@@ -50,7 +51,7 @@ def _plain_score_value(value: str) -> str | None:
     except ValueError:
         return None
     if -10 <= score <= 10:
-        return str(score)
+        return str(score) if score <= 0 or score >= 3 else f"+{score}"
     return None
 
 
