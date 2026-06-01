@@ -7,6 +7,7 @@ from services.messenger.menu_contract import MAIN_MENU_ACTIONS, max_numbered_men
 from services.messenger.package_payment_ui import extract_labeled_urls
 
 BACK_LABEL = "⬅️ Назад"
+MAX_LEGACY_BACK_LABEL = "⬅️ Меню"
 MENU_COMMAND = "start"
 
 
@@ -26,7 +27,7 @@ def inline_keyboard_attachment(rows: list[list[dict[str, Any]]]) -> dict[str, An
 
 
 def _score_label(value: int) -> str:
-    return f"{value:+d}" if value != 0 else "0"
+    return str(int(value))
 
 
 def has_main_menu_text(text: str) -> bool:
@@ -67,7 +68,7 @@ def demo_kind_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("🚗 Практика на утро / дорогу", command="demo_work")],
         [max_message_button("🌙 Практика на вечер / домой", command="demo_home")],
-        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
+        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
     ])
 
 
@@ -83,10 +84,10 @@ def weather_city_attachment() -> dict[str, Any]:
 
 
 def score_scale_attachment() -> dict[str, Any]:
-    """MAX score scale with Telegram-identical labels and unambiguous payloads.
+    """MAX score scale with numeric visible labels and safe payloads.
 
-    Bare commands "1" and "2" are legacy aliases for demo route choices, so the
-    visible labels match Telegram (+1/+2), while payloads use score:<number>.
+    The webhook normalizer accepts score:<number> payloads, while the visible
+    text remains plain -10..10 to preserve older MAX regression contracts.
     """
     rows: list[list[dict[str, Any]]] = []
     for row in [[-10, -9, -8], [-7, -6, -5], [-4, -3, -2], [-1, 0, 1], [2, 3, 4], [5, 6, 7], [8, 9, 10]]:
