@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from aiohttp import web
 
@@ -12,6 +13,7 @@ from runtime.messenger_payloads import (
     extract_vk_message,
     max_event_key,
     normalise_messenger_text,
+    text_from_max_payload,
     vk_event_key,
 )
 from services.events import log_event
@@ -59,6 +61,44 @@ def _claim_replies_if_needed(*, platform: str, extracted: dict) -> tuple[int, li
     )
     result = claim_gift_token(gift_token=token, recipient_user_id=int(entry.user_id), platform=platform)
     return int(entry.user_id), [MessengerReply(text=result.message)]
+
+
+def _max_score_route_text(payload: dict[str, Any]) -> str | None:
+    """Return +1/+2 for MAX score callbacks whose normalized value is a demo alias.
+
+    The canonical normalizer must keep ``score:1`` as ``1`` because legacy tests
+    and score maps rely on numeric keys. But before ``handle_incoming_text`` a
+    MAX score callback must not be indistinguishable from the demo route aliases
+    ``1``/``2``. Therefore only the ingress layer preserves the score intent with
+    explicit +1/+2 text.
+    """
+    message = payload.get("message") or {}
+    body = message.get("body") if isinstance(message, dict) else {}
+    if not isinstance(body, dict):
+        body = {}
+    callback = payload.get("callback") or payload.get("button") or payload.get("payload") or {}
+    if not isinstance(callback, dict):
+        callback = {}
+    candidates = [
+        body.get("payload"),
+        body.get("button"),
+        body.get("callback"),
+        message.get("payload") if isinstance(message, dict) else None,
+        message.get("button") if isinstance(message, dict) else None,
+        message.get("callback") if isinstance(message, dict) else None,
+        callback,
+        payload.get("payload"),
+        payload.get("button"),
+        payload.get("callback"),
+    ]
+    for candidate in candidates:
+        raw = text_from_max_payload(candidate)
+        compact = str(raw or "").strip().casefold().replace("−", "-")
+        if compact in {"score:1", "score=1"}:
+            return "+1"
+        if compact in {"score:2", "score=2"}:
+            return "+2"
+    return None
 
 
 async def vk_webhook(request: web.Request) -> web.Response:
@@ -183,7 +223,7 @@ async def max_webhook(request: web.Request) -> web.Response:
         )
         return web.json_response({"ok": True})
 
-    normalized_text = normalise_messenger_text(extracted["text"])
+    normalized_text = _max_score_route_text(payload) or normalise_messenger_text(extracted["text"])
     log_payload_normalized(
         platform="max",
         user_id=extracted["user_id"],
