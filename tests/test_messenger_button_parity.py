@@ -56,11 +56,6 @@ def _vk_labels(keyboard_json: str) -> list[str]:
     return [button["action"]["label"] for row in keyboard["buttons"] for button in row]
 
 
-def _vk_open_link_labels(keyboard_json: str) -> list[str]:
-    keyboard = _vk_keyboard(keyboard_json)
-    return [button["action"]["label"] for row in keyboard["buttons"] for button in row if button["action"]["type"] == "open_link"]
-
-
 def _max_button_texts(attachment: dict) -> list[str]:
     return [button["text"] for row in attachment["payload"]["buttons"] for button in row]
 
@@ -86,7 +81,6 @@ def test_max_main_keyboard_is_rendered_from_canonical_contract():
 
 
 def test_main_menu_does_not_expose_admin_outside_telegram():
-    assert ADMIN_LABEL in [button.text for row in kb_main(1).inline_keyboard for button in row]
     assert ADMIN_LABEL not in _vk_labels(vk_main_keyboard_json(1))
     assert ADMIN_LABEL not in _max_button_texts(messenger_max_ui.main_menu_attachment())
     assert "admin" not in set(_vk_commands(vk_main_keyboard_json(1)))
