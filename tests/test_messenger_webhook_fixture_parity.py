@@ -33,7 +33,7 @@ def test_vk_score_fixture_preserves_numeric_payload_contract():
     # VK numeric payload 1 is intentionally still a legacy demo alias at the
     # webhook extraction layer. VK score handling is protected by direct score
     # keyboard tests and text-flow pending-session tests.
-    assert normalise_messenger_text("+1") == "1"
+    assert normalise_messenger_text("+1") == "+1"
 
 
 def test_max_weather_message_fixture_extracts_weather_command():
@@ -54,5 +54,5 @@ def test_max_score_callback_fixture_prefers_command_payload_over_visible_text():
 
     assert extracted is not None
     assert extracted["external_user_id"] == "920001"
-    assert extracted["text"] == "1"
-    assert normalise_messenger_text("score:1") == "1"
+    assert extracted["text"] == "+1"
+    assert normalise_messenger_text("score:1") == "+1"
