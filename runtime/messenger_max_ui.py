@@ -112,7 +112,7 @@ def post_audio_attachment() -> dict[str, Any]:
 def progress_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("🎧 Получить аудио", command="continue"), max_message_button("✅ Прослушал", command="done")],
-        [max_message_button("🔁 Повторить аудио", command="repeat_audio"), max_message_button("🧾 История", command="history")],
+        [max_message_button("🔁 Повторить аудио", command="repeat"), max_message_button("🧾 История", command="history")],
         [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
     ])
 
