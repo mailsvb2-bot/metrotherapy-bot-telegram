@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 try:
@@ -14,7 +14,7 @@ from config.settings import settings
 import asyncio
 
 from services.audio_anchor import pick_for_slot
-from services.db import mark_delivery_once, db
+from services.db import mark_delivery_once, unmark_delivery, db
 from services.delivery_preferences import build_delivery_policy_decision
 from services.events import log_event
 from services.idempotency_keys import for_pre_score
@@ -32,7 +32,7 @@ def _norm_hms(hm: str) -> tuple[int, int, int]:
         h = int(parts[0])
         m = int(parts[1]) if len(parts) > 1 else 0
         s = int(parts[2]) if len(parts) > 2 else 0
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, IndexError):
         return (0, 0, 0)
     return (max(0, min(23, h)), max(0, min(59, m)), max(0, min(59, s)))
 
@@ -48,12 +48,36 @@ def _plus_one_sec(h: int, m: int, s: int) -> tuple[int, int, int]:
     return h, m, s
 
 
+def _prompt_due_at(local_dt: datetime, hm: str) -> datetime:
+    """Return the pre-score prompt time for the local calendar day.
+
+    UX contract: pre-score prompt opens at the selected time + 1 second.
+    The scheduler must not rely on hitting that exact second; if the loop is late,
+    the delivery remains due for the rest of the local day and idempotency prevents
+    duplicate prompts.
+    """
+    h, m, s = _norm_hms(hm)
+    selected = local_dt.replace(hour=h, minute=m, second=s, microsecond=0)
+    return selected + timedelta(seconds=1)
 
 
 def _matches_slot_second(local_dt: datetime, hm: str) -> bool:
+    """Backward-compatible exact-second predicate kept for old unit tests."""
     h, m, s = _norm_hms(hm)
     th, tm, ts = _plus_one_sec(h, m, s)
     return f'{th:02d}:{tm:02d}:{ts:02d}' == local_dt.strftime('%H:%M:%S')
+
+
+def _is_due_local_day(local_dt: datetime, hm: str) -> bool:
+    """Robust due predicate for production delivery.
+
+    Old logic required the background loop to wake up on exactly HH:MM:SS+1. That
+    made a slow DB/Telegram/network tick capable of skipping a user until the next
+    day. The canonical rule is now: not before selected time + 1 sec, but still due
+    later on the same local day until the idempotency marker is written.
+    """
+    due_at = _prompt_due_at(local_dt, hm)
+    return local_dt.date() == due_at.date() and local_dt >= due_at
 
 
 def _eligible_subscriber_ids(slot: str) -> list[int]:
@@ -105,7 +129,7 @@ def _is_due_for_user(uid: int, slot: str, now_utc: datetime) -> tuple[bool, str,
     local_now = now_utc.astimezone(ZoneInfo(policy.timezone))
     if policy.blocked_by_quiet_hours:
         return False, policy.timezone, hm
-    return _matches_slot_second(local_now, hm), policy.timezone, hm
+    return _is_due_local_day(local_now, hm), policy.timezone, hm
 
 
 def _collect_due_candidates(now_utc: datetime) -> list[dict[str, object]]:
@@ -123,7 +147,7 @@ def _collect_due_candidates(now_utc: datetime) -> list[dict[str, object]]:
             policy = build_delivery_policy_decision(uid, slot, now_utc=now_utc)
             hm = _slot_time_for_user(uid, slot)
             local_now = now_utc.astimezone(ZoneInfo(policy.timezone))
-            scheduled_now = _matches_slot_second(local_now, hm)
+            scheduled_now = _is_due_local_day(local_now, hm)
             if not scheduled_now:
                 continue
             out.append({
@@ -161,8 +185,6 @@ async def _send_pre_prompt(bot: Bot, uid: int, *, session_id: int, channel: str,
 async def tick(bot: Bot):
     try:
         now_utc = datetime.now(timezone.utc).replace(microsecond=0)
-        if now_utc.second > 3:
-            return
         senders = SenderRegistry(telegram=TelegramBotSender(bot), max=MaxBotSender(), vk=VkBotSender())
         due_candidates = await asyncio.to_thread(_collect_due_candidates, now_utc)
         for item in due_candidates:
@@ -191,6 +213,10 @@ async def tick(bot: Bot):
                 if policy.fallback_used:
                     log_event(uid, 'auto_audio_channel_fallback', {'slot': slot, 'preferred': policy.preferred_channel, 'resolved': policy.resolved_channel, 'tz': tz_name})
             except (RuntimeError, ValueError, TypeError) as e:
+                try:
+                    await asyncio.to_thread(unmark_delivery, uid, kind, 'pre_score', scheduled_at)
+                except sqlite3.Error:
+                    logging.getLogger(__name__).debug('pre_score idempotency cleanup failed', exc_info=True)
                 log_event(uid, 'auto_audio_error', {'slot': slot, 'err': str(e), 'channel': policy.resolved_channel})
     except (sqlite3.Error, RuntimeError, ValueError):
         logging.getLogger(__name__).exception('auto_audio.tick failed')
