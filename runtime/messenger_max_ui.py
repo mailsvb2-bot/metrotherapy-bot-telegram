@@ -8,6 +8,8 @@ from services.messenger.package_payment_ui import extract_labeled_urls
 
 BACK_LABEL = "⬅️ Назад"
 MAX_LEGACY_BACK_LABEL = "⬅️ Меню"
+HOME_LABEL = "🏠 Меню"
+MAIN_MENU_LABEL = "⬅️ Главное меню"
 MENU_COMMAND = "start"
 
 
@@ -126,11 +128,85 @@ def settings_attachment() -> dict[str, Any]:
     """
     return inline_keyboard_attachment([
         [max_message_button("🌦 Погода в моём городе", command="weather")],
-        [max_message_button("⏰ Время и правила отправки", command="time")],
+        [max_message_button("⏰ Время: дорога на работу", command="time")],
+        [max_message_button("⏰ Время: дорога домой", command="time")],
+        [max_message_button("🎁 Мои бонусы за приглашения", command="share")],
         [max_message_button("💬 Предпочтительный мессенджер", command="settings")],
         [max_message_button("📨 Каналы по времени дня", command="time")],
         [max_message_button("📈 Анализ моего состояния", command="progress")],
         [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
+    ])
+
+
+def delivery_slots_attachment() -> dict[str, Any]:
+    return inline_keyboard_attachment([
+        [max_message_button("🌅 Утренние отправки", command="channel morning auto")],
+        [max_message_button("🌙 Вечерние отправки", command="channel evening auto")],
+        [max_message_button(BACK_LABEL, command="settings")],
+    ])
+
+
+def delivery_channel_select_attachment(slot: str = "morning") -> dict[str, Any]:
+    slot = "evening" if str(slot).strip().lower() == "evening" else "morning"
+    return inline_keyboard_attachment([
+        [max_message_button("♻️ Авто", command=f"channel {slot} auto")],
+        [max_message_button("telegram", command=f"channel {slot} telegram")],
+        [max_message_button("max", command=f"channel {slot} max")],
+        [max_message_button("vk", command=f"channel {slot} vk")],
+        [max_message_button(BACK_LABEL, command="time")],
+    ])
+
+
+def state_period_attachment() -> dict[str, Any]:
+    return inline_keyboard_attachment([
+        [max_message_button("⭐ Оценить состояние сейчас", command="continue")],
+        [max_message_button("📅 Сегодня", command="progress"), max_message_button("📆 Вчера", command="history")],
+        [max_message_button("🗓 За всё время", command="progress")],
+        [max_message_button("🔐 Открыть полный маршрут", command="full"), max_message_button("🎁 Подарить", command="gift")],
+        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
+    ])
+
+
+def post_actions_attachment() -> dict[str, Any]:
+    return inline_keyboard_attachment([
+        [max_message_button("📈 Посмотреть изменение состояния", command="progress")],
+        [max_message_button("🔐 Открыть полный маршрут", command="full")],
+        [max_message_button("🎧 Ещё одна бесплатная практика", command="demo")],
+        [max_message_button("🎁 Подарить подписку", command="gift")],
+        [max_message_button(MAIN_MENU_LABEL, command=MENU_COMMAND)],
+    ])
+
+
+def sales_offer_attachment() -> dict[str, Any]:
+    return inline_keyboard_attachment([
+        [max_message_button("🔐 Открыть полный маршрут", command="pay")],
+        [max_message_button("🎧 Ещё одна бесплатная практика", command="demo")],
+        [max_message_button("🎁 Подарить подписку другу", command="gift")],
+        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
+    ])
+
+
+def full_access_attachment() -> dict[str, Any]:
+    return inline_keyboard_attachment([
+        [max_message_button("🔐 Открыть полный маршрут", command="pay")],
+        [max_message_button("⏰ Напомнить завтра утром", command="time")],
+        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
+    ])
+
+
+def settings_locked_attachment() -> dict[str, Any]:
+    return inline_keyboard_attachment([
+        [max_message_button("🔐 Открыть полный маршрут", command="pay")],
+        [max_message_button("🎁 Передать ритм", command="gift"), max_message_button(BACK_LABEL, command="settings")],
+    ])
+
+
+def ref_bonus_actions_attachment() -> dict[str, Any]:
+    return inline_keyboard_attachment([
+        [max_message_button("🔐 Открыть полный маршрут", command="pay")],
+        [max_message_button("🎁 Подарить подписку другу", command="gift")],
+        [max_message_button("📈 Анализ моего состояния", command="progress")],
+        [max_message_button(BACK_LABEL, command="settings")],
     ])
 
 
@@ -205,6 +281,8 @@ def native_keyboard_attachments(text: str) -> list[dict[str, Any]]:
         return [progress_attachment()]
     if stripped.startswith("⚙️ Настройки канала"):
         return [settings_attachment()]
+    if stripped.startswith("🕒 Правила отправки") or "Каналы по времени дня" in raw:
+        return [delivery_slots_attachment()]
     return []
 
 
