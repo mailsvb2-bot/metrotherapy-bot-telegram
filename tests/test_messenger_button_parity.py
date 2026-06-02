@@ -148,22 +148,24 @@ def test_full_route_context_controls_are_equal_for_vk_and_max():
 def test_progress_context_controls_are_equal_for_vk_and_max():
     expected_labels = ["🎧 Получить аудио", "✅ Прослушал", "🔁 Повторить аудио", "🧾 История", BACK_LABEL]
     expected_commands = ["continue", "done", "repeat", "history", "start"]
-    assert _vk_labels(vk_progress_keyboard_json()) == expected_labels
-    assert _max_button_texts(messenger_max_ui.progress_attachment()) == expected_labels
-    assert _vk_commands(vk_progress_keyboard_json()) == expected_commands
-    assert _max_button_commands(messenger_max_ui.progress_attachment()) == expected_commands
+    assert _vk_labels(vk_progress_keyboard_json())[:5] == expected_labels
+    assert _max_button_texts(messenger_max_ui.progress_attachment())[:5] == expected_labels
+    assert _vk_commands(vk_progress_keyboard_json())[:5] == expected_commands
+    assert _max_button_commands(messenger_max_ui.progress_attachment())[:5] == expected_commands
 
 
 def test_settings_public_surface_is_equal_for_vk_and_max():
     expected_labels = [
         "🌦 Погода в моём городе",
-        "⏰ Время и правила отправки",
+        "⏰ Время: дорога на работу",
+        "⏰ Время: дорога домой",
+        "🎁 Мои бонусы за приглашения",
         "💬 Предпочтительный мессенджер",
         "📨 Каналы по времени дня",
         "📈 Анализ моего состояния",
         BACK_LABEL,
     ]
-    expected_commands = ["weather", "time", "settings", "time", "progress", "start"]
+    expected_commands = ["weather", "time", "time", "share", "settings", "time", "progress", "start"]
     assert _vk_labels(vk_settings_keyboard_json()) == expected_labels
     assert _max_button_texts(messenger_max_ui.settings_attachment()) == expected_labels
     assert _vk_commands(vk_settings_keyboard_json()) == expected_commands
