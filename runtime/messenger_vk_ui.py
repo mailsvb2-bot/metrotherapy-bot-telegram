@@ -7,6 +7,9 @@ from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS,
 from services.messenger.package_payment_ui import extract_labeled_urls
 
 BACK_LABEL = "⬅️ Назад"
+MENU_LABEL = "⬅️ Меню"
+HOME_LABEL = "🏠 Меню"
+MAIN_MENU_LABEL = "⬅️ Главное меню"
 MENU_COMMAND = "start"
 
 
@@ -61,6 +64,9 @@ def button_command(button: Any) -> str:
     label = str(action.get("label") or "").strip().casefold().replace("ё", "е")
     label_aliases = {action.title.casefold().replace("ё", "е"): action.command for action in MAIN_MENU_ACTIONS + CONTEXT_ACTIONS}
     label_aliases[BACK_LABEL.casefold().replace("ё", "е")] = MENU_COMMAND
+    label_aliases[MENU_LABEL.casefold().replace("ё", "е")] = MENU_COMMAND
+    label_aliases[HOME_LABEL.casefold().replace("ё", "е")] = MENU_COMMAND
+    label_aliases[MAIN_MENU_LABEL.casefold().replace("ё", "е")] = MENU_COMMAND
     label_aliases["⬅️ меню"] = MENU_COMMAND
     label_aliases["⬅️ назад"] = MENU_COMMAND
     label_aliases["назад"] = MENU_COMMAND
@@ -215,11 +221,85 @@ def vk_progress_keyboard_json() -> str:
 def vk_settings_keyboard_json() -> str:
     return _keyboard([
         [_button("🌦 Погода в моём городе", "weather", "primary")],
-        [_button("⏰ Время и правила отправки", "time", "secondary")],
+        [_button("⏰ Время: дорога на работу", "time", "secondary")],
+        [_button("⏰ Время: дорога домой", "time", "secondary")],
+        [_button("🎁 Мои бонусы за приглашения", "share", "secondary")],
         [_button("💬 Предпочтительный мессенджер", "settings", "secondary")],
         [_button("📨 Каналы по времени дня", "time", "secondary")],
         [_button("📈 Анализ моего состояния", "progress", "primary")],
         [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
+    ])
+
+
+def vk_delivery_slots_keyboard_json() -> str:
+    return _keyboard([
+        [_button("🌅 Утренние отправки", "channel morning auto", "primary")],
+        [_button("🌙 Вечерние отправки", "channel evening auto", "primary")],
+        [_button(BACK_LABEL, "settings", "secondary")],
+    ])
+
+
+def vk_delivery_channel_select_keyboard_json(slot: str = "morning") -> str:
+    slot = "evening" if str(slot).strip().lower() == "evening" else "morning"
+    return _keyboard([
+        [_button("♻️ Авто", f"channel {slot} auto", "secondary")],
+        [_button("telegram", f"channel {slot} telegram", "secondary")],
+        [_button("max", f"channel {slot} max", "secondary")],
+        [_button("vk", f"channel {slot} vk", "secondary")],
+        [_button(BACK_LABEL, "time", "secondary")],
+    ])
+
+
+def vk_state_period_keyboard_json() -> str:
+    return _keyboard([
+        [_button("⭐ Оценить состояние сейчас", "continue", "primary")],
+        [_button("📅 Сегодня", "progress", "secondary"), _button("📆 Вчера", "history", "secondary")],
+        [_button("🗓 За всё время", "progress", "secondary")],
+        [_button("🔐 Открыть полный маршрут", "full", "primary"), _button("🎁 Подарить", "gift", "secondary")],
+        [_button(MENU_LABEL, MENU_COMMAND, "secondary")],
+    ])
+
+
+def vk_post_actions_keyboard_json() -> str:
+    return _keyboard([
+        [_button("📈 Посмотреть изменение состояния", "progress", "primary")],
+        [_button("🔐 Открыть полный маршрут", "full", "primary")],
+        [_button("🎧 Ещё одна бесплатная практика", "demo", "positive")],
+        [_button("🎁 Подарить подписку", "gift", "secondary")],
+        [_button(MAIN_MENU_LABEL, MENU_COMMAND, "secondary")],
+    ])
+
+
+def vk_sales_offer_keyboard_json() -> str:
+    return _keyboard([
+        [_button("🔐 Открыть полный маршрут", "pay", "primary")],
+        [_button("🎧 Ещё одна бесплатная практика", "demo", "positive")],
+        [_button("🎁 Подарить подписку другу", "gift", "secondary")],
+        [_button(MENU_LABEL, MENU_COMMAND, "secondary")],
+    ])
+
+
+def vk_full_access_keyboard_json() -> str:
+    return _keyboard([
+        [_button("🔐 Открыть полный маршрут", "pay", "primary")],
+        [_button("⏰ Напомнить завтра утром", "time", "secondary")],
+        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
+    ])
+
+
+def vk_settings_locked_keyboard_json() -> str:
+    return _keyboard([
+        [_button("🔐 Открыть полный маршрут", "pay", "primary")],
+        [_button("🎁 Передать ритм", "gift", "secondary"), _button(BACK_LABEL, "settings", "secondary")],
+    ])
+
+
+def vk_ref_bonus_actions_keyboard_json() -> str:
+    return _keyboard([
+        [_button("🔐 Открыть полный маршрут", "pay", "primary")],
+        [_button("🎁 Подарить подписку другу", "gift", "secondary")],
+        [_button("📈 Анализ моего состояния", "progress", "primary")],
+        [_button(BACK_LABEL, "settings", "secondary")],
     ])
 
 
@@ -244,6 +324,8 @@ def with_vk_keyboard(platform: str, kwargs: dict[str, Any], *, user_id: int | No
         enriched.setdefault("keyboard_json", vk_progress_keyboard_json())
     elif text.lstrip().startswith("⚙️ Настройки канала"):
         enriched.setdefault("keyboard_json", vk_settings_keyboard_json())
+    elif text.lstrip().startswith("🕒 Правила отправки") or "Каналы по времени дня" in text:
+        enriched.setdefault("keyboard_json", vk_delivery_slots_keyboard_json())
     else:
         enriched.setdefault("keyboard_json", vk_main_keyboard_json(user_id))
     return enriched
@@ -262,4 +344,22 @@ def keyboard_for_reply_kind(kind: str | None) -> str | None:
         return vk_progress_keyboard_json()
     if kind == "settings":
         return vk_settings_keyboard_json()
+    if kind == "delivery_slots":
+        return vk_delivery_slots_keyboard_json()
+    if kind == "delivery_morning":
+        return vk_delivery_channel_select_keyboard_json("morning")
+    if kind == "delivery_evening":
+        return vk_delivery_channel_select_keyboard_json("evening")
+    if kind == "state_period":
+        return vk_state_period_keyboard_json()
+    if kind == "post_actions":
+        return vk_post_actions_keyboard_json()
+    if kind == "sales_offer":
+        return vk_sales_offer_keyboard_json()
+    if kind == "full_access":
+        return vk_full_access_keyboard_json()
+    if kind == "settings_locked":
+        return vk_settings_locked_keyboard_json()
+    if kind == "ref_bonus":
+        return vk_ref_bonus_actions_keyboard_json()
     return None
