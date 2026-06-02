@@ -39,12 +39,21 @@ async def _fake_send_audio_cached(bot, chat_id: int, *, key: str, file_path: Pat
     return {"ok": True, "key": key}
 
 
+def _table_exists(conn, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (str(table_name),),
+    ).fetchone()
+    return row is not None
+
+
 def _clear_user_state(user_id: int) -> None:
     with db() as conn:
         conn.execute("DELETE FROM user_audio_progress WHERE user_id=?", (int(user_id),))
         conn.execute("DELETE FROM user_audio_access_tokens WHERE user_id=?", (int(user_id),))
         conn.execute("DELETE FROM user_channel_identities WHERE user_id=?", (int(user_id),))
-        conn.execute("DELETE FROM audio_timeline WHERE user_id=?", (int(user_id),))
+        if _table_exists(conn, "audio_timeline"):
+            conn.execute("DELETE FROM audio_timeline WHERE user_id=?", (int(user_id),))
 
 
 def test_telegram_audio_delivery_requires_bot_instance(monkeypatch):
