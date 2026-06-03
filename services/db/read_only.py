@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from contextlib import contextmanager
 from typing import Any, Iterator, Sequence
 
@@ -58,7 +59,7 @@ class ReadOnlyConnection:
         # A read-only context must not commit writes. Roll back to clear any accidental transaction.
         try:
             self._conn.rollback()
-        except Exception:  # validator: allow-wide-except
+        except (sqlite3.Error, RuntimeError, AttributeError):
             log.debug("read-only rollback on commit skipped", exc_info=True)
 
     def rollback(self) -> None:
@@ -78,20 +79,20 @@ def get_db_ro() -> Iterator[Any]:
         if is_postgres_enabled():
             try:
                 conn.execute("SET TRANSACTION READ ONLY")
-            except Exception:  # validator: allow-wide-except
+            except (sqlite3.Error, RuntimeError, AttributeError):
                 log.debug("postgres read-only transaction marker failed", exc_info=True)
         else:
             try:
                 conn.execute("PRAGMA query_only=ON")
-            except Exception:  # validator: allow-wide-except
+            except (sqlite3.Error, RuntimeError, AttributeError):
                 log.debug("sqlite query_only marker failed", exc_info=True)
         yield ReadOnlyConnection(conn)
     finally:
         try:
             conn.rollback()
-        except Exception:  # validator: allow-wide-except
+        except (sqlite3.Error, RuntimeError, AttributeError):
             log.debug("read-only rollback failed", exc_info=True)
         try:
             conn.close()
-        except Exception:  # validator: allow-wide-except
+        except (sqlite3.Error, RuntimeError, AttributeError):
             log.exception("DB close failed")
