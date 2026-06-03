@@ -44,6 +44,15 @@ def ensure(c: sqlite3.Connection) -> None:
     _add_col(c, 'payments', 'decision_id TEXT')
     _add_col(c, 'payments', 'correlation_id TEXT')
 
+    # Payment processing state. This is the local outbox/status-machine used to
+    # make post-payment side effects resumable and idempotent after process crash
+    # or duplicate payment updates.
+    _add_col(c, 'payments', "processing_status TEXT DEFAULT 'received'")
+    _add_col(c, 'payments', 'granted_at_utc TEXT')
+    _add_col(c, 'payments', 'side_effects_done_at_utc TEXT')
+    _add_col(c, 'payments', 'notified_at_utc TEXT')
+    _add_col(c, 'payments', 'processing_error TEXT')
+
     # Provider reconciliation fields. They keep external payment state visible
     # without creating a second payment brain or changing Telegram polling mode.
     _add_col(c, 'payments', 'provider_status TEXT')
@@ -54,6 +63,7 @@ def ensure(c: sqlite3.Connection) -> None:
     c.execute("CREATE INDEX IF NOT EXISTS idx_payments_provider_charge_id ON payments(provider_charge_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_payments_provider_status ON payments(provider_status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_payments_problem ON payments(problem)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_payments_processing_status ON payments(processing_status)")
 
     # FUNNEL EVENTS 2.0 (сценарии, idempotency, аналитика)
     c.execute(
@@ -113,4 +123,3 @@ def ensure(c: sqlite3.Connection) -> None:
     c.execute("CREATE INDEX IF NOT EXISTS idx_mood_user_day ON mood_sessions(user_id, day)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_mood_user_kind ON mood_sessions(user_id, kind)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_mood_user_created ON mood_sessions(user_id, created_at_utc)")
-
