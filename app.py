@@ -99,15 +99,16 @@ async def create_application():
     health_runtime = None
 
     async def _on_startup(bot: Bot):
-        # v15.2: fail fast if critical files/folders are missing
-        run_startup_checks(Path(__file__).resolve().parent)
-        init_db()
-        # Validate content + DB schema contracts (fail fast in prod)
-        # strict validation is enabled in prod by default; can be overridden via env
         app_env = os.getenv("APP_ENV", "dev").lower()
         strict_env = os.getenv("VALIDATOR_STRICT")
         strict = (app_env == "prod") if strict_env is None else (strict_env.strip() in {"1","true","yes","on"})
+
+        # Fail closed before DB schema/migrations mutate persistent state.
         validate_all(strict=strict)
+
+        # v15.2: fail fast if critical files/folders are missing
+        run_startup_checks(Path(__file__).resolve().parent)
+        init_db()
         messenger_setup = build_setup_status()
         if messenger_setup.missing:
             log.warning('Messenger setup incomplete: %s', ', '.join(messenger_setup.missing))
