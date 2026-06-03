@@ -4,6 +4,23 @@ from core.time_utils import utc_now
 from services.db import db
 
 
+def _coerce_plan_id(scope: str, days: int, plan_id: int | None) -> int | None:
+    if plan_id is not None:
+        try:
+            return int(plan_id)
+        except (TypeError, ValueError):
+            return None
+    try:
+        from services.plans import get_plan_by_scope_days
+
+        plan = get_plan_by_scope_days(str(scope), int(days))
+        if not plan:
+            return None
+        return int(plan.get("id") or plan.get("plan_id") or 0) or None
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
 def set_plan(
     user_id: int,
     scope: str,
@@ -18,19 +35,14 @@ def set_plan(
     IMPORTANT:
     - The *source of truth* for price/title/scope/days is the `plans` table.
     - `selected_plan` is only a UX helper to remember the choice.
-
-    For backward compatibility many callsites still pass derived fields; when plan_id is provided
-    we do NOT persist derived fields (title/price/code) to avoid drift after restarts/price edits.
-    Derived fields are resolved from `plans` at read time.
+    - Legacy callers that omit plan_id are normalized by resolving a canonical
+      plan pointer from scope+days.
     """
-    pid = int(plan_id) if plan_id is not None else None
+    pid = _coerce_plan_id(scope, int(days), plan_id)
 
-    # We keep backward-compatible columns in the table, but they are NOT a source of truth.
-    # Store only plan_id (+ minimal UX fields) and resolve title/price from `plans` at read time.
     if pid is not None:
         scope = str(scope)
         days = int(days)
-        # Do not persist derived fields to avoid drift after price edits/restarts.
         title = ""
         price = None
         plan_code = ""
@@ -68,7 +80,6 @@ def get_plan(user_id: int) -> dict | None:
     if not row:
         return None
     data = dict(row)
-    # Fill derived fields from the source of truth (`plans`) for UX.
     pid = data.get("plan_id")
     try:
         pid_i = int(pid) if pid is not None else None
