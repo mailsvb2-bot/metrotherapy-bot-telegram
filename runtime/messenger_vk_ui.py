@@ -117,16 +117,11 @@ def full_route_keyboard_json() -> str:
         [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
     ])
 
-def vk_payment_keyboard_json(text: str) -> str | None:
-    links = extract_labeled_urls(text)
-    if not links:
-        return None
-    rows: list[list[dict[str, Any]]] = []
-    for label, url in links[:4]:
-        rows.append([_open_link_button(label, url)])
-    rows.append([_button(BACK_LABEL, MENU_COMMAND, "secondary")])
-    return _keyboard(rows, inline=True)
 
+def vk_payment_keyboard_json(text: str) -> str | None:
+    # Payment/gift/share link keyboards are intentionally closed for VK until
+    # they have explicit Telegram-parity coverage. URLs remain in message text.
+    return None
 
 def prepare_vk_keyboard_json(keyboard_json: str, *, external_user_id: str, text: str) -> str:
     payment_keyboard = vk_payment_keyboard_json(text)
@@ -199,37 +194,20 @@ def vk_progress_keyboard_json() -> str:
     # Telegram state-period surface parity, not a second audio-control menu.
     return vk_state_period_keyboard_json()
 
+
 def vk_settings_keyboard_json() -> str:
-    return _keyboard([
-        [_button("🌦 Погода в моём городе", "weather", "primary")],
-        [_button("⏰ Время: дорога на работу", "time", "secondary")],
-        [_button("⏰ Время: дорога домой", "time", "secondary")],
-        [_button("🎁 Мои бонусы за приглашения", "share", "secondary")],
-        [_button("💬 Предпочтительный мессенджер", "settings", "secondary")],
-        [_button("📨 Каналы по времени дня", "time", "secondary")],
-        [_button("📈 Анализ моего состояния", "progress", "primary")],
-        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
-    ])
+    # Closed until full Telegram 1:1 settings subtree is certified.
+    return vk_main_keyboard_json()
 
 
 def vk_delivery_slots_keyboard_json() -> str:
-    return _keyboard([
-        [_button("🌅 Утренние отправки", "channel morning auto", "primary")],
-        [_button("🌙 Вечерние отправки", "channel evening auto", "primary")],
-        [_button(BACK_LABEL, "settings", "secondary")],
-    ])
+    # Closed until full Telegram 1:1 delivery subtree is certified.
+    return vk_main_keyboard_json()
 
 
 def vk_delivery_channel_select_keyboard_json(slot: str = "morning") -> str:
-    slot = "evening" if str(slot).strip().lower() == "evening" else "morning"
-    return _keyboard([
-        [_button("♻️ Авто", f"channel {slot} auto", "secondary")],
-        [_button("telegram", f"channel {slot} telegram", "secondary")],
-        [_button("max", f"channel {slot} max", "secondary")],
-        [_button("vk", f"channel {slot} vk", "secondary")],
-        [_button(BACK_LABEL, "time", "secondary")],
-    ])
-
+    # Closed until full Telegram 1:1 delivery channel selector is certified.
+    return vk_main_keyboard_json()
 
 def vk_state_period_keyboard_json() -> str:
     return _keyboard([
@@ -241,44 +219,28 @@ def vk_state_period_keyboard_json() -> str:
     ])
 
 
+
 def vk_post_actions_keyboard_json() -> str:
-    return _keyboard([
-        [_button("📈 Посмотреть изменение состояния", "progress", "primary")],
-        [_button("🔐 Открыть полный маршрут", "full", "primary")],
-        [_button("🎧 Ещё одна бесплатная практика", "demo", "positive")],
-        [_button("🎁 Подарить подписку", "gift", "secondary")],
-        [_button(MAIN_MENU_LABEL, MENU_COMMAND, "secondary")],
-    ])
+    # Closed until this post-audio surface is included in strict parity tests.
+    return vk_main_keyboard_json()
 
 
 def vk_sales_offer_keyboard_json() -> str:
-    return _keyboard([
-        [_button("🔐 Открыть полный маршрут", "pay", "primary")],
-        [_button("🎧 Ещё одна бесплатная практика", "demo", "positive")],
-        [_button("🎁 Подарить подписку другу", "gift", "secondary")],
-        [_button(MENU_LABEL, MENU_COMMAND, "secondary")],
-    ])
-
-
+    # Closed until sales offer surface is certified against Telegram.
+    return vk_main_keyboard_json()
 
 def vk_full_access_keyboard_json() -> str:
     return full_route_keyboard_json()
 
+
 def vk_settings_locked_keyboard_json() -> str:
-    return _keyboard([
-        [_button("🔐 Открыть полный маршрут", "pay", "primary")],
-        [_button("🎁 Передать ритм", "gift", "secondary"), _button(BACK_LABEL, "settings", "secondary")],
-    ])
+    # Covered fallback: full access menu already has Telegram parity.
+    return full_route_keyboard_json()
 
 
 def vk_ref_bonus_actions_keyboard_json() -> str:
-    return _keyboard([
-        [_button("🔐 Открыть полный маршрут", "pay", "primary")],
-        [_button("🎁 Подарить подписку другу", "gift", "secondary")],
-        [_button("📈 Анализ моего состояния", "progress", "primary")],
-        [_button(BACK_LABEL, "settings", "secondary")],
-    ])
-
+    # Closed until referral bonus actions are certified against Telegram.
+    return vk_main_keyboard_json()
 
 def vk_text_send_kwargs(platform: str, text: str = "", *, user_id: int | None = None) -> dict[str, Any]:
     if platform != "vk":
