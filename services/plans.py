@@ -50,17 +50,16 @@ def _row_to_plan(row) -> dict:
 
     scope = plan_type  # historical name in the project
     days = _parse_int(touches, field="touches", plan_id=plan_id)
-    # Цена в проекте хранится в рублях.
-    # В старых БД могли оказаться цены в копейках (например, 99000 вместо 990).
-    # Эвристика: если значение >= 100000 и делится на 100 — считаем, что это копейки.
+    # Canonical contract: plans.price is rubles at runtime.
+    # Legacy kopeck rows are normalized only by price_rub_migration_v1.
+    # Never guess units here: a legitimate high-ticket price like 50000 RUB
+    # must not be silently converted to 500 RUB.
     try:
         price_int = int(price)
     except (TypeError, ValueError):
         # Не маскируем странные данные: цена=0 может сломать платежи/UI.
         log.warning("Invalid plan price value", extra={"raw_price": repr(price), "plan_id": plan_id, "code": str(code)}, exc_info=True)
         price_int = 0
-    if price_int >= 50000 and price_int % 100 == 0:
-        price_int = price_int // 100
     return {
         "id": _parse_int(plan_id, field="id", plan_id=plan_id),
         # В проекте исторически встречаются оба ключа:
