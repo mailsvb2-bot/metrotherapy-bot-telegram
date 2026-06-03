@@ -229,22 +229,15 @@ async def mood_answer(cb: CallbackQuery):
             await cb.message.answer("⚠️ Не удалось найти аудиофайл. Попробуйте позже или сообщите в поддержку.")
             return
         # --- Idempotency (канон) ---
-        # demo: анти-спам по секунде (можно зависеть от времени)
-        # full(work/home/...): детерминированный ключ по session_id.
+        # demo/full use the same two-phase lock: lock before send, final marker after send.
         user_id = int(cb.from_user.id)
         idem_kind = "demo" if s.source == "demo" else str(s.kind or "")
         idem_scheduled_at = for_demo_click() if s.source == "demo" else for_session(sid)
 
-        if s.source != "demo":
-            # Если уже отправили — выходим (защита от дублей при повторных кликах/рестартах)
-            if was_delivered(user_id, idem_kind, "audio", idem_scheduled_at):
-                return
-            # Двухфазный lock: не даём двум параллельным апдейтам отправить аудио дважды.
-            if not mark_delivery_once(user_id, idem_kind, "audio_lock", idem_scheduled_at):
-                return
-        else:
-            if not mark_delivery_once(user_id, idem_kind, "audio", idem_scheduled_at):
-                return
+        if was_delivered(user_id, idem_kind, "audio", idem_scheduled_at):
+            return
+        if not mark_delivery_once(user_id, idem_kind, "audio_lock", idem_scheduled_at):
+            return
 
         async def _send_audio() -> None:
             """Отправить аудио не блокируя UI (кнопка должна ощущаться мгновенной)."""
@@ -310,20 +303,22 @@ async def mood_answer(cb: CallbackQuery):
                 except (ValueError, RuntimeError):
                     logging.getLogger(__name__).exception("Unhandled exception")
 
-                # Финальный маркер отправки — после успешного send.
-                if s.source != "demo":
-                    mark_delivery_once(int(cb.from_user.id), idem_kind, "audio", idem_scheduled_at)
+                # Финальный маркер отправки — только после успешного send.
+                mark_delivery_once(int(cb.from_user.id), idem_kind, "audio", idem_scheduled_at)
+                try:
+                    unmark_delivery(int(cb.from_user.id), idem_kind, "audio_lock", idem_scheduled_at)
+                except sqlite3.Error:
+                    logging.getLogger(__name__).debug("audio_lock cleanup after send failed", exc_info=True)
 
                 mark_audio_sent(sid)
                 await cb.message.answer("Когда прослушаете — нажмите кнопку:", reply_markup=kb_mood_done(sid))
             except (ValueError, RuntimeError) as e:
                 # Если упали ДО факта отправки — снимаем lock, чтобы allow retry.
-                if s.source != "demo":
-                    try:
-                        unmark_delivery(int(cb.from_user.id), idem_kind, "audio_lock", idem_scheduled_at)
-                    except sqlite3.Error:
-                        # last-resort: не ломаем UX из-за cleanup
-                        logging.getLogger(__name__).debug("audio_lock cleanup failed", exc_info=True)
+                try:
+                    unmark_delivery(int(cb.from_user.id), idem_kind, "audio_lock", idem_scheduled_at)
+                except sqlite3.Error:
+                    # last-resort: не ломаем UX из-за cleanup
+                    logging.getLogger(__name__).debug("audio_lock cleanup failed", exc_info=True)
                 log_event(int(cb.from_user.id), "mood_audio_send_error", {"err": str(e), "source": s.source})
                 await cb.message.answer("⚠️ Не удалось отправить аудио. Попробуйте ещё раз.")
 
@@ -367,5 +362,3 @@ async def mood_answer(cb: CallbackQuery):
 
         await cb.message.answer(msg, reply_markup=kb_post_show_chart(sid))
         return
-
-
