@@ -5,6 +5,7 @@ from pathlib import Path
 
 from core.paths import ROOT as PROJECT_ROOT
 from services.validators.base import ValidationError
+from services.validators.delivery_contracts import validate_delivery_contracts
 
 EXCLUDED_DIRS = {".git", ".venv", "venv", "env", "__pycache__", ".pytest_cache", ".mypy_cache"}
 
@@ -24,12 +25,7 @@ def _py_files() -> list[Path]:
 
 
 def validate_no_runtime_price_unit_heuristics(*, strict: bool = True) -> None:
-    """Runtime must never guess whether prices are rubles or minor units.
-
-    The only legal legacy conversion point is the one-time migration
-    `price_rub_migration_v1.py`. Runtime payment code must use
-    services.payments.amounts.
-    """
+    """Runtime must never guess whether prices are rubles or minor units."""
     bad: list[str] = []
     for path in _py_files():
         rel = path.relative_to(PROJECT_ROOT).as_posix()
@@ -63,3 +59,4 @@ def validate_legacy_invoice_routes_disabled(*, strict: bool = True) -> None:
 def validate_payment_contracts(*, strict: bool = True) -> None:
     validate_no_runtime_price_unit_heuristics(strict=strict)
     validate_legacy_invoice_routes_disabled(strict=strict)
+    validate_delivery_contracts(strict=strict)
