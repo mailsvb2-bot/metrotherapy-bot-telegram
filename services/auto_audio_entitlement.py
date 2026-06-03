@@ -63,8 +63,12 @@ def eligible_user_ids(slot: str) -> list[int]:
 
 def has_entitlement(user_id: int, slot: str) -> bool:
     slot = "morning" if str(slot) == "morning" else "evening"
-    if has_access(int(user_id), slot):
-        return True
+    try:
+        if has_access(int(user_id), slot):
+            return True
+    except sqlite3.Error:
+        log.exception("subscription entitlement check failed")
+        return False
     if not token_economy_enabled() or enforcement_mode() == "off":
         return False
     try:
@@ -72,6 +76,9 @@ def has_entitlement(user_id: int, slot: str) -> bool:
         if int(wallet.available_tokens) > 0:
             return True
         return enforcement_mode() == "soft"
-    except (sqlite3.Error, RuntimeError, TypeError, ValueError):
-        log.exception("practice token entitlement check failed")
+    except sqlite3.Error:
+        log.exception("practice token entitlement db check failed")
+        return enforcement_mode() == "soft"
+    except (TypeError, ValueError):
+        log.exception("practice token entitlement value check failed")
         return enforcement_mode() == "soft"
