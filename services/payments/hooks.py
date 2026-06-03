@@ -179,8 +179,14 @@ async def pre_checkout(pre: PreCheckoutQuery) -> None:
         await pre.answer(ok=True)
     except (TelegramAPIError, asyncio.TimeoutError):
         logger.exception("pre_checkout_query answer failed")
-    except (sqlite3.Error, RuntimeError, ValueError, TypeError):
-        logger.exception("pre_checkout_query validation failed")
+    except sqlite3.Error:
+        logger.exception("pre_checkout_query database validation failed")
+        await _answer_pre_checkout_temporarily_unavailable(pre)
+    except (ValueError, TypeError):
+        logger.exception("pre_checkout_query value validation failed")
+        await _answer_pre_checkout_temporarily_unavailable(pre)
+    except RuntimeError:
+        logger.exception("pre_checkout_query runtime validation failed")
         await _answer_pre_checkout_temporarily_unavailable(pre)
 
 
