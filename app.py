@@ -48,6 +48,7 @@ from core.ai.decision_core import DecisionCore
 
 from services.schema import init_db
 from services.validator import validate_all
+from services.validators.prod import validate_prod_guardrails
 from services.scheduler import start_scheduler
 from services.prewarm import prewarm_audio_cache, prewarm_matplotlib_cache
 from services.scheduler import stop_scheduler
@@ -103,12 +104,14 @@ async def create_application():
         strict_env = os.getenv("VALIDATOR_STRICT")
         strict = (app_env == "prod") if strict_env is None else (strict_env.strip() in {"1","true","yes","on"})
 
-        # Fail closed before DB schema/migrations mutate persistent state.
-        validate_all(strict=strict)
+        # Environment-only guardrail must run before schema/migrations mutate persistent state.
+        validate_prod_guardrails(strict=True)
 
         # v15.2: fail fast if critical files/folders are missing
         run_startup_checks(Path(__file__).resolve().parent)
         init_db()
+        # Full validators run after schema/migrations exist.
+        validate_all(strict=strict)
         messenger_setup = build_setup_status()
         if messenger_setup.missing:
             log.warning('Messenger setup incomplete: %s', ', '.join(messenger_setup.missing))
