@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from core.paths import ROOT as PROJECT_ROOT
 from services.validators.base import ValidationError
 
@@ -14,18 +12,15 @@ def _read(path: str) -> str:
 
 
 def validate_demo_idempotency_cleanup(*, strict: bool = True) -> None:
-    """Demo audio idempotency must be reversible if send fails before delivery."""
+    """Demo audio idempotency must use a two-phase lock and final marker after send."""
     text = _read("handlers/mood_flow/ratings.py")
     if not text:
         return
-    marker = "s.source != \"demo\""
-    cleanup = "unmark_delivery(int(cb.from_user.id), idem_kind, \"audio_lock\", idem_scheduled_at)"
-    demo_marker = "mark_delivery_once(user_id, idem_kind, \"audio\", idem_scheduled_at)"
-    if demo_marker in text and cleanup in text and marker in text:
-        msg = (
-            "Demo audio idempotency marker can remain stuck after failed send. "
-            "The failure cleanup is gated to non-demo sessions only."
-        )
+    old_demo_final_marker_before_send = "else:\n            if not mark_delivery_once(user_id, idem_kind, \"audio\", idem_scheduled_at):"
+    missing_final_marker = "mark_delivery_once(int(cb.from_user.id), idem_kind, \"audio\", idem_scheduled_at)" not in text
+    missing_lock_cleanup = "unmark_delivery(int(cb.from_user.id), idem_kind, \"audio_lock\", idem_scheduled_at)" not in text
+    if old_demo_final_marker_before_send in text or missing_final_marker or missing_lock_cleanup:
+        msg = "Demo audio idempotency is not using the canonical lock-before-send/final-marker-after-send lifecycle"
         if strict:
             raise ValidationError(msg)
 
@@ -33,11 +28,13 @@ def validate_demo_idempotency_cleanup(*, strict: bool = True) -> None:
 def validate_auto_audio_not_subscription_only(*, strict: bool = True) -> None:
     """New practice-token checkout must be connected to delivery entitlement."""
     text = _read("services/auto_audio.py")
+    adapter = _read("services/auto_audio_entitlement.py")
     if not text:
         return
-    subscription_only = "FROM subscriptions" in text and "practice_wallets" not in text and "check_and_reserve_for_audio" not in text
-    if subscription_only:
-        msg = "auto_audio delivery still selects only subscriptions and is not connected to practice-token entitlement"
+    connected = "services.auto_audio_entitlement" in text and "eligible_user_ids" in text and "has_entitlement" in text
+    adapter_uses_tokens = "practice_wallets" in adapter and "has_access" in adapter and "get_wallet" in adapter
+    if not connected or not adapter_uses_tokens:
+        msg = "auto_audio delivery is not connected to unified subscription/practice-token entitlement"
         if strict:
             raise ValidationError(msg)
 
