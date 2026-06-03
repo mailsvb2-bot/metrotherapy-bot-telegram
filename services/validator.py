@@ -32,6 +32,7 @@ from services.validators.release import (
 )
 from services.validators.architecture import validate_architecture_contracts
 from services.validators.prod import validate_prod_guardrails
+from services.validators.payment_contracts import validate_payment_contracts
 
 
 def validate_all(strict: bool = True) -> None:
@@ -53,8 +54,10 @@ def validate_all(strict: bool = True) -> None:
         validate_compileall(strict=True)
         validate_wide_except_policy(strict=True)
         validate_architecture_contracts(strict=True)
+        validate_payment_contracts(strict=True)
     elif guardrails_strict:
         validate_architecture_contracts(strict=True)
+        validate_payment_contracts(strict=True)
 
     try:
         from pathlib import Path
