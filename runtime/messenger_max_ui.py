@@ -28,9 +28,9 @@ def inline_keyboard_attachment(rows: list[list[dict[str, Any]]]) -> dict[str, An
     return {"type": "inline_keyboard", "payload": {"buttons": rows}}
 
 
-def _score_label(value: int) -> str:
-    return str(int(value))
 
+def _score_label(value: int) -> str:
+    return f"{int(value):+d}" if int(value) != 0 else "0"
 
 def has_main_menu_text(text: str) -> bool:
     raw = str(text or "")
@@ -59,66 +59,60 @@ def main_menu_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment(rows)
 
 
-def full_route_attachment() -> dict[str, Any]:
-    return inline_keyboard_attachment([
-        [max_message_button("🎧 Получить аудио", command="continue"), max_message_button("✅ Прослушал", command="done")],
-        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
-    ])
 
+def full_route_attachment() -> dict[str, Any]:
+    # Telegram kb_full_access_menu parity.
+    return inline_keyboard_attachment([
+        [max_message_button("🔐 Открыть полный маршрут", command="pay")],
+        [max_message_button("⏰ Напомнить завтра утром", command="remind_continue_tomorrow")],
+        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
+    ])
 
 def demo_kind_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
         [max_message_button("🚗 Практика на утро / дорогу", command="demo_work")],
         [max_message_button("🌙 Практика на вечер / домой", command="demo_home")],
-        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
+        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
     ])
+
 
 
 def weather_attachment() -> dict[str, Any]:
+    # Telegram kb_weather parity: no invented refresh button.
     return inline_keyboard_attachment([
-        [max_message_button("🔄 Обновить погоду", command="weather"), max_message_button("🏙 Изменить город", command="weather_city")],
-        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
+        [max_message_button("🏙 Изменить город", command="weather_city")],
+        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
     ])
-
 
 def weather_city_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([[max_message_button(BACK_LABEL, command=MENU_COMMAND)]])
 
 
-def score_scale_attachment() -> dict[str, Any]:
-    """MAX score scale with numeric visible labels and safe payloads.
 
-    The webhook normalizer accepts score:<number> payloads, while the visible
-    text remains plain -10..10 to preserve older MAX regression contracts.
-    """
+def score_scale_attachment() -> dict[str, Any]:
+    # Telegram kb_mood_scale parity: -10..10, rows of seven, then menu.
     rows: list[list[dict[str, Any]]] = []
-    for row in [[-10, -9, -8], [-7, -6, -5], [-4, -3, -2], [-1, 0, 1], [2, 3, 4], [5, 6, 7], [8, 9, 10]]:
+    vals = list(range(-10, 11))
+    for idx in range(0, len(vals), 7):
         rows.append([
             max_message_button(_score_label(value), command=f"score:{value}")
-            for value in row
+            for value in vals[idx:idx + 7]
         ])
-    rows.append([
-        max_message_button("📈 Мой прогресс", command="progress"),
-        max_message_button(BACK_LABEL, command=MENU_COMMAND),
-    ])
+    rows.append([max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)])
     return inline_keyboard_attachment(rows)
 
 
 def post_audio_attachment() -> dict[str, Any]:
+    # Telegram kb_mood_done parity.
     return inline_keyboard_attachment([
         [max_message_button("✅ Прослушал", command="done")],
-        [max_message_button("📈 Мой прогресс", command="progress"), max_message_button("🧾 История", command="history")],
-        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
+        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
     ])
 
 
 def progress_attachment() -> dict[str, Any]:
-    return inline_keyboard_attachment([
-        [max_message_button("🎧 Получить аудио", command="continue"), max_message_button("✅ Прослушал", command="done")],
-        [max_message_button("🔁 Повторить аудио", command="repeat"), max_message_button("🧾 История", command="history")],
-        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
-    ])
-
+    # Telegram state-period surface parity, not a second audio-control menu.
+    return state_period_attachment()
 
 def settings_attachment() -> dict[str, Any]:
     """MAX settings controls aligned with Telegram's public settings surface.
@@ -162,7 +156,7 @@ def state_period_attachment() -> dict[str, Any]:
         [max_message_button("⭐ Оценить состояние сейчас", command="continue")],
         [max_message_button("📅 Сегодня", command="progress"), max_message_button("📆 Вчера", command="history")],
         [max_message_button("🗓 За всё время", command="progress")],
-        [max_message_button("🔐 Открыть полный маршрут", command="full"), max_message_button("🎁 Подарить", command="gift")],
+        [max_message_button("🔐 Открыть полный маршрут", command="pay"), max_message_button("🎁 Подарить", command="gift")],
         [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
     ])
 
@@ -186,13 +180,9 @@ def sales_offer_attachment() -> dict[str, Any]:
     ])
 
 
-def full_access_attachment() -> dict[str, Any]:
-    return inline_keyboard_attachment([
-        [max_message_button("🔐 Открыть полный маршрут", command="pay")],
-        [max_message_button("⏰ Напомнить завтра утром", command="time")],
-        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
-    ])
 
+def full_access_attachment() -> dict[str, Any]:
+    return full_route_attachment()
 
 def settings_locked_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
@@ -236,6 +226,7 @@ def _labeled_link_rows(text: str) -> list[list[dict[str, Any]]]:
     return rows
 
 
+
 def link_action_attachment(text: str) -> dict[str, Any] | None:
     raw = str(text or "")
     url = first_url(raw)
@@ -243,11 +234,11 @@ def link_action_attachment(text: str) -> dict[str, Any] | None:
         return None
     if raw.lstrip().startswith("💳"):
         rows = _labeled_link_rows(raw) or [[max_link_button("💳 Оплатить", url)]]
-        rows.append([max_message_button("🎧 Получить аудио", command="continue"), max_message_button(BACK_LABEL, command=MENU_COMMAND)])
+        rows.append([max_message_button(BACK_LABEL, command=MENU_COMMAND)])
         return inline_keyboard_attachment(rows)
     if raw.lstrip().startswith("🎁"):
         rows = _labeled_link_rows(raw) or [[max_link_button("🎁 Оплатить подарок", url)]]
-        rows.append([max_message_button("📣 Посоветовать", command="share"), max_message_button(BACK_LABEL, command=MENU_COMMAND)])
+        rows.append([max_message_button(BACK_LABEL, command=MENU_COMMAND)])
         return inline_keyboard_attachment(rows)
     if raw.lstrip().startswith("↗️ Поделиться"):
         return inline_keyboard_attachment([
@@ -255,7 +246,6 @@ def link_action_attachment(text: str) -> dict[str, Any] | None:
             [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
         ])
     return None
-
 
 def native_keyboard_attachments(text: str) -> list[dict[str, Any]]:
     raw = str(text or "")

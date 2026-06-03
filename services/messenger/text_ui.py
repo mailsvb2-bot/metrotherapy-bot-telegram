@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from config.settings import settings
+from services.db import db
+from services.jobs import add_job, cancel_jobs
 from services.personalization import get_preface
 from services.delivery_preferences import (
     describe_delivery_preferences,
@@ -25,7 +27,8 @@ from services.messenger.timeline import get_recent_audio_timeline
 from services.mood_text_flow import parse_score_text, find_pending_pre_session_id, find_pending_post_session_id
 from services.mood import create_session
 from services.pending import set_pending, peek_pending, pop_pending
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 
 @dataclass(frozen=True)
@@ -269,21 +272,12 @@ def _demo_text() -> str:
 
 
 def _full_route_text(user_id: int) -> str:
-    snapshot = get_progress_snapshot(int(user_id))
-    if snapshot.pending_item is not None:
-        current = f"Сейчас ожидает подтверждения аудио №{snapshot.pending_item.anchor} — {snapshot.pending_item.title}."
-    elif snapshot.next_item is not None:
-        current = f"Следующим будет аудио №{snapshot.next_item.anchor} — {snapshot.next_item.title}."
-    else:
-        current = "Основная серия уже дослушана до конца."
-
+    _ = get_progress_snapshot(int(user_id))
     return (
         "🔐 Полный маршрут\n\n"
-        "В Telegram эта кнопка открывает полный доступ и список треков. "
-        "Во ВКонтакте маршрут исполняется через ту же общую аудио-очередь, чтобы прогресс не расходился между каналами.\n\n"
-        f"{current}\n\n"
-        "Нажмите «🎧 Получить аудио», чтобы продолжить полный маршрут во ВКонтакте. "
-        "После прослушивания нажмите «✅ Прослушал» и отправьте оценку от -10 до 10."
+        "Здесь можно открыть полный маршрут или поставить напоминание на завтра утром.\n\n"
+        "Нажмите «🔐 Открыть полный маршрут», чтобы перейти к тарифам, "
+        "или «⏰ Напомнить завтра утром», чтобы я напомнил продолжить завтра."
     )
 
 
@@ -305,6 +299,48 @@ def _weather_city_prompt_text() -> str:
         "После этого я сохраню город и покажу прогноз."
     )
 
+
+
+def _parse_hhmm_for_reminder(value: str) -> tuple[int, int] | None:
+    raw = (value or "").strip()
+    if ":" not in raw:
+        return None
+    hh, mm = raw.split(":", 1)
+    if not (hh.isdigit() and mm.isdigit()):
+        return None
+    h, m = int(hh), int(mm)
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return None
+    return h, m
+
+
+def _schedule_continue_tomorrow_text(user_id: int) -> str:
+    uid = int(user_id)
+    tz_name = getattr(settings, "TIMEZONE", "Europe/Moscow")
+    tz = ZoneInfo(tz_name)
+
+    with db() as conn:
+        row = conn.execute("SELECT work_time FROM users WHERE user_id=?", (uid,)).fetchone()
+
+    hhmm = ""
+    if row is not None:
+        try:
+            hhmm = row["work_time"] or ""
+        except (KeyError, TypeError, IndexError):
+            hhmm = ""
+
+    hhmm = hhmm or getattr(settings, "MORNING_TIME", "08:30")
+    parsed = _parse_hhmm_for_reminder(str(hhmm)) or _parse_hhmm_for_reminder(getattr(settings, "MORNING_TIME", "08:30"))
+    h, m = parsed if parsed else (8, 30)
+
+    now_local = datetime.now(tz)
+    run_local = (now_local + timedelta(days=1)).replace(hour=h, minute=m, second=0, microsecond=0)
+    run_utc = run_local.astimezone(ZoneInfo("UTC")).replace(microsecond=0).isoformat()
+
+    cancel_jobs(uid, prefix="remind_")
+    add_job(uid, "remind_continue", run_utc, {"src": "full_access", "hhmm": f"{h:02d}:{m:02d}"})
+
+    return f"✅ Хорошо. Я напомню Вам завтра в {run_local.strftime('%H:%M')} ({tz_name})."
 
 def _platform_changed_text(user_id: int, platform: str) -> str:
     set_preferred_platform(int(user_id), platform)
@@ -342,6 +378,8 @@ def _parse_command(text: str) -> tuple[str, str | None]:
         return "progress", None
     if lowered in {"history", "/history", "timeline", "/timeline", "история", "🧾 история"}:
         return "history", None
+    if lowered in {"remind_continue_tomorrow", "/remind_continue_tomorrow", "⏰ напомнить завтра утром", "напомнить завтра утром"}:
+        return "remind_continue_tomorrow", None
     if lowered in {"time", "/time", "schedule", "/schedule", "время", "расписание"}:
         return "time", None
     if lowered.startswith("timezone ") or lowered.startswith("/timezone "):
@@ -706,6 +744,9 @@ def handle_incoming_text(
         ]
     if action == "history":
         return canonical_user_id, [MessengerReply(text=_history_text(canonical_user_id))]
+    if action == "remind_continue_tomorrow":
+        return canonical_user_id, [MessengerReply(text=_schedule_continue_tomorrow_text(canonical_user_id))]
+
     if action == "time":
         morning_decision = build_delivery_policy_decision(canonical_user_id, "morning")
         evening_decision = build_delivery_policy_decision(canonical_user_id, "evening")

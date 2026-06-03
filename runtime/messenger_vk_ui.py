@@ -108,12 +108,14 @@ def telegram_main_parity_keyboard_json(keyboard_json: str) -> str:
     return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
 
 
+
 def full_route_keyboard_json() -> str:
+    # Telegram kb_full_access_menu parity.
     return _keyboard([
-        [_button("🎧 Получить аудио", "continue", "primary"), _button("✅ Прослушал", "done", "positive")],
+        [_button("🔐 Открыть полный маршрут", "pay", "primary")],
+        [_button("⏰ Напомнить завтра утром", "remind_continue_tomorrow", "secondary")],
         [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
     ])
-
 
 def vk_payment_keyboard_json(text: str) -> str | None:
     links = extract_labeled_urls(text)
@@ -166,57 +168,36 @@ def vk_demo_kind_keyboard_json() -> str:
     ])
 
 
+
 def vk_weather_keyboard_json() -> str:
-    """VK weather keyboard aligned with Telegram weather entry surface."""
+    """VK weather keyboard aligned with Telegram kb_weather."""
     return _keyboard([
-        [
-            _button("🌤 Погода", "weather", "primary"),
-            _button("🏙 Изменить город", "weather_city", "secondary"),
-        ],
+        [_button("🏙 Изменить город", "weather_city", "secondary")],
         [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
     ])
-
 
 def vk_weather_city_keyboard_json() -> str:
     """VK keyboard while waiting for city input."""
     return _keyboard([[_button(BACK_LABEL, MENU_COMMAND, "secondary")]])
 
 
-def vk_score_scale_keyboard_json() -> str:
-    """VK keyboard for mood score scale parity.
 
-    Visible labels use Telegram plus signs for positive values; payload commands
-    remain plain numeric strings because the canonical webhook normalizer and
-    cross-messenger score tests consume numeric VK payloads directly.
-    """
+def vk_score_scale_keyboard_json() -> str:
+    """VK keyboard for Telegram kb_mood_scale parity."""
     rows: list[list[dict[str, Any]]] = []
-    for row in [
-        [-10, -9, -8],
-        [-7, -6, -5],
-        [-4, -3, -2],
-        [-1, 0, 1],
-        [2, 3, 4],
-        [5, 6, 7],
-        [8, 9, 10],
-    ]:
+    vals = list(range(-10, 11))
+    for idx in range(0, len(vals), 7):
         rows.append([
-            _button(_score_label(value), str(value), "primary" if value == 0 else "secondary")
-            for value in row
+            _button(_score_label(value), str(value), "secondary")
+            for value in vals[idx:idx + 7]
         ])
-    rows.append([
-        _button("📈 Мой прогресс", "progress", "primary"),
-        _button(BACK_LABEL, MENU_COMMAND, "secondary"),
-    ])
+    rows.append([_button(MENU_LABEL, MENU_COMMAND, "secondary")])
     return _keyboard(rows)
 
 
 def vk_progress_keyboard_json() -> str:
-    return _keyboard([
-        [_button("🎧 Получить аудио", "continue", "primary"), _button("✅ Прослушал", "done", "positive")],
-        [_button("🔁 Повторить аудио", "repeat", "secondary"), _button("🧾 История", "history", "secondary")],
-        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
-    ])
-
+    # Telegram state-period surface parity, not a second audio-control menu.
+    return vk_state_period_keyboard_json()
 
 def vk_settings_keyboard_json() -> str:
     return _keyboard([
@@ -255,7 +236,7 @@ def vk_state_period_keyboard_json() -> str:
         [_button("⭐ Оценить состояние сейчас", "continue", "primary")],
         [_button("📅 Сегодня", "progress", "secondary"), _button("📆 Вчера", "history", "secondary")],
         [_button("🗓 За всё время", "progress", "secondary")],
-        [_button("🔐 Открыть полный маршрут", "full", "primary"), _button("🎁 Подарить", "gift", "secondary")],
+        [_button("🔐 Открыть полный маршрут", "pay", "primary"), _button("🎁 Подарить", "gift", "secondary")],
         [_button(MENU_LABEL, MENU_COMMAND, "secondary")],
     ])
 
@@ -279,13 +260,9 @@ def vk_sales_offer_keyboard_json() -> str:
     ])
 
 
-def vk_full_access_keyboard_json() -> str:
-    return _keyboard([
-        [_button("🔐 Открыть полный маршрут", "pay", "primary")],
-        [_button("⏰ Напомнить завтра утром", "time", "secondary")],
-        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
-    ])
 
+def vk_full_access_keyboard_json() -> str:
+    return full_route_keyboard_json()
 
 def vk_settings_locked_keyboard_json() -> str:
     return _keyboard([
