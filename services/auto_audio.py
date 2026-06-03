@@ -19,7 +19,7 @@ from services.delivery_preferences import build_delivery_policy_decision
 from services.events import log_event
 from services.idempotency_keys import for_pre_score
 from services.mood import create_session
-from services.subscription import has_access
+from services.auto_audio_entitlement import eligible_user_ids, has_entitlement
 from services.progress import get_index
 from services.messenger.outbound import SenderRegistry, build_delivery_plan
 from runtime.messenger_senders import TelegramBotSender, MaxBotSender, VkBotSender
@@ -49,64 +49,20 @@ def _plus_one_sec(h: int, m: int, s: int) -> tuple[int, int, int]:
 
 
 def _prompt_due_at(local_dt: datetime, hm: str) -> datetime:
-    """Return the pre-score prompt time for the local calendar day.
-
-    UX contract: pre-score prompt opens at the selected time + 1 second.
-    The scheduler must not rely on hitting that exact second; if the loop is late,
-    the delivery remains due for the rest of the local day and idempotency prevents
-    duplicate prompts.
-    """
     h, m, s = _norm_hms(hm)
     selected = local_dt.replace(hour=h, minute=m, second=s, microsecond=0)
     return selected + timedelta(seconds=1)
 
 
 def _matches_slot_second(local_dt: datetime, hm: str) -> bool:
-    """Backward-compatible exact-second predicate kept for old unit tests."""
     h, m, s = _norm_hms(hm)
     th, tm, ts = _plus_one_sec(h, m, s)
     return f'{th:02d}:{tm:02d}:{ts:02d}' == local_dt.strftime('%H:%M:%S')
 
 
 def _is_due_local_day(local_dt: datetime, hm: str) -> bool:
-    """Robust due predicate for production delivery.
-
-    Old logic required the background loop to wake up on exactly HH:MM:SS+1. That
-    made a slow DB/Telegram/network tick capable of skipping a user until the next
-    day. The canonical rule is now: not before selected time + 1 sec, but still due
-    later on the same local day until the idempotency marker is written.
-    """
     due_at = _prompt_due_at(local_dt, hm)
     return local_dt.date() == due_at.date() and local_dt >= due_at
-
-
-def _eligible_subscriber_ids(slot: str) -> list[int]:
-    if slot not in ('morning', 'evening'):
-        return []
-    try:
-        with db() as conn:
-            if slot == 'morning':
-                rows = conn.execute(
-                    """
-                    SELECT user_id FROM subscriptions
-                    WHERE COALESCE(status,'active')='active'
-                      AND COALESCE(total_morning,0) > 0
-                      AND COALESCE(used_morning,0) < COALESCE(total_morning,0)
-                    """
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT user_id FROM subscriptions
-                    WHERE COALESCE(status,'active')='active'
-                      AND COALESCE(total_evening,0) > 0
-                      AND COALESCE(used_evening,0) < COALESCE(total_evening,0)
-                    """
-                ).fetchall()
-        return [int(r[0]) for r in rows]
-    except sqlite3.Error:
-        logging.getLogger(__name__).exception('eligible subscribers query failed')
-        return []
 
 
 def _slot_time_for_user(uid: int, slot: str) -> str:
@@ -133,16 +89,10 @@ def _is_due_for_user(uid: int, slot: str, now_utc: datetime) -> tuple[bool, str,
 
 
 def _collect_due_candidates(now_utc: datetime) -> list[dict[str, object]]:
-    """Resolve due audio deliveries off the event loop.
-
-    Avoids many small SQLite reads inside async hot paths.
-    """
     out: list[dict[str, object]] = []
     for slot in ("morning", "evening"):
-        for uid in _eligible_subscriber_ids(slot):
-            if slot == "morning" and not has_access(uid, "morning"):
-                continue
-            if slot == "evening" and not has_access(uid, "evening"):
+        for uid in eligible_user_ids(slot):
+            if not has_entitlement(uid, slot):
                 continue
             policy = build_delivery_policy_decision(uid, slot, now_utc=now_utc)
             hm = _slot_time_for_user(uid, slot)
@@ -150,13 +100,7 @@ def _collect_due_candidates(now_utc: datetime) -> list[dict[str, object]]:
             scheduled_now = _is_due_local_day(local_now, hm)
             if not scheduled_now:
                 continue
-            out.append({
-                "uid": int(uid),
-                "slot": slot,
-                "policy": policy,
-                "hm": hm,
-                "scheduled_now": scheduled_now,
-            })
+            out.append({"uid": int(uid), "slot": slot, "policy": policy, "hm": hm, "scheduled_now": scheduled_now})
     return out
 
 
