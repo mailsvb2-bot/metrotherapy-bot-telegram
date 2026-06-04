@@ -27,6 +27,7 @@ from services.messenger.timeline import get_recent_audio_timeline
 from services.mood_text_flow import parse_score_text, find_pending_pre_session_id, find_pending_post_session_id
 from services.mood import create_session
 from services.pending import set_pending, peek_pending, pop_pending
+from services.bonuses import compute_bonus_stats, paid_referrals_count, gift_grants_count, gift_days_granted
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -342,6 +343,69 @@ def _schedule_continue_tomorrow_text(user_id: int) -> str:
 
     return f"✅ Хорошо. Я напомню Вам завтра в {run_local.strftime('%H:%M')} ({tz_name})."
 
+
+def _text_time_prompt(slot: str) -> str:
+    title = "Дорога на работу" if slot == "work" else "Дорога домой"
+    return (
+        f"⏰ Время «{title}»\n\n"
+        "Напишите желаемое время в формате HH:MM, например 08:30.\n\n"
+        "Я сохраню время — и транс будет приходить ровно в него."
+    )
+
+
+def _save_text_time(user_id: int, slot: str, raw_value: str) -> str:
+    hhmm = _parse_hhmm_for_reminder(raw_value)
+    if hhmm is None:
+        return "Пожалуйста, время в формате HH:MM, например 08:30."
+    h, m = hhmm
+    col = "work_time" if slot == "work" else "home_time"
+    value = f"{h:02d}:{m:02d}"
+    uid = int(user_id)
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO users(user_id, joined_at) VALUES(?, COALESCE((SELECT joined_at FROM users WHERE user_id=?), datetime('now'))) "
+            "ON CONFLICT(user_id) DO NOTHING",
+            (uid, uid),
+        )
+        conn.execute(f"UPDATE users SET {col}=? WHERE user_id=?", (value, uid))
+    title = "Дорога на работу" if slot == "work" else "Дорога домой"
+    return f"✅ Сохранил время «{title}»: {value}"
+
+
+def _ref_bonus_text(user_id: int) -> str:
+    uid = int(user_id)
+    n_paid = paid_referrals_count(uid)
+    n_gifts = gift_grants_count(uid)
+    gift_days = gift_days_granted(uid)
+    stats = compute_bonus_stats(uid)
+    return (
+        "🎁 Мои бонусы за приглашения\n\n"
+        f"По Вашему приглашению программу оплатили: {n_paid} человек(а).\n\n"
+        f"За подарки Вы получили бонусов: {gift_days} дн. (подарков: {n_gifts}).\n\n"
+        "Бонусы (в днях):\n"
+        f"• начислено: {stats.earned_days} дн.\n"
+        f"• израсходовано: {stats.used_days} дн.\n"
+        f"• остаток: {stats.remaining_days} дн.\n\n"
+        "Бонус начисляется только за тех, кто оплатил программу.\n"
+        "Бонус за подарки начисляется сразу после оплаты подарка.\n"
+        "Дни не обнуляются — всё сохраняется."
+    )
+
+
+def _delivery_channels_text(user_id: int) -> str:
+    return (
+        "📨 Каналы по времени дня\n\n"
+        + describe_delivery_preferences(int(user_id))
+        + "\n\nВыберите, куда сначала пытаться доставлять утренние и вечерние касания."
+    )
+
+
+def _delivery_slot_text(user_id: int, slot: str) -> str:
+    label = "утренних" if slot == "morning" else "вечерних"
+    return f"📨 Канал для {label} отправок\n\n" + describe_delivery_preferences(int(user_id))
+
+
+
 def _platform_changed_text(user_id: int, platform: str) -> str:
     set_preferred_platform(int(user_id), platform)
     return f"Сохранено: приоритетный канал — {platform_title(platform)}."
@@ -378,8 +442,40 @@ def _parse_command(text: str) -> tuple[str, str | None]:
         return "progress", None
     if lowered in {"history", "/history", "timeline", "/timeline", "история", "🧾 история"}:
         return "history", None
-    if lowered in {"remind_continue_tomorrow", "/remind_continue_tomorrow", "⏰ напомнить завтра утром", "напомнить завтра утром"}:
+    if lowered in {"menu:main", "back", "⬅️ назад", "⬅️ меню"}:
+        return "menu", None
+    if lowered in {"sub:menu"}:
+        return "pay", None
+    if lowered in {"gift:menu"}:
+        return "gift", None
+    if lowered in {"settings:menu"}:
+        return "settings", None
+    if lowered in {"settings:state"}:
+        return "progress", None
+    if lowered in {"share:menu"}:
+        return "share", None
+    if lowered in {"weather:show"}:
+        return "weather", None
+    if lowered in {"remind_continue_tomorrow", "/remind_continue_tomorrow", "remind:continue_tomorrow", "⏰ напомнить завтра утром", "напомнить завтра утром"}:
         return "remind_continue_tomorrow", None
+    if lowered in {"settings:time:work"}:
+        return "settings_time", "work"
+    if lowered in {"settings:time:home"}:
+        return "settings_time", "home"
+    if lowered in {"settings:ref"}:
+        return "settings_ref", None
+    if lowered in {"settings:platform:menu"}:
+        return "settings", None
+    if lowered in {"settings:delivery:channels"}:
+        return "settings_delivery_channels", None
+    if lowered in {"settings:delivery:slot:morning"}:
+        return "settings_delivery_slot", "morning"
+    if lowered in {"settings:delivery:slot:evening"}:
+        return "settings_delivery_slot", "evening"
+    if lowered.startswith("settings:delivery:slot:set:"):
+        parts = lowered.split(":")
+        if len(parts) >= 6:
+            return "channel", f"{parts[4]} {parts[5]}"
     if lowered in {"time", "/time", "schedule", "/schedule", "время", "расписание"}:
         return "time", None
     if lowered.startswith("timezone ") or lowered.startswith("/timezone "):
@@ -613,6 +709,13 @@ def handle_incoming_text(
     command_norm = command_text.casefold().replace("ё", "е")
 
     pending = peek_pending(canonical_user_id)
+    if pending and pending.kind == "set_time":
+        if command_norm not in {"start", "menu", "/start", "/menu", "отмена", "cancel", "⬅️ меню", "⬅️ назад"}:
+            pending = pop_pending(canonical_user_id)
+            slot = ((pending.data or {}).get("slot") if pending else "work") or "work"
+            return canonical_user_id, [MessengerReply(text=_save_text_time(canonical_user_id, slot, command_text))]
+        pop_pending(canonical_user_id)
+
     if pending and pending.kind == "weather_city":
         # Let explicit navigation commands still work instead of treating them as city names.
         if command_norm not in {"start", "menu", "/start", "/menu", "отмена", "cancel", "⬅️ меню"}:
@@ -746,6 +849,21 @@ def handle_incoming_text(
         return canonical_user_id, [MessengerReply(text=_history_text(canonical_user_id))]
     if action == "remind_continue_tomorrow":
         return canonical_user_id, [MessengerReply(text=_schedule_continue_tomorrow_text(canonical_user_id))]
+
+    if action == "settings_time":
+        slot = "home" if value == "home" else "work"
+        set_pending(canonical_user_id, "set_time", {"slot": slot})
+        return canonical_user_id, [MessengerReply(text=_text_time_prompt(slot))]
+
+    if action == "settings_ref":
+        return canonical_user_id, [MessengerReply(text=_ref_bonus_text(canonical_user_id))]
+
+    if action == "settings_delivery_channels":
+        return canonical_user_id, [MessengerReply(text=_delivery_channels_text(canonical_user_id))]
+
+    if action == "settings_delivery_slot":
+        slot = "evening" if value == "evening" else "morning"
+        return canonical_user_id, [MessengerReply(text=_delivery_slot_text(canonical_user_id, slot))]
 
     if action == "time":
         morning_decision = build_delivery_policy_decision(canonical_user_id, "morning")

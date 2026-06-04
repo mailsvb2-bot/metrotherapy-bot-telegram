@@ -115,19 +115,39 @@ def progress_attachment() -> dict[str, Any]:
     return state_period_attachment()
 
 
+
 def settings_attachment() -> dict[str, Any]:
-    # Closed until full Telegram 1:1 settings subtree is certified.
-    return main_menu_attachment()
+    # Telegram kb_settings_menu parity.
+    return inline_keyboard_attachment([
+        [max_message_button("🌦 Погода в моём городе", command="weather:show")],
+        [max_message_button("⏰ Время: дорога на работу", command="settings:time:work")],
+        [max_message_button("⏰ Время: дорога домой", command="settings:time:home")],
+        [max_message_button("🎁 Мои бонусы за приглашения", command="settings:ref")],
+        [max_message_button("💬 Предпочтительный мессенджер", command="settings:platform:menu")],
+        [max_message_button("📨 Каналы по времени дня", command="settings:delivery:channels")],
+        [max_message_button("📈 Анализ моего состояния", command="settings:state")],
+        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
+    ])
 
 
 def delivery_slots_attachment() -> dict[str, Any]:
-    # Closed until full Telegram 1:1 delivery subtree is certified.
-    return main_menu_attachment()
+    # Telegram kb_delivery_channel_slots parity for default/snapshotless surface.
+    return inline_keyboard_attachment([
+        [max_message_button("🌅 Утренние отправки: авто", command="settings:delivery:slot:morning")],
+        [max_message_button("🌙 Вечерние отправки: авто", command="settings:delivery:slot:evening")],
+        [max_message_button(BACK_LABEL, command="settings:menu")],
+    ])
 
 
 def delivery_channel_select_attachment(slot: str = "morning") -> dict[str, Any]:
-    # Closed until full Telegram 1:1 delivery channel selector is certified.
-    return main_menu_attachment()
+    slot = "evening" if str(slot).strip().lower() == "evening" else "morning"
+    return inline_keyboard_attachment([
+        [max_message_button("♻️ Авто", command=f"settings:delivery:slot:set:{slot}:auto")],
+        [max_message_button("telegram • fallback", command=f"settings:delivery:slot:set:{slot}:telegram")],
+        [max_message_button("max • fallback", command=f"settings:delivery:slot:set:{slot}:max")],
+        [max_message_button("vk • fallback", command=f"settings:delivery:slot:set:{slot}:vk")],
+        [max_message_button(BACK_LABEL, command="settings:delivery:channels")],
+    ])
 
 def state_period_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([
@@ -140,27 +160,48 @@ def state_period_attachment() -> dict[str, Any]:
 
 
 
+
 def post_actions_attachment() -> dict[str, Any]:
-    # Closed until this post-audio surface is included in strict parity tests.
-    return main_menu_attachment()
+    # Telegram kb_after_post_actions parity.
+    return inline_keyboard_attachment([
+        [max_message_button("📈 Посмотреть изменение состояния", command="settings:state")],
+        [max_message_button("🔐 Открыть полный маршрут", command="sub:menu")],
+        [max_message_button("🎧 Ещё одна бесплатная практика", command="demo")],
+        [max_message_button("🎁 Подарить подписку", command="gift:menu")],
+        [max_message_button(MAIN_MENU_LABEL, command=MENU_COMMAND)],
+    ])
 
 
 def sales_offer_attachment() -> dict[str, Any]:
-    # Closed until sales offer surface is certified against Telegram.
-    return main_menu_attachment()
+    # Telegram kb_sales_offer parity.
+    return inline_keyboard_attachment([
+        [max_message_button("🔐 Открыть полный маршрут", command="sub:menu")],
+        [max_message_button("🎧 Ещё одна бесплатная практика", command="demo")],
+        [max_message_button("🎁 Подарить подписку другу", command="gift:menu")],
+        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
+    ])
 
 def full_access_attachment() -> dict[str, Any]:
     return full_route_attachment()
 
 
+
 def settings_locked_attachment() -> dict[str, Any]:
-    # Covered fallback: full access menu already has Telegram parity.
-    return full_route_attachment()
+    # Telegram kb_settings_locked parity.
+    return inline_keyboard_attachment([
+        [max_message_button("🔐 Открыть полный маршрут", command="sub:menu")],
+        [max_message_button("🎁 Передать ритм", command="gift:menu"), max_message_button(BACK_LABEL, command="settings:menu")],
+    ])
 
 
 def ref_bonus_actions_attachment() -> dict[str, Any]:
-    # Closed until referral bonus actions are certified against Telegram.
-    return main_menu_attachment()
+    # Telegram kb_ref_bonus_actions parity.
+    return inline_keyboard_attachment([
+        [max_message_button("🔐 Открыть полный маршрут", command="sub:menu")],
+        [max_message_button("🎁 Подарить подписку другу", command="gift:menu")],
+        [max_message_button("📈 Анализ моего состояния", command="settings:state")],
+        [max_message_button(BACK_LABEL, command="settings:menu")],
+    ])
 
 def is_score_scale_text(text: str) -> bool:
     raw = str(text or "").casefold().replace("−", "-")
@@ -195,6 +236,7 @@ def link_action_attachment(text: str) -> dict[str, Any] | None:
     # they have explicit Telegram-parity coverage. URLs remain in message text.
     return None
 
+
 def native_keyboard_attachments(text: str) -> list[dict[str, Any]]:
     raw = str(text or "")
     stripped = raw.lstrip()
@@ -221,8 +263,13 @@ def native_keyboard_attachments(text: str) -> list[dict[str, Any]]:
         return [settings_attachment()]
     if stripped.startswith("🕒 Правила отправки") or "Каналы по времени дня" in raw:
         return [delivery_slots_attachment()]
+    if stripped.startswith("📨 Канал для утренних"):
+        return [delivery_channel_select_attachment("morning")]
+    if stripped.startswith("📨 Канал для вечерних"):
+        return [delivery_channel_select_attachment("evening")]
+    if stripped.startswith("🎁 Мои бонусы за приглашения"):
+        return [ref_bonus_actions_attachment()]
     return []
-
 
 def normalize_max_text(text: str) -> str:
     raw = str(text or "")
