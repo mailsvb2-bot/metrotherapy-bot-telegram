@@ -1,0 +1,40 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+src = ["."]
+exclude = [
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "data",
+    "backups",
+    "audio",
+    "logs",
+    "tmp",
+]
+
+[tool.ruff.lint]
+# Safe first-stage gate: catch syntax/runtime-dangerous Python issues without
+# turning the existing production repository into a noisy style migration.
+select = [
+    "E4",
+    "E7",
+    "E9",
+    "F",
+]
+ignore = [
+    # Line length is useful later, but enabling it now would create cosmetic noise.
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "F401",
+    "F811",
+]
