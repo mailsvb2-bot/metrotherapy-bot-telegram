@@ -3,9 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS, main_menu_commands
-from services.messenger.package_payment_ui import extract_labeled_urls
-from runtime.telegram_button_parity import vk_keyboard_from_telegram
 from keyboards.inline import (
     kb_after_post_actions,
     kb_delivery_channel_select,
@@ -22,6 +19,8 @@ from keyboards.inline import (
     kb_state_rate_scale,
     kb_weather,
 )
+from runtime.telegram_button_parity import vk_keyboard_from_telegram
+from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS, main_menu_commands
 
 BACK_LABEL = "⬅️ Назад"
 MENU_LABEL = "⬅️ Меню"
@@ -53,11 +52,7 @@ def _open_link_button(label: str, url: str) -> dict[str, Any]:
 
 
 def _keyboard(rows: list[list[dict[str, Any]]], *, inline: bool = False) -> str:
-    return json.dumps(
-        {"one_time": False, "inline": inline, "buttons": rows},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    return json.dumps({"one_time": False, "inline": inline, "buttons": rows}, ensure_ascii=False, separators=(",", ":"))
 
 
 def _score_label(value: int) -> str:
@@ -79,15 +74,17 @@ def button_command(button: Any) -> str:
             if isinstance(command, str) and command.strip():
                 return command.strip()
     label = str(action.get("label") or "").strip().casefold().replace("ё", "е")
-    label_aliases = {action.title.casefold().replace("ё", "е"): action.command for action in MAIN_MENU_ACTIONS + CONTEXT_ACTIONS}
-    label_aliases[BACK_LABEL.casefold().replace("ё", "е")] = MENU_COMMAND
-    label_aliases[MENU_LABEL.casefold().replace("ё", "е")] = MENU_COMMAND
-    label_aliases[HOME_LABEL.casefold().replace("ё", "е")] = MENU_COMMAND
-    label_aliases[MAIN_MENU_LABEL.casefold().replace("ё", "е")] = MENU_COMMAND
-    label_aliases["⬅️ меню"] = MENU_COMMAND
-    label_aliases["⬅️ назад"] = MENU_COMMAND
-    label_aliases["назад"] = MENU_COMMAND
-    return label_aliases.get(label, "")
+    aliases = {a.title.casefold().replace("ё", "е"): a.command for a in MAIN_MENU_ACTIONS + CONTEXT_ACTIONS}
+    aliases.update({
+        BACK_LABEL.casefold().replace("ё", "е"): MENU_COMMAND,
+        MENU_LABEL.casefold().replace("ё", "е"): MENU_COMMAND,
+        HOME_LABEL.casefold().replace("ё", "е"): MENU_COMMAND,
+        MAIN_MENU_LABEL.casefold().replace("ё", "е"): MENU_COMMAND,
+        "⬅️ меню": MENU_COMMAND,
+        "⬅️ назад": MENU_COMMAND,
+        "назад": MENU_COMMAND,
+    })
+    return aliases.get(label, "")
 
 
 def telegram_main_parity_keyboard_json(keyboard_json: str) -> str:
@@ -95,15 +92,12 @@ def telegram_main_parity_keyboard_json(keyboard_json: str) -> str:
         keyboard = json.loads(keyboard_json)
     except (TypeError, ValueError, json.JSONDecodeError):
         return keyboard_json
-    if not isinstance(keyboard, dict):
-        return keyboard_json
-    rows = keyboard.get("buttons")
-    if not isinstance(rows, list):
+    if not isinstance(keyboard, dict) or not isinstance(keyboard.get("buttons"), list):
         return keyboard_json
 
-    all_commands: set[str] = set()
     row_commands: list[tuple[list[Any], set[str]]] = []
-    for row in rows:
+    all_commands: set[str] = set()
+    for row in keyboard["buttons"]:
         if not isinstance(row, list):
             row_commands.append((row, set()))
             continue
@@ -112,37 +106,46 @@ def telegram_main_parity_keyboard_json(keyboard_json: str) -> str:
         all_commands.update(commands)
         row_commands.append((row, commands))
 
-    telegram_main_commands = set(main_menu_commands())
-    vk_only_main_controls = {"continue", "done"}
-    if not telegram_main_commands.issubset(all_commands):
+    if not set(main_menu_commands()).issubset(all_commands):
         return keyboard_json
-    if not vk_only_main_controls.intersection(all_commands):
+    if not {"continue", "done"}.intersection(all_commands):
         return keyboard_json
 
-    filtered_rows = [row for row, commands in row_commands if not commands or not commands.issubset(vk_only_main_controls)]
     normalized = dict(keyboard)
-    normalized["buttons"] = filtered_rows
+    normalized["buttons"] = [row for row, commands in row_commands if not commands or not commands.issubset({"continue", "done"})]
     return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
 
 
+def _snapshot(snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+    return snapshot or {"identities": [], "morning_channel": None, "evening_channel": None}
+
+
+def _looks_like_main_menu_text(text: str) -> bool:
+    raw = str(text or "")
+    head = raw.lstrip()[:700]
+    compact = raw.casefold().replace("ё", "е")
+    return "Главное меню" in head and (
+        "выберите маршрут" in compact or "попробовать бесплатно" in compact or "полный маршрут" in compact
+    )
+
+
+def vk_payment_keyboard_json(text: str) -> str | None:
+    _ = text
+    return None
+
+
+def prepare_vk_keyboard_json(keyboard_json: str, *, external_user_id: str, text: str) -> str:
+    _ = external_user_id
+    payment_keyboard = vk_payment_keyboard_json(text)
+    if payment_keyboard is not None:
+        return payment_keyboard
+    if str(text or "").lstrip().startswith("🔐 Полный маршрут"):
+        return full_route_keyboard_json()
+    return telegram_main_parity_keyboard_json(keyboard_json)
 
 
 def full_route_keyboard_json() -> str:
     return vk_keyboard_from_telegram(kb_full_access_menu())
-
-def vk_payment_keyboard_json(text: str) -> str | None:
-    # Payment/gift/share link keyboards are intentionally closed for VK until
-    # they have explicit Telegram-parity coverage. URLs remain in message text.
-    return None
-
-def prepare_vk_keyboard_json(keyboard_json: str, *, external_user_id: str, text: str) -> str:
-    payment_keyboard = vk_payment_keyboard_json(text)
-    if payment_keyboard is not None:
-        return payment_keyboard
-    if (text or "").lstrip().startswith("🔐 Полный маршрут"):
-        return full_route_keyboard_json()
-    return telegram_main_parity_keyboard_json(keyboard_json)
-
 
 
 def vk_main_keyboard_json(user_id: int | None = None) -> str:
@@ -161,11 +164,9 @@ def vk_demo_kind_keyboard_json() -> str:
 def vk_weather_keyboard_json() -> str:
     return vk_keyboard_from_telegram(kb_weather())
 
+
 def vk_weather_city_keyboard_json() -> str:
-    """VK keyboard while waiting for city input."""
     return _keyboard([[_button(BACK_LABEL, MENU_COMMAND, "secondary")]])
-
-
 
 
 def vk_score_scale_keyboard_json(session_id: int = 0, *, stage: str = "pre") -> str:
@@ -181,16 +182,20 @@ def vk_settings_keyboard_json() -> str:
 
 
 def vk_delivery_slots_keyboard_json(snapshot: dict[str, Any] | None = None) -> str:
-    return vk_keyboard_from_telegram(kb_delivery_channel_slots(snapshot or {"identities": [], "morning_channel": None, "evening_channel": None}))
+    return vk_keyboard_from_telegram(kb_delivery_channel_slots(_snapshot(snapshot)))
 
 
 def vk_delivery_channel_select_keyboard_json(slot: str = "morning", snapshot: dict[str, Any] | None = None) -> str:
     slot = "evening" if str(slot).strip().lower() == "evening" else "morning"
-    return vk_keyboard_from_telegram(kb_delivery_channel_select(slot, snapshot or {"identities": [], "morning_channel": None, "evening_channel": None}))
+    return vk_keyboard_from_telegram(kb_delivery_channel_select(slot, _snapshot(snapshot)))
 
 
 def vk_state_period_keyboard_json() -> str:
     return vk_keyboard_from_telegram(kb_state_period_menu())
+
+
+def vk_state_rate_scale_keyboard_json() -> str:
+    return vk_keyboard_from_telegram(kb_state_rate_scale())
 
 
 def vk_post_actions_keyboard_json() -> str:
@@ -212,6 +217,7 @@ def vk_settings_locked_keyboard_json() -> str:
 def vk_ref_bonus_actions_keyboard_json() -> str:
     return vk_keyboard_from_telegram(kb_ref_bonus_actions())
 
+
 def vk_text_send_kwargs(platform: str, text: str = "", *, user_id: int | None = None) -> dict[str, Any]:
     if platform != "vk":
         return {}
@@ -219,7 +225,6 @@ def vk_text_send_kwargs(platform: str, text: str = "", *, user_id: int | None = 
     if payment_keyboard is not None:
         return {"keyboard_json": payment_keyboard}
     return {"keyboard_json": vk_main_keyboard_json(user_id)}
-
 
 
 def with_vk_keyboard(platform: str, kwargs: dict[str, Any], *, user_id: int | None = None) -> dict[str, Any]:
@@ -230,6 +235,8 @@ def with_vk_keyboard(platform: str, kwargs: dict[str, Any], *, user_id: int | No
     payment_keyboard = vk_payment_keyboard_json(text)
     if payment_keyboard is not None:
         enriched["keyboard_json"] = payment_keyboard
+    elif _looks_like_main_menu_text(text):
+        enriched.setdefault("keyboard_json", vk_main_keyboard_json(user_id))
     elif text.lstrip().startswith("🎧 Общий прогресс") or text.lstrip().startswith("🎧 Вы ещё не запускали") or "📈 Мой прогресс" in text or "📈 Анализ состояния" in text:
         enriched.setdefault("keyboard_json", vk_progress_keyboard_json())
     elif text.lstrip().startswith("⚙️ Настройки канала"):
@@ -249,6 +256,8 @@ def with_vk_keyboard(platform: str, kwargs: dict[str, Any], *, user_id: int | No
 
 def keyboard_for_reply_kind(kind: str | None, meta: dict[str, Any] | None = None) -> str | None:
     meta = meta or {}
+    if kind == "main":
+        return vk_main_keyboard_json()
     if kind == "demo_kind":
         return vk_demo_kind_keyboard_json()
     if kind == "score_scale":
@@ -282,6 +291,3 @@ def keyboard_for_reply_kind(kind: str | None, meta: dict[str, Any] | None = None
     if kind == "ref_bonus":
         return vk_ref_bonus_actions_keyboard_json()
     return None
-
-def vk_state_rate_scale_keyboard_json() -> str:
-    return vk_keyboard_from_telegram(kb_state_rate_scale())
