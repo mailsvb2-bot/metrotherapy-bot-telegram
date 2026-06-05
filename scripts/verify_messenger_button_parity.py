@@ -75,18 +75,11 @@ def check(name: str, tg: Any, max_attachment: dict[str, Any] | None, vk_keyboard
         assert_equal(f"VK {name}", vk_rows(vk_keyboard), expected)
 
 
-def check_vk_runtime_main_menu_routing() -> None:
-    """Regression for the real VK screenshot failure.
-
-    The public main menu text contains the line "📈 Мой прогресс". VK must still
-    attach the Telegram main menu keyboard, not the progress/state-period
-    keyboard. This test checks runtime keyboard selection, not just pure keyboard
-    factory parity.
-    """
-    main_text = (
+def _main_menu_text(platform_word: str) -> str:
+    return (
         "Главное меню\n\n"
         "Выберите маршрут: можно начать с бесплатной практики, открыть полный доступ или посмотреть свой прогресс.\n\n"
-        "Кнопки ВКонтакте соответствуют главному меню Telegram:\n"
+        f"Кнопки {platform_word} соответствуют главному меню Telegram:\n"
         "• 🌿 Попробовать бесплатно\n"
         "• 🔐 Полный маршрут\n"
         "• 💳 Тарифы\n"
@@ -96,8 +89,30 @@ def check_vk_runtime_main_menu_routing() -> None:
         "• 📣 Посоветовать\n"
         "• 🌤 Погода"
     )
-    kwargs = vk_ui.with_vk_keyboard("vk", {"_text_for_keyboard": main_text}, user_id=999999991)
+
+
+def check_vk_runtime_main_menu_routing() -> None:
+    """Regression for the real VK screenshot failure.
+
+    The public main menu text contains the line "📈 Мой прогресс". VK must still
+    attach the Telegram main menu keyboard, not the progress/state-period
+    keyboard. This test checks runtime keyboard selection, not just pure keyboard
+    factory parity.
+    """
+    kwargs = vk_ui.with_vk_keyboard("vk", {"_text_for_keyboard": _main_menu_text("ВКонтакте")}, user_id=999999991)
     assert_equal("VK runtime main menu routing", vk_rows(kwargs["keyboard_json"]), tg_rows(kb_main(None)))
+
+
+def check_max_runtime_main_menu_routing() -> None:
+    """Same runtime regression for MAX native attachment selection."""
+    attachments = max_ui.native_keyboard_attachments(_main_menu_text("MAX и ВКонтакте"))
+    if not attachments:
+        raise AssertionError("MAX runtime main menu routing produced no native keyboard attachment")
+    assert_equal("MAX runtime main menu routing", max_rows(attachments[0]), tg_rows(kb_main(None)))
+    explicit = max_ui.attachment_for_reply_kind("main")
+    if explicit is None:
+        raise AssertionError("MAX explicit main keyboard mapping is missing")
+    assert_equal("MAX explicit main keyboard mapping", max_rows(explicit), tg_rows(kb_main(None)))
 
 
 def main() -> None:
@@ -133,9 +148,11 @@ def main() -> None:
     check("settings locked", kb_settings_locked(), max_ui.settings_locked_attachment(), vk_ui.vk_settings_locked_keyboard_json())
     check("ref bonus actions", kb_ref_bonus_actions(), max_ui.ref_bonus_actions_attachment(), vk_ui.vk_ref_bonus_actions_keyboard_json())
     check_vk_runtime_main_menu_routing()
+    check_max_runtime_main_menu_routing()
 
     print("✅ exact raw Telegram=VK=MAX button callback parity OK")
     print("✅ VK runtime main menu routing OK")
+    print("✅ MAX runtime main menu routing OK")
 
 
 if __name__ == "__main__":
