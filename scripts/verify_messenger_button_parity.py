@@ -75,6 +75,31 @@ def check(name: str, tg: Any, max_attachment: dict[str, Any] | None, vk_keyboard
         assert_equal(f"VK {name}", vk_rows(vk_keyboard), expected)
 
 
+def check_vk_runtime_main_menu_routing() -> None:
+    """Regression for the real VK screenshot failure.
+
+    The public main menu text contains the line "📈 Мой прогресс". VK must still
+    attach the Telegram main menu keyboard, not the progress/state-period
+    keyboard. This test checks runtime keyboard selection, not just pure keyboard
+    factory parity.
+    """
+    main_text = (
+        "Главное меню\n\n"
+        "Выберите маршрут: можно начать с бесплатной практики, открыть полный доступ или посмотреть свой прогресс.\n\n"
+        "Кнопки ВКонтакте соответствуют главному меню Telegram:\n"
+        "• 🌿 Попробовать бесплатно\n"
+        "• 🔐 Полный маршрут\n"
+        "• 💳 Тарифы\n"
+        "• 🎁 Подарить\n"
+        "• 📈 Мой прогресс\n"
+        "• 🧠 Настройки\n"
+        "• 📣 Посоветовать\n"
+        "• 🌤 Погода"
+    )
+    kwargs = vk_ui.with_vk_keyboard("vk", {"_text_for_keyboard": main_text}, user_id=999999991)
+    assert_equal("VK runtime main menu routing", vk_rows(kwargs["keyboard_json"]), tg_rows(kb_main(None)))
+
+
 def main() -> None:
     check("main", kb_main(None), max_ui.main_menu_attachment(), vk_ui.vk_main_keyboard_json(None))
     check("demo", kb_demo_kind(), max_ui.demo_kind_attachment(), vk_ui.vk_demo_kind_keyboard_json())
@@ -107,8 +132,10 @@ def main() -> None:
     check("sales offer", kb_sales_offer(0), max_ui.sales_offer_attachment(), vk_ui.vk_sales_offer_keyboard_json())
     check("settings locked", kb_settings_locked(), max_ui.settings_locked_attachment(), vk_ui.vk_settings_locked_keyboard_json())
     check("ref bonus actions", kb_ref_bonus_actions(), max_ui.ref_bonus_actions_attachment(), vk_ui.vk_ref_bonus_actions_keyboard_json())
+    check_vk_runtime_main_menu_routing()
 
     print("✅ exact raw Telegram=VK=MAX button callback parity OK")
+    print("✅ VK runtime main menu routing OK")
 
 
 if __name__ == "__main__":
