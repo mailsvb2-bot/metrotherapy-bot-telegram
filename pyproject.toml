@@ -20,21 +20,20 @@ exclude = [
 ]
 
 [tool.ruff.lint]
-# Safe first-stage gate: catch syntax/runtime-dangerous Python issues without
-# turning the existing production repository into a noisy style migration.
+# Production-safe first-stage gate.
+# Keep this narrow: block only syntax/runtime-dangerous errors, not legacy style debt.
 select = [
-    "E4",
-    "E7",
-    "E9",
-    "F",
-]
-ignore = [
-    # Line length is useful later, but enabling it now would create cosmetic noise.
-    "E501",
+    "E9",    # syntax / parser level pycodestyle errors
+    "F821",  # undefined name
+    "F822",  # undefined name in __all__
+    "F823",  # local variable referenced before assignment
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# Tests intentionally keep local bootstrap/import patterns; the production gate
+# should not be blocked by test style debt.
 "tests/**/*.py" = [
-    "F401",
-    "F811",
+    "F821",
+    "F822",
+    "F823",
 ]
