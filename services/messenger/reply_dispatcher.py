@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from runtime.messenger_senders import MaxBotSender, VkBotSender, MessengerTransportError
+from runtime import messenger_max_ui as max_ui
 from runtime.messenger_vk_ui import (
     vk_demo_kind_keyboard_json,
     vk_score_scale_keyboard_json,
     vk_weather_city_keyboard_json,
     vk_weather_keyboard_json,
     with_vk_keyboard,
+    keyboard_for_reply_kind,
 )
 from services.events import log_event
 from services.messenger.audio_delivery import send_next_audio_to_user
@@ -134,16 +136,31 @@ async def send_reply_bundle(
             if not str(text or "").strip():
                 continue
             kwargs: dict[str, Any] = {}
+            keyboard_kind = (reply.meta or {}).get("vk_keyboard") or (reply.meta or {}).get("keyboard")
             if platform == "vk":
-                keyboard_kind = (reply.meta or {}).get("vk_keyboard")
-                if keyboard_kind == "demo_kind":
-                    kwargs["keyboard_json"] = vk_demo_kind_keyboard_json()
-                elif keyboard_kind == "score_scale" or _looks_like_score_scale(text):
+                if keyboard_kind == "score_scale":
+                    kwargs["keyboard_json"] = vk_score_scale_keyboard_json(
+                        int((reply.meta or {}).get("session_id") or 0),
+                        stage=str((reply.meta or {}).get("stage") or "pre"),
+                    )
+                elif keyboard_kind:
+                    keyboard_json = keyboard_for_reply_kind(keyboard_kind, reply.meta or {})
+                    if keyboard_json is not None:
+                        kwargs["keyboard_json"] = keyboard_json
+                elif _looks_like_score_scale(text):
                     kwargs["keyboard_json"] = vk_score_scale_keyboard_json()
-                elif keyboard_kind == "weather":
-                    kwargs["keyboard_json"] = vk_weather_keyboard_json()
-                elif keyboard_kind == "weather_city":
-                    kwargs["keyboard_json"] = vk_weather_city_keyboard_json()
+            elif platform == "max":
+                if keyboard_kind == "score_scale":
+                    kwargs["attachments"] = [
+                        max_ui.score_scale_attachment(
+                            int((reply.meta or {}).get("session_id") or 0),
+                            stage=str((reply.meta or {}).get("stage") or "pre"),
+                        )
+                    ]
+                elif keyboard_kind:
+                    attachment = max_ui.attachment_for_reply_kind(keyboard_kind, reply.meta or {})
+                    if attachment is not None:
+                        kwargs["attachments"] = [attachment]
             await sender.send_text(external_user_id, text, **_vk_kwargs(platform, kwargs, canonical_user_id, text=text))
             continue
 

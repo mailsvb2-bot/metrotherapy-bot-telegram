@@ -5,6 +5,23 @@ from typing import Any
 
 from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS, main_menu_commands
 from services.messenger.package_payment_ui import extract_labeled_urls
+from runtime.telegram_button_parity import vk_keyboard_from_telegram
+from keyboards.inline import (
+    kb_after_post_actions,
+    kb_delivery_channel_select,
+    kb_delivery_channel_slots,
+    kb_demo_kind,
+    kb_full_access_menu,
+    kb_main,
+    kb_mood_scale,
+    kb_ref_bonus_actions,
+    kb_sales_offer,
+    kb_settings_locked,
+    kb_settings_menu,
+    kb_state_period_menu,
+    kb_state_rate_scale,
+    kb_weather,
+)
 
 BACK_LABEL = "⬅️ Назад"
 MENU_LABEL = "⬅️ Меню"
@@ -109,14 +126,9 @@ def telegram_main_parity_keyboard_json(keyboard_json: str) -> str:
 
 
 
-def full_route_keyboard_json() -> str:
-    # Telegram kb_full_access_menu parity.
-    return _keyboard([
-        [_button("🔐 Открыть полный маршрут", "pay", "primary")],
-        [_button("⏰ Напомнить завтра утром", "remind_continue_tomorrow", "secondary")],
-        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
-    ])
 
+def full_route_keyboard_json() -> str:
+    return vk_keyboard_from_telegram(kb_full_access_menu())
 
 def vk_payment_keyboard_json(text: str) -> str | None:
     # Payment/gift/share link keyboards are intentionally closed for VK until
@@ -132,44 +144,22 @@ def prepare_vk_keyboard_json(keyboard_json: str, *, external_user_id: str, text:
     return telegram_main_parity_keyboard_json(keyboard_json)
 
 
-def vk_main_keyboard_json(user_id: int | None = None) -> str:
-    """Persistent VK user keyboard aligned with Telegram ``kb_main``.
 
-    Admin/control-plane surfaces intentionally stay Telegram-only. VK is a user
-    channel; even ADMIN_IDS do not receive admin buttons here.
-    """
+def vk_main_keyboard_json(user_id: int | None = None) -> str:
     _ = user_id
-    rows: list[list[dict[str, Any]]] = []
-    actions = list(MAIN_MENU_ACTIONS)
-    for idx in range(0, len(actions), 2):
-        rows.append([
-            _button(action.title, action.command, action.vk_color)
-            for action in actions[idx:idx + 2]
-        ])
-    return _keyboard(rows)
+    return vk_keyboard_from_telegram(kb_main(None))
 
 
 def vk_default_keyboard_json() -> str:
-    """Backward-compatible alias for the canonical VK main menu."""
     return vk_main_keyboard_json()
 
 
 def vk_demo_kind_keyboard_json() -> str:
-    """VK keyboard for Telegram demo-kind parity."""
-    return _keyboard([
-        [_button("🚗 Практика на утро / дорогу", "demo_work", "positive")],
-        [_button("🌙 Практика на вечер / домой", "demo_home", "primary")],
-        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
-    ])
-
+    return vk_keyboard_from_telegram(kb_demo_kind())
 
 
 def vk_weather_keyboard_json() -> str:
-    """VK weather keyboard aligned with Telegram kb_weather."""
-    return _keyboard([
-        [_button("🏙 Изменить город", "weather_city", "secondary")],
-        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
-    ])
+    return vk_keyboard_from_telegram(kb_weather())
 
 def vk_weather_city_keyboard_json() -> str:
     """VK keyboard while waiting for city input."""
@@ -177,111 +167,50 @@ def vk_weather_city_keyboard_json() -> str:
 
 
 
-def vk_score_scale_keyboard_json() -> str:
-    """VK keyboard for Telegram kb_mood_scale parity."""
-    rows: list[list[dict[str, Any]]] = []
-    vals = list(range(-10, 11))
-    for idx in range(0, len(vals), 7):
-        rows.append([
-            _button(_score_label(value), str(value), "secondary")
-            for value in vals[idx:idx + 7]
-        ])
-    rows.append([_button(MENU_LABEL, MENU_COMMAND, "secondary")])
-    return _keyboard(rows)
+
+def vk_score_scale_keyboard_json(session_id: int = 0, *, stage: str = "pre") -> str:
+    return vk_keyboard_from_telegram(kb_mood_scale(int(session_id), stage=str(stage or "pre")))
 
 
 def vk_progress_keyboard_json() -> str:
-    # Telegram state-period surface parity, not a second audio-control menu.
     return vk_state_period_keyboard_json()
 
 
-
 def vk_settings_keyboard_json() -> str:
-    # Telegram kb_settings_menu parity.
-    return _keyboard([
-        [_button("🌦 Погода в моём городе", "weather:show", "primary")],
-        [_button("⏰ Время: дорога на работу", "settings:time:work", "secondary")],
-        [_button("⏰ Время: дорога домой", "settings:time:home", "secondary")],
-        [_button("🎁 Мои бонусы за приглашения", "settings:ref", "secondary")],
-        [_button("💬 Предпочтительный мессенджер", "settings:platform:menu", "secondary")],
-        [_button("📨 Каналы по времени дня", "settings:delivery:channels", "secondary")],
-        [_button("📈 Анализ моего состояния", "settings:state", "primary")],
-        [_button(BACK_LABEL, MENU_COMMAND, "secondary")],
-    ])
+    return vk_keyboard_from_telegram(kb_settings_menu())
 
 
-def vk_delivery_slots_keyboard_json() -> str:
-    # Telegram kb_delivery_channel_slots parity for default/snapshotless surface.
-    return _keyboard([
-        [_button("🌅 Утренние отправки: авто", "settings:delivery:slot:morning", "primary")],
-        [_button("🌙 Вечерние отправки: авто", "settings:delivery:slot:evening", "primary")],
-        [_button(BACK_LABEL, "settings:menu", "secondary")],
-    ])
+def vk_delivery_slots_keyboard_json(snapshot: dict[str, Any] | None = None) -> str:
+    return vk_keyboard_from_telegram(kb_delivery_channel_slots(snapshot or {"identities": [], "morning_channel": None, "evening_channel": None}))
 
 
-def vk_delivery_channel_select_keyboard_json(slot: str = "morning") -> str:
+def vk_delivery_channel_select_keyboard_json(slot: str = "morning", snapshot: dict[str, Any] | None = None) -> str:
     slot = "evening" if str(slot).strip().lower() == "evening" else "morning"
-    return _keyboard([
-        [_button("♻️ Авто", f"settings:delivery:slot:set:{slot}:auto", "secondary")],
-        [_button("telegram • fallback", f"settings:delivery:slot:set:{slot}:telegram", "secondary")],
-        [_button("max • fallback", f"settings:delivery:slot:set:{slot}:max", "secondary")],
-        [_button("vk • fallback", f"settings:delivery:slot:set:{slot}:vk", "secondary")],
-        [_button(BACK_LABEL, "settings:delivery:channels", "secondary")],
-    ])
+    return vk_keyboard_from_telegram(kb_delivery_channel_select(slot, snapshot or {"identities": [], "morning_channel": None, "evening_channel": None}))
+
 
 def vk_state_period_keyboard_json() -> str:
-    return _keyboard([
-        [_button("⭐ Оценить состояние сейчас", "continue", "primary")],
-        [_button("📅 Сегодня", "progress", "secondary"), _button("📆 Вчера", "history", "secondary")],
-        [_button("🗓 За всё время", "progress", "secondary")],
-        [_button("🔐 Открыть полный маршрут", "pay", "primary"), _button("🎁 Подарить", "gift", "secondary")],
-        [_button(MENU_LABEL, MENU_COMMAND, "secondary")],
-    ])
-
-
+    return vk_keyboard_from_telegram(kb_state_period_menu())
 
 
 def vk_post_actions_keyboard_json() -> str:
-    # Telegram kb_after_post_actions parity.
-    return _keyboard([
-        [_button("📈 Посмотреть изменение состояния", "settings:state", "primary")],
-        [_button("🔐 Открыть полный маршрут", "sub:menu", "primary")],
-        [_button("🎧 Ещё одна бесплатная практика", "demo", "positive")],
-        [_button("🎁 Подарить подписку", "gift:menu", "secondary")],
-        [_button(MAIN_MENU_LABEL, MENU_COMMAND, "secondary")],
-    ])
+    return vk_keyboard_from_telegram(kb_after_post_actions())
 
 
 def vk_sales_offer_keyboard_json() -> str:
-    # Telegram kb_sales_offer parity.
-    return _keyboard([
-        [_button("🔐 Открыть полный маршрут", "sub:menu", "primary")],
-        [_button("🎧 Ещё одна бесплатная практика", "demo", "positive")],
-        [_button("🎁 Подарить подписку другу", "gift:menu", "secondary")],
-        [_button(MENU_LABEL, MENU_COMMAND, "secondary")],
-    ])
+    return vk_keyboard_from_telegram(kb_sales_offer(0))
+
 
 def vk_full_access_keyboard_json() -> str:
     return full_route_keyboard_json()
 
 
-
 def vk_settings_locked_keyboard_json() -> str:
-    # Telegram kb_settings_locked parity.
-    return _keyboard([
-        [_button("🔐 Открыть полный маршрут", "sub:menu", "primary")],
-        [_button("🎁 Передать ритм", "gift:menu", "secondary"), _button(BACK_LABEL, "settings:menu", "secondary")],
-    ])
+    return vk_keyboard_from_telegram(kb_settings_locked())
 
 
 def vk_ref_bonus_actions_keyboard_json() -> str:
-    # Telegram kb_ref_bonus_actions parity.
-    return _keyboard([
-        [_button("🔐 Открыть полный маршрут", "sub:menu", "primary")],
-        [_button("🎁 Подарить подписку другу", "gift:menu", "secondary")],
-        [_button("📈 Анализ моего состояния", "settings:state", "primary")],
-        [_button(BACK_LABEL, "settings:menu", "secondary")],
-    ])
+    return vk_keyboard_from_telegram(kb_ref_bonus_actions())
 
 def vk_text_send_kwargs(platform: str, text: str = "", *, user_id: int | None = None) -> dict[str, Any]:
     if platform != "vk":
@@ -317,11 +246,13 @@ def with_vk_keyboard(platform: str, kwargs: dict[str, Any], *, user_id: int | No
         enriched.setdefault("keyboard_json", vk_main_keyboard_json(user_id))
     return enriched
 
-def keyboard_for_reply_kind(kind: str | None) -> str | None:
+
+def keyboard_for_reply_kind(kind: str | None, meta: dict[str, Any] | None = None) -> str | None:
+    meta = meta or {}
     if kind == "demo_kind":
         return vk_demo_kind_keyboard_json()
     if kind == "score_scale":
-        return vk_score_scale_keyboard_json()
+        return vk_score_scale_keyboard_json(int(meta.get("session_id") or 0), stage=str(meta.get("stage") or "pre"))
     if kind == "weather":
         return vk_weather_keyboard_json()
     if kind == "weather_city":
@@ -338,6 +269,8 @@ def keyboard_for_reply_kind(kind: str | None) -> str | None:
         return vk_delivery_channel_select_keyboard_json("evening")
     if kind == "state_period":
         return vk_state_period_keyboard_json()
+    if kind == "state_rate":
+        return vk_state_rate_scale_keyboard_json()
     if kind == "post_actions":
         return vk_post_actions_keyboard_json()
     if kind == "sales_offer":
@@ -349,3 +282,6 @@ def keyboard_for_reply_kind(kind: str | None) -> str | None:
     if kind == "ref_bonus":
         return vk_ref_bonus_actions_keyboard_json()
     return None
+
+def vk_state_rate_scale_keyboard_json() -> str:
+    return vk_keyboard_from_telegram(kb_state_rate_scale())

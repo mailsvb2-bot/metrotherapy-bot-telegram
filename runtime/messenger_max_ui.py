@@ -5,6 +5,24 @@ from typing import Any
 
 from services.messenger.menu_contract import MAIN_MENU_ACTIONS, max_numbered_menu_text
 from services.messenger.package_payment_ui import extract_labeled_urls
+from runtime.telegram_button_parity import max_attachment_from_telegram
+from keyboards.inline import (
+    kb_after_post_actions,
+    kb_delivery_channel_select,
+    kb_delivery_channel_slots,
+    kb_demo_kind,
+    kb_full_access_menu,
+    kb_main,
+    kb_mood_done,
+    kb_mood_scale,
+    kb_ref_bonus_actions,
+    kb_sales_offer,
+    kb_settings_locked,
+    kb_settings_menu,
+    kb_state_period_menu,
+    kb_state_rate_scale,
+    kb_weather,
+)
 
 BACK_LABEL = "⬅️ Назад"
 MAX_LEGACY_BACK_LABEL = "⬅️ Меню"
@@ -47,161 +65,75 @@ def has_main_menu_text(text: str) -> bool:
     )
 
 
+
 def main_menu_attachment() -> dict[str, Any]:
-    """MAX main menu rendered from the Telegram-derived public user contract.
-
-    Admin/control-plane buttons intentionally stay Telegram-only.
-    """
-    rows: list[list[dict[str, Any]]] = []
-    actions = list(MAIN_MENU_ACTIONS)
-    for idx in range(0, len(actions), 2):
-        rows.append([max_message_button(action.title, command=action.command) for action in actions[idx:idx + 2]])
-    return inline_keyboard_attachment(rows)
-
+    return max_attachment_from_telegram(kb_main(None))
 
 
 def full_route_attachment() -> dict[str, Any]:
-    # Telegram kb_full_access_menu parity.
-    return inline_keyboard_attachment([
-        [max_message_button("🔐 Открыть полный маршрут", command="pay")],
-        [max_message_button("⏰ Напомнить завтра утром", command="remind_continue_tomorrow")],
-        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
-    ])
+    return max_attachment_from_telegram(kb_full_access_menu())
+
 
 def demo_kind_attachment() -> dict[str, Any]:
-    return inline_keyboard_attachment([
-        [max_message_button("🚗 Практика на утро / дорогу", command="demo_work")],
-        [max_message_button("🌙 Практика на вечер / домой", command="demo_home")],
-        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
-    ])
-
+    return max_attachment_from_telegram(kb_demo_kind())
 
 
 def weather_attachment() -> dict[str, Any]:
-    # Telegram kb_weather parity: no invented refresh button.
-    return inline_keyboard_attachment([
-        [max_message_button("🏙 Изменить город", command="weather_city")],
-        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
-    ])
+    return max_attachment_from_telegram(kb_weather())
 
 def weather_city_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([[max_message_button(BACK_LABEL, command=MENU_COMMAND)]])
 
 
 
-def score_scale_attachment() -> dict[str, Any]:
-    # Telegram kb_mood_scale parity: -10..10, rows of seven, then menu.
-    rows: list[list[dict[str, Any]]] = []
-    vals = list(range(-10, 11))
-    for idx in range(0, len(vals), 7):
-        rows.append([
-            max_message_button(_score_label(value), command=f"score:{value}")
-            for value in vals[idx:idx + 7]
-        ])
-    rows.append([max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)])
-    return inline_keyboard_attachment(rows)
+
+def score_scale_attachment(session_id: int = 0, *, stage: str = "pre") -> dict[str, Any]:
+    return max_attachment_from_telegram(kb_mood_scale(int(session_id), stage=str(stage or "pre")))
 
 
-def post_audio_attachment() -> dict[str, Any]:
-    # Telegram kb_mood_done parity.
-    return inline_keyboard_attachment([
-        [max_message_button("✅ Прослушал", command="done")],
-        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
-    ])
+def post_audio_attachment(session_id: int = 0) -> dict[str, Any]:
+    return max_attachment_from_telegram(kb_mood_done(int(session_id)))
 
 
 def progress_attachment() -> dict[str, Any]:
-    # Telegram state-period surface parity, not a second audio-control menu.
     return state_period_attachment()
 
 
-
 def settings_attachment() -> dict[str, Any]:
-    # Telegram kb_settings_menu parity.
-    return inline_keyboard_attachment([
-        [max_message_button("🌦 Погода в моём городе", command="weather:show")],
-        [max_message_button("⏰ Время: дорога на работу", command="settings:time:work")],
-        [max_message_button("⏰ Время: дорога домой", command="settings:time:home")],
-        [max_message_button("🎁 Мои бонусы за приглашения", command="settings:ref")],
-        [max_message_button("💬 Предпочтительный мессенджер", command="settings:platform:menu")],
-        [max_message_button("📨 Каналы по времени дня", command="settings:delivery:channels")],
-        [max_message_button("📈 Анализ моего состояния", command="settings:state")],
-        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
-    ])
+    return max_attachment_from_telegram(kb_settings_menu())
 
 
-def delivery_slots_attachment() -> dict[str, Any]:
-    # Telegram kb_delivery_channel_slots parity for default/snapshotless surface.
-    return inline_keyboard_attachment([
-        [max_message_button("🌅 Утренние отправки: авто", command="settings:delivery:slot:morning")],
-        [max_message_button("🌙 Вечерние отправки: авто", command="settings:delivery:slot:evening")],
-        [max_message_button(BACK_LABEL, command="settings:menu")],
-    ])
+def delivery_slots_attachment(snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+    return max_attachment_from_telegram(kb_delivery_channel_slots(snapshot or {"identities": [], "morning_channel": None, "evening_channel": None}))
 
 
-def delivery_channel_select_attachment(slot: str = "morning") -> dict[str, Any]:
+def delivery_channel_select_attachment(slot: str = "morning", snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
     slot = "evening" if str(slot).strip().lower() == "evening" else "morning"
-    return inline_keyboard_attachment([
-        [max_message_button("♻️ Авто", command=f"settings:delivery:slot:set:{slot}:auto")],
-        [max_message_button("telegram • fallback", command=f"settings:delivery:slot:set:{slot}:telegram")],
-        [max_message_button("max • fallback", command=f"settings:delivery:slot:set:{slot}:max")],
-        [max_message_button("vk • fallback", command=f"settings:delivery:slot:set:{slot}:vk")],
-        [max_message_button(BACK_LABEL, command="settings:delivery:channels")],
-    ])
+    return max_attachment_from_telegram(kb_delivery_channel_select(slot, snapshot or {"identities": [], "morning_channel": None, "evening_channel": None}))
+
 
 def state_period_attachment() -> dict[str, Any]:
-    return inline_keyboard_attachment([
-        [max_message_button("⭐ Оценить состояние сейчас", command="continue")],
-        [max_message_button("📅 Сегодня", command="progress"), max_message_button("📆 Вчера", command="history")],
-        [max_message_button("🗓 За всё время", command="progress")],
-        [max_message_button("🔐 Открыть полный маршрут", command="pay"), max_message_button("🎁 Подарить", command="gift")],
-        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
-    ])
-
-
+    return max_attachment_from_telegram(kb_state_period_menu())
 
 
 def post_actions_attachment() -> dict[str, Any]:
-    # Telegram kb_after_post_actions parity.
-    return inline_keyboard_attachment([
-        [max_message_button("📈 Посмотреть изменение состояния", command="settings:state")],
-        [max_message_button("🔐 Открыть полный маршрут", command="sub:menu")],
-        [max_message_button("🎧 Ещё одна бесплатная практика", command="demo")],
-        [max_message_button("🎁 Подарить подписку", command="gift:menu")],
-        [max_message_button(MAIN_MENU_LABEL, command=MENU_COMMAND)],
-    ])
+    return max_attachment_from_telegram(kb_after_post_actions())
 
 
 def sales_offer_attachment() -> dict[str, Any]:
-    # Telegram kb_sales_offer parity.
-    return inline_keyboard_attachment([
-        [max_message_button("🔐 Открыть полный маршрут", command="sub:menu")],
-        [max_message_button("🎧 Ещё одна бесплатная практика", command="demo")],
-        [max_message_button("🎁 Подарить подписку другу", command="gift:menu")],
-        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
-    ])
+    return max_attachment_from_telegram(kb_sales_offer(0))
+
 
 def full_access_attachment() -> dict[str, Any]:
     return full_route_attachment()
 
 
-
 def settings_locked_attachment() -> dict[str, Any]:
-    # Telegram kb_settings_locked parity.
-    return inline_keyboard_attachment([
-        [max_message_button("🔐 Открыть полный маршрут", command="sub:menu")],
-        [max_message_button("🎁 Передать ритм", command="gift:menu"), max_message_button(BACK_LABEL, command="settings:menu")],
-    ])
+    return max_attachment_from_telegram(kb_settings_locked())
 
 
 def ref_bonus_actions_attachment() -> dict[str, Any]:
-    # Telegram kb_ref_bonus_actions parity.
-    return inline_keyboard_attachment([
-        [max_message_button("🔐 Открыть полный маршрут", command="sub:menu")],
-        [max_message_button("🎁 Подарить подписку другу", command="gift:menu")],
-        [max_message_button("📈 Анализ моего состояния", command="settings:state")],
-        [max_message_button(BACK_LABEL, command="settings:menu")],
-    ])
+    return max_attachment_from_telegram(kb_ref_bonus_actions())
 
 def is_score_scale_text(text: str) -> bool:
     raw = str(text or "").casefold().replace("−", "-")
@@ -295,3 +227,44 @@ def prepare_text(text: str, *, has_native_keyboard: bool = False) -> str:
     if has_main_menu_text(raw) and not has_native_keyboard and "отправьте:" not in raw:
         return raw.rstrip() + "\n\n" + max_numbered_menu_text()
     return raw
+
+
+def state_rate_scale_attachment() -> dict[str, Any]:
+    return max_attachment_from_telegram(kb_state_rate_scale())
+
+
+def attachment_for_reply_kind(kind: str | None, meta: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    meta = meta or {}
+    if kind == "demo_kind":
+        return demo_kind_attachment()
+    if kind == "score_scale":
+        return score_scale_attachment(int(meta.get("session_id") or 0), stage=str(meta.get("stage") or "pre"))
+    if kind == "weather":
+        return weather_attachment()
+    if kind == "weather_city":
+        return weather_city_attachment()
+    if kind == "progress":
+        return progress_attachment()
+    if kind == "settings":
+        return settings_attachment()
+    if kind == "delivery_slots":
+        return delivery_slots_attachment()
+    if kind == "delivery_morning":
+        return delivery_channel_select_attachment("morning")
+    if kind == "delivery_evening":
+        return delivery_channel_select_attachment("evening")
+    if kind == "state_period":
+        return state_period_attachment()
+    if kind == "state_rate":
+        return state_rate_scale_attachment()
+    if kind == "post_actions":
+        return post_actions_attachment()
+    if kind == "sales_offer":
+        return sales_offer_attachment()
+    if kind == "full_access":
+        return full_access_attachment()
+    if kind == "settings_locked":
+        return settings_locked_attachment()
+    if kind == "ref_bonus":
+        return ref_bonus_actions_attachment()
+    return None

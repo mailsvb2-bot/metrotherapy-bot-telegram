@@ -28,6 +28,7 @@ from services.mood_text_flow import parse_score_text, find_pending_pre_session_i
 from services.mood import create_session
 from services.pending import set_pending, peek_pending, pop_pending
 from services.bonuses import compute_bonus_stats, paid_referrals_count, gift_grants_count, gift_days_granted
+from services.state_ratings import add_rating
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -406,6 +407,24 @@ def _delivery_slot_text(user_id: int, slot: str) -> str:
 
 
 
+
+def _state_rate_prompt_text() -> str:
+    return "⭐ Оцените своё состояние прямо сейчас (1 — хуже, 10 — лучше):"
+
+
+def _save_state_rate_text(user_id: int, value: str | None) -> str:
+    try:
+        rating = int(str(value or "").strip())
+    except (TypeError, ValueError):
+        return "⚠️ Не удалось распознать оценку. Выберите число от 1 до 10."
+    if not 1 <= rating <= 10:
+        return "⚠️ Оценка должна быть от 1 до 10."
+    ok = add_rating(int(user_id), rating)
+    if not ok:
+        return "⚠️ Не удалось сохранить оценку. Попробуйте ещё раз."
+    return f"✅ Сохранил: {rating}/10\n\nВыберите период, чтобы построить график:"
+
+
 def _platform_changed_text(user_id: int, platform: str) -> str:
     set_preferred_platform(int(user_id), platform)
     return f"Сохранено: приоритетный канал — {platform_title(platform)}."
@@ -416,6 +435,23 @@ def _parse_command(text: str) -> tuple[str, str | None]:
     if not raw:
         return "menu", None
     lowered = raw.lower()
+    if lowered.startswith("mood:done:"):
+        return "done", lowered.rsplit(":", 1)[-1]
+    if lowered.startswith("mood:"):
+        parts = lowered.split(":")
+        if len(parts) >= 4:
+            stage = parts[1]
+            score = parts[-1]
+            if stage in {"pre", "post"}:
+                return ("pre_score" if stage == "pre" else "post_score"), score
+    if lowered == "state:rate":
+        return "state_rate_menu", None
+    if lowered.startswith("state:rate:"):
+        parts = lowered.split(":")
+        if len(parts) == 3:
+            return "state_rate_save", parts[2]
+    if lowered in {"state:today", "state:yesterday", "state:all"}:
+        return "state_period", lowered.split(":", 1)[1]
     contract_command = normalize_menu_command(raw)
     if contract_command:
         return ("menu" if contract_command == "start" else contract_command), None
@@ -550,7 +586,7 @@ def _start_vk_pre_audio_session(user_id: int, *, kind: str) -> MessengerReply:
 
     return MessengerReply(
         text=_vk_pre_audio_score_text(kind, int(session_id)),
-        meta={"vk_keyboard": "score_scale"},
+        meta={"vk_keyboard": "score_scale", "session_id": str(int(session_id)), "stage": "pre"},
     )
 
 
@@ -656,7 +692,7 @@ def handle_incoming_text(
     if action == "continue" and norm_platform == "telegram":
         return int(user_id), [MessengerReply(kind="next_audio")]
 
-    if action == "done":
+    if action == "done" and norm_platform == "telegram":
         try:
             confirmed = confirm_pending_audio_delivery(int(user_id), platform=norm_platform)
         except TypeError:
@@ -849,6 +885,19 @@ def handle_incoming_text(
         return canonical_user_id, [MessengerReply(text=_history_text(canonical_user_id))]
     if action == "remind_continue_tomorrow":
         return canonical_user_id, [MessengerReply(text=_schedule_continue_tomorrow_text(canonical_user_id))]
+
+    if action == "state_rate_menu":
+        return canonical_user_id, [MessengerReply(text=_state_rate_prompt_text(), meta={"vk_keyboard": "state_rate"})]
+
+    if action == "state_rate_save":
+        return canonical_user_id, [MessengerReply(text=_save_state_rate_text(canonical_user_id, value), meta={"vk_keyboard": "state_period"})]
+
+    if action == "state_period":
+        return canonical_user_id, [
+            MessengerReply(text=_progress_text(canonical_user_id), meta={"vk_keyboard": "state_period", "period": str(value or "all")}),
+            MessengerReply(kind="progress_chart", meta={"period": str(value or "all")}),
+        ]
+
 
     if action == "settings_time":
         slot = "home" if value == "home" else "work"
