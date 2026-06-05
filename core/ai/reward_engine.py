@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Iterable, Optional, Tuple
 
