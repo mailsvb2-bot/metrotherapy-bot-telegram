@@ -46,9 +46,9 @@ def inline_keyboard_attachment(rows: list[list[dict[str, Any]]]) -> dict[str, An
     return {"type": "inline_keyboard", "payload": {"buttons": rows}}
 
 
-
 def _score_label(value: int) -> str:
     return f"{int(value):+d}" if int(value) != 0 else "0"
+
 
 def has_main_menu_text(text: str) -> bool:
     raw = str(text or "")
@@ -59,11 +59,11 @@ def has_main_menu_text(text: str) -> bool:
         and (
             "выберите маршрут" in compact
             or "попробовать бесплатно" in compact
+            or "полный маршрут" in compact
             or "кнопки max" in compact
             or "кнопки вконтакте" in compact
         )
     )
-
 
 
 def main_menu_attachment() -> dict[str, Any]:
@@ -81,10 +81,9 @@ def demo_kind_attachment() -> dict[str, Any]:
 def weather_attachment() -> dict[str, Any]:
     return max_attachment_from_telegram(kb_weather())
 
+
 def weather_city_attachment() -> dict[str, Any]:
     return inline_keyboard_attachment([[max_message_button(BACK_LABEL, command=MENU_COMMAND)]])
-
-
 
 
 def score_scale_attachment(session_id: int = 0, *, stage: str = "pre") -> dict[str, Any]:
@@ -135,6 +134,7 @@ def settings_locked_attachment() -> dict[str, Any]:
 def ref_bonus_actions_attachment() -> dict[str, Any]:
     return max_attachment_from_telegram(kb_ref_bonus_actions())
 
+
 def is_score_scale_text(text: str) -> bool:
     raw = str(text or "").casefold().replace("−", "-")
     return "-10" in raw and "10" in raw and ("шкал" in raw or "оцен" in raw or "состояни" in raw)
@@ -159,8 +159,6 @@ def _labeled_link_rows(text: str) -> list[list[dict[str, Any]]]:
         if label != "Открыть":
             rows.append([max_link_button(label, url)])
     return rows
-
-
 
 
 def link_action_attachment(text: str) -> dict[str, Any] | None:
@@ -203,6 +201,7 @@ def native_keyboard_attachments(text: str) -> list[dict[str, Any]]:
         return [ref_bonus_actions_attachment()]
     return []
 
+
 def normalize_max_text(text: str) -> str:
     raw = str(text or "")
     replacements = {
@@ -235,6 +234,8 @@ def state_rate_scale_attachment() -> dict[str, Any]:
 
 def attachment_for_reply_kind(kind: str | None, meta: dict[str, Any] | None = None) -> dict[str, Any] | None:
     meta = meta or {}
+    if kind == "main":
+        return main_menu_attachment()
     if kind == "demo_kind":
         return demo_kind_attachment()
     if kind == "score_scale":
