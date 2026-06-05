@@ -1,10 +1,10 @@
-name: Ruff quality gate
+name: Quality gate
 
 on:
   workflow_dispatch:
 
 jobs:
-  ruff:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -18,5 +18,5 @@ jobs:
       - name: Install dev dependencies
         run: python -m pip install -r requirements-dev.txt
 
-      - name: Run Ruff
-        run: python scripts/check_ruff.py
+      - name: Run quality gate
+        run: python scripts/check_quality.py
