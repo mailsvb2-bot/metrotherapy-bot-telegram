@@ -5,12 +5,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-from keyboards.inline import (
-    kb_after_post_actions,
-    kb_delivery_channel_select,
-    kb_delivery_channel_slots,
-    kb_demo_kind,
-    kb_full
+from keyboards.inline import kb_demo_kind, kb_main, kb_mood_scale
+from runtime import messenger_max_ui as max_ui
+from runtime import messenger_vk_ui as vk_ui
+
+
+def tg_rows(markup: Any) ->
