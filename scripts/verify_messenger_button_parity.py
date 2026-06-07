@@ -13,4 +13,4 @@ from runtime import messenger_max_ui as max_ui
 from runtime import messenger_vk_ui as vk_ui
 
 
-def tg_rows(markup: Any) ->
+def tg_rows(markup: Any) -> list[list[tuple[str, str]]]:
