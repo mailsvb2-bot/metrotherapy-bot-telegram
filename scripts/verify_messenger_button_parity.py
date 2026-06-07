@@ -14,3 +14,4 @@ from runtime import messenger_vk_ui as vk_ui
 
 
 def tg_rows(markup: Any) -> list[list[tuple[str, str]]]:
+    return [[(str(b.text), str(b.callback_data or
