@@ -119,6 +119,107 @@ async def _send_progress_chart_or_notice(
         )
 
 
+async def _send_mood_flow_result_notice(
+    *,
+    platform: str,
+    sender: Any,
+    external_user_id: str,
+    canonical_user_id: int,
+    message: str,
+    prompt_done: bool = False,
+) -> None:
+    if not str(message or "").strip():
+        return
+    kwargs: dict[str, Any] = {}
+    if prompt_done:
+        if platform == "vk":
+            kwargs["keyboard_json"] = keyboard_for_reply_kind("post_audio") or keyboard_for_reply_kind("state_period")
+        elif platform == "max":
+            attachment = max_ui.post_audio_attachment()
+            if attachment is not None:
+                kwargs["attachments"] = [attachment]
+    await sender.send_text(
+        external_user_id,
+        message,
+        **_vk_kwargs(platform, kwargs, canonical_user_id, text=message),
+    )
+
+
+async def _handle_pre_score_flow(
+    *,
+    platform: str,
+    sender: Any,
+    registry: SenderRegistry,
+    external_user_id: str,
+    canonical_user_id: int,
+    score: int,
+) -> None:
+    try:
+        result = await complete_pre_score_and_send(
+            canonical_user_id,
+            platform=platform,
+            score=int(score),
+            senders=registry,
+        )
+        if not result.ok:
+            await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))
+            return
+        # VK sends the post-audio controls inside complete_pre_score_and_send;
+        # MAX sends native audio there, then needs the same controls as a message.
+        if platform == "max":
+            await _send_mood_flow_result_notice(
+                platform=platform,
+                sender=sender,
+                external_user_id=external_user_id,
+                canonical_user_id=canonical_user_id,
+                message=result.message,
+                prompt_done=result.prompt_done,
+            )
+    except Exception:  # validator: allow-wide-except
+        log.exception("%s pre-score flow failed", platform.upper())
+        await sender.send_text(
+            external_user_id,
+            "⚠️ Оценку сохранил, но не смог отправить аудио. Напишите: continue",
+            **_vk_kwargs(platform, {}, canonical_user_id),
+        )
+
+
+async def _handle_post_score_flow(
+    *,
+    platform: str,
+    sender: Any,
+    registry: SenderRegistry,
+    external_user_id: str,
+    canonical_user_id: int,
+    score: int,
+) -> None:
+    try:
+        result = await complete_post_score_and_send_next(
+            canonical_user_id,
+            platform=platform,
+            score=int(score),
+            senders=registry,
+        )
+        await sender.send_text(
+            external_user_id,
+            result.message,
+            **_vk_kwargs(platform, {"keyboard_json": keyboard_for_reply_kind("state_period") or ""} if platform == "vk" else {}, canonical_user_id, text=result.message),
+        )
+        await _send_progress_chart_or_notice(
+            platform=platform,
+            sender=sender,
+            external_user_id=external_user_id,
+            canonical_user_id=canonical_user_id,
+        )
+    except Exception:  # validator: allow-wide-except
+        log.exception("%s post-score flow failed", platform.upper())
+        await sender.send_text(
+            external_user_id,
+            "⚠️ Оценку после прослушивания сохранил, но не смог завершить цикл. Напишите: progress",
+            **_vk_kwargs(platform, {}, canonical_user_id),
+        )
+
+
 async def send_reply_bundle(
     platform: str,
     external_user_id: str,
@@ -220,32 +321,28 @@ async def send_reply_bundle(
             )
             continue
 
-        if reply.kind == "pre_score_result":
+        if reply.kind in {"pre_score_result", "auto_pre_score"}:
             score = int((reply.meta or {}).get("score", "0") or 0)
-            session_id = int((reply.meta or {}).get("session_id", "0") or 0)
-            try:
-                await complete_pre_score_and_send(canonical_user_id, score, session_id=session_id, target_platform=platform)
-            except Exception:  # validator: allow-wide-except
-                log.exception("%s pre-score flow failed", platform.upper())
-                await sender.send_text(
-                    external_user_id,
-                    "⚠️ Оценку сохранил, но не смог отправить аудио. Напишите: continue",
-                    **_vk_kwargs(platform, {}, canonical_user_id),
-                )
+            await _handle_pre_score_flow(
+                platform=platform,
+                sender=sender,
+                registry=registry,
+                external_user_id=external_user_id,
+                canonical_user_id=canonical_user_id,
+                score=score,
+            )
             continue
 
-        if reply.kind == "post_score_result":
+        if reply.kind in {"post_score_result", "auto_post_score"}:
             score = int((reply.meta or {}).get("score", "0") or 0)
-            session_id = int((reply.meta or {}).get("session_id", "0") or 0)
-            try:
-                await complete_post_score_and_send_next(canonical_user_id, score, session_id=session_id, target_platform=platform)
-            except Exception:  # validator: allow-wide-except
-                log.exception("%s post-score flow failed", platform.upper())
-                await sender.send_text(
-                    external_user_id,
-                    "⚠️ Оценку после прослушивания сохранил, но не смог отправить следующее аудио. Напишите: continue",
-                    **_vk_kwargs(platform, {}, canonical_user_id),
-                )
+            await _handle_post_score_flow(
+                platform=platform,
+                sender=sender,
+                registry=registry,
+                external_user_id=external_user_id,
+                canonical_user_id=canonical_user_id,
+                score=score,
+            )
             continue
 
         if reply.kind == "audio_confirmed_next":
