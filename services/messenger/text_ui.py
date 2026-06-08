@@ -862,7 +862,7 @@ def handle_incoming_text(
                         'Теперь оцените состояние ПОСЛЕ прослушивания.\n'
                         f'{_score_scale_text()}'
                     ),
-                    meta={'vk_keyboard': 'score_scale'},
+                    meta={'vk_keyboard': 'score_scale', 'session_id': str(pending_post_session_id or 0), 'stage': 'post'},
                 ),
             ]
 
@@ -873,7 +873,7 @@ def handle_incoming_text(
                     'Теперь оцените состояние ПОСЛЕ прослушивания.\n'
                     f'{_score_scale_text()}'
                 ),
-                meta={'vk_keyboard': 'score_scale'},
+                meta={'vk_keyboard': 'score_scale', 'session_id': str(pending_post_session_id or 0), 'stage': 'post'},
             ),
         ]
     if action == "progress":

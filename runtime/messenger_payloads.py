@@ -44,7 +44,7 @@ def _plain_score_value(value: str) -> str | None:
         candidate = raw[1:]
     elif raw.startswith("-") and raw[1:].isdigit():
         candidate = raw
-    elif raw == "0" or raw in {"3", "4", "5", "6", "7", "8", "9", "10"}:
+    elif raw in {str(i) for i in range(0, 11)}:
         candidate = raw
     else:
         return None
@@ -86,7 +86,17 @@ def normalise_messenger_text(text: str) -> str:
         "⬅️ назад": "start",
         "назад": "start",
         "⬅️ меню": "start",
-        "1": "demo_work",
+        "menu:main": "start",
+        "back": "start",
+        "demo_kind_work": "demo_work",
+        "demo_kind_home": "demo_home",
+        "sub:menu": "pay",
+        "gift:menu": "gift",
+        "settings:menu": "settings",
+        "settings:state": "progress",
+        "share:menu": "share",
+        "weather:show": "weather",
+        "weather:city": "weather_city",
         "1.": "demo_work",
         "1️⃣": "demo_work",
         "1️⃣ утро / дорога": "demo_work",
@@ -95,7 +105,6 @@ def normalise_messenger_text(text: str) -> str:
         "дорога на работу": "demo_work",
         "🚗 практика на утро / дорогу": "demo_work",
         "практика на утро / дорогу": "demo_work",
-        "2": "demo_home",
         "2.": "demo_home",
         "2️⃣": "demo_home",
         "2️⃣ вечер / домой": "demo_home",
