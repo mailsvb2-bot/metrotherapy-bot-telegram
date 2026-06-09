@@ -285,7 +285,9 @@ def _has_pending_score_context(user_id: int | None) -> bool:
             find_pending_pre_session_id(int(user_id))
             or find_pending_post_session_id(int(user_id))
         )
-    except (ImportError, TypeError, ValueError, RuntimeError):
+    except RuntimeError:
+        return False
+    except (ImportError, TypeError, ValueError):
         return False
 
 
