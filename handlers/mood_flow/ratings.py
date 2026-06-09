@@ -13,6 +13,7 @@ from services.jobs import add_job, cancel_post_prompt
 import asyncio
 
 from aiogram import Router, F
+from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.types import CallbackQuery, BufferedInputFile
 from aiogram.types import FSInputFile
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -240,16 +241,31 @@ async def mood_answer(cb: CallbackQuery):
             return
 
         async def _send_audio() -> None:
-            """Отправить аудио не блокируя UI (кнопка должна ощущаться мгновенной)."""
             cached_kind = "voice" if file_path.suffix.lower() in (".ogg", ".opus") else "audio"
             cached_id = get_cached_file_id(file_path, cached_kind)
+
             try:
                 if cached_id and cached_kind == "voice":
-                    msg = await cb.bot.send_voice(chat_id=int(cb.from_user.id), voice=cached_id, caption=caption, protect_content=True)
+                    msg = await cb.bot.send_voice(
+                        chat_id=int(cb.from_user.id),
+                        voice=cached_id,
+                        caption=caption,
+                        protect_content=True,
+                    )
                 elif cached_id and cached_kind == "audio":
-                    msg = await cb.bot.send_audio(chat_id=int(cb.from_user.id), audio=cached_id, caption=caption, protect_content=True)
+                    msg = await cb.bot.send_audio(
+                        chat_id=int(cb.from_user.id),
+                        audio=cached_id,
+                        caption=caption,
+                        protect_content=True,
+                    )
                 elif file_path.suffix.lower() in (".ogg", ".opus"):
-                    msg = await cb.bot.send_voice(chat_id=int(cb.from_user.id), voice=FSInputFile(file_path), caption=caption, protect_content=True)
+                    msg = await cb.bot.send_voice(
+                        chat_id=int(cb.from_user.id),
+                        voice=FSInputFile(file_path),
+                        caption=caption,
+                        protect_content=True,
+                    )
                 else:
                     msg = await send_audio_cached(
                         bot=cb.bot,
@@ -259,68 +275,122 @@ async def mood_answer(cb: CallbackQuery):
                         caption=caption,
                         protect_content=True,
                     )
-
-                # кеш file_id
+            except (
+                TelegramAPIError,
+                TelegramNetworkError,
+                OSError,
+                asyncio.TimeoutError,
+                sqlite3.Error,
+                ValueError,
+                RuntimeError,
+            ) as e:
                 try:
-                    if getattr(msg, "voice", None) and getattr(msg.voice, "file_id", None):
-                        save_cached_file_id(file_path, "voice", str(msg.voice.file_id))
-                    if getattr(msg, "audio", None) and getattr(msg.audio, "file_id", None):
-                        save_cached_file_id(file_path, "audio", str(msg.audio.file_id))
-                except (ValueError, RuntimeError):
-                    logging.getLogger(__name__).exception("Unhandled exception")
+                    unmark_delivery(int(cb.from_user.id), idem_kind, "audio_lock", idem_scheduled_at)
+                except sqlite3.Error:
+                    logging.getLogger(__name__).debug("audio_lock cleanup failed", exc_info=True)
 
-                # demo analytics
-                try:
-                    if s.source == "demo" and msg:
-                        dur = None
-                        if getattr(msg, "voice", None):
-                            dur = getattr(msg.voice, "duration", None)
-                        if getattr(msg, "audio", None):
-                            dur = getattr(msg.audio, "duration", dur)
-                        from datetime import datetime, timezone
-                        sent_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-                        record_demo_sent(int(cb.from_user.id), "work" if s.kind == "work" else "home", int(msg.message_id), sent_at, int(dur) if dur else None)
-                except (ValueError, RuntimeError):
-                    logging.getLogger(__name__).exception("Unhandled exception")
-
-
-                # подписка считается по касаниям: фиксируем ТОЛЬКО после факта отправки аудио
-                try:
-                    if s.source != "demo":
-                        slot = "morning" if s.kind == "work" else "evening"
-                        register_touch(int(cb.from_user.id), slot)
-                        advance(int(cb.from_user.id), slot)
-                except (ValueError, RuntimeError):
-                    logging.getLogger(__name__).exception("Unhandled exception")
+                log_event(
+                    int(cb.from_user.id),
+                    "mood_audio_send_error",
+                    {"err": str(e), "err_type": type(e).__name__, "source": s.source},
+                )
 
                 try:
-                    if s.anchor_id is not None and file_path is not None:
-                        record_audio_delivery(
-                            int(cb.from_user.id),
-                            item=AudioProgressItem(ordinal=0, anchor=int(s.anchor_id), title=str(caption or file_path.stem), path=file_path),
-                            platform='telegram',
-                        )
-                except (ValueError, RuntimeError):
-                    logging.getLogger(__name__).exception("Unhandled exception")
+                    await cb.message.answer("⚠️ Не удалось отправить аудио. Попробуйте ещё раз.")
+                except (TelegramAPIError, TelegramNetworkError, RuntimeError):
+                    logging.getLogger(__name__).exception("failed to notify user about audio send error")
+                return
 
-                # Финальный маркер отправки — только после успешного send.
-                mark_delivery_once(int(cb.from_user.id), idem_kind, "audio", idem_scheduled_at)
+            try:
+                if getattr(msg, "voice", None) and getattr(msg.voice, "file_id", None):
+                    save_cached_file_id(file_path, "voice", str(msg.voice.file_id))
+                if getattr(msg, "audio", None) and getattr(msg.audio, "file_id", None):
+                    save_cached_file_id(file_path, "audio", str(msg.audio.file_id))
+            except (sqlite3.Error, ValueError, RuntimeError):
+                logging.getLogger(__name__).exception("audio cache update failed")
+
+            try:
+                if s.source == "demo" and msg:
+                    dur = None
+                    if getattr(msg, "voice", None):
+                        dur = getattr(msg.voice, "duration", None)
+                    if getattr(msg, "audio", None):
+                        dur = getattr(msg.audio, "duration", dur)
+
+                    from datetime import datetime, timezone
+                    sent_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+                    record_demo_sent(
+                        int(cb.from_user.id),
+                        "work" if s.kind == "work" else "home",
+                        int(msg.message_id),
+                        sent_at,
+                        int(dur) if dur else None,
+                    )
+            except (sqlite3.Error, ValueError, RuntimeError):
+                logging.getLogger(__name__).exception("demo analytics update failed")
+
+            try:
+                if s.source != "demo":
+                    slot = "morning" if s.kind == "work" else "evening"
+                    register_touch(int(cb.from_user.id), slot)
+                    advance(int(cb.from_user.id), slot)
+            except (sqlite3.Error, ValueError, RuntimeError):
+                logging.getLogger(__name__).exception("subscription touch update failed")
+
+            try:
+                if s.anchor_id is not None and file_path is not None:
+                    record_audio_delivery(
+                        int(cb.from_user.id),
+                        item=AudioProgressItem(
+                            ordinal=0,
+                            anchor=int(s.anchor_id),
+                            title=str(caption or file_path.stem),
+                            path=file_path,
+                        ),
+                        platform="telegram",
+                    )
+            except (sqlite3.Error, ValueError, RuntimeError):
+                logging.getLogger(__name__).exception("audio progress update failed")
+
+            final_marker_ok = False
+            try:
+                final_marker_ok = mark_delivery_once(
+                    int(cb.from_user.id),
+                    idem_kind,
+                    "audio",
+                    idem_scheduled_at,
+                )
+                if not final_marker_ok:
+                    final_marker_ok = was_delivered(
+                        int(cb.from_user.id),
+                        idem_kind,
+                        "audio",
+                        idem_scheduled_at,
+                    )
+            except sqlite3.Error:
+                logging.getLogger(__name__).exception("audio final idempotency marker failed")
+
+            if final_marker_ok:
                 try:
                     unmark_delivery(int(cb.from_user.id), idem_kind, "audio_lock", idem_scheduled_at)
                 except sqlite3.Error:
                     logging.getLogger(__name__).debug("audio_lock cleanup after send failed", exc_info=True)
+            else:
+                log_event(
+                    int(cb.from_user.id),
+                    "mood_audio_final_marker_missing",
+                    {"source": s.source, "kind": idem_kind, "scheduled_at": idem_scheduled_at},
+                )
 
+            try:
                 mark_audio_sent(sid)
+            except (sqlite3.Error, ValueError, RuntimeError):
+                logging.getLogger(__name__).exception("mark_audio_sent failed")
+
+            try:
                 await cb.message.answer("Когда прослушаете — нажмите кнопку:", reply_markup=kb_mood_done(sid))
-            except (ValueError, RuntimeError) as e:
-                # Если упали ДО факта отправки — снимаем lock, чтобы allow retry.
-                try:
-                    unmark_delivery(int(cb.from_user.id), idem_kind, "audio_lock", idem_scheduled_at)
-                except sqlite3.Error:
-                    # last-resort: не ломаем UX из-за cleanup
-                    logging.getLogger(__name__).debug("audio_lock cleanup failed", exc_info=True)
-                log_event(int(cb.from_user.id), "mood_audio_send_error", {"err": str(e), "source": s.source})
-                await cb.message.answer("⚠️ Не удалось отправить аудио. Попробуйте ещё раз.")
+            except (TelegramAPIError, TelegramNetworkError, RuntimeError):
+                logging.getLogger(__name__).exception("failed to send mood-done prompt")
 
         tm().create(_send_audio())
         return

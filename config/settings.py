@@ -149,13 +149,13 @@ class Settings:
     PREWARM_CHAT_ID: str = _env("PREWARM_CHAT_ID", "")
 
     # --- AI (OpenAI) ---
-    # AI включён, если задан ключ. UX не меняем: AI помогает выбирать сценарии/тексты/цены.
+    # AI fail-closed by default. Enable explicitly with AI_ENABLED=1.
     OPENAI_API_KEY: str = _env("OPENAI_API_KEY", "")
     OPENAI_MODEL: str = _env("OPENAI_MODEL", "gpt-4.1-mini")
     OPENAI_BASE_URL: str = _env("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
     # Для безопасного запуска: можно жёстко отключить AI, даже если ключ задан.
-    AI_ENABLED: int = int(_env("AI_ENABLED", "1"))
+    AI_ENABLED: int = int(_env("AI_ENABLED", "0"))
 
 
     @property
