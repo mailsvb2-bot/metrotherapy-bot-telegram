@@ -320,8 +320,10 @@ class Engine:
             reply_markup=kb_mood_scale(sid, stage="pre"),
         )
 
-        # Аудио и последующие шаги отправим после клика по оценке (handlers/mood_flow/ratings.py)
+        # Аудио и последующие шаги отправим после клика по оценке (handlers/mood.py)
         return
+
+        log_event(user_id, "demo_sent", {"kind": kind})
 
     def _kb_offer(self, user_id: int) -> InlineKeyboardMarkup:
         # Пробный доступ отключён по ТЗ. Оставляем только детерминированные кнопки.
