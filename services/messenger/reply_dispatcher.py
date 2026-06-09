@@ -110,7 +110,7 @@ async def _send_progress_chart_or_notice(
             canonical_user_id=canonical_user_id,
         )
         log.info("%s progress chart sent: user_id=%s path=%s", platform.upper(), canonical_user_id, chart_path)
-    except Exception:  # validator: allow-wide-except
+    except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
         log.exception("%s progress chart send failed", platform.upper())
         await sender.send_text(
             external_user_id,
@@ -177,7 +177,7 @@ async def _handle_pre_score_flow(
                 message=result.message,
                 prompt_done=result.prompt_done,
             )
-    except Exception:  # validator: allow-wide-except
+    except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
         log.exception("%s pre-score flow failed", platform.upper())
         await sender.send_text(
             external_user_id,
@@ -218,7 +218,7 @@ async def _handle_post_score_flow(
             external_user_id=external_user_id,
             canonical_user_id=canonical_user_id,
         )
-    except Exception:  # validator: allow-wide-except
+    except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
         log.exception("%s post-score flow failed", platform.upper())
         await sender.send_text(
             external_user_id,
