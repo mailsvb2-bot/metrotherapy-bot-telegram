@@ -133,7 +133,9 @@ async def _send_mood_flow_result_notice(
     kwargs: dict[str, Any] = {}
     if prompt_done:
         if platform == "vk":
-            kwargs["keyboard_json"] = keyboard_for_reply_kind("post_audio") or keyboard_for_reply_kind("state_period")
+            keyboard_json = keyboard_for_reply_kind("post_audio") or keyboard_for_reply_kind("state_period")
+            if keyboard_json is not None:
+                kwargs["keyboard_json"] = keyboard_json
         elif platform == "max":
             attachment = max_ui.post_audio_attachment()
             if attachment is not None:
@@ -200,10 +202,15 @@ async def _handle_post_score_flow(
             score=int(score),
             senders=registry,
         )
+        kwargs: dict[str, Any] = {}
+        if platform == "vk":
+            keyboard_json = keyboard_for_reply_kind("state_period")
+            if keyboard_json is not None:
+                kwargs["keyboard_json"] = keyboard_json
         await sender.send_text(
             external_user_id,
             result.message,
-            **_vk_kwargs(platform, {"keyboard_json": keyboard_for_reply_kind("state_period") or ""} if platform == "vk" else {}, canonical_user_id, text=result.message),
+            **_vk_kwargs(platform, kwargs, canonical_user_id, text=result.message),
         )
         await _send_progress_chart_or_notice(
             platform=platform,

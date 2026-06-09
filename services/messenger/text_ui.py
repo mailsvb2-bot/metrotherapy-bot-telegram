@@ -842,6 +842,8 @@ def handle_incoming_text(
     if action == "done":
         pending_post_session_id = find_pending_post_session_id(canonical_user_id)
         confirmed = confirm_pending_audio_delivery(canonical_user_id, platform=platform)
+        if pending_post_session_id is None:
+            pending_post_session_id = find_pending_post_session_id(canonical_user_id)
 
         if confirmed is None and pending_post_session_id is None:
             return canonical_user_id, [

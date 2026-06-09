@@ -11,6 +11,7 @@ from keyboards.inline import (
     kb_full_access_menu,
     kb_main,
     kb_mood_scale,
+    kb_mood_done,
     kb_ref_bonus_actions,
     kb_sales_offer,
     kb_settings_locked,
@@ -177,6 +178,10 @@ def vk_progress_keyboard_json() -> str:
     return vk_state_period_keyboard_json()
 
 
+def vk_post_audio_keyboard_json(session_id: int = 0) -> str:
+    return vk_keyboard_from_telegram(kb_mood_done(int(session_id)))
+
+
 def vk_settings_keyboard_json() -> str:
     return vk_keyboard_from_telegram(kb_settings_menu())
 
@@ -268,6 +273,8 @@ def keyboard_for_reply_kind(kind: str | None, meta: dict[str, Any] | None = None
         return vk_weather_city_keyboard_json()
     if kind == "progress":
         return vk_progress_keyboard_json()
+    if kind == "post_audio":
+        return vk_post_audio_keyboard_json(int(meta.get("session_id") or 0))
     if kind == "settings":
         return vk_settings_keyboard_json()
     if kind == "delivery_slots":

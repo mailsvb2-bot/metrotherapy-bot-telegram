@@ -36,33 +36,41 @@ def _score_command_value(value: str) -> str | None:
     return None
 
 
-def _plain_score_value(value: str) -> str | None:
+
+def _plain_score_value(value: str, *, allow_one_two: bool = False) -> str | None:
     raw = str(value or "").strip().casefold().replace("−", "-")
     if not raw:
         return None
+
     if raw.startswith("+") and raw[1:].isdigit():
         candidate = raw[1:]
     elif raw.startswith("-") and raw[1:].isdigit():
         candidate = raw
-    elif raw in {str(i) for i in range(0, 11)}:
+    elif raw == "0" or raw in {"3", "4", "5", "6", "7", "8", "9", "10"}:
+        candidate = raw
+    elif allow_one_two and raw in {"1", "2"}:
         candidate = raw
     else:
         return None
+
     try:
         score = int(candidate)
     except ValueError:
         return None
+
     if -10 <= score <= 10:
         return _format_score(score)
     return None
 
 
-def normalise_messenger_text(text: str) -> str:
+def normalise_messenger_text(text: str, *, allow_plain_score: bool = False) -> str:
     raw = (text or "").strip()
+
     score_command = _score_command_value(raw)
     if score_command is not None:
         return score_command
-    plain_score = _plain_score_value(raw)
+
+    plain_score = _plain_score_value(raw, allow_one_two=allow_plain_score)
     if plain_score is not None:
         return plain_score
 
@@ -88,8 +96,10 @@ def normalise_messenger_text(text: str) -> str:
         "⬅️ меню": "start",
         "menu:main": "start",
         "back": "start",
+
         "demo_kind_work": "demo_work",
         "demo_kind_home": "demo_home",
+
         "sub:menu": "pay",
         "gift:menu": "gift",
         "settings:menu": "settings",
@@ -97,6 +107,8 @@ def normalise_messenger_text(text: str) -> str:
         "share:menu": "share",
         "weather:show": "weather",
         "weather:city": "weather_city",
+
+        "1": "demo_work",
         "1.": "demo_work",
         "1️⃣": "demo_work",
         "1️⃣ утро / дорога": "demo_work",
@@ -105,6 +117,8 @@ def normalise_messenger_text(text: str) -> str:
         "дорога на работу": "demo_work",
         "🚗 практика на утро / дорогу": "demo_work",
         "практика на утро / дорогу": "demo_work",
+
+        "2": "demo_home",
         "2.": "demo_home",
         "2️⃣": "demo_home",
         "2️⃣ вечер / домой": "demo_home",
@@ -113,6 +127,7 @@ def normalise_messenger_text(text: str) -> str:
         "дорога домой": "demo_home",
         "🌙 практика на вечер / домой": "demo_home",
         "практика на вечер / домой": "demo_home",
+
         "weather_city": "weather_city",
         "🏙 изменить город": "weather_city",
         "изменить город": "weather_city",
@@ -120,34 +135,39 @@ def normalise_messenger_text(text: str) -> str:
         "город": "weather_city",
         "🔄 обновить погоду": "weather",
         "обновить погоду": "weather",
+
         "💳 оплатить": "pay",
         "оплатить": "pay",
         "оплата": "pay",
         "pay": "pay",
+
         "⚙️ настройки": "settings",
         "settings": "settings",
+
         "repeat": "repeat_audio",
         "/repeat": "repeat_audio",
         "🔁 повторить": "repeat_audio",
         "повторить": "repeat_audio",
         "повторить аудио": "repeat_audio",
         "слушать снова": "repeat_audio",
+
         "📊 прогресс": "progress",
         "🧾 история": "history",
         "история": "history",
         "history": "history",
         "timeline": "history",
         "/timeline": "history",
+
         "🔁 другой мессенджер": "switch",
         "другой мессенджер": "switch",
         "switch": "switch",
+
         "❓ помощь": "help",
         "помощь": "help",
         "help": "help",
         "/help": "help",
     }
     return aliases.get(compact, raw)
-
 
 def safe_int(value: Any) -> int | None:
     try:
@@ -254,16 +274,45 @@ def max_event_key(payload: dict[str, Any]) -> str:
     return key or stable_payload_key("max", payload)
 
 
+
+def _has_pending_score_context(user_id: int | None) -> bool:
+    if user_id is None:
+        return False
+    try:
+        from services.mood_text_flow import find_pending_pre_session_id, find_pending_post_session_id
+
+        return bool(
+            find_pending_pre_session_id(int(user_id))
+            or find_pending_post_session_id(int(user_id))
+        )
+    except Exception:
+        return False
+
+
 def extract_vk_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     obj = payload.get("object") or {}
     message = obj.get("message") or obj
-    from_id = message.get("from_id") or message.get("user_id") or message.get("peer_id") or obj.get("from_id") or obj.get("user_id")
-    payload_text = text_from_vk_payload(message.get("payload") or obj.get("payload") or payload.get("payload"))
-    text = (payload_text or message.get("text") or obj.get("text") or "").strip()
-    text = normalise_messenger_text(text)
+    from_id = (
+        message.get("from_id")
+        or message.get("user_id")
+        or message.get("peer_id")
+        or obj.get("from_id")
+        or obj.get("user_id")
+    )
     safe_user_id = safe_int(from_id)
     if safe_user_id is None:
         return None
+
+    payload_text = text_from_vk_payload(
+        message.get("payload")
+        or obj.get("payload")
+        or payload.get("payload")
+    )
+    text = (payload_text or message.get("text") or obj.get("text") or "").strip()
+    text = normalise_messenger_text(
+        text,
+        allow_plain_score=bool(payload_text) or _has_pending_score_context(safe_user_id),
+    )
     return {
         "user_id": safe_user_id,
         "external_user_id": str(from_id),
@@ -280,9 +329,11 @@ def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     callback = payload.get("callback") or payload.get("button") or payload.get("payload") or {}
     if not isinstance(callback, dict):
         callback = {}
+
     sender = message.get("sender") or payload.get("sender") or callback.get("sender") or {}
     if not isinstance(sender, dict):
         sender = {}
+
     user_id = _first_int_from_dict(
         {"message": message, "sender": sender, "payload": payload, "callback": callback, "body": body},
         ("message", "sender", "user_id"),
@@ -299,10 +350,19 @@ def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     )
     if user_id is None:
         return None
+
     text = (message.get("text") or body.get("text") or payload.get("text") or "").strip()
-    command_text = text_from_max_payload(callback) or text_from_max_payload(body.get("payload")) or text_from_max_payload(message.get("payload")) or text_from_max_payload(payload.get("payload"))
+    command_text = (
+        text_from_max_payload(callback)
+        or text_from_max_payload(body.get("payload"))
+        or text_from_max_payload(message.get("payload"))
+        or text_from_max_payload(payload.get("payload"))
+    )
     text = command_text or text or "start"
-    text = normalise_messenger_text(text)
+    text = normalise_messenger_text(
+        text,
+        allow_plain_score=bool(command_text) or _has_pending_score_context(int(user_id)),
+    )
     return {
         "user_id": int(user_id),
         "external_user_id": str(user_id),
@@ -311,3 +371,4 @@ def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
         "first_name": None,
         "text": text or "start",
     }
+
