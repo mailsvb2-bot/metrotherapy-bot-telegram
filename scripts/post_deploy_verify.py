@@ -25,6 +25,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,6 +63,20 @@ def _parse_json_body(*, url: str, body: str) -> dict:
         raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} invalid_json={_truncate(body, limit=300)}") from exc
 
 
+def _with_path(url: str, path: str) -> str:
+    parts = urlsplit(str(url))
+    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+
+
+def _alias_urls(url: str, *, aliases: tuple[str, ...]) -> list[str]:
+    urls = [str(url)]
+    for alias in aliases:
+        candidate = _with_path(str(url), alias)
+        if candidate not in urls:
+            urls.append(candidate)
+    return urls
+
+
 def _http_json(url: str) -> dict:
     try:
         with urllib.request.urlopen(url, timeout=5) as response:  # nosec B310 - local operator-provided probe URL
@@ -80,11 +95,21 @@ def _http_json(url: str) -> dict:
     return payload
 
 
+def _http_json_any(urls: list[str]) -> tuple[dict, str]:
+    errors: list[str] = []
+    for url in urls:
+        try:
+            return _http_json(url), url
+        except SystemExit as exc:
+            errors.append(str(exc))
+    raise SystemExit("POST_DEPLOY_VERIFY_FAILED all_probe_urls_failed\n" + "\n".join(errors))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run repeatable post-deploy proof checks")
     parser.add_argument("--skip-pytest", action="store_true", help="Skip pytest for faster repeated local checks")
     parser.add_argument("--restore-drill", action="store_true", help="Run postgres_restore_drill.py --latest as part of the bundle")
-    parser.add_argument("--health-url", default=os.getenv("HEALTH_URL", "http://127.0.0.1:8082/healthz"))
+    parser.add_argument("--health-url", default=os.getenv("HEALTH_URL", "http://127.0.0.1:8082/health"))
     parser.add_argument("--ready-url", default=os.getenv("READINESS_URL", "http://127.0.0.1:8082/readyz"))
     args = parser.parse_args()
 
@@ -114,12 +139,17 @@ def main() -> int:
         print("==> postgres restore drill", flush=True)
         print(_run([sys.executable, "scripts/postgres_restore_drill.py", "--latest"]))
 
-    print("==> healthz", flush=True)
-    health = _http_json(str(args.health_url))
-    print(json.dumps({"ok": health.get("ok"), "probe": health.get("probe"), "db_engine": health.get("db_engine")}, ensure_ascii=False))
+    print("==> health", flush=True)
+    health, health_url = _http_json_any(_alias_urls(str(args.health_url), aliases=("/health", "/healthz")))
+    print(
+        json.dumps(
+            {"ok": health.get("ok"), "probe": health.get("probe"), "db_engine": health.get("db_engine"), "url": health_url},
+            ensure_ascii=False,
+        )
+    )
 
-    print("==> readyz", flush=True)
-    ready = _http_json(str(args.ready_url))
+    print("==> ready", flush=True)
+    ready, ready_url = _http_json_any(_alias_urls(str(args.ready_url), aliases=("/readyz", "/ready")))
     print(
         json.dumps(
             {
@@ -129,6 +159,7 @@ def main() -> int:
                 "schema_ready": ready.get("schema_ready"),
                 "scheduler_ready": ready.get("scheduler_ready"),
                 "webhook_ready": ready.get("webhook_ready"),
+                "url": ready_url,
             },
             ensure_ascii=False,
         )
