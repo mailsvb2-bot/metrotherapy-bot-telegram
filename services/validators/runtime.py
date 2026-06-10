@@ -20,6 +20,11 @@ EXCLUDED_SCAN_DIR_NAMES = {
     "venv",
     "env",
     ".env",
+    ".tox",
+    ".nox",
+    ".eggs",
+    ".cache",
+    ".patch_backups",
     "site-packages",
     "dist-packages",
     "node_modules",
@@ -40,7 +45,7 @@ def validate_background_tasks(strict: bool = False) -> None:
     """Validate non-canonical asyncio.create_task usage in project-owned code.
 
     The rule is intentionally scoped:
-    - never scan virtualenvs or third-party packages;
+    - never scan virtualenvs, third-party packages, generated caches or operator backup dirs;
     - allow only explicit owner modules that centralize background execution;
     - do not flag this validator's own explanatory/search strings.
     """
@@ -78,6 +83,7 @@ def validate_background_tasks(strict: bool = False) -> None:
         )
         if strict:
             raise ValidationError(msg)
+
 
 def validate_single_scheduler(strict: bool = True) -> None:
     """Architectural guardrails (v16.4):
@@ -145,6 +151,8 @@ def validate_single_scheduler(strict: bool = True) -> None:
         if strict:
             raise ValidationError(msg)
         log.warning(msg)
+
+
 def validate_wide_except_policy(*, strict: bool = True) -> None:
     """Strict gate for accidental broad exception handling.
 

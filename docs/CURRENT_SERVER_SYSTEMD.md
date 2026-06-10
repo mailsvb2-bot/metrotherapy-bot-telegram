@@ -47,6 +47,7 @@ sudo systemctl daemon-reload
 sudo systemctl restart metrotherapy.service
 sleep 8
 sudo systemctl show metrotherapy.service -p Environment
+curl -sS http://127.0.0.1:8082/health
 curl -sS http://127.0.0.1:8082/healthz
 curl -sS http://127.0.0.1:8082/readyz
 ```
@@ -54,9 +55,21 @@ curl -sS http://127.0.0.1:8082/readyz
 Expected proof:
 
 - `Environment=MPLCONFIGDIR=/var/lib/metrotherapy/mplcache`
-- `/healthz` returns `ok: true`
+- `/health` and `/healthz` return `ok: true`
 - `/readyz` returns `ok: true`
 - readiness has `db_ready`, `schema_ready`, `scheduler_ready`, `webhook_ready` all true
+
+## Health endpoint aliases
+
+The health runtime intentionally exposes both historical and conventional probe
+paths:
+
+- liveness: `/health` and `/healthz`
+- readiness: `/ready` and `/readyz`
+
+Operator docs and post-deploy scripts should prefer `/health` for the current
+Timeweb server because that is the endpoint used in manual production evidence,
+while still accepting `/healthz` for load balancers and conventional probes.
 
 ## Production invariants
 
