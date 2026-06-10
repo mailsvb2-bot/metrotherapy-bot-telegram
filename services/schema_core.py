@@ -49,7 +49,7 @@ def init_db() -> None:
 
 
 def ensure_prod_tables(conn: sqlite3.Connection) -> None:
-    """Tables used in prod for idempotency / queues / deliveries."""
+    """Tables used in prod for idempotency / queues / deliveries / probes."""
     conn.execute(
         """
     CREATE TABLE IF NOT EXISTS idempotency (
@@ -88,5 +88,34 @@ def ensure_prod_tables(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_deliveries_user_created_at
         ON deliveries(user_id, created_at)
+        """.strip()
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS probe_runs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            probe_type TEXT NOT NULL,
+            run_id TEXT NOT NULL UNIQUE,
+            user_id INTEGER,
+            started_at_utc TEXT NOT NULL,
+            finished_at_utc TEXT,
+            status TEXT NOT NULL,
+            cleanup_status TEXT NOT NULL DEFAULT 'pending',
+            rows_touched INTEGER NOT NULL DEFAULT 0,
+            error TEXT,
+            evidence_json TEXT NOT NULL DEFAULT '{}'
+        )
+        """.strip()
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_probe_runs_type_started
+        ON probe_runs(probe_type, started_at_utc)
+        """.strip()
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_probe_runs_status_cleanup
+        ON probe_runs(status, cleanup_status)
         """.strip()
     )

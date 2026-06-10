@@ -102,6 +102,7 @@ def kb_staff_menu(
             [InlineKeyboardButton(text="🧲 Воронка 2.0", callback_data="admin:funnel2")],
             [InlineKeyboardButton(text="🧩 Удержание", callback_data="admin:retention")],
             [InlineKeyboardButton(text="🧾 Мои состояния (10)", callback_data="admin:state:last")],
+            [InlineKeyboardButton(text="🧪 Системные проверки", callback_data="admin:system:checks")],
         ]
         if is_superadmin:
             rows.append([InlineKeyboardButton(text="💳 Тарифы", callback_data=ADMIN_TARIFFS)])
@@ -322,7 +323,7 @@ def kb_after_post_actions():
     return _kb([
         [InlineKeyboardButton(text="📈 Посмотреть изменение состояния", callback_data="settings:state")],
         [InlineKeyboardButton(text="🔐 Открыть полный маршрут", callback_data="sub:menu")],
-        [InlineKeyboardButton(text="🎧 Ещё одна бесплатная практика", callback_data="demo")],
+        [InlineKeyboardButton(text="🎧 Другая практика", callback_data="demo")],
         [InlineKeyboardButton(text="🎁 Подарить подписку", callback_data="gift:menu")],
         [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main")],
     ])
