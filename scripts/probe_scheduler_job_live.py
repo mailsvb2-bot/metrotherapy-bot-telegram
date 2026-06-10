@@ -160,9 +160,6 @@ def run_probe(*, user_id: int = DEFAULT_PROBE_USER_ID, keep_artifacts: bool = Fa
     except SystemExit as exc:
         _record_failure(run_id=run_id, rows_touched=rows_touched, keep_artifacts=keep_artifacts, error=exc, job_key=job_key)
         raise
-    except Exception as exc:  # validator: allow-wide-except
-        _record_failure(run_id=run_id, rows_touched=rows_touched, keep_artifacts=keep_artifacts, error=exc, job_key=job_key)
-        raise
 
 
 def main() -> int:
