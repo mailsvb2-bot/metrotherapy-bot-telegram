@@ -76,6 +76,17 @@ def _cleanup_probe_rows(*, user_id: int, run_id: str, job_key: str) -> int:
     return touched
 
 
+def _record_failure(*, run_id: str, rows_touched: int, keep_artifacts: bool, error: BaseException, job_key: str) -> None:
+    finish_probe_run(
+        run_id=run_id,
+        status="failed",
+        cleanup_status="failed" if keep_artifacts else "unknown",
+        rows_touched=rows_touched,
+        error=str(error),
+        evidence={"job_key": job_key},
+    )
+
+
 def run_probe(*, user_id: int = DEFAULT_PROBE_USER_ID, keep_artifacts: bool = False) -> ProbeResult:
     assert_synthetic_user_id(int(user_id))
     init_db()
@@ -146,15 +157,11 @@ def run_probe(*, user_id: int = DEFAULT_PROBE_USER_ID, keep_artifacts: bool = Fa
             cleanup_status=cleanup_status,
             rows_touched=rows_touched,
         )
-    except BaseException as exc:
-        finish_probe_run(
-            run_id=run_id,
-            status="failed",
-            cleanup_status="failed" if keep_artifacts else "unknown",
-            rows_touched=rows_touched,
-            error=str(exc),
-            evidence={"job_key": job_key},
-        )
+    except SystemExit as exc:
+        _record_failure(run_id=run_id, rows_touched=rows_touched, keep_artifacts=keep_artifacts, error=exc, job_key=job_key)
+        raise
+    except Exception as exc:  # validator: allow-wide-except
+        _record_failure(run_id=run_id, rows_touched=rows_touched, keep_artifacts=keep_artifacts, error=exc, job_key=job_key)
         raise
 
 
