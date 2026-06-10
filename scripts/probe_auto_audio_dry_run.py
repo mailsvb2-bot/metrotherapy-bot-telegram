@@ -71,6 +71,17 @@ def _ensure_probe_user(*, user_id: int) -> None:
         )
 
 
+def _record_failure(*, run_id: str, rows_touched: int, keep_artifacts: bool, error: BaseException, slot: str) -> None:
+    finish_probe_run(
+        run_id=run_id,
+        status="failed",
+        cleanup_status="failed" if keep_artifacts else "unknown",
+        rows_touched=rows_touched,
+        error=str(error),
+        evidence={"slot": slot},
+    )
+
+
 def run_probe(*, user_id: int = DEFAULT_PROBE_USER_ID, slot: str = DEFAULT_SLOT, keep_artifacts: bool = False) -> AutoAudioProbeResult:
     assert_synthetic_user_id(int(user_id))
     init_db()
@@ -149,15 +160,11 @@ def run_probe(*, user_id: int = DEFAULT_PROBE_USER_ID, slot: str = DEFAULT_SLOT,
             cleanup_status=cleanup_status,
             rows_touched=rows_touched,
         )
-    except BaseException as exc:
-        finish_probe_run(
-            run_id=run_id,
-            status="failed",
-            cleanup_status="failed" if keep_artifacts else "unknown",
-            rows_touched=rows_touched,
-            error=str(exc),
-            evidence={"slot": slot},
-        )
+    except SystemExit as exc:
+        _record_failure(run_id=run_id, rows_touched=rows_touched, keep_artifacts=keep_artifacts, error=exc, slot=slot)
+        raise
+    except Exception as exc:  # validator: allow-wide-except
+        _record_failure(run_id=run_id, rows_touched=rows_touched, keep_artifacts=keep_artifacts, error=exc, slot=slot)
         raise
 
 
