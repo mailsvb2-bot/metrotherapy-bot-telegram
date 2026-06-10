@@ -19,6 +19,7 @@ It does not modify systemd units and does not send Telegram messages.
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import urllib.error
@@ -28,6 +29,35 @@ from typing import Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
+
+
+def _load_env_file(path: str | Path | None) -> dict[str, str]:
+    if not path:
+        return {}
+    env_path = Path(path)
+    if not env_path.exists():
+        return {}
+    loaded: dict[str, str] = {}
+    for raw_line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        try:
+            parts = shlex.split(value, posix=True)
+            loaded[key] = parts[0] if len(parts) == 1 else value
+        except ValueError:
+            loaded[key] = value.strip('"').strip("'")
+    return loaded
 
 
 def _run(cmd: list[str], *, env: Mapping[str, str] | None = None) -> str:
@@ -109,15 +139,23 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run repeatable post-deploy proof checks")
     parser.add_argument("--skip-pytest", action="store_true", help="Skip pytest for faster repeated local checks")
     parser.add_argument("--restore-drill", action="store_true", help="Run postgres_restore_drill.py --latest as part of the bundle")
+    parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
     parser.add_argument("--health-url", default=os.getenv("HEALTH_URL", "http://127.0.0.1:8082/health"))
     parser.add_argument("--ready-url", default=os.getenv("READINESS_URL", "http://127.0.0.1:8082/readyz"))
     args = parser.parse_args()
 
+    service_env = _load_env_file(args.env_file)
+    if service_env:
+        print(f"==> loaded env file: {args.env_file} ({len(service_env)} keys)", flush=True)
+    else:
+        print(f"==> env file not loaded or empty: {args.env_file}", flush=True)
+
     if not args.skip_pytest:
         print("==> pytest", flush=True)
-        print(_run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]))
+        print(_run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"], env=service_env))
 
     strict_env = {
+        **service_env,
         "APP_ENV": "prod",
         "VALIDATOR_RELEASE_MODE": "1",
         "VALIDATOR_GUARDRAILS_STRICT": "1",
@@ -130,14 +168,14 @@ def main() -> int:
     print(_run([sys.executable, "scripts/smoke.py"], env=strict_env))
 
     print("==> scheduler job probe", flush=True)
-    print(_run([sys.executable, "scripts/probe_scheduler_job_live.py"]))
+    print(_run([sys.executable, "scripts/probe_scheduler_job_live.py"], env=service_env))
 
     print("==> auto-audio dry-run probe", flush=True)
-    print(_run([sys.executable, "scripts/probe_auto_audio_dry_run.py"]))
+    print(_run([sys.executable, "scripts/probe_auto_audio_dry_run.py"], env=service_env))
 
     if args.restore_drill:
         print("==> postgres restore drill", flush=True)
-        print(_run([sys.executable, "scripts/postgres_restore_drill.py", "--latest"]))
+        print(_run([sys.executable, "scripts/postgres_restore_drill.py", "--latest"], env=service_env))
 
     print("==> health", flush=True)
     health, health_url = _http_json_any(_alias_urls(str(args.health_url), aliases=("/health", "/healthz")))
