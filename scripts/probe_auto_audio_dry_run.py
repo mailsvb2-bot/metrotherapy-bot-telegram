@@ -163,9 +163,6 @@ def run_probe(*, user_id: int = DEFAULT_PROBE_USER_ID, slot: str = DEFAULT_SLOT,
     except SystemExit as exc:
         _record_failure(run_id=run_id, rows_touched=rows_touched, keep_artifacts=keep_artifacts, error=exc, slot=slot)
         raise
-    except Exception as exc:  # validator: allow-wide-except
-        _record_failure(run_id=run_id, rows_touched=rows_touched, keep_artifacts=keep_artifacts, error=exc, slot=slot)
-        raise
 
 
 def main() -> int:
