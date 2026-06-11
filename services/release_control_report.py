@@ -1,0 +1,167 @@
+from __future__ import annotations
+
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+from services.payments.reconciliation import payment_problem_summary
+from services.probe_ledger import ProbeRun, get_recent_probe_runs
+
+ROOT = Path(__file__).resolve().parents[1]
+
+REQUIRED_PROBES = {
+    "payment_entitlement_reconciliation_probe": "💳 Payment entitlement",
+    "probe_scheduler_job_live": "⏱ Scheduler job",
+    "auto_audio_dry_run_probe": "🎧 Auto-audio dry-run",
+}
+
+
+@dataclass(frozen=True)
+class ReleaseProbeStatus:
+    probe_type: str
+    label: str
+    status: str
+    cleanup_status: str
+    rows_touched: int
+    run_id: str
+    finished_at_utc: str | None
+    error: str | None
+
+    @property
+    def is_green(self) -> bool:
+        return self.status == "ok" and self.cleanup_status in {"clean", "dry_run"}
+
+
+def _git_value(*args: str) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(ROOT),
+            text=True,
+            capture_output=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    if proc.returncode != 0:
+        return "unknown"
+    return (proc.stdout or "").strip() or "unknown"
+
+
+def _latest_by_type(runs: list[ProbeRun]) -> dict[str, ProbeRun]:
+    result: dict[str, ProbeRun] = {}
+    for run in runs:
+        if run.probe_type and run.probe_type not in result:
+            result[run.probe_type] = run
+    return result
+
+
+def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
+    latest = _latest_by_type(runs)
+    statuses: list[ReleaseProbeStatus] = []
+    for probe_type, label in REQUIRED_PROBES.items():
+        run = latest.get(probe_type)
+        if run is None:
+            statuses.append(
+                ReleaseProbeStatus(
+                    probe_type=probe_type,
+                    label=label,
+                    status="missing",
+                    cleanup_status="missing",
+                    rows_touched=0,
+                    run_id="",
+                    finished_at_utc=None,
+                    error="no recent probe ledger record",
+                )
+            )
+            continue
+        statuses.append(
+            ReleaseProbeStatus(
+                probe_type=probe_type,
+                label=label,
+                status=run.status,
+                cleanup_status=run.cleanup_status,
+                rows_touched=run.rows_touched,
+                run_id=run.run_id,
+                finished_at_utc=run.finished_at_utc,
+                error=run.error,
+            )
+        )
+    return statuses
+
+
+def _overall_marker(*, statuses: list[ReleaseProbeStatus], payment_problem_count: int) -> tuple[str, str]:
+    if not all(item.is_green for item in statuses):
+        return "🛑", "RED"
+    if payment_problem_count > 0:
+        return "⚠️", "YELLOW"
+    return "✅", "GREEN"
+
+
+def _short(value: str | None, *, length: int = 12) -> str:
+    if not value:
+        return "-"
+    return str(value)[:length]
+
+
+def format_release_control_report(*, limit: int = 25) -> str:
+    """Return an admin-facing release/control-plane status summary.
+
+    The report is read-only: it does not run probes, mutate rows, contact external
+    providers, or restart services. It only summarizes the latest already-recorded
+    probe ledger facts and current payment-problem surface.
+    """
+    runs = get_recent_probe_runs(limit=max(int(limit), len(REQUIRED_PROBES)))
+    statuses = _probe_statuses(runs)
+    payment_problem_count = len(payment_problem_summary(limit=20))
+    marker, status = _overall_marker(statuses=statuses, payment_problem_count=payment_problem_count)
+
+    branch = _git_value("rev-parse", "--abbrev-ref", "HEAD")
+    commit = _git_value("rev-parse", "--short", "HEAD")
+
+    lines = [
+        "🚦 Release gate / control-plane",
+        "",
+        f"Статус: {marker} {status}",
+        f"Git: {branch} @ {commit}",
+        f"Проблемные платежи: {payment_problem_count}",
+        "",
+        "Обязательные proof-проверки:",
+    ]
+
+    for item in statuses:
+        probe_marker = "✅" if item.is_green else "⚠️"
+        lines.append(
+            f"{probe_marker} {item.label}: {item.status}/{item.cleanup_status} "
+            f"rows={item.rows_touched} run={_short(item.run_id)}"
+        )
+        if item.finished_at_utc:
+            lines.append(f"   finished={item.finished_at_utc}")
+        if item.error:
+            lines.append(f"   error={item.error[:180]}")
+
+    lines.extend(
+        [
+            "",
+            "Последние probe ledger записи:",
+        ]
+    )
+    for run in runs[:7]:
+        run_marker = "✅" if run.status == "ok" and run.cleanup_status in {"clean", "dry_run"} else "⚠️"
+        lines.append(
+            f"{run_marker} #{run.id} {run.probe_type} — {run.status}/{run.cleanup_status} "
+            f"rows={run.rows_touched} run={_short(run.run_id)}"
+        )
+
+    if status == "GREEN":
+        lines.append("\nИтог: релизный контур выглядит зелёным по последним proof-записям.")
+    elif status == "YELLOW":
+        lines.append("\nИтог: probes зелёные, но есть платежи для ручной проверки.")
+    else:
+        lines.append("\nИтог: есть незакрытая proof-проблема. Релиз/изменения нужно остановить до разбора.")
+
+    return "\n".join(lines)
+
+
+__all__ = ["ReleaseProbeStatus", "format_release_control_report"]
