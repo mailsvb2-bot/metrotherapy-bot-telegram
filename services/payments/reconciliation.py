@@ -37,8 +37,14 @@ def _metadata_user_id(metadata: dict[str, Any] | None) -> int:
         return 0
     for key in ("external_user_id", "user_id", "telegram_user_id"):
         value = str(metadata.get(key) or "").strip()
-        if value.isdigit():
-            return int(value)
+        if not value:
+            continue
+        try:
+            parsed = int(value, 10)
+        except ValueError:
+            continue
+        if str(parsed) == value and parsed != 0:
+            return parsed
     return 0
 
 
