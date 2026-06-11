@@ -10,6 +10,7 @@ that were previously run manually after deploy into one repeatable command:
 - smoke bootstrap;
 - DB-backed scheduler/idempotency probe;
 - auto-audio dry-run probe without Telegram sends;
+- payment reconciliation / entitlement proof probe without real provider calls;
 - optional Postgres restore drill;
 - local health/readiness HTTP probes.
 
@@ -138,6 +139,7 @@ def _http_json_any(urls: list[str]) -> tuple[dict, str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run repeatable post-deploy proof checks")
     parser.add_argument("--skip-pytest", action="store_true", help="Skip pytest for faster repeated local checks")
+    parser.add_argument("--skip-payment-probe", action="store_true", help="Skip synthetic payment entitlement proof probe")
     parser.add_argument("--restore-drill", action="store_true", help="Run postgres_restore_drill.py --latest as part of the bundle")
     parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
     parser.add_argument("--health-url", default=os.getenv("HEALTH_URL", "http://127.0.0.1:8082/health"))
@@ -172,6 +174,20 @@ def main() -> int:
 
     print("==> auto-audio dry-run probe", flush=True)
     print(_run([sys.executable, "scripts/probe_auto_audio_dry_run.py"], env=service_env))
+
+    if not args.skip_payment_probe:
+        print("==> payment entitlement probe", flush=True)
+        print(
+            _run(
+                [
+                    sys.executable,
+                    "scripts/probe_payment_reconciliation_live.py",
+                    "--apply-webhooks",
+                    "--allow-live-db-mutation",
+                ],
+                env=service_env,
+            )
+        )
 
     if args.restore_drill:
         print("==> postgres restore drill", flush=True)
