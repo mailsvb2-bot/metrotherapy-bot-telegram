@@ -10,10 +10,12 @@ that were previously run manually after deploy into one repeatable command:
 - smoke bootstrap;
 - DB-backed scheduler/idempotency probe;
 - auto-audio dry-run probe without Telegram sends;
+- local payment reconciliation / entitlement / idempotency probe;
 - optional Postgres restore drill;
 - local health/readiness HTTP probes.
 
-It does not modify systemd units and does not send Telegram messages.
+It does not modify systemd units, does not contact YooKassa, and does not send
+Telegram messages.
 """
 
 import argparse
@@ -93,6 +95,15 @@ def _parse_json_body(*, url: str, body: str) -> dict:
         raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED url={url} invalid_json={_truncate(body, limit=300)}") from exc
 
 
+def _parse_command_json(*, command_name: str, output: str) -> dict:
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"POST_DEPLOY_VERIFY_FAILED command={command_name} invalid_json={_truncate(output, limit=500)}"
+        ) from exc
+
+
 def _with_path(url: str, path: str) -> str:
     parts = urlsplit(str(url))
     return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
@@ -135,9 +146,51 @@ def _http_json_any(urls: list[str]) -> tuple[dict, str]:
     raise SystemExit("POST_DEPLOY_VERIFY_FAILED all_probe_urls_failed\n" + "\n".join(errors))
 
 
+def _verify_payment_probe(payload: dict) -> dict:
+    if payload.get("ok") is not True or payload.get("applied") is not True:
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED payment_probe payload={payload}")
+    results = payload.get("results")
+    if not isinstance(results, list) or not results:
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED payment_probe missing_results payload={payload}")
+    first = results[0]
+    if not isinstance(first, dict):
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED payment_probe malformed_result payload={payload}")
+    checks = {
+        "first_ok": first.get("first_ok") is True,
+        "first_inserted": first.get("first_inserted") is True,
+        "first_problem_empty": first.get("first_problem") == "",
+        "second_ok": first.get("second_ok") is True,
+        "second_inserted_false": first.get("second_inserted") is False,
+        "second_problem_empty": first.get("second_problem") == "",
+        "wallet_delta_positive": int(first.get("wallet_delta") or 0) > 0,
+        "grant_rows_one": int(first.get("grant_rows_delta") or 0) == 1,
+        "payment_rows_one": int(first.get("payment_rows_delta") or 0) == 1,
+        "entitlement_rows_positive": int(first.get("entitlement_rows_delta") or 0) > 0,
+        "outbox_rows_positive": int(first.get("outbox_rows_delta") or 0) > 0,
+        "consultation_rows_positive": int(first.get("consultation_rows_delta") or 0) > 0,
+        "cleanup_clean": first.get("cleanup_status") == "clean",
+    }
+    failed = [name for name, ok in checks.items() if not ok]
+    if failed:
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED payment_probe failed_checks={failed} result={first}")
+    return {
+        "ok": True,
+        "probe": "payment_entitlement",
+        "payment_id": first.get("payment_id"),
+        "package_id": first.get("package_id"),
+        "wallet_delta": first.get("wallet_delta"),
+        "entitlement_rows_delta": first.get("entitlement_rows_delta"),
+        "outbox_rows_delta": first.get("outbox_rows_delta"),
+        "consultation_rows_delta": first.get("consultation_rows_delta"),
+        "cleanup_status": first.get("cleanup_status"),
+        "rows_touched": first.get("rows_touched"),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run repeatable post-deploy proof checks")
     parser.add_argument("--skip-pytest", action="store_true", help="Skip pytest for faster repeated local checks")
+    parser.add_argument("--skip-payment-probe", action="store_true", help="Skip the local payment entitlement proof probe")
     parser.add_argument("--restore-drill", action="store_true", help="Run postgres_restore_drill.py --latest as part of the bundle")
     parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
     parser.add_argument("--health-url", default=os.getenv("HEALTH_URL", "http://127.0.0.1:8082/health"))
@@ -172,6 +225,19 @@ def main() -> int:
 
     print("==> auto-audio dry-run probe", flush=True)
     print(_run([sys.executable, "scripts/probe_auto_audio_dry_run.py"], env=service_env))
+
+    if not args.skip_payment_probe:
+        print("==> payment entitlement probe", flush=True)
+        payment_output = _run(
+            [
+                sys.executable,
+                "scripts/probe_payment_reconciliation_live.py",
+                "--apply-webhooks",
+                "--allow-live-db-mutation",
+            ],
+            env=service_env,
+        )
+        print(json.dumps(_verify_payment_probe(_parse_command_json(command_name="payment entitlement probe", output=payment_output)), ensure_ascii=False))
 
     if args.restore_drill:
         print("==> postgres restore drill", flush=True)
