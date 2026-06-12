@@ -14,8 +14,8 @@ from services.storage_legacy_audit import format_storage_legacy_audit_for_admin,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Audit active DB storage and legacy SQLite ambiguity")
-    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
-    parser.add_argument("--strict", action="store_true", help="Exit non-zero on hard storage failures")
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only")
+    parser.add_argument("--strict", action="store_true", help="Exit non-zero when the audit has hard findings")
     args = parser.parse_args()
 
     audit = storage_legacy_audit()
@@ -25,9 +25,10 @@ def main() -> int:
         print(format_storage_legacy_audit_for_admin())
 
     if args.strict and audit.hard_failures:
-        print("STORAGE_LEGACY_AUDIT_FAILED hard_failures=" + ",".join(audit.hard_failures), file=sys.stderr)
+        print("STORAGE_LEGACY_AUDIT_NOT_OK hard_findings=" + ",".join(audit.hard_failures), file=sys.stderr)
         return 1
-    print("STORAGE_LEGACY_AUDIT_OK status=" + audit.status)
+    if not args.json:
+        print("STORAGE_LEGACY_AUDIT_OK status=" + audit.status)
     return 0
 
 
