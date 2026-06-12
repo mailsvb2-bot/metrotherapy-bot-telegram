@@ -98,6 +98,7 @@ def kb_staff_menu(
 
     if ROLE_ADMIN in roles or is_superadmin:
         rows += [
+            [InlineKeyboardButton(text="🚦 Release gate", callback_data="admin:release:gate")],
             [InlineKeyboardButton(text="🎁 Подарки и рекомендации", callback_data="admin:giftshare")],
             [InlineKeyboardButton(text="🧲 Воронка 2.0", callback_data="admin:funnel2")],
             [InlineKeyboardButton(text="🧩 Удержание", callback_data="admin:retention")],
@@ -216,7 +217,6 @@ def kb_pay():
         [InlineKeyboardButton(text="💳 Оплатить выбранный тариф", callback_data="pay:selected")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")],
     ])
-
 
 @lru_cache()
 def kb_sales_offer(user_id: int):

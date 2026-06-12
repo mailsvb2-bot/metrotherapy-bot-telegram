@@ -44,6 +44,7 @@ _HANDLERS = {
     "admin:state:last": state_last.run,
     "admin:messenger:overview": messenger_overview.run,
     "admin:system:checks": system_checks.run,
+    "admin:release:gate": system_checks.run,
     "admin:money:today": money_clients.run,
     "admin:money:week": money_clients.run,
     "admin:money:month": money_clients.run,
