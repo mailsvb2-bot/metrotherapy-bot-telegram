@@ -8,14 +8,15 @@ that were previously run manually after deploy into one repeatable command:
 - optional pytest run;
 - production validator;
 - smoke bootstrap;
+- storage/legacy SQLite ambiguity audit;
 - DB-backed scheduler/idempotency probe;
 - auto-audio dry-run probe without Telegram sends;
 - local payment reconciliation / entitlement / idempotency probe;
 - optional Postgres restore drill;
 - local health/readiness HTTP probes.
 
-It does not modify systemd units, does not contact YooKassa, and does not send
-Telegram messages.
+It does not modify systemd units, does not contact YooKassa, does not delete
+legacy SQLite files, and does not send Telegram messages.
 """
 
 import argparse
@@ -187,10 +188,32 @@ def _verify_payment_probe(payload: dict) -> dict:
     }
 
 
+def _verify_storage_audit(payload: dict) -> dict:
+    if payload.get("ok") is not True:
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED storage_audit payload={payload}")
+    if payload.get("active_engine") != "postgres":
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED storage_audit active_engine={payload.get('active_engine')}")
+    if payload.get("repo_local_sqlite_present") is True:
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED storage_audit repo_local_sqlite_present payload={payload}")
+    if payload.get("disallowed_direct_sqlite_connects"):
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED storage_audit disallowed_direct_sqlite_connects payload={payload}")
+    return {
+        "ok": True,
+        "probe": "storage_legacy_audit",
+        "status": payload.get("status"),
+        "active_engine": payload.get("active_engine"),
+        "legacy_sqlite_present": payload.get("legacy_sqlite_present"),
+        "repo_local_sqlite_present": payload.get("repo_local_sqlite_present"),
+        "direct_sqlite_connects": len(payload.get("direct_sqlite_connects") or []),
+        "disallowed_direct_sqlite_connects": len(payload.get("disallowed_direct_sqlite_connects") or []),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run repeatable post-deploy proof checks")
     parser.add_argument("--skip-pytest", action="store_true", help="Skip pytest for faster repeated local checks")
     parser.add_argument("--skip-payment-probe", action="store_true", help="Skip the local payment entitlement proof probe")
+    parser.add_argument("--skip-storage-audit", action="store_true", help="Skip the storage/legacy SQLite ambiguity audit")
     parser.add_argument("--restore-drill", action="store_true", help="Run postgres_restore_drill.py --latest as part of the bundle")
     parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
     parser.add_argument("--health-url", default=os.getenv("HEALTH_URL", "http://127.0.0.1:8082/health"))
@@ -219,6 +242,11 @@ def main() -> int:
 
     print("==> smoke", flush=True)
     print(_run([sys.executable, "scripts/smoke.py"], env=strict_env))
+
+    if not args.skip_storage_audit:
+        print("==> storage legacy audit", flush=True)
+        storage_output = _run([sys.executable, "scripts/storage_legacy_audit.py", "--json", "--strict"], env=service_env)
+        print(json.dumps(_verify_storage_audit(_parse_command_json(command_name="storage legacy audit", output=storage_output)), ensure_ascii=False))
 
     print("==> scheduler job probe", flush=True)
     print(_run([sys.executable, "scripts/probe_scheduler_job_live.py"], env=service_env))
