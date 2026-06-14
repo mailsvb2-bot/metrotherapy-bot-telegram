@@ -8,12 +8,18 @@ from typing import Any
 from core.paths import DATABASE_URL, DB_PATH, ROOT
 from services.db.runtime import CONFIG, redacted_db_target
 
+# Direct sqlite3.connect is allowed only in explicit SQLite fallback/operator/test
+# surfaces. Production business code must go through services.db.core.get_connection().
 ALLOWED_DIRECT_SQLITE_CONNECT_PATHS = {
-    "services/db/core.py",
-    "scripts/backup_db.py",
-    "scripts/restore_drill.py",
+    "services/db/core.py",          # canonical DB adapter; Postgres branch wins in prod
+    "services/db_writer.py",        # SQLite fallback writer; disabled in Postgres mode
+    "scripts/backup_db.py",         # offline SQLite backup tooling
+    "scripts/restore_db.py",        # offline SQLite restore tooling
+    "scripts/restore_drill.py",     # offline SQLite restore drill
     "scripts/postgres_restore_drill.py",
-    "check_db.py",
+    "scripts/stress_db.py",         # local SQLite stress tool
+    "dashboard/sla_dashboard.py",   # standalone SQLite dashboard reader
+    "check_db.py",                  # operator diagnostic
 }
 
 SKIP_DIRS = {
@@ -24,6 +30,7 @@ SKIP_DIRS = {
     ".mypy_cache",
     ".ruff_cache",
     "node_modules",
+    "tests",
 }
 
 
