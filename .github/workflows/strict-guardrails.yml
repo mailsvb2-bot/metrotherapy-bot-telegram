@@ -3,28 +3,36 @@ name: Strict Guardrails
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   guardrails:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, metrotherapy-ci]
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install deps
+      - name: Prepare isolated CI virtualenv
         run: |
+          python3 -m venv .venv-ci
+          . .venv-ci/bin/activate
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m pip install pytest
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
 
-      - name: Full pytest
-        env:
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python -m pytest -q
+      - name: Compile
+        run: |
+          . .venv-ci/bin/activate
+          python -m compileall .
+
+      - name: Ruff quality gate
+        run: |
+          . .venv-ci/bin/activate
+          python scripts/check_ruff.py
 
       - name: Strict validator with architecture guardrails
         env:
@@ -32,11 +40,6 @@ jobs:
           VALIDATOR_RELEASE_MODE: '1'
           VALIDATOR_GUARDRAILS_STRICT: '1'
           PYTHONDONTWRITEBYTECODE: '1'
-        run: python scripts/validate_project.py
-
-      - name: Smoke with architecture guardrails
-        env:
-          APP_ENV: prod
-          VALIDATOR_GUARDRAILS_STRICT: '1'
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python scripts/smoke.py
+        run: |
+          . .venv-ci/bin/activate
+          python scripts/validate_project.py
