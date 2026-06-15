@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hmac
 import json
 import logging
+import os
 from typing import Any
 
 from aiohttp import web
@@ -27,6 +29,24 @@ from services.messenger.webhook_dedupe import register_inbound_event
 log = logging.getLogger(__name__)
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _app_env() -> str:
+    return (os.getenv("APP_ENV") or getattr(settings, "APP_ENV", "") or "dev").strip().lower()
+
+
+def _allow_insecure_messenger_webhooks() -> bool:
+    # Explicit local/dev escape hatch only. Production/staging messenger webhooks must be authenticated.
+    if _app_env() in {"prod", "production", "stage", "staging"}:
+        return False
+    return _env_bool("ALLOW_INSECURE_MESSENGER_WEBHOOKS", False)
+
+
 def _provided_max_secret(request: web.Request, payload: dict) -> str:
     return (
         request.headers.get("X-Max-Webhook-Secret")
@@ -41,8 +61,21 @@ def _provided_max_secret(request: web.Request, payload: dict) -> str:
 def _max_secret_ok(request: web.Request, payload: dict) -> bool:
     expected = (getattr(settings, "MAX_WEBHOOK_SECRET", "") or "").strip()
     if not expected:
-        return True
-    return _provided_max_secret(request, payload) == expected
+        return _allow_insecure_messenger_webhooks()
+    provided = _provided_max_secret(request, payload)
+    if not provided:
+        return False
+    return hmac.compare_digest(provided, expected)
+
+
+def _vk_secret_ok(payload: dict) -> bool:
+    expected = (getattr(settings, "VK_SECRET", "") or "").strip()
+    provided = (payload.get("secret") or "").strip()
+    if not expected:
+        return _allow_insecure_messenger_webhooks()
+    if not provided:
+        return False
+    return hmac.compare_digest(provided, expected)
 
 
 def _claim_replies_if_needed(*, platform: str, extracted: dict) -> tuple[int, list[MessengerReply]] | None:
@@ -107,8 +140,10 @@ async def vk_webhook(request: web.Request) -> web.Response:
         payload = json.loads(body)
     except json.JSONDecodeError:
         return web.Response(status=400, text="invalid json")
-    secret = (settings.VK_SECRET or "").strip()
-    if secret and payload.get("secret") not in {"", None, secret}:
+    if not isinstance(payload, dict):
+        return web.Response(status=400, text="bad payload")
+    if not _vk_secret_ok(payload):
+        log.warning("VK webhook rejected: bad or missing secret")
         return web.Response(status=403, text="forbidden")
 
     event_type = (payload.get("type") or "").strip()
@@ -198,7 +233,7 @@ async def max_webhook(request: web.Request) -> web.Response:
         log.warning("MAX webhook rejected non-object json")
         return web.Response(status=400, text="bad payload")
     if not _max_secret_ok(request, payload):
-        log.warning("MAX webhook rejected: bad secret")
+        log.warning("MAX webhook rejected: bad or missing secret")
         return web.json_response({"ok": False, "error": "forbidden"}, status=403)
     update_type = (payload.get("update_type") or payload.get("type") or payload.get("event_type") or "").strip()
     if update_type not in _MAX_PROCESSABLE_UPDATE_TYPES:
