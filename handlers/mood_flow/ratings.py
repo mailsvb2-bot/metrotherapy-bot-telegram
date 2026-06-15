@@ -13,6 +13,7 @@ from services.jobs import add_job, cancel_post_prompt
 import asyncio
 
 from aiogram import Router, F
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery, BufferedInputFile
 from aiogram.types import FSInputFile
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -32,6 +33,7 @@ from services.demo_policy import next_remaining_demo_kind
 from services.body import pick_body_question, save_body_feedback, technique_for_area
 from services.audio_cache import get_cached_file_id, save_cached_file_id
 from services.messenger.audio_progress import record_audio_delivery, AudioProgressItem
+from services.practice_tokens import check_and_reserve_for_audio, finalize_audio_access
 from services.progress import advance
 from services.support_ai import decide_support_pre
 from services.subscription import register_touch
@@ -239,10 +241,28 @@ async def mood_answer(cb: CallbackQuery):
         if not mark_delivery_once(user_id, idem_kind, "audio_lock", idem_scheduled_at):
             return
 
+        access_decision = await asyncio.to_thread(
+            check_and_reserve_for_audio,
+            user_id,
+            is_demo=(str(s.source) == "demo"),
+            session_id=sid,
+            audio_anchor=getattr(s, "anchor_id", None),
+        )
+        if not access_decision.allowed:
+            try:
+                unmark_delivery(user_id, idem_kind, "audio_lock", idem_scheduled_at)
+            except sqlite3.Error:
+                logging.getLogger(__name__).debug("audio_lock cleanup after access denial failed", exc_info=True)
+            log_event(user_id, "mood_audio_access_denied", {"reason": access_decision.reason, "source": s.source})
+            return await cb.message.answer(access_decision.message or "⚠️ Для продолжения нужен доступ к практике.")
+        if access_decision.warning:
+            await cb.message.answer(access_decision.warning)
+
         async def _send_audio() -> None:
             """Отправить аудио не блокируя UI (кнопка должна ощущаться мгновенной)."""
             cached_kind = "voice" if file_path.suffix.lower() in (".ogg", ".opus") else "audio"
             cached_id = get_cached_file_id(file_path, cached_kind)
+            delivered = False
             try:
                 if cached_id and cached_kind == "voice":
                     msg = await cb.bot.send_voice(chat_id=int(cb.from_user.id), voice=cached_id, caption=caption, protect_content=True)
@@ -259,6 +279,12 @@ async def mood_answer(cb: CallbackQuery):
                         caption=caption,
                         protect_content=True,
                     )
+                delivered = True
+                try:
+                    await asyncio.to_thread(finalize_audio_access, access_decision, delivered=True)
+                except (sqlite3.Error, RuntimeError, ValueError):
+                    logging.getLogger(__name__).exception("practice token consume after audio send failed")
+                    log_event(int(cb.from_user.id), "practice_token_consume_error", {"session_id": sid, "source": s.source})
 
                 # кеш file_id
                 try:
@@ -312,8 +338,13 @@ async def mood_answer(cb: CallbackQuery):
 
                 mark_audio_sent(sid)
                 await cb.message.answer("Когда прослушаете — нажмите кнопку:", reply_markup=kb_mood_done(sid))
-            except (ValueError, RuntimeError) as e:
-                # Если упали ДО факта отправки — снимаем lock, чтобы allow retry.
+            except (TelegramAPIError, OSError, ValueError, RuntimeError) as e:
+                # Если упали ДО факта отправки — снимаем lock и возвращаем резерв, чтобы allow retry.
+                if not delivered:
+                    try:
+                        await asyncio.to_thread(finalize_audio_access, access_decision, delivered=False)
+                    except (sqlite3.Error, RuntimeError, ValueError):
+                        logging.getLogger(__name__).debug("practice token release after send failure failed", exc_info=True)
                 try:
                     unmark_delivery(int(cb.from_user.id), idem_kind, "audio_lock", idem_scheduled_at)
                 except sqlite3.Error:
