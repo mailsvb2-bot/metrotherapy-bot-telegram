@@ -51,7 +51,12 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             provider_event_id TEXT,
             provider_raw TEXT,
             reconciled_at TEXT,
-            problem TEXT
+            problem TEXT,
+            processing_status TEXT DEFAULT 'received',
+            granted_at_utc TEXT,
+            side_effects_done_at_utc TEXT,
+            notified_at_utc TEXT,
+            processing_error TEXT
         )
         """
     )
@@ -88,8 +93,12 @@ def test_yookassa_reconciliation_is_idempotent(tmp_path, monkeypatch):
 
     assert first.ok is True
     assert first.inserted is True
+    assert first.processing_status == "provider_succeeded"
+    assert first.side_effects_done is True
     assert second.ok is True
     assert second.inserted is False
+    assert second.processing_status == "provider_succeeded"
+    assert second.side_effects_done is True
 
 
 def test_yookassa_reconciliation_marks_missing_user(tmp_path, monkeypatch):
@@ -108,6 +117,9 @@ def test_yookassa_reconciliation_marks_missing_user(tmp_path, monkeypatch):
 
     assert result.ok is True
     assert result.problem == "missing_user_id"
+    assert result.processing_status == "action_required"
+    assert result.side_effects_done is False
     rows = reconciliation.payment_problem_summary()
     assert rows
     assert rows[0]["problem"] == "missing_user_id"
+    assert rows[0]["processing_status"] == "action_required"
