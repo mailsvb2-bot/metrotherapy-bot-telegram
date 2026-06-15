@@ -16,6 +16,10 @@ from services.premium_entitlements import grant_premium_entitlements_for_payment
 
 log = logging.getLogger(__name__)
 
+_GRANT_KINDS = {"tokens", "practices", "practice_package"}
+_WAITING_PROVIDER_STATUSES = {"pending", "waiting_for_capture"}
+_TERMINAL_BAD_PROVIDER_STATUSES = {"canceled", "cancelled", "failed", "refunded"}
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -63,10 +67,58 @@ class ReconciliationResult:
     event: str
     inserted: bool
     problem: str = ""
+    processing_status: str = ""
+    side_effects_done: bool = False
 
 
 def _problem_join(*items: str) -> str:
     return ";".join(item for item in items if item)
+
+
+def _is_succeeded_payment(*, event: str, status: str) -> bool:
+    return event == "payment.succeeded" or status == "succeeded"
+
+
+def _is_grant_candidate(*, event: str, status: str, metadata: dict[str, Any]) -> bool:
+    if not _is_succeeded_payment(event=event, status=status):
+        return False
+    kind = str(metadata.get("kind") or "").strip().lower()
+    package_id = str(metadata.get("package_id") or "").strip()
+    return kind in _GRANT_KINDS or bool(package_id)
+
+
+def _initial_processing_status(*, event: str, status: str, metadata: dict[str, Any]) -> str:
+    if _is_grant_candidate(event=event, status=status, metadata=metadata):
+        return "grant_pending"
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status in _WAITING_PROVIDER_STATUSES:
+        return "provider_waiting"
+    if normalized_status in _TERMINAL_BAD_PROVIDER_STATUSES:
+        return "provider_terminal_problem"
+    if _is_succeeded_payment(event=event, status=status):
+        return "provider_succeeded"
+    return "received"
+
+
+def _final_processing_status(
+    *,
+    event: str,
+    status: str,
+    metadata: dict[str, Any],
+    problem: str,
+) -> str:
+    if problem:
+        return "action_required"
+    if _is_grant_candidate(event=event, status=status, metadata=metadata):
+        return "side_effects_done"
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status in _WAITING_PROVIDER_STATUSES:
+        return "provider_waiting"
+    if normalized_status in _TERMINAL_BAD_PROVIDER_STATUSES:
+        return "provider_terminal_problem"
+    if _is_succeeded_payment(event=event, status=status):
+        return "provider_succeeded"
+    return "received"
 
 
 def _practice_package_payment_problem(*, package_id: str, amount_minor: int, currency: str) -> str:
@@ -91,7 +143,7 @@ def _mark_paid_gift_if_needed(
     metadata: dict[str, Any],
     package_id: str,
 ) -> str:
-    succeeded = event == "payment.succeeded" or status == "succeeded"
+    succeeded = _is_succeeded_payment(event=event, status=status)
     if not succeeded:
         return ""
     gift_token = normalize_gift_token(str(metadata.get("gift_token") or ""))
@@ -128,10 +180,10 @@ def _grant_practices_if_needed(
 ) -> str:
     kind = str(metadata.get("kind") or "").strip().lower()
     package_id = str(metadata.get("package_id") or "").strip()
-    succeeded = event == "payment.succeeded" or status == "succeeded"
+    succeeded = _is_succeeded_payment(event=event, status=status)
     if not succeeded:
         return ""
-    if kind not in {"tokens", "practices", "practice_package"} and not package_id:
+    if kind not in _GRANT_KINDS and not package_id:
         return ""
     if not user_id:
         return "missing_user_id_for_practice_grant"
@@ -202,12 +254,17 @@ def _record_payment_fact(
     raw: str,
     reconciled_at: str,
     problem: str,
+    processing_status: str,
+    granted_at_utc: str | None = None,
+    side_effects_done_at_utc: str | None = None,
+    processing_error: str = "",
 ) -> bool:
     """Insert/update the provider payment ledger fact before side-effect grants.
 
     Grants are separately idempotent and may use their own DB transactions. The
     payment fact must therefore exist first, so a process crash between fact and
-    grant is recoverable by replaying the provider webhook.
+    grant is recoverable by replaying the provider webhook. The local processing
+    columns expose that resumable state to admin/reporting surfaces.
     """
     with db() as conn:
         with tx(conn):
@@ -219,10 +276,26 @@ def _record_payment_fact(
                 conn.execute(
                     """
                     UPDATE payments
-                    SET provider_status=?, provider_event_id=?, provider_raw=?, reconciled_at=?, problem=?
+                    SET provider_status=?, provider_event_id=?, provider_raw=?, reconciled_at=?, problem=?,
+                        processing_status=?,
+                        granted_at_utc=COALESCE(granted_at_utc, ?),
+                        side_effects_done_at_utc=COALESCE(side_effects_done_at_utc, ?),
+                        processing_error=?
                     WHERE provider_charge_id=? OR telegram_charge_id=?
                     """.strip(),
-                    (status, provider_event_id, raw, reconciled_at, problem, payment_id, synthetic_charge_id),
+                    (
+                        status,
+                        provider_event_id,
+                        raw,
+                        reconciled_at,
+                        problem,
+                        processing_status,
+                        granted_at_utc,
+                        side_effects_done_at_utc,
+                        processing_error,
+                        payment_id,
+                        synthetic_charge_id,
+                    ),
                 )
                 return False
 
@@ -231,8 +304,9 @@ def _record_payment_fact(
                 INSERT INTO payments(
                     user_id, telegram_charge_id, provider_charge_id, payload,
                     amount, currency, created_at,
-                    provider_status, provider_event_id, provider_raw, reconciled_at, problem
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                    provider_status, provider_event_id, provider_raw, reconciled_at, problem,
+                    processing_status, granted_at_utc, side_effects_done_at_utc, processing_error
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """.strip(),
                 (
                     int(user_id),
@@ -247,6 +321,10 @@ def _record_payment_fact(
                     raw,
                     reconciled_at,
                     problem,
+                    processing_status,
+                    granted_at_utc,
+                    side_effects_done_at_utc,
+                    processing_error,
                 ),
             )
             return True
@@ -283,6 +361,8 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
             event=event,
             inserted=False,
             problem="missing_provider_payment_id",
+            processing_status="action_required",
+            side_effects_done=False,
         )
 
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)[:12000]
@@ -290,6 +370,7 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
     synthetic_charge_id = f"yookassa:{payment_id}"
     created_at = _utc_now_iso()
     preliminary_problem = "" if user_id else "missing_user_id"
+    processing_status = _initial_processing_status(event=event, status=status, metadata=metadata)
 
     inserted = _record_payment_fact(
         payment_id=payment_id,
@@ -303,6 +384,8 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
         raw=raw,
         reconciled_at=created_at,
         problem=preliminary_problem,
+        processing_status=processing_status,
+        processing_error=preliminary_problem,
     )
 
     grant_problem = _grant_practices_if_needed(
@@ -315,7 +398,23 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
         currency=currency,
     )
     problem = _problem_join(preliminary_problem, grant_problem)
-    if problem != preliminary_problem:
+    final_processing_status = _final_processing_status(
+        event=event,
+        status=status,
+        metadata=metadata,
+        problem=problem,
+    )
+    side_effects_done = final_processing_status in {"side_effects_done", "provider_succeeded"}
+    grant_candidate = _is_grant_candidate(event=event, status=status, metadata=metadata)
+    granted_at = created_at if grant_candidate and not problem else None
+    side_effects_done_at = created_at if side_effects_done else None
+
+    if (
+        problem != preliminary_problem
+        or final_processing_status != processing_status
+        or side_effects_done_at is not None
+        or granted_at is not None
+    ):
         _record_payment_fact(
             payment_id=payment_id,
             synthetic_charge_id=synthetic_charge_id,
@@ -328,14 +427,19 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
             raw=raw,
             reconciled_at=created_at,
             problem=problem,
+            processing_status=final_processing_status,
+            granted_at_utc=granted_at,
+            side_effects_done_at_utc=side_effects_done_at,
+            processing_error=problem,
         )
 
     log.info(
-        "YooKassa webhook reconciled: payment_id=%s status=%s event=%s user_id=%s problem=%s",
+        "YooKassa webhook reconciled: payment_id=%s status=%s event=%s user_id=%s processing_status=%s problem=%s",
         payment_id,
         status,
         event,
         user_id,
+        final_processing_status,
         problem or "none",
     )
     return ReconciliationResult(
@@ -346,6 +450,8 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
         event=event,
         inserted=inserted,
         problem=problem,
+        processing_status=final_processing_status,
+        side_effects_done=side_effects_done,
     )
 
 
@@ -363,6 +469,10 @@ def _row_to_payment_problem(row: Any) -> dict[str, Any]:
         "problem": row[7],
         "reconciled_at": row[8],
         "created_at": row[9],
+        "processing_status": row[10],
+        "processing_error": row[11],
+        "granted_at_utc": row[12],
+        "side_effects_done_at_utc": row[13],
     }
 
 
@@ -370,10 +480,12 @@ def payment_problem_summary(limit: int = 20, *, user_id: int | None = None) -> l
     """Return recent payment records that need admin attention."""
     base_query = """
         SELECT id, user_id, provider_charge_id, payload, amount, currency,
-               provider_status, problem, reconciled_at, created_at
+               provider_status, problem, reconciled_at, created_at,
+               processing_status, processing_error, granted_at_utc, side_effects_done_at_utc
         FROM payments
         WHERE (COALESCE(problem, '') <> ''
-           OR provider_status IN ('canceled', 'waiting_for_capture'))
+           OR provider_status IN ('canceled', 'cancelled', 'failed', 'refunded', 'waiting_for_capture')
+           OR COALESCE(processing_status, '') IN ('grant_pending', 'action_required', 'provider_waiting', 'provider_terminal_problem'))
     """.strip()
     params: list[Any] = []
     if user_id is not None:
