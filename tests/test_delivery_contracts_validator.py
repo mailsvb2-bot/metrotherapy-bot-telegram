@@ -92,6 +92,9 @@ async def tick(bot):
         await _send_pre_prompt(bot, uid, session_id=sid, channel=channel, senders=senders)
         await asyncio.to_thread(mark_delivery_once, uid, kind, "pre_score", scheduled_at)
         await _unmark_pre_score_lock(uid, kind, scheduled_at)
+    except RuntimeError:
+        await _unmark_pre_score_lock(uid, kind, scheduled_at)
+        raise
 
 def _unmark_pre_score_lock(uid, kind, scheduled_at):
     return asyncio.to_thread(unmark_delivery, uid, kind, "pre_score_lock", scheduled_at)
@@ -119,6 +122,9 @@ async def tick(bot):
         await _send_pre_prompt(bot, uid, session_id=sid, channel=channel, senders=senders)
         await asyncio.to_thread(mark_delivery_once, uid, kind, "pre_score", scheduled_at)
         await _unmark_pre_score_lock(uid, kind, scheduled_at)
+    except RuntimeError:
+        await _unmark_pre_score_lock(uid, kind, scheduled_at)
+        raise
 
 def _unmark_pre_score_lock(uid, kind, scheduled_at):
     return asyncio.to_thread(unmark_delivery, uid, kind, "pre_score_lock", scheduled_at)
