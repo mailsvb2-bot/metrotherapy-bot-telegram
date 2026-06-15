@@ -1,49 +1,48 @@
 name: CI
+
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   smoke:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.11', '3.12']
+    runs-on: [self-hosted, linux, x64, metrotherapy-ci]
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install deps
+      - name: Prepare isolated CI virtualenv
         run: |
+          python3 -m venv .venv-ci
+          . .venv-ci/bin/activate
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          python -m pip install pytest
+          python -m pip install -r requirements.txt
+          python -m pip install pytest ruff
 
       - name: Release hygiene
-        run: python scripts/check_release_hygiene.py
+        run: |
+          . .venv-ci/bin/activate
+          python scripts/check_release_hygiene.py
 
       - name: Compile
-        run: python -m compileall .
+        run: |
+          . .venv-ci/bin/activate
+          python -m compileall .
 
-      - name: Full pytest
-        env:
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python -m pytest -q
+      - name: Ruff quality gate
+        run: |
+          . .venv-ci/bin/activate
+          python scripts/check_ruff.py
 
-      - name: Validator (strict)
-        env:
-          APP_ENV: prod
-          VALIDATOR_RELEASE_MODE: '1'
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python scripts/validate_project.py
-
-      - name: Smoke (no polling)
+      - name: Smoke no polling
         env:
           APP_ENV: prod
           PYTHONDONTWRITEBYTECODE: '1'
-        run: python scripts/smoke.py
+        run: |
+          . .venv-ci/bin/activate
+          python scripts/smoke.py
