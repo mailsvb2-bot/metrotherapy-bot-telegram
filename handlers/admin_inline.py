@@ -87,7 +87,6 @@ async def admin_gate(cb: CallbackQuery, state: FSMContext):
             reset_stack=True,
         )
         return
-
     await safe_answer_callback(cb, "", show_alert=False)
 
 
@@ -107,7 +106,9 @@ async def admin_tariff_single_price_input(msg: Message, state: FSMContext):
 async def admin_add_admin_input(msg: Message, state: FSMContext):
     """Add admin by Telegram picker, forwarded message, @username, or numeric user_id."""
     uid = msg.from_user.id if msg.from_user else None
-    if not is_admin(uid):
+    if uid is None or not is_superadmin(int(uid)):
+        logging.getLogger(__name__).warning("Blocked non-superadmin admin grant state: uid=%s", uid)
+        await state.clear()
         return
     text = (msg.text or "").strip()
 
