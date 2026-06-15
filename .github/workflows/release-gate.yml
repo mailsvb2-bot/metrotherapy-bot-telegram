@@ -5,28 +5,42 @@ on:
     branches: [main]
   push:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   release-gate:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, metrotherapy-ci]
     timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
+      - name: Prepare isolated CI virtualenv
         run: |
+          python3 -m venv .venv-ci
+          . .venv-ci/bin/activate
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install ruff
 
-      - name: Compile Python
-        run: python -m compileall .
+      - name: Compile DR release files
+        run: |
+          . .venv-ci/bin/activate
+          python -m compileall \
+            services/disaster_recovery_status.py \
+            scripts/disaster_recovery_proof.py \
+            scripts/release_evidence_snapshot.py \
+            handlers/admin_reports/system_checks.py
 
-      - name: Ruff
-        run: python -m ruff check .
+      - name: Ruff quality gate
+        run: |
+          . .venv-ci/bin/activate
+          python scripts/check_ruff.py
+
+      - name: Disaster recovery backup proof
+        run: |
+          . .venv-ci/bin/activate
+          python scripts/disaster_recovery_proof.py --json --strict
