@@ -14,21 +14,24 @@ jobs:
   release-gate:
     runs-on: [self-hosted]
     timeout-minutes: 15
+    env:
+      CI_VENV: ${{ runner.temp }}/metrotherapy-release-gate-venv
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Prepare isolated CI virtualenv
         run: |
-          python3 -m venv .venv-ci
-          . .venv-ci/bin/activate
+          rm -rf "$CI_VENV"
+          python3 -m venv "$CI_VENV"
+          . "$CI_VENV/bin/activate"
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install ruff
 
       - name: Compile DR release files
         run: |
-          . .venv-ci/bin/activate
+          . "$CI_VENV/bin/activate"
           python -m compileall \
             services/disaster_recovery_status.py \
             scripts/disaster_recovery_proof.py \
@@ -37,10 +40,10 @@ jobs:
 
       - name: Ruff quality gate
         run: |
-          . .venv-ci/bin/activate
+          . "$CI_VENV/bin/activate"
           python scripts/check_ruff.py
 
       - name: Disaster recovery backup proof
         run: |
-          . .venv-ci/bin/activate
+          . "$CI_VENV/bin/activate"
           python scripts/disaster_recovery_proof.py --json --strict
