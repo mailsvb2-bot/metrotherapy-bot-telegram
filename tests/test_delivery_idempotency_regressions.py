@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import inspect
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import handlers.mood_flow.ratings as mood_ratings
 from services.auto_audio import _is_due_local_day, _matches_slot_second
 from services.idempotency_keys import for_demo_click, for_session
 
@@ -38,3 +40,12 @@ def test_auto_audio_due_window_survives_slow_scheduler_tick() -> None:
     assert _is_due_local_day(datetime(2026, 6, 2, 8, 30, 1, tzinfo=tz), "08:30")
     assert _is_due_local_day(datetime(2026, 6, 2, 8, 45, 0, tzinfo=tz), "08:30")
     assert not _is_due_local_day(datetime(2026, 6, 3, 0, 0, 0, tzinfo=tz), "23:59:59")
+
+
+def test_mood_audio_send_path_uses_practice_token_guard_and_finalize() -> None:
+    source = inspect.getsource(mood_ratings.mood_answer)
+    assert "check_and_reserve_for_audio" in source
+    assert "finalize_audio_access" in source
+    assert "delivered=True" in source
+    assert "delivered=False" in source
+    assert "audio_lock" in source
