@@ -139,6 +139,11 @@ async def _unmark_pre_score_lock(uid: int, kind: str, scheduled_at: str) -> None
         log.debug("pre_score_lock idempotency cleanup failed", exc_info=True)
 
 
+async def _record_auto_audio_error(uid: int, kind: str, scheduled_at: str, slot: str, channel: str, exc: BaseException) -> None:
+    await _unmark_pre_score_lock(uid, kind, scheduled_at)
+    log_event(uid, "auto_audio_error", {"slot": slot, "err": str(exc), "channel": channel})
+
+
 async def tick(bot: Bot):
     try:
         now_utc = datetime.now(timezone.utc).replace(microsecond=0)
@@ -178,13 +183,24 @@ async def tick(bot: Bot):
                 await _unmark_pre_score_lock(uid, kind, scheduled_at)
                 log_event(uid, "auto_audio_telegram_delivery_error", {"slot": slot, "err": str(exc), "channel": policy.resolved_channel})
                 continue
-            except (sqlite3.Error, RuntimeError, ValueError, TypeError) as exc:
-                await _unmark_pre_score_lock(uid, kind, scheduled_at)
-                log_event(uid, "auto_audio_error", {"slot": slot, "err": str(exc), "channel": policy.resolved_channel})
+            except sqlite3.Error as exc:
+                await _record_auto_audio_error(uid, kind, scheduled_at, slot, policy.resolved_channel, exc)
+                continue
+            except RuntimeError as exc:
+                await _record_auto_audio_error(uid, kind, scheduled_at, slot, policy.resolved_channel, exc)
+                continue
+            except ValueError as exc:
+                await _record_auto_audio_error(uid, kind, scheduled_at, slot, policy.resolved_channel, exc)
+                continue
+            except TypeError as exc:
+                await _record_auto_audio_error(uid, kind, scheduled_at, slot, policy.resolved_channel, exc)
                 continue
     except sqlite3.Error:
         log.exception("auto_audio.tick database failure")
         return
-    except (RuntimeError, ValueError):
+    except RuntimeError:
+        log.exception("auto_audio.tick runtime failure")
+        return
+    except ValueError:
         log.exception("auto_audio.tick runtime failure")
         return
