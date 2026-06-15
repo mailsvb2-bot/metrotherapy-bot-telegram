@@ -4,6 +4,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from services.auto_audio_recovery import auto_audio_lock_summary
 from services.payments.reconciliation import payment_problem_summary
 from services.probe_ledger import ProbeRun, get_recent_probe_runs
 
@@ -91,10 +92,12 @@ def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
     return statuses
 
 
-def _overall_marker(*, statuses: list[ReleaseProbeStatus], payment_problem_count: int) -> tuple[str, str]:
+def _overall_marker(*, statuses: list[ReleaseProbeStatus], payment_problem_count: int, stale_auto_audio_lock_count: int) -> tuple[str, str]:
     if not all(item.is_green for item in statuses):
         return "🛑", "RED"
     if payment_problem_count > 0:
+        return "⚠️", "YELLOW"
+    if stale_auto_audio_lock_count > 0:
         return "⚠️", "YELLOW"
     return "✅", "GREEN"
 
@@ -110,12 +113,18 @@ def format_release_control_report(*, limit: int = 25) -> str:
 
     The report is read-only: it does not run probes, mutate rows, contact external
     providers, or restart services. It only summarizes the latest already-recorded
-    probe ledger facts and current payment-problem surface.
+    probe ledger facts and current payment/delivery problem surfaces.
     """
     runs = get_recent_probe_runs(limit=max(int(limit), len(REQUIRED_PROBES)))
     statuses = _probe_statuses(runs)
     payment_problem_count = len(payment_problem_summary(limit=20))
-    marker, status = _overall_marker(statuses=statuses, payment_problem_count=payment_problem_count)
+    auto_audio_locks = auto_audio_lock_summary(limit=5)
+    stale_auto_audio_lock_count = int(auto_audio_locks.get("stale_lock_count") or 0)
+    marker, status = _overall_marker(
+        statuses=statuses,
+        payment_problem_count=payment_problem_count,
+        stale_auto_audio_lock_count=stale_auto_audio_lock_count,
+    )
 
     branch = _git_value("rev-parse", "--abbrev-ref", "HEAD")
     commit = _git_value("rev-parse", "--short", "HEAD")
@@ -126,6 +135,7 @@ def format_release_control_report(*, limit: int = 25) -> str:
         f"Статус: {marker} {status}",
         f"Git: {branch} @ {commit}",
         f"Проблемные платежи: {payment_problem_count}",
+        f"Stale auto-audio locks: {stale_auto_audio_lock_count}",
         "",
         "Обязательные proof-проверки:",
     ]
@@ -140,6 +150,17 @@ def format_release_control_report(*, limit: int = 25) -> str:
             lines.append(f"   finished={item.finished_at_utc}")
         if item.error:
             lines.append(f"   error={item.error[:180]}")
+
+    if stale_auto_audio_lock_count:
+        lines.extend(["", "Stale auto-audio delivery locks:"])
+        for item in auto_audio_locks.get("locks", [])[:5]:
+            lines.append(
+                "⚠️ "
+                f"user_id={item.get('user_id')} "
+                f"stage={item.get('stage')} "
+                f"kind={item.get('kind')} "
+                f"age={item.get('age_seconds')}s"
+            )
 
     lines.extend(
         [
@@ -157,7 +178,7 @@ def format_release_control_report(*, limit: int = 25) -> str:
     if status == "GREEN":
         lines.append("\nИтог: релизный контур выглядит зелёным по последним proof-записям.")
     elif status == "YELLOW":
-        lines.append("\nИтог: probes зелёные, но есть платежи для ручной проверки.")
+        lines.append("\nИтог: probes зелёные, но есть платежи или auto-audio locks для ручной проверки.")
     else:
         lines.append("\nИтог: есть незакрытая proof-проблема. Релиз/изменения нужно остановить до разбора.")
 
