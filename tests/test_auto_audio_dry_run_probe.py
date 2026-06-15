@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from services.db import db
-from scripts.probe_auto_audio_dry_run import PROBE_SOURCE, run_probe
+from scripts.probe_auto_audio_dry_run import AutoAudioProbeResult, PROBE_SOURCE, run_probe
 
 
 def test_auto_audio_dry_run_probe_verifies_and_cleans_local_path() -> None:
     user_id = -910_000_301
-    session_id = run_probe(user_id=user_id, slot="morning", keep_artifacts=False)
+    result = run_probe(user_id=user_id, slot="morning", keep_artifacts=False)
 
-    assert isinstance(session_id, int)
-    assert session_id > 0
+    assert isinstance(result, AutoAudioProbeResult)
+    assert result.user_id == user_id
+    assert result.slot == "morning"
+    assert isinstance(result.session_id, int)
+    assert result.session_id > 0
+    assert result.cleanup_status == "clean"
+    assert result.rows_touched > 0
 
     with db() as conn:
         session_row = conn.execute(
@@ -27,13 +32,17 @@ def test_auto_audio_dry_run_probe_verifies_and_cleans_local_path() -> None:
 
 def test_auto_audio_dry_run_probe_can_keep_artifacts_for_manual_inspection() -> None:
     user_id = -910_000_302
-    session_id = run_probe(user_id=user_id, slot="evening", keep_artifacts=True)
+    result = run_probe(user_id=user_id, slot="evening", keep_artifacts=True)
 
     try:
+        assert isinstance(result, AutoAudioProbeResult)
+        assert result.user_id == user_id
+        assert result.slot == "evening"
+        assert result.cleanup_status == "kept"
         with db() as conn:
             session_row = conn.execute(
                 "SELECT user_id, source, slot, anchor_id FROM mood_sessions WHERE id=?",
-                (session_id,),
+                (result.session_id,),
             ).fetchone()
             subscription_row = conn.execute(
                 "SELECT 1 FROM subscriptions WHERE user_id=? LIMIT 1",
