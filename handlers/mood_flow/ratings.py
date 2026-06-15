@@ -19,6 +19,7 @@ from aiogram.types import FSInputFile
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from keyboards.inline import kb_mood_scale, kb_mood_done, kb_body_question, kb_after_post_actions, kb_post_show_chart
+from services.auto_audio_recovery import acquire_delivery_lock
 from services.db import mark_delivery_once, unmark_delivery, was_delivered
 from services.idempotency import wall_key
 from services.idempotency_keys import for_demo_click, for_session
@@ -67,7 +68,10 @@ def _trial_outcome_keyboard(user_id: int, kind: str, *, delta: int | None, sessi
     except sqlite3.Error:
         logging.getLogger(__name__).exception("trial keyboard: failed to read demo history")
         remaining = None
-    except (TypeError, ValueError):
+    except TypeError:
+        logging.getLogger(__name__).exception("trial keyboard: bad demo history")
+        remaining = None
+    except ValueError:
         logging.getLogger(__name__).exception("trial keyboard: bad demo history")
         remaining = None
 
@@ -151,7 +155,10 @@ async def mood_answer(cb: CallbackQuery):
     try:
         sid = int(sid_raw)
         val = int(val_raw)
-    except (ValueError, RuntimeError):
+    except ValueError:
+        logging.getLogger(__name__).exception("Unhandled exception")
+        return
+    except RuntimeError:
         logging.getLogger(__name__).exception("Unhandled exception")
         return
 
@@ -177,7 +184,9 @@ async def mood_answer(cb: CallbackQuery):
         try:
             if getattr(s, "audio_sent", 0):
                 return
-        except (ValueError, RuntimeError):
+        except ValueError:
+            logging.getLogger(__name__).exception("Unhandled exception")
+        except RuntimeError:
             logging.getLogger(__name__).exception("Unhandled exception")
 
         # --- Support-AI: персональная реакция системы (деликатно, без давления) ---
@@ -190,7 +199,9 @@ async def mood_answer(cb: CallbackQuery):
             )
             if dec and dec.message:
                 await cb.message.answer(dec.message)
-        except (ValueError, RuntimeError):
+        except ValueError:
+            logging.getLogger(__name__).exception("Unhandled exception")
+        except RuntimeError:
             logging.getLogger(__name__).exception("Unhandled exception")
 
         # Определяем что отправлять
@@ -214,7 +225,9 @@ async def mood_answer(cb: CallbackQuery):
                 for p in demo_files:
                     try:
                         stem = (p.stem or "").lower()
-                    except (ValueError, RuntimeError):
+                    except ValueError:
+                        stem = ""
+                    except RuntimeError:
                         stem = ""
                     if want in stem:
                         picked = p
@@ -238,8 +251,19 @@ async def mood_answer(cb: CallbackQuery):
 
         if was_delivered(user_id, idem_kind, "audio", idem_scheduled_at):
             return
-        if not mark_delivery_once(user_id, idem_kind, "audio_lock", idem_scheduled_at):
+        audio_lock = await asyncio.to_thread(
+            acquire_delivery_lock,
+            user_id,
+            idem_kind,
+            "audio_lock",
+            idem_scheduled_at,
+            final_stage="audio",
+        )
+        if not audio_lock.acquired:
+            log_event(user_id, "idempotency_skip", {"stage": "audio_lock", "scheduled_at": idem_scheduled_at, "reason": audio_lock.reason})
             return
+        if audio_lock.stale_reclaimed:
+            log_event(user_id, "mood_audio_stale_lock_reclaimed", {"stage": "audio_lock", "scheduled_at": idem_scheduled_at})
 
         access_decision = await asyncio.to_thread(
             check_and_reserve_for_audio,
@@ -302,7 +326,13 @@ async def mood_answer(cb: CallbackQuery):
                 delivered = True
                 try:
                     await asyncio.to_thread(finalize_audio_access, access_decision, delivered=True)
-                except (sqlite3.Error, RuntimeError, ValueError):
+                except sqlite3.Error:
+                    logging.getLogger(__name__).exception("practice token consume after audio send failed")
+                    log_event(int(cb.from_user.id), "practice_token_consume_error", {"session_id": sid, "source": s.source})
+                except RuntimeError:
+                    logging.getLogger(__name__).exception("practice token consume after audio send failed")
+                    log_event(int(cb.from_user.id), "practice_token_consume_error", {"session_id": sid, "source": s.source})
+                except ValueError:
                     logging.getLogger(__name__).exception("practice token consume after audio send failed")
                     log_event(int(cb.from_user.id), "practice_token_consume_error", {"session_id": sid, "source": s.source})
 
@@ -312,7 +342,9 @@ async def mood_answer(cb: CallbackQuery):
                         save_cached_file_id(file_path, "voice", str(msg.voice.file_id))
                     if getattr(msg, "audio", None) and getattr(msg.audio, "file_id", None):
                         save_cached_file_id(file_path, "audio", str(msg.audio.file_id))
-                except (ValueError, RuntimeError):
+                except ValueError:
+                    logging.getLogger(__name__).exception("Unhandled exception")
+                except RuntimeError:
                     logging.getLogger(__name__).exception("Unhandled exception")
 
                 # demo analytics
@@ -326,7 +358,9 @@ async def mood_answer(cb: CallbackQuery):
                         from datetime import datetime, timezone
                         sent_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
                         record_demo_sent(int(cb.from_user.id), "work" if s.kind == "work" else "home", int(msg.message_id), sent_at, int(dur) if dur else None)
-                except (ValueError, RuntimeError):
+                except ValueError:
+                    logging.getLogger(__name__).exception("Unhandled exception")
+                except RuntimeError:
                     logging.getLogger(__name__).exception("Unhandled exception")
 
 
@@ -336,7 +370,9 @@ async def mood_answer(cb: CallbackQuery):
                         slot = "morning" if s.kind == "work" else "evening"
                         register_touch(int(cb.from_user.id), slot)
                         advance(int(cb.from_user.id), slot)
-                except (ValueError, RuntimeError):
+                except ValueError:
+                    logging.getLogger(__name__).exception("Unhandled exception")
+                except RuntimeError:
                     logging.getLogger(__name__).exception("Unhandled exception")
 
                 try:
@@ -346,7 +382,9 @@ async def mood_answer(cb: CallbackQuery):
                             item=AudioProgressItem(ordinal=0, anchor=int(s.anchor_id), title=str(caption or file_path.stem), path=file_path),
                             platform='telegram',
                         )
-                except (ValueError, RuntimeError):
+                except ValueError:
+                    logging.getLogger(__name__).exception("Unhandled exception")
+                except RuntimeError:
                     logging.getLogger(__name__).exception("Unhandled exception")
 
                 # Финальный маркер отправки — только после успешного send.
