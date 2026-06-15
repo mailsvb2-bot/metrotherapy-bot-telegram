@@ -13,6 +13,7 @@ from services.db.runtime import CONFIG, redacted_db_target
 ALLOWED_DIRECT_SQLITE_CONNECT_PATHS = {
     "services/db/core.py",          # canonical DB adapter; Postgres branch wins in prod
     "services/db_writer.py",        # SQLite fallback writer; disabled in Postgres mode
+    "scripts/archive_legacy_sqlite.py",  # operator-only archival/integrity tooling
     "scripts/backup_db.py",         # offline SQLite backup tooling
     "scripts/restore_db.py",        # offline SQLite restore tooling
     "scripts/restore_drill.py",     # offline SQLite restore drill
