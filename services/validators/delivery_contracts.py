@@ -13,11 +13,29 @@ def _read(path: str) -> str:
         return ""
 
 
-def _has_call(text: str, *, func_name: str, args: tuple[str, ...]) -> bool:
+def _func_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _func_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def _unparse(node: ast.AST) -> str:
+    try:
+        return ast.unparse(node)
+    except ValueError:
+        return ""
+    except RuntimeError:
+        return ""
+
+
+def _has_call(text: str, *, func_name: str, args: tuple[str, ...], keywords: dict[str, str] | None = None) -> bool:
     """Return True when source contains func_name(*args), independent of formatting.
 
     The production validator must enforce the delivery lifecycle contract without
-    coupling startup to one exact line-wrapping style.  This keeps the guardrail
+    coupling startup to one exact line-wrapping style. This keeps the guardrail
     strict while allowing normal formatter-safe edits.
     """
 
@@ -26,20 +44,57 @@ def _has_call(text: str, *, func_name: str, args: tuple[str, ...]) -> bool:
     except SyntaxError:
         return False
 
+    expected_keywords = keywords or {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        func = node.func
-        if not isinstance(func, ast.Name) or func.id != func_name:
+        if _func_name(node.func) != func_name:
             continue
         if len(node.args) < len(args):
             continue
-        try:
-            actual = tuple(ast.unparse(arg) for arg in node.args[: len(args)])
-        except (ValueError, RuntimeError):
+        actual = tuple(_unparse(arg) for arg in node.args[: len(args)])
+        if actual != args:
             continue
-        if actual == args:
-            return True
+        actual_keywords = {kw.arg: _unparse(kw.value) for kw in node.keywords if kw.arg}
+        if any(actual_keywords.get(key) != value for key, value in expected_keywords.items()):
+            continue
+        return True
+    return False
+
+
+def _has_to_thread_call(
+    text: str,
+    *,
+    target: str,
+    args: tuple[str, ...],
+    keywords: dict[str, str] | None = None,
+) -> bool:
+    """Return True for asyncio.to_thread(target, *args, **keywords)."""
+
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return False
+
+    expected_keywords = keywords or {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _func_name(node.func) != "asyncio.to_thread":
+            continue
+        if not node.args:
+            continue
+        if _unparse(node.args[0]) != target:
+            continue
+        if len(node.args) < len(args) + 1:
+            continue
+        actual = tuple(_unparse(arg) for arg in node.args[1 : len(args) + 1])
+        if actual != args:
+            continue
+        actual_keywords = {kw.arg: _unparse(kw.value) for kw in node.keywords if kw.arg}
+        if any(actual_keywords.get(key) != value for key, value in expected_keywords.items()):
+            continue
+        return True
     return False
 
 
@@ -59,7 +114,17 @@ def validate_demo_idempotency_cleanup(*, strict: bool = True) -> None:
         func_name="unmark_delivery",
         args=("int(cb.from_user.id)", "idem_kind", "'audio_lock'", "idem_scheduled_at"),
     )
-    if old_demo_final_marker_before_send in text or not has_final_marker or not has_lock_cleanup:
+    has_lock = _has_to_thread_call(
+        text,
+        target="acquire_delivery_lock",
+        args=("user_id", "idem_kind", "'audio_lock'", "idem_scheduled_at"),
+        keywords={"final_stage": "'audio'"},
+    ) or _has_call(
+        text,
+        func_name="mark_delivery_once",
+        args=("user_id", "idem_kind", "'audio_lock'", "idem_scheduled_at"),
+    )
+    if old_demo_final_marker_before_send in text or not has_lock or not has_final_marker or not has_lock_cleanup:
         msg = "Demo audio idempotency is not using the canonical lock-before-send/final-marker-after-send lifecycle"
         if strict:
             raise ValidationError(msg)
@@ -84,15 +149,34 @@ def validate_auto_audio_pre_score_lifecycle(*, strict: bool = True) -> None:
     text = _read("services/auto_audio.py")
     if not text:
         return
-    required = [
-        "asyncio.to_thread(was_delivered, uid, kind, \"pre_score\", scheduled_at)",
-        "asyncio.to_thread(mark_delivery_once, uid, kind, \"pre_score_lock\", scheduled_at)",
-        "asyncio.to_thread(mark_delivery_once, uid, kind, \"pre_score\", scheduled_at)",
-        "unmark_delivery, uid, kind, \"pre_score_lock\", scheduled_at",
-    ]
-    missing = [needle for needle in required if needle not in text]
+
+    has_final_check = _has_to_thread_call(
+        text,
+        target="was_delivered",
+        args=("uid", "kind", "'pre_score'", "scheduled_at"),
+    )
+    has_lock = _has_to_thread_call(
+        text,
+        target="acquire_delivery_lock",
+        args=("uid", "kind", "'pre_score_lock'", "scheduled_at"),
+        keywords={"final_stage": "'pre_score'"},
+    ) or _has_to_thread_call(
+        text,
+        target="mark_delivery_once",
+        args=("uid", "kind", "'pre_score_lock'", "scheduled_at"),
+    )
+    has_final_marker = _has_to_thread_call(
+        text,
+        target="mark_delivery_once",
+        args=("uid", "kind", "'pre_score'", "scheduled_at"),
+    )
+    has_lock_cleanup = _has_to_thread_call(
+        text,
+        target="unmark_delivery",
+        args=("uid", "kind", "'pre_score_lock'", "scheduled_at"),
+    ) or "_unmark_pre_score_lock(uid, kind, scheduled_at)" in text
     old_marker = "mark_delivery_once, uid, kind, \"pre_score\", scheduled_at):\n                log_event"
-    if missing or old_marker in text:
+    if not has_final_check or not has_lock or not has_final_marker or not has_lock_cleanup or old_marker in text:
         msg = "auto_audio pre_score idempotency is not using the canonical two-phase lifecycle"
         if strict:
             raise ValidationError(msg)
