@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import os
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -10,6 +11,24 @@ from config.settings import settings
 
 if TYPE_CHECKING:
     from aiogram import Bot, Dispatcher
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _app_env() -> str:
+    return (os.getenv("APP_ENV") or getattr(settings, "APP_ENV", "") or "dev").strip().lower()
+
+
+def _allow_insecure_telegram_webhook() -> bool:
+    # Explicit local/dev escape hatch only. Production/staging webhooks must be authenticated.
+    if _app_env() in {"prod", "production", "stage", "staging"}:
+        return False
+    return _env_bool("ALLOW_INSECURE_TELEGRAM_WEBHOOK", False)
 
 
 def telegram_webhook_prefix() -> str:
@@ -45,7 +64,7 @@ def telegram_public_webhook_url() -> str:
 def telegram_secret_ok(request: web.Request) -> bool:
     expected = (getattr(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "") or "").strip()
     if not expected:
-        return True
+        return _allow_insecure_telegram_webhook()
     actual = (request.headers.get("X-Telegram-Bot-Api-Secret-Token") or "").strip()
     if not actual:
         return False
