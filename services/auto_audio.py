@@ -19,7 +19,7 @@ from config.settings import settings
 from runtime.messenger_senders import MaxBotSender, TelegramBotSender, VkBotSender
 from services.audio_anchor import pick_for_slot
 from services.auto_audio_entitlement import eligible_user_ids, has_entitlement
-from services.db import db, mark_delivery_once, unmark_delivery
+from services.db import db, mark_delivery_once, unmark_delivery, was_delivered
 from services.delivery_preferences import build_delivery_policy_decision
 from services.events import log_event
 from services.idempotency_keys import for_pre_score
@@ -132,11 +132,11 @@ async def _send_pre_prompt(bot: Bot, uid: int, *, session_id: int, channel: str,
     await sender.send_text(plan.external_user_id, prompt)
 
 
-async def _unmark_pre_score(uid: int, kind: str, scheduled_at: str) -> None:
+async def _unmark_pre_score_lock(uid: int, kind: str, scheduled_at: str) -> None:
     try:
-        await asyncio.to_thread(unmark_delivery, uid, kind, "pre_score", scheduled_at)
+        await asyncio.to_thread(unmark_delivery, uid, kind, "pre_score_lock", scheduled_at)
     except sqlite3.Error:
-        log.debug("pre_score idempotency cleanup failed", exc_info=True)
+        log.debug("pre_score_lock idempotency cleanup failed", exc_info=True)
 
 
 async def tick(bot: Bot):
@@ -160,21 +160,26 @@ async def tick(bot: Bot):
             local_day = now_utc.astimezone(ZoneInfo(tz_name)).date().isoformat()
             scheduled_at = for_pre_score(uid, local_day, slot)
             kind = "work" if slot == "morning" else "home"
-            if not await asyncio.to_thread(mark_delivery_once, uid, kind, "pre_score", scheduled_at):
+            if await asyncio.to_thread(was_delivered, uid, kind, "pre_score", scheduled_at):
                 log_event(uid, "idempotency_skip", {"stage": "pre_score", "slot": slot, "scheduled_at": scheduled_at})
                 continue
-            sid = await asyncio.to_thread(create_session, uid, kind=kind, source="auto", day=local_day, slot=slot, scheduled_at=scheduled_at, anchor_id=aa.anchor)
+            if not await asyncio.to_thread(mark_delivery_once, uid, kind, "pre_score_lock", scheduled_at):
+                log_event(uid, "idempotency_skip", {"stage": "pre_score_lock", "slot": slot, "scheduled_at": scheduled_at})
+                continue
             try:
+                sid = await asyncio.to_thread(create_session, uid, kind=kind, source="auto", day=local_day, slot=slot, scheduled_at=scheduled_at, anchor_id=aa.anchor)
                 await _send_pre_prompt(bot, uid, session_id=sid, channel=policy.resolved_channel, senders=senders)
+                await asyncio.to_thread(mark_delivery_once, uid, kind, "pre_score", scheduled_at)
+                await _unmark_pre_score_lock(uid, kind, scheduled_at)
                 log_event(uid, "auto_audio_prompted", {"slot": slot, "anchor": aa.anchor, "day": local_day, "channel": policy.resolved_channel, "preferred": policy.preferred_channel, "tz": tz_name})
                 if policy.fallback_used:
                     log_event(uid, "auto_audio_channel_fallback", {"slot": slot, "preferred": policy.preferred_channel, "resolved": policy.resolved_channel, "tz": tz_name})
             except TelegramAPIError as exc:
-                await _unmark_pre_score(uid, kind, scheduled_at)
+                await _unmark_pre_score_lock(uid, kind, scheduled_at)
                 log_event(uid, "auto_audio_telegram_delivery_error", {"slot": slot, "err": str(exc), "channel": policy.resolved_channel})
                 continue
-            except (RuntimeError, ValueError, TypeError) as exc:
-                await _unmark_pre_score(uid, kind, scheduled_at)
+            except (sqlite3.Error, RuntimeError, ValueError, TypeError) as exc:
+                await _unmark_pre_score_lock(uid, kind, scheduled_at)
                 log_event(uid, "auto_audio_error", {"slot": slot, "err": str(exc), "channel": policy.resolved_channel})
                 continue
     except sqlite3.Error:
