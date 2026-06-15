@@ -263,6 +263,26 @@ async def mood_answer(cb: CallbackQuery):
             cached_kind = "voice" if file_path.suffix.lower() in (".ogg", ".opus") else "audio"
             cached_id = get_cached_file_id(file_path, cached_kind)
             delivered = False
+
+            async def _handle_audio_send_failure(exc: BaseException) -> None:
+                # Если упали ДО факта отправки — снимаем lock и возвращаем резерв, чтобы allow retry.
+                if not delivered:
+                    try:
+                        await asyncio.to_thread(finalize_audio_access, access_decision, delivered=False)
+                    except sqlite3.Error:
+                        logging.getLogger(__name__).debug("practice token release after send failure failed", exc_info=True)
+                    except RuntimeError:
+                        logging.getLogger(__name__).debug("practice token release after send failure failed", exc_info=True)
+                    except ValueError:
+                        logging.getLogger(__name__).debug("practice token release after send failure failed", exc_info=True)
+                try:
+                    unmark_delivery(int(cb.from_user.id), idem_kind, "audio_lock", idem_scheduled_at)
+                except sqlite3.Error:
+                    # last-resort: не ломаем UX из-за cleanup
+                    logging.getLogger(__name__).debug("audio_lock cleanup failed", exc_info=True)
+                log_event(int(cb.from_user.id), "mood_audio_send_error", {"err": str(exc), "source": s.source})
+                await cb.message.answer("⚠️ Не удалось отправить аудио. Попробуйте ещё раз.")
+
             try:
                 if cached_id and cached_kind == "voice":
                     msg = await cb.bot.send_voice(chat_id=int(cb.from_user.id), voice=cached_id, caption=caption, protect_content=True)
@@ -338,20 +358,14 @@ async def mood_answer(cb: CallbackQuery):
 
                 mark_audio_sent(sid)
                 await cb.message.answer("Когда прослушаете — нажмите кнопку:", reply_markup=kb_mood_done(sid))
-            except (TelegramAPIError, OSError, ValueError, RuntimeError) as e:
-                # Если упали ДО факта отправки — снимаем lock и возвращаем резерв, чтобы allow retry.
-                if not delivered:
-                    try:
-                        await asyncio.to_thread(finalize_audio_access, access_decision, delivered=False)
-                    except (sqlite3.Error, RuntimeError, ValueError):
-                        logging.getLogger(__name__).debug("practice token release after send failure failed", exc_info=True)
-                try:
-                    unmark_delivery(int(cb.from_user.id), idem_kind, "audio_lock", idem_scheduled_at)
-                except sqlite3.Error:
-                    # last-resort: не ломаем UX из-за cleanup
-                    logging.getLogger(__name__).debug("audio_lock cleanup failed", exc_info=True)
-                log_event(int(cb.from_user.id), "mood_audio_send_error", {"err": str(e), "source": s.source})
-                await cb.message.answer("⚠️ Не удалось отправить аудио. Попробуйте ещё раз.")
+            except TelegramAPIError as exc:
+                await _handle_audio_send_failure(exc)
+            except OSError as exc:
+                await _handle_audio_send_failure(exc)
+            except ValueError as exc:
+                await _handle_audio_send_failure(exc)
+            except RuntimeError as exc:
+                await _handle_audio_send_failure(exc)
 
         tm().create(_send_audio())
         return
