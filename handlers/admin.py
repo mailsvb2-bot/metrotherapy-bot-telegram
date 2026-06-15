@@ -24,6 +24,7 @@ async def admin_cmd(message: Message):
     await message.answer(
         "🛠 Админ\n\n"
         "Команды:\n"
+        "• /release — единый release/control-plane статус\n"
         "• /stats — базовая статистика\n"
         "• /users — количество пользователей\n"
         "• /state_last — последние состояния (лог)\n\n"
