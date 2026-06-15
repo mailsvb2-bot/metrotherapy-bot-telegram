@@ -203,6 +203,8 @@ async def yookassa_reconciliation_webhook(request: web.Request) -> web.Response:
             "event": result.event,
             "inserted": result.inserted,
             "problem": result.problem,
+            "processing_status": result.processing_status,
+            "side_effects_done": result.side_effects_done,
         },
         status=status,
     )
