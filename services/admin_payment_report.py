@@ -56,7 +56,8 @@ def render_admin_payment_report_text(report: AdminPaymentReport) -> str:
                 f"payment_id={_short(item.get('provider_charge_id') or '-')} "
                 f"user_id={_short(item.get('user_id') or '-')} "
                 f"status={_short(item.get('provider_status') or '-')} "
-                f"problem={_short(item.get('problem') or '-')}"
+                f"processing={_short(item.get('processing_status') or '-')} "
+                f"problem={_short(item.get('problem') or item.get('processing_error') or '-')}"
             )
     else:
         lines.append("- no records requiring attention")
