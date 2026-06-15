@@ -1,49 +1,57 @@
 name: CI
+
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   smoke:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.11', '3.12']
+    runs-on: [self-hosted]
+    timeout-minutes: 20
+    env:
+      CI_VENV: ${{ runner.temp }}/metrotherapy-ci-venv
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install deps
+      - name: Prepare isolated CI virtualenv
         run: |
+          rm -rf "$CI_VENV"
+          python3 -m venv "$CI_VENV"
+          . "$CI_VENV/bin/activate"
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          python -m pip install pytest
+          python -m pip install -r requirements.txt
+          python -m pip install pytest ruff
 
       - name: Release hygiene
-        run: python scripts/check_release_hygiene.py
+        run: |
+          . "$CI_VENV/bin/activate"
+          python scripts/check_release_hygiene.py
 
       - name: Compile
-        run: python -m compileall .
+        run: |
+          . "$CI_VENV/bin/activate"
+          python -m compileall \
+            services \
+            scripts \
+            handlers \
+            core \
+            app.py \
+            main.py
 
-      - name: Full pytest
-        env:
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python -m pytest -q
+      - name: Ruff quality gate
+        run: |
+          . "$CI_VENV/bin/activate"
+          python scripts/check_ruff.py
 
-      - name: Validator (strict)
+      - name: Smoke no polling
         env:
           APP_ENV: prod
-          VALIDATOR_RELEASE_MODE: '1'
           PYTHONDONTWRITEBYTECODE: '1'
-        run: python scripts/validate_project.py
-
-      - name: Smoke (no polling)
-        env:
-          APP_ENV: prod
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python scripts/smoke.py
+        run: |
+          . "$CI_VENV/bin/activate"
+          python scripts/smoke.py

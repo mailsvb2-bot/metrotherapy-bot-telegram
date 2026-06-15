@@ -79,6 +79,26 @@ def validate_auto_audio_not_subscription_only(*, strict: bool = True) -> None:
             raise ValidationError(msg)
 
 
+def validate_auto_audio_pre_score_lifecycle(*, strict: bool = True) -> None:
+    """Auto-audio prompt delivery must use lock-before-send and final marker-after-send."""
+    text = _read("services/auto_audio.py")
+    if not text:
+        return
+    required = [
+        "asyncio.to_thread(was_delivered, uid, kind, \"pre_score\", scheduled_at)",
+        "asyncio.to_thread(mark_delivery_once, uid, kind, \"pre_score_lock\", scheduled_at)",
+        "asyncio.to_thread(mark_delivery_once, uid, kind, \"pre_score\", scheduled_at)",
+        "unmark_delivery, uid, kind, \"pre_score_lock\", scheduled_at",
+    ]
+    missing = [needle for needle in required if needle not in text]
+    old_marker = "mark_delivery_once, uid, kind, \"pre_score\", scheduled_at):\n                log_event"
+    if missing or old_marker in text:
+        msg = "auto_audio pre_score idempotency is not using the canonical two-phase lifecycle"
+        if strict:
+            raise ValidationError(msg)
+
+
 def validate_delivery_contracts(*, strict: bool = True) -> None:
     validate_demo_idempotency_cleanup(strict=strict)
     validate_auto_audio_not_subscription_only(strict=strict)
+    validate_auto_audio_pre_score_lifecycle(strict=strict)

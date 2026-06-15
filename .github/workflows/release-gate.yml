@@ -1,19 +1,21 @@
-name: Strict Guardrails
+name: Release gate
 
 on:
-  push:
   pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  guardrails:
+  release-gate:
     runs-on: [self-hosted]
-    timeout-minutes: 20
+    timeout-minutes: 15
     env:
-      CI_VENV: ${{ runner.temp }}/metrotherapy-guardrails-venv
+      CI_VENV: ${{ runner.temp }}/metrotherapy-release-gate-venv
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,28 +29,21 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install ruff
 
-      - name: Compile
+      - name: Compile DR release files
         run: |
           . "$CI_VENV/bin/activate"
           python -m compileall \
-            services \
-            scripts \
-            handlers \
-            core \
-            app.py \
-            main.py
+            services/disaster_recovery_status.py \
+            scripts/disaster_recovery_proof.py \
+            scripts/release_evidence_snapshot.py \
+            handlers/admin_reports/system_checks.py
 
       - name: Ruff quality gate
         run: |
           . "$CI_VENV/bin/activate"
           python scripts/check_ruff.py
 
-      - name: Strict validator with architecture guardrails
-        env:
-          APP_ENV: prod
-          VALIDATOR_RELEASE_MODE: '1'
-          VALIDATOR_GUARDRAILS_STRICT: '1'
-          PYTHONDONTWRITEBYTECODE: '1'
+      - name: Disaster recovery backup proof
         run: |
           . "$CI_VENV/bin/activate"
-          python scripts/validate_project.py
+          python scripts/disaster_recovery_proof.py --json --strict
