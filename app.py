@@ -79,6 +79,7 @@ from handlers import (
     demo,
     audio,
     admin,
+    admin_release,
     admin_stats,
     admin_inline,
     share,
@@ -231,6 +232,7 @@ async def create_application():
     dp.include_router(audio.router)
     dp.include_router(payments.router)
     dp.include_router(admin.router)
+    dp.include_router(admin_release.router)
     dp.include_router(admin_stats.router)
     dp.include_router(admin_inline.router)
     dp.include_router(share.router)
