@@ -1,0 +1,41 @@
+name: Release gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff pytest
+
+      - name: Compile Python
+        run: python -m compileall .
+
+      - name: Ruff
+        run: python -m ruff check .
+
+      - name: Static storage audit import smoke
+        run: python - <<'PY'
+          from services.storage_legacy_audit import storage_legacy_audit
+          from services.disaster_recovery_status import disaster_recovery_status
+          assert storage_legacy_audit is not None
+          assert disaster_recovery_status is not None
+          print('STATIC_RELEASE_GATE_IMPORTS_OK')
+          PY
