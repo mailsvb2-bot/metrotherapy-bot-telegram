@@ -19,6 +19,7 @@ from config.settings import settings
 from runtime.messenger_senders import MaxBotSender, TelegramBotSender, VkBotSender
 from services.audio_anchor import pick_for_slot
 from services.auto_audio_entitlement import eligible_user_ids, has_entitlement
+from services.auto_audio_recovery import acquire_delivery_lock
 from services.db import db, mark_delivery_once, unmark_delivery, was_delivered
 from services.delivery_preferences import build_delivery_policy_decision
 from services.events import log_event
@@ -168,9 +169,19 @@ async def tick(bot: Bot):
             if await asyncio.to_thread(was_delivered, uid, kind, "pre_score", scheduled_at):
                 log_event(uid, "idempotency_skip", {"stage": "pre_score", "slot": slot, "scheduled_at": scheduled_at})
                 continue
-            if not await asyncio.to_thread(mark_delivery_once, uid, kind, "pre_score_lock", scheduled_at):
-                log_event(uid, "idempotency_skip", {"stage": "pre_score_lock", "slot": slot, "scheduled_at": scheduled_at})
+            lock = await asyncio.to_thread(
+                acquire_delivery_lock,
+                uid,
+                kind,
+                "pre_score_lock",
+                scheduled_at,
+                final_stage="pre_score",
+            )
+            if not lock.acquired:
+                log_event(uid, "idempotency_skip", {"stage": "pre_score_lock", "slot": slot, "scheduled_at": scheduled_at, "reason": lock.reason})
                 continue
+            if lock.stale_reclaimed:
+                log_event(uid, "auto_audio_stale_lock_reclaimed", {"stage": "pre_score_lock", "slot": slot, "scheduled_at": scheduled_at})
             try:
                 sid = await asyncio.to_thread(create_session, uid, kind=kind, source="auto", day=local_day, slot=slot, scheduled_at=scheduled_at, anchor_id=aa.anchor)
                 await _send_pre_prompt(bot, uid, session_id=sid, channel=policy.resolved_channel, senders=senders)
