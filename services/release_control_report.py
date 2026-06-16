@@ -17,7 +17,6 @@ REQUIRED_PROBES = {
     "probe_scheduler_job_live": "Scheduler job",
     "auto_audio_dry_run_probe": "Auto-audio dry-run",
     "synthetic_user_journey_e2e_probe": "User journey E2E",
-    "telegram_live_smoke_probe": "Telegram live smoke",
 }
 
 
