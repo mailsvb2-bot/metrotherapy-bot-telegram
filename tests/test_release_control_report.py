@@ -28,6 +28,16 @@ class _Storage:
         self.disallowed_direct_sqlite_connects = []
 
 
+class _Recovery:
+    def __init__(self, status: str = "GREEN") -> None:
+        self.status = status
+        self.reason = "ok" if status == "GREEN" else "backup_missing"
+        self.backup_count = 1 if status == "GREEN" else 0
+        self.latest_backup = "/tmp/backup.dump" if status == "GREEN" else None
+        self.latest_backup_size_bytes = 1024 if status == "GREEN" else 0
+        self.restore_target_configured = status == "GREEN"
+
+
 def _green_runs() -> list[ProbeRun]:
     return [
         _probe("payment_entitlement_reconciliation_probe", idx=1),
@@ -37,12 +47,17 @@ def _green_runs() -> list[ProbeRun]:
     ]
 
 
-def test_release_report_green_when_storage_and_probes_are_green(monkeypatch) -> None:
+def _patch_common(monkeypatch, *, storage: str = "GREEN", recovery: str = "GREEN") -> None:
     monkeypatch.setattr(report_module, "get_recent_probe_runs", lambda limit: _green_runs())
     monkeypatch.setattr(report_module, "payment_problem_summary", lambda limit: [])
     monkeypatch.setattr(report_module, "auto_audio_lock_summary", lambda limit: {"stale_lock_count": 0, "locks": []})
-    monkeypatch.setattr(report_module, "storage_legacy_audit", lambda: _Storage("GREEN"))
+    monkeypatch.setattr(report_module, "storage_legacy_audit", lambda: _Storage(storage))
+    monkeypatch.setattr(report_module, "disaster_recovery_status", lambda include_hash=False: _Recovery(recovery))
     monkeypatch.setattr(report_module, "_git_value", lambda *args: "main" if "--abbrev-ref" in args else "abc123")
+
+
+def test_release_report_green_when_storage_recovery_and_probes_are_green(monkeypatch) -> None:
+    _patch_common(monkeypatch)
 
     text = report_module.format_release_control_report(limit=10)
     snapshot = report_module.build_release_control_snapshot(limit=10)
@@ -50,17 +65,14 @@ def test_release_report_green_when_storage_and_probes_are_green(monkeypatch) -> 
     assert snapshot.status == "GREEN"
     assert "Статус: ✅ GREEN" in text
     assert "Storage: GREEN legacy_sqlite=False" in text
+    assert "Disaster recovery: GREEN" in text
     assert "Проблемные платежи: 0" in text
     assert "Stale auto-audio locks: 0" in text
     assert "User journey E2E: ok/clean" in text
 
 
 def test_release_report_yellow_when_storage_is_yellow(monkeypatch) -> None:
-    monkeypatch.setattr(report_module, "get_recent_probe_runs", lambda limit: _green_runs())
-    monkeypatch.setattr(report_module, "payment_problem_summary", lambda limit: [])
-    monkeypatch.setattr(report_module, "auto_audio_lock_summary", lambda limit: {"stale_lock_count": 0, "locks": []})
-    monkeypatch.setattr(report_module, "storage_legacy_audit", lambda: _Storage("YELLOW"))
-    monkeypatch.setattr(report_module, "_git_value", lambda *args: "main")
+    _patch_common(monkeypatch, storage="YELLOW")
 
     text = report_module.format_release_control_report(limit=10)
 
@@ -68,11 +80,21 @@ def test_release_report_yellow_when_storage_is_yellow(monkeypatch) -> None:
     assert "Storage: YELLOW" in text
 
 
+def test_release_report_yellow_when_recovery_is_not_green(monkeypatch) -> None:
+    _patch_common(monkeypatch, recovery="RED")
+
+    text = report_module.format_release_control_report(limit=10)
+
+    assert "Статус: ⚠️ YELLOW" in text
+    assert "Disaster recovery: RED" in text
+
+
 def test_release_report_red_when_required_probe_missing(monkeypatch) -> None:
     monkeypatch.setattr(report_module, "get_recent_probe_runs", lambda limit: [_probe("probe_scheduler_job_live", idx=2)])
     monkeypatch.setattr(report_module, "payment_problem_summary", lambda limit: [])
     monkeypatch.setattr(report_module, "auto_audio_lock_summary", lambda limit: {"stale_lock_count": 0, "locks": []})
     monkeypatch.setattr(report_module, "storage_legacy_audit", lambda: _Storage("GREEN"))
+    monkeypatch.setattr(report_module, "disaster_recovery_status", lambda include_hash=False: _Recovery("GREEN"))
     monkeypatch.setattr(report_module, "_git_value", lambda *args: "main")
 
     text = report_module.format_release_control_report(limit=10)
