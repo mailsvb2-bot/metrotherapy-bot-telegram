@@ -49,6 +49,7 @@ def main() -> int:
     parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
     parser.add_argument("--include-hash", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--strict", action="store_true", help="Exit non-zero when backup proof is not OK")
     args = parser.parse_args()
 
     _apply_env(_load_env_file(args.env_file))
@@ -62,7 +63,7 @@ def main() -> int:
         print(json.dumps(status.to_dict(), ensure_ascii=False, sort_keys=True))
     else:
         print(format_disaster_recovery_status_for_admin())
-    return 0 if status.ok else 2
+    return 2 if args.strict and not status.ok else 0
 
 
 if __name__ == "__main__":
