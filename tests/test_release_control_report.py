@@ -33,6 +33,7 @@ def _green_runs() -> list[ProbeRun]:
         _probe("payment_entitlement_reconciliation_probe", idx=1),
         _probe("probe_scheduler_job_live", idx=2),
         _probe("auto_audio_dry_run_probe", idx=3),
+        _probe("synthetic_user_journey_e2e_probe", idx=4),
     ]
 
 
@@ -51,6 +52,7 @@ def test_release_report_green_when_storage_and_probes_are_green(monkeypatch) -> 
     assert "Storage: GREEN legacy_sqlite=False" in text
     assert "Проблемные платежи: 0" in text
     assert "Stale auto-audio locks: 0" in text
+    assert "User journey E2E: ok/clean" in text
 
 
 def test_release_report_yellow_when_storage_is_yellow(monkeypatch) -> None:
@@ -77,3 +79,8 @@ def test_release_report_red_when_required_probe_missing(monkeypatch) -> None:
 
     assert "Статус: 🛑 RED" in text
     assert "missing/missing" in text
+    assert "User journey E2E: missing/missing" in text
+
+
+def test_release_report_requires_user_journey_e2e_probe() -> None:
+    assert "synthetic_user_journey_e2e_probe" in report_module.REQUIRED_PROBES
