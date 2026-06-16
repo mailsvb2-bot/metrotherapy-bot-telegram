@@ -18,6 +18,7 @@ URL is needed by the next process.
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
 FORBIDDEN_DB_NAMES = {"postgres", "template0", "template1", "metrotherapy"}
+SAFE_DB_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,8 @@ def _safe_db_name(value: str) -> str:
     name = value.strip()
     if not name:
         raise SystemExit("target database name is empty")
+    if not SAFE_DB_NAME_RE.fullmatch(name):
+        raise SystemExit("target database name may contain only ASCII letters, digits, and underscore")
     if name in FORBIDDEN_DB_NAMES:
         raise SystemExit(f"refusing unsafe target database name: {name}")
     if "drill" not in name and "restore" not in name and "test" not in name:
@@ -132,7 +136,8 @@ def _run(cmd: list[str]) -> str:
 
 
 def _db_exists(target_db: str) -> bool:
-    sql = "SELECT 1 FROM pg_database WHERE datname = :'target_db'"
+    target_db = _safe_db_name(target_db)
+    sql = f"SELECT 1 FROM pg_database WHERE datname = '{target_db}'"
     output = _run(
         [
             "runuser",
@@ -144,8 +149,6 @@ def _db_exists(target_db: str) -> bool:
             "postgres",
             "--tuples-only",
             "--no-align",
-            "--set",
-            f"target_db={target_db}",
             "--command",
             sql,
         ]
