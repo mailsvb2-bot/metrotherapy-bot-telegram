@@ -2,14 +2,49 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 
+DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
 DEFAULT_BACKUP_DIR = Path(os.getenv("METRO_POSTGRES_BACKUP_DIR", "/var/backups/metrotherapy/postgres"))
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_env_file(path: str | Path | None) -> dict[str, str]:
+    if not path:
+        return {}
+    env_path = Path(path)
+    if not env_path.exists():
+        return {}
+    loaded: dict[str, str] = {}
+    for raw_line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        try:
+            parts = shlex.split(value, posix=True)
+            loaded[key] = parts[0] if len(parts) == 1 else value
+        except ValueError:
+            loaded[key] = value.strip('"').strip("'")
+    return loaded
+
+
+def _apply_env(values: dict[str, str]) -> None:
+    for key, value in values.items():
+        os.environ.setdefault(str(key), str(value))
 
 
 def _database_url() -> str:
@@ -72,6 +107,10 @@ def create_backup(*, backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path:
         raise SystemExit("POSTGRES_BACKUP_FAILED " + detail)
     if not out.exists() or out.stat().st_size <= 0:
         raise SystemExit("POSTGRES_BACKUP_FAILED backup file was not created or is empty")
+    try:
+        out.chmod(0o600)
+    except OSError:
+        pass
     print(f"POSTGRES_BACKUP_OK path={out} bytes={out.stat().st_size}")
     return out
 
@@ -88,9 +127,12 @@ def prune_backups(*, backup_dir: Path = DEFAULT_BACKUP_DIR, keep: int = 14) -> N
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Create a pg_dump backup for Metrotherapy Postgres")
+    parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
     parser.add_argument("--backup-dir", default=str(DEFAULT_BACKUP_DIR))
     parser.add_argument("--keep", type=int, default=int(os.getenv("METRO_POSTGRES_BACKUP_KEEP", "14")))
     args = parser.parse_args()
+
+    _apply_env(_load_env_file(args.env_file))
     create_backup(backup_dir=Path(args.backup_dir))
     prune_backups(backup_dir=Path(args.backup_dir), keep=args.keep)
     return 0
