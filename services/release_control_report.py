@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from services.auto_audio_recovery import auto_audio_lock_summary
+from services.disaster_recovery_status import disaster_recovery_status
 from services.payments.reconciliation import payment_problem_summary
 from services.probe_ledger import ProbeRun, get_recent_probe_runs
 from services.storage_legacy_audit import storage_legacy_audit
@@ -46,6 +47,12 @@ class ReleaseControlSnapshot:
     storage_legacy_sqlite_present: bool
     storage_repo_sqlite_present: bool
     storage_disallowed_sqlite_connects: int
+    disaster_recovery_status: str
+    disaster_recovery_reason: str
+    disaster_backup_count: int
+    disaster_latest_backup: str | None
+    disaster_latest_backup_size_bytes: int
+    disaster_restore_target_configured: bool
     payment_problem_count: int
     stale_auto_audio_lock_count: int
     probe_statuses: list[ReleaseProbeStatus]
@@ -118,6 +125,7 @@ def _overall_marker(
     *,
     statuses: list[ReleaseProbeStatus],
     storage_status: str,
+    disaster_status: str,
     payment_problem_count: int,
     stale_auto_audio_lock_count: int,
 ) -> tuple[str, str]:
@@ -126,6 +134,8 @@ def _overall_marker(
     if not all(item.is_green for item in statuses):
         return "🛑", "RED"
     if storage_status != "GREEN":
+        return "⚠️", "YELLOW"
+    if disaster_status != "GREEN":
         return "⚠️", "YELLOW"
     if payment_problem_count > 0:
         return "⚠️", "YELLOW"
@@ -147,9 +157,11 @@ def build_release_control_snapshot(*, limit: int = 25) -> ReleaseControlSnapshot
     auto_audio_locks = auto_audio_lock_summary(limit=5)
     stale_auto_audio_lock_count = int(auto_audio_locks.get("stale_lock_count") or 0)
     storage = storage_legacy_audit()
+    disaster = disaster_recovery_status(include_hash=False)
     marker, status = _overall_marker(
         statuses=statuses,
         storage_status=str(storage.status),
+        disaster_status=str(disaster.status),
         payment_problem_count=payment_problem_count,
         stale_auto_audio_lock_count=stale_auto_audio_lock_count,
     )
@@ -162,6 +174,12 @@ def build_release_control_snapshot(*, limit: int = 25) -> ReleaseControlSnapshot
         storage_legacy_sqlite_present=bool(storage.legacy_sqlite_present),
         storage_repo_sqlite_present=bool(storage.repo_local_sqlite_present),
         storage_disallowed_sqlite_connects=len(storage.disallowed_direct_sqlite_connects),
+        disaster_recovery_status=str(disaster.status),
+        disaster_recovery_reason=str(disaster.reason),
+        disaster_backup_count=int(disaster.backup_count),
+        disaster_latest_backup=disaster.latest_backup,
+        disaster_latest_backup_size_bytes=int(disaster.latest_backup_size_bytes),
+        disaster_restore_target_configured=bool(disaster.restore_target_configured),
         payment_problem_count=payment_problem_count,
         stale_auto_audio_lock_count=stale_auto_audio_lock_count,
         probe_statuses=statuses,
@@ -187,6 +205,11 @@ def format_release_control_report(*, limit: int = 25) -> str:
         f"legacy_sqlite={snapshot.storage_legacy_sqlite_present} "
         f"repo_sqlite={snapshot.storage_repo_sqlite_present} "
         f"bad_sqlite_connects={snapshot.storage_disallowed_sqlite_connects}",
+        f"Disaster recovery: {snapshot.disaster_recovery_status} "
+        f"backups={snapshot.disaster_backup_count} "
+        f"latest_size={snapshot.disaster_latest_backup_size_bytes} "
+        f"restore_target={snapshot.disaster_restore_target_configured} "
+        f"reason={snapshot.disaster_recovery_reason}",
         f"Проблемные платежи: {snapshot.payment_problem_count}",
         f"Stale auto-audio locks: {snapshot.stale_auto_audio_lock_count}",
         "",
@@ -231,7 +254,7 @@ def format_release_control_report(*, limit: int = 25) -> str:
     if snapshot.status == "GREEN":
         lines.append("\nИтог: релизный контур выглядит зелёным по последним proof-записям.")
     elif snapshot.status == "YELLOW":
-        lines.append("\nИтог: probes зелёные, но есть storage/payment/auto-audio пункт для ручной проверки.")
+        lines.append("\nИтог: runtime probes зелёные, но есть storage/payment/auto-audio/DR пункт для ручной проверки.")
     else:
         lines.append("\nИтог: есть незакрытая proof-проблема. Релиз/изменения нужно остановить до разбора.")
 
