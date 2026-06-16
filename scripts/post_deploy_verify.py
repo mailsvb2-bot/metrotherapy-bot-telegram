@@ -13,11 +13,13 @@ that were previously run manually after deploy into one repeatable command:
 - auto-audio dry-run probe without Telegram sends;
 - local payment reconciliation / entitlement / idempotency probe;
 - synthetic user journey E2E probe without Telegram sends or provider calls;
+- live Telegram Bot API transport smoke without user impersonation;
 - optional Postgres restore drill;
 - local health/readiness HTTP probes.
 
 It does not modify systemd units, does not contact YooKassa, does not delete
-legacy SQLite files, and does not send Telegram messages.
+legacy SQLite files, and does not send Telegram messages unless explicitly asked
+with --telegram-live-send.
 """
 
 import argparse
@@ -219,6 +221,27 @@ def _verify_user_journey_probe(payload: dict) -> dict:
     }
 
 
+def _verify_telegram_live_smoke(payload: dict) -> dict:
+    if payload.get("ok") is not True:
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED telegram_live_smoke payload={payload}")
+    if not payload.get("bot_id"):
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED telegram_live_smoke missing_bot_id payload={payload}")
+    if not str(payload.get("bot_username") or "").strip():
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED telegram_live_smoke missing_username payload={payload}")
+    if payload.get("transport") == "polling" and payload.get("webhook_url_present") is True:
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED telegram_live_smoke webhook_conflict payload={payload}")
+    return {
+        "ok": True,
+        "probe": "telegram_live_smoke",
+        "bot_username": payload.get("bot_username"),
+        "transport": payload.get("transport"),
+        "webhook_url_present": payload.get("webhook_url_present"),
+        "pending_update_count": payload.get("pending_update_count"),
+        "send_checked": payload.get("send_checked"),
+        "cleanup_status": payload.get("cleanup_status"),
+    }
+
+
 def _verify_storage_audit(payload: dict) -> dict:
     if payload.get("ok") is not True:
         raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED storage_audit payload={payload}")
@@ -245,6 +268,9 @@ def main() -> int:
     parser.add_argument("--skip-pytest", action="store_true", help="Skip pytest for faster repeated local checks")
     parser.add_argument("--skip-payment-probe", action="store_true", help="Skip the local payment entitlement proof probe")
     parser.add_argument("--skip-user-journey-probe", action="store_true", help="Skip the synthetic user journey E2E proof probe")
+    parser.add_argument("--skip-telegram-live-smoke", action="store_true", help="Skip live Telegram Bot API reachability smoke")
+    parser.add_argument("--telegram-live-send", action="store_true", help="Send and delete a harmless test message to TELEGRAM_LIVE_SMOKE_CHAT_ID/TEST_CHAT_ID")
+    parser.add_argument("--telegram-live-chat-id", default=os.getenv("TELEGRAM_LIVE_SMOKE_CHAT_ID", os.getenv("TEST_CHAT_ID", "")))
     parser.add_argument("--skip-storage-audit", action="store_true", help="Skip the storage/legacy SQLite ambiguity audit")
     parser.add_argument("--restore-drill", action="store_true", help="Run postgres_restore_drill.py --latest as part of the bundle")
     parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
@@ -303,6 +329,16 @@ def main() -> int:
         print("==> user journey E2E probe", flush=True)
         journey_output = _run([sys.executable, "scripts/probe_user_journey_e2e.py", "--json"], env=service_env)
         print(json.dumps(_verify_user_journey_probe(_parse_command_json(command_name="user journey E2E probe", output=journey_output)), ensure_ascii=False))
+
+    if not args.skip_telegram_live_smoke:
+        print("==> Telegram live smoke", flush=True)
+        telegram_cmd = [sys.executable, "scripts/probe_telegram_live_smoke.py", "--json"]
+        if args.telegram_live_send:
+            telegram_cmd.append("--allow-send")
+            if str(args.telegram_live_chat_id or "").strip():
+                telegram_cmd.extend(["--chat-id", str(args.telegram_live_chat_id)])
+        telegram_output = _run(telegram_cmd, env=service_env)
+        print(json.dumps(_verify_telegram_live_smoke(_parse_command_json(command_name="Telegram live smoke", output=telegram_output)), ensure_ascii=False))
 
     if args.restore_drill:
         print("==> postgres restore drill", flush=True)
