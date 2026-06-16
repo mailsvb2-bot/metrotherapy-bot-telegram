@@ -2,12 +2,11 @@ from __future__ import annotations
 
 """Synthetic user-journey E2E probe.
 
-This probe does not send Telegram messages and does not contact YooKassa. It
-executes the local production-critical path end-to-end with a reserved synthetic
-user id:
+No Telegram sends. No provider network calls. The probe runs a reserved synthetic
+user through the local critical path:
 
 1. demo mood session: pre-score -> demo sent/ack -> post-score;
-2. synthetic payment webhook replay: token grant + premium entitlement side effects;
+2. synthetic YooKassa webhook replay: tokens + premium entitlement side effects;
 3. paid scheduled practice: pre-score marker -> token reserve/consume -> audio marker -> post-score;
 4. cleanup and probe-ledger evidence.
 """
@@ -16,6 +15,7 @@ import argparse
 import json
 import os
 import shlex
+import sqlite3
 import sys
 import uuid
 from dataclasses import asdict, dataclass
@@ -86,7 +86,7 @@ def _apply_env(values: dict[str, str]) -> None:
         os.environ.setdefault(str(key), str(value))
 
 
-def _imports():
+def _imports() -> dict[str, Any]:
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
     from core.time_utils import utcnow_iso
@@ -128,12 +128,12 @@ def _imports():
     }
 
 
-def _delete_with_count(conn, sql: str, params: tuple[Any, ...]) -> int:
+def _delete_with_count(conn: Any, sql: str, params: tuple[Any, ...]) -> int:
     cur = conn.execute(sql, params)
     return max(int(getattr(cur, "rowcount", 0) or 0), 0)
 
 
-def _cleanup_probe_rows(*, db, assert_synthetic_user_id, user_id: int, payment_id: str | None = None) -> int:
+def _cleanup_probe_rows(*, db: Any, assert_synthetic_user_id: Any, user_id: int, payment_id: str | None = None) -> int:
     assert_synthetic_user_id(int(user_id))
     touched = 0
     with db() as conn:
@@ -144,7 +144,7 @@ def _cleanup_probe_rows(*, db, assert_synthetic_user_id, user_id: int, payment_i
             touched += _delete_with_count(conn, "DELETE FROM payment_token_grants WHERE provider=? AND provider_payment_id=?", (PROVIDER, payment_id))
             touched += _delete_with_count(conn, "DELETE FROM payments WHERE provider_charge_id=? OR telegram_charge_id=?", (payment_id, f"yookassa:{payment_id}"))
             touched += _delete_with_count(conn, "DELETE FROM practice_ledger WHERE provider=? AND provider_payment_id=?", (PROVIDER, payment_id))
-        for sql, params in (
+        cleanup_statements = (
             ("DELETE FROM practice_reservations WHERE user_id=?", (int(user_id),)),
             ("DELETE FROM practice_ledger WHERE user_id=?", (int(user_id),)),
             ("DELETE FROM practice_wallets WHERE user_id=?", (int(user_id),)),
@@ -157,21 +157,22 @@ def _cleanup_probe_rows(*, db, assert_synthetic_user_id, user_id: int, payment_i
             ("DELETE FROM idempotency WHERE user_id=?", (int(user_id),)),
             ("DELETE FROM events WHERE user_id=?", (int(user_id),)),
             ("DELETE FROM users WHERE user_id=?", (int(user_id),)),
-        ):
+        )
+        for sql, params in cleanup_statements:
             try:
                 touched += _delete_with_count(conn, sql, params)
-            except Exception:
-                # Some old schemas may not have all optional tables/columns in local tests.
+            except sqlite3.Error:
+                # Optional table/column can be absent in older local fixtures.
                 continue
     return touched
 
 
-def _row_count(conn, sql: str, params: tuple[Any, ...]) -> int:
+def _row_count(conn: Any, sql: str, params: tuple[Any, ...]) -> int:
     row = conn.execute(sql, params).fetchone()
     return int(row[0]) if row else 0
 
 
-def _wallet_tokens(get_wallet, user_id: int) -> tuple[int, int, int]:
+def _wallet_tokens(get_wallet: Any, user_id: int) -> tuple[int, int, int]:
     wallet = get_wallet(int(user_id))
     return int(wallet.available_tokens), int(wallet.reserved_tokens), int(wallet.used_tokens)
 
@@ -195,6 +196,55 @@ def _payment_payload(*, payment_id: str, user_id: int, package_id: str, amount: 
     }
 
 
+def _finish_failure(
+    *,
+    deps: dict[str, Any],
+    run_id: str,
+    rows_touched: int,
+    cleanup_status: str,
+    payment_id: str,
+    problems: list[str],
+) -> None:
+    deps["finish_probe_run"](
+        run_id=run_id,
+        status="failed",
+        cleanup_status=cleanup_status,
+        rows_touched=rows_touched,
+        error=";".join(problems),
+        evidence={"payment_id": payment_id, "problems": problems},
+    )
+
+
+def _attempt_failure_cleanup(
+    *,
+    deps: dict[str, Any],
+    user_id: int,
+    payment_id: str,
+    rows_touched: int,
+) -> tuple[int, str]:
+    touched = rows_touched
+    try:
+        touched += _cleanup_probe_rows(
+            db=deps["db"],
+            assert_synthetic_user_id=deps["assert_synthetic_user_id"],
+            user_id=int(user_id),
+            payment_id=payment_id,
+        )
+        return touched, "clean"
+    except sqlite3.Error:
+        return touched, "failed"
+    except RuntimeError:
+        return touched, "failed"
+    except ValueError:
+        return touched, "failed"
+    except TypeError:
+        return touched, "failed"
+    except KeyError:
+        return touched, "failed"
+    except AttributeError:
+        return touched, "failed"
+
+
 def run_probe(*, user_id: int = DEFAULT_SYNTHETIC_USER_ID, keep_artifacts: bool = False) -> UserJourneyProbeResult:
     deps = _imports()
     deps["assert_synthetic_user_id"](int(user_id))
@@ -203,25 +253,14 @@ def run_probe(*, user_id: int = DEFAULT_SYNTHETIC_USER_ID, keep_artifacts: bool 
     package = deps["package_by_id"](DEFAULT_PACKAGE_ID)
     payment_id = f"probe-e2e-{uuid.uuid4().hex[:12]}"
     run_id = uuid.uuid4().hex
-    started = deps["utcnow_iso"]()
     deps["start_probe_run"](
         probe_type=PROBE_TYPE,
         user_id=int(user_id),
         run_id=run_id,
-        evidence={"payment_id": payment_id, "package_id": DEFAULT_PACKAGE_ID, "started": started},
+        evidence={"payment_id": payment_id, "package_id": DEFAULT_PACKAGE_ID},
     )
     rows_touched = 0
     problems: list[str] = []
-    demo_session_id = 0
-    paid_session_id = 0
-    demo_ack_ok = False
-    paid_reservation_reason = "not_started"
-    entitlement_rows_delta = 0
-    outbox_rows_delta = 0
-    consultation_rows_delta = 0
-    wallet_delta_after_payment = 0
-    available_after_paid_audio = 0
-    used_after_paid_audio = 0
     cleanup_status = "not_started"
 
     try:
@@ -259,8 +298,7 @@ def run_probe(*, user_id: int = DEFAULT_SYNTHETIC_USER_ID, keep_artifacts: bool 
         deps["mark_audio_sent"](demo_session_id)
         if not deps["set_post"](demo_session_id, 3):
             problems.append("demo_post_score_failed")
-        sent_at = deps["utcnow_iso"]()
-        deps["record_demo_sent"](int(user_id), "work", int(demo_session_id), sent_at, 1200)
+        deps["record_demo_sent"](int(user_id), "work", int(demo_session_id), deps["utcnow_iso"](), 1200)
         demo_ack_ok = deps["record_demo_ack"](int(user_id), "work", int(demo_session_id), deps["utcnow_iso"]())
         if not demo_ack_ok:
             problems.append("demo_ack_failed")
@@ -269,7 +307,6 @@ def run_probe(*, user_id: int = DEFAULT_SYNTHETIC_USER_ID, keep_artifacts: bool 
             problems.append("demo_audio_not_marked_sent")
 
         before_available, _before_reserved, before_used = _wallet_tokens(deps["get_wallet"], int(user_id))
-        before_counts: dict[str, int]
         with deps["db"]() as conn:
             before_counts = {
                 "entitlements": _row_count(conn, "SELECT COUNT(*) FROM premium_entitlements WHERE provider=? AND provider_payment_id=?", (PROVIDER, payment_id)),
@@ -390,27 +427,47 @@ def run_probe(*, user_id: int = DEFAULT_SYNTHETIC_USER_ID, keep_artifacts: bool 
             evidence=asdict(result),
         )
         return result
-    except Exception as exc:
+    except sqlite3.Error as exc:
         problems.append(f"unexpected:{type(exc).__name__}:{exc}")
-        if cleanup_status == "not_started" and not keep_artifacts:
-            try:
-                rows_touched += _cleanup_probe_rows(
-                    db=deps["db"],
-                    assert_synthetic_user_id=deps["assert_synthetic_user_id"],
-                    user_id=int(user_id),
-                    payment_id=payment_id,
-                )
-                cleanup_status = "clean"
-            except Exception:
-                cleanup_status = "failed"
-        deps["finish_probe_run"](
-            run_id=run_id,
-            status="failed",
-            cleanup_status=cleanup_status,
-            rows_touched=rows_touched,
-            error=";".join(problems),
-            evidence={"payment_id": payment_id, "problems": problems},
+        rows_touched, cleanup_status = _attempt_failure_cleanup(
+            deps=deps, user_id=int(user_id), payment_id=payment_id, rows_touched=rows_touched
         )
+        _finish_failure(deps=deps, run_id=run_id, rows_touched=rows_touched, cleanup_status=cleanup_status, payment_id=payment_id, problems=problems)
+        raise
+    except RuntimeError as exc:
+        problems.append(f"unexpected:{type(exc).__name__}:{exc}")
+        rows_touched, cleanup_status = _attempt_failure_cleanup(
+            deps=deps, user_id=int(user_id), payment_id=payment_id, rows_touched=rows_touched
+        )
+        _finish_failure(deps=deps, run_id=run_id, rows_touched=rows_touched, cleanup_status=cleanup_status, payment_id=payment_id, problems=problems)
+        raise
+    except ValueError as exc:
+        problems.append(f"unexpected:{type(exc).__name__}:{exc}")
+        rows_touched, cleanup_status = _attempt_failure_cleanup(
+            deps=deps, user_id=int(user_id), payment_id=payment_id, rows_touched=rows_touched
+        )
+        _finish_failure(deps=deps, run_id=run_id, rows_touched=rows_touched, cleanup_status=cleanup_status, payment_id=payment_id, problems=problems)
+        raise
+    except TypeError as exc:
+        problems.append(f"unexpected:{type(exc).__name__}:{exc}")
+        rows_touched, cleanup_status = _attempt_failure_cleanup(
+            deps=deps, user_id=int(user_id), payment_id=payment_id, rows_touched=rows_touched
+        )
+        _finish_failure(deps=deps, run_id=run_id, rows_touched=rows_touched, cleanup_status=cleanup_status, payment_id=payment_id, problems=problems)
+        raise
+    except KeyError as exc:
+        problems.append(f"unexpected:{type(exc).__name__}:{exc}")
+        rows_touched, cleanup_status = _attempt_failure_cleanup(
+            deps=deps, user_id=int(user_id), payment_id=payment_id, rows_touched=rows_touched
+        )
+        _finish_failure(deps=deps, run_id=run_id, rows_touched=rows_touched, cleanup_status=cleanup_status, payment_id=payment_id, problems=problems)
+        raise
+    except AttributeError as exc:
+        problems.append(f"unexpected:{type(exc).__name__}:{exc}")
+        rows_touched, cleanup_status = _attempt_failure_cleanup(
+            deps=deps, user_id=int(user_id), payment_id=payment_id, rows_touched=rows_touched
+        )
+        _finish_failure(deps=deps, run_id=run_id, rows_touched=rows_touched, cleanup_status=cleanup_status, payment_id=payment_id, problems=problems)
         raise
 
 
