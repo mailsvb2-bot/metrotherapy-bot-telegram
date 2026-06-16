@@ -9,6 +9,7 @@ that were previously run manually after deploy into one repeatable command:
 - production validator;
 - smoke bootstrap;
 - storage/legacy SQLite ambiguity audit;
+- disaster-recovery backup status;
 - DB-backed scheduler/idempotency probe;
 - auto-audio dry-run probe without Telegram sends;
 - local payment reconciliation / entitlement / idempotency probe;
@@ -242,6 +243,22 @@ def _verify_telegram_live_smoke(payload: dict) -> dict:
     }
 
 
+def _verify_disaster_recovery_status(payload: dict, *, require_green: bool = False) -> dict:
+    status = str(payload.get("status") or "")
+    ok = payload.get("ok") is True
+    if require_green and status != "GREEN":
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED disaster_recovery_status payload={payload}")
+    return {
+        "ok": ok,
+        "probe": "disaster_recovery_status",
+        "status": status,
+        "reason": payload.get("reason"),
+        "backup_count": payload.get("backup_count"),
+        "latest_backup_size_bytes": payload.get("latest_backup_size_bytes"),
+        "restore_target_configured": payload.get("restore_target_configured"),
+    }
+
+
 def _verify_storage_audit(payload: dict) -> dict:
     if payload.get("ok") is not True:
         raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED storage_audit payload={payload}")
@@ -272,6 +289,8 @@ def main() -> int:
     parser.add_argument("--telegram-live-send", action="store_true", help="Send and delete a harmless test message to TELEGRAM_LIVE_SMOKE_CHAT_ID/TEST_CHAT_ID")
     parser.add_argument("--telegram-live-chat-id", default=os.getenv("TELEGRAM_LIVE_SMOKE_CHAT_ID", os.getenv("TEST_CHAT_ID", "")))
     parser.add_argument("--skip-storage-audit", action="store_true", help="Skip the storage/legacy SQLite ambiguity audit")
+    parser.add_argument("--skip-disaster-recovery-status", action="store_true", help="Skip backup/disaster-recovery status summary")
+    parser.add_argument("--require-disaster-recovery-green", action="store_true", help="Fail unless backup status and restore target are GREEN")
     parser.add_argument("--restore-drill", action="store_true", help="Run postgres_restore_drill.py --latest as part of the bundle")
     parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
     parser.add_argument("--health-url", default=os.getenv("HEALTH_URL", "http://127.0.0.1:8082/health"))
@@ -305,6 +324,19 @@ def main() -> int:
         print("==> storage legacy audit", flush=True)
         storage_output = _run([sys.executable, "scripts/storage_legacy_audit.py", "--json", "--strict"], env=service_env)
         print(json.dumps(_verify_storage_audit(_parse_command_json(command_name="storage legacy audit", output=storage_output)), ensure_ascii=False))
+
+    if not args.skip_disaster_recovery_status:
+        print("==> disaster recovery status", flush=True)
+        recovery_output = _run([sys.executable, "scripts/disaster_recovery_status.py", "--json"], env=service_env)
+        print(
+            json.dumps(
+                _verify_disaster_recovery_status(
+                    _parse_command_json(command_name="disaster recovery status", output=recovery_output),
+                    require_green=bool(args.require_disaster_recovery_green),
+                ),
+                ensure_ascii=False,
+            )
+        )
 
     print("==> scheduler job probe", flush=True)
     print(_run([sys.executable, "scripts/probe_scheduler_job_live.py"], env=service_env))
@@ -362,7 +394,8 @@ def main() -> int:
                 "probe": ready.get("probe"),
                 "db_ready": ready.get("db_ready"),
                 "schema_ready": ready.get("schema_ready"),
-                "scheduler_ready": ready.get("scheduler_ready"),
+                "scheduler_ready": ready.get("scheduler_ready",
+                ),
                 "webhook_ready": ready.get("webhook_ready"),
                 "url": ready_url,
             },
