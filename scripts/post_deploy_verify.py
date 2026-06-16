@@ -12,6 +12,7 @@ that were previously run manually after deploy into one repeatable command:
 - DB-backed scheduler/idempotency probe;
 - auto-audio dry-run probe without Telegram sends;
 - local payment reconciliation / entitlement / idempotency probe;
+- synthetic user journey E2E probe without Telegram sends or provider calls;
 - optional Postgres restore drill;
 - local health/readiness HTTP probes.
 
@@ -188,6 +189,36 @@ def _verify_payment_probe(payload: dict) -> dict:
     }
 
 
+def _verify_user_journey_probe(payload: dict) -> dict:
+    checks = {
+        "ok": payload.get("ok") is True,
+        "cleanup_clean": payload.get("cleanup_status") == "clean",
+        "demo_ack_ok": payload.get("demo_ack_ok") is True,
+        "wallet_delta_expected": int(payload.get("wallet_delta_after_payment") or 0) == 60,
+        "entitlement_rows_positive": int(payload.get("entitlement_rows_delta") or 0) > 0,
+        "outbox_rows_positive": int(payload.get("outbox_rows_delta") or 0) > 0,
+        "consultation_rows_positive": int(payload.get("consultation_rows_delta") or 0) > 0,
+        "paid_reserved": payload.get("paid_reservation_reason") == "reserved",
+        "used_tokens_one": int(payload.get("used_tokens_after_paid_audio") or 0) == 1,
+        "no_problems": payload.get("problems") == [],
+    }
+    failed = [name for name, ok in checks.items() if not ok]
+    if failed:
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED user_journey_probe failed_checks={failed} payload={payload}")
+    return {
+        "ok": True,
+        "probe": "synthetic_user_journey_e2e",
+        "run_id": payload.get("run_id"),
+        "wallet_delta_after_payment": payload.get("wallet_delta_after_payment"),
+        "entitlement_rows_delta": payload.get("entitlement_rows_delta"),
+        "outbox_rows_delta": payload.get("outbox_rows_delta"),
+        "consultation_rows_delta": payload.get("consultation_rows_delta"),
+        "paid_reservation_reason": payload.get("paid_reservation_reason"),
+        "cleanup_status": payload.get("cleanup_status"),
+        "rows_touched": payload.get("rows_touched"),
+    }
+
+
 def _verify_storage_audit(payload: dict) -> dict:
     if payload.get("ok") is not True:
         raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED storage_audit payload={payload}")
@@ -213,6 +244,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run repeatable post-deploy proof checks")
     parser.add_argument("--skip-pytest", action="store_true", help="Skip pytest for faster repeated local checks")
     parser.add_argument("--skip-payment-probe", action="store_true", help="Skip the local payment entitlement proof probe")
+    parser.add_argument("--skip-user-journey-probe", action="store_true", help="Skip the synthetic user journey E2E proof probe")
     parser.add_argument("--skip-storage-audit", action="store_true", help="Skip the storage/legacy SQLite ambiguity audit")
     parser.add_argument("--restore-drill", action="store_true", help="Run postgres_restore_drill.py --latest as part of the bundle")
     parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
@@ -266,6 +298,11 @@ def main() -> int:
             env=service_env,
         )
         print(json.dumps(_verify_payment_probe(_parse_command_json(command_name="payment entitlement probe", output=payment_output)), ensure_ascii=False))
+
+    if not args.skip_user_journey_probe:
+        print("==> user journey E2E probe", flush=True)
+        journey_output = _run([sys.executable, "scripts/probe_user_journey_e2e.py", "--json"], env=service_env)
+        print(json.dumps(_verify_user_journey_probe(_parse_command_json(command_name="user journey E2E probe", output=journey_output)), ensure_ascii=False))
 
     if args.restore_drill:
         print("==> postgres restore drill", flush=True)
