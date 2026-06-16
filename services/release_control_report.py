@@ -13,9 +13,10 @@ from services.storage_legacy_audit import storage_legacy_audit
 ROOT = Path(__file__).resolve().parents[1]
 
 REQUIRED_PROBES = {
-    "payment_entitlement_reconciliation_probe": "💳 Payment entitlement",
-    "probe_scheduler_job_live": "⏱ Scheduler job",
-    "auto_audio_dry_run_probe": "🎧 Auto-audio dry-run",
+    "payment_entitlement_reconciliation_probe": "Payment entitlement",
+    "probe_scheduler_job_live": "Scheduler job",
+    "auto_audio_dry_run_probe": "Auto-audio dry-run",
+    "synthetic_user_journey_e2e_probe": "User journey E2E",
 }
 
 
@@ -50,7 +51,6 @@ class ReleaseControlSnapshot:
     probe_statuses: list[ReleaseProbeStatus]
     recent_probe_runs: list[ProbeRun]
     stale_auto_audio_locks: list[dict[str, Any]]
-
 
 
 def _git_value(*args: str) -> str:
