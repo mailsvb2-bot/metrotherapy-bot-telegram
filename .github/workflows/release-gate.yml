@@ -1,10 +1,6 @@
-name: Release gate
+name: Release Gate Advisory
 
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -12,26 +8,26 @@ permissions:
 
 jobs:
   release-gate:
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      CI_VENV: /tmp/metrotherapy-release-gate-venv
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare isolated CI virtualenv
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
         run: |
-          rm -rf "$CI_VENV"
-          python3 -m venv "$CI_VENV"
-          . "$CI_VENV/bin/activate"
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install ruff
 
       - name: Compile DR release files
         run: |
-          . "$CI_VENV/bin/activate"
           python -m compileall \
             services/disaster_recovery_status.py \
             scripts/disaster_recovery_proof.py \
@@ -39,11 +35,7 @@ jobs:
             handlers/admin_reports/system_checks.py
 
       - name: Ruff quality gate
-        run: |
-          . "$CI_VENV/bin/activate"
-          python scripts/check_ruff.py
+        run: python scripts/check_ruff.py
 
       - name: Disaster recovery backup proof advisory
-        run: |
-          . "$CI_VENV/bin/activate"
-          python scripts/disaster_recovery_proof.py --json
+        run: python scripts/disaster_recovery_proof.py --json
