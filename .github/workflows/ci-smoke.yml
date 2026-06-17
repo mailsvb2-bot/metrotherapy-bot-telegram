@@ -1,8 +1,6 @@
-name: CI Smoke
+name: CI Smoke Advisory
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -10,35 +8,30 @@ permissions:
 
 jobs:
   smoke:
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      CI_VENV: /tmp/metrotherapy-smoke-venv
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare isolated CI virtualenv
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
         run: |
-          rm -rf "$CI_VENV"
-          python3 -m venv "$CI_VENV"
-          . "$CI_VENV/bin/activate"
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
       - name: Release hygiene
-        run: |
-          . "$CI_VENV/bin/activate"
-          python scripts/check_release_hygiene.py
+        run: python scripts/check_release_hygiene.py
 
       - name: Compile smoke surface
-        run: |
-          . "$CI_VENV/bin/activate"
-          python -m compileall scripts/smoke.py services handlers core
+        run: python -m compileall scripts/smoke.py services handlers core
 
       - name: Smoke
         env:
           PYTHONDONTWRITEBYTECODE: '1'
-        run: |
-          . "$CI_VENV/bin/activate"
-          python scripts/smoke.py
+        run: python scripts/smoke.py
