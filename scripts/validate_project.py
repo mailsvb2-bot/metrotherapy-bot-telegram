@@ -22,11 +22,13 @@ if os.getenv("VALIDATOR_RELEASE_MODE") == "1":
     os.environ.setdefault("STORE_LOG_PATH", str(_tmp_dir / "metro_validator_store.log"))
 
 
-# In release validation mode, use dummy secrets for import-time prod fail-fast checks.
-# This keeps preflight hermetic while still forcing real deployments to provide env vars.
+# In release validation mode, use dummy secrets/identity for import-time prod
+# fail-fast checks. This keeps preflight hermetic while still forcing real
+# deployments to provide their own env vars.
 if os.getenv("VALIDATOR_RELEASE_MODE") == "1":
     os.environ.setdefault("BOT_TOKEN", "000000:VALIDATION")
     os.environ.setdefault("PAY_PROVIDER_TOKEN", "000000:VALIDATION")
+    os.environ.setdefault("ADMIN_IDS", "1")
 
 # In release validation mode, prevent creation of __pycache__ / .pyc during imports.
 if os.getenv("VALIDATOR_RELEASE_MODE") == "1":
