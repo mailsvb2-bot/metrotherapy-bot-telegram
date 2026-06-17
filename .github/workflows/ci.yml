@@ -10,31 +10,29 @@ permissions:
 
 jobs:
   smoke:
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      CI_VENV: /tmp/metrotherapy-ci-venv
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare isolated CI virtualenv
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
         run: |
-          rm -rf "$CI_VENV"
-          python3 -m venv "$CI_VENV"
-          . "$CI_VENV/bin/activate"
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install pytest ruff
 
       - name: Release hygiene
-        run: |
-          . "$CI_VENV/bin/activate"
-          python scripts/check_release_hygiene.py
+        run: python scripts/check_release_hygiene.py
 
       - name: Compile
         run: |
-          . "$CI_VENV/bin/activate"
           python -m compileall \
             services \
             scripts \
@@ -44,9 +42,7 @@ jobs:
             main.py
 
       - name: Ruff quality gate
-        run: |
-          . "$CI_VENV/bin/activate"
-          python scripts/check_ruff.py
+        run: python scripts/check_ruff.py
 
       - name: Smoke no polling
         env:
@@ -55,6 +51,4 @@ jobs:
           VALIDATOR_GUARDRAILS_STRICT: '1'
           VALIDATOR_SKIP_AUDIO: '1'
           PYTHONDONTWRITEBYTECODE: '1'
-        run: |
-          . "$CI_VENV/bin/activate"
-          python scripts/smoke.py
+        run: python scripts/smoke.py
