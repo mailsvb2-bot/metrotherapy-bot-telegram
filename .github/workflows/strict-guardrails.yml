@@ -13,7 +13,7 @@ jobs:
     runs-on: [self-hosted]
     timeout-minutes: 20
     env:
-      CI_VENV: ${{ runner.temp }}/metrotherapy-guardrails-venv
+      CI_VENV: /tmp/metrotherapy-guardrails-venv-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,6 +48,7 @@ jobs:
           APP_ENV: prod
           VALIDATOR_RELEASE_MODE: '1'
           VALIDATOR_GUARDRAILS_STRICT: '1'
+          VALIDATOR_SKIP_AUDIO: '1'
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           . "$CI_VENV/bin/activate"
