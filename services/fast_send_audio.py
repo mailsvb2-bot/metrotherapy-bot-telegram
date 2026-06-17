@@ -15,16 +15,34 @@ from services.audio_cache import get_file_id, set_file_id
 
 log = logging.getLogger(__name__)
 
-async def send_audio_cached(bot: Bot, chat_id: int, key: str, file_path: Union[str, Path], caption: Optional[str] = None):
+
+async def send_audio_cached(
+    bot: Bot,
+    chat_id: int,
+    key: str,
+    file_path: Union[str, Path],
+    caption: Optional[str] = None,
+    protect_content: bool = False,
+):
     """Send audio using cached Telegram file_id to keep latency < 1s after first send."""
     with get_db() as conn:
         fid = get_file_id(conn, key)
 
     async def _send_by_id():
-        return await bot.send_audio(chat_id=chat_id, audio=fid, caption=caption)
+        return await bot.send_audio(
+            chat_id=chat_id,
+            audio=fid,
+            caption=caption,
+            protect_content=protect_content,
+        )
 
     async def _send_by_file():
-        msg = await bot.send_audio(chat_id=chat_id, audio=FSInputFile(str(file_path)), caption=caption)
+        msg = await bot.send_audio(
+            chat_id=chat_id,
+            audio=FSInputFile(str(file_path)),
+            caption=caption,
+            protect_content=protect_content,
+        )
         # cache file_id from Telegram response
         try:
             new_fid = msg.audio.file_id if msg.audio else None
