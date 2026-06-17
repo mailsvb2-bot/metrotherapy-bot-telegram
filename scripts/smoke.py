@@ -70,6 +70,7 @@ def main() -> int:
     os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
     sys.dont_write_bytecode = True
     os.environ.setdefault('VALIDATOR_RELEASE_MODE', '1')
+    os.environ.setdefault('VALIDATOR_GUARDRAILS_STRICT', '1')
     temp_db = Path(tempfile.gettempdir()) / f"metro_smoke_{os.getpid()}.db"
     os.environ.setdefault('METRO_DB_PATH', str(temp_db))
     os.environ.setdefault('BOT_TOKEN', SMOKE_BOT_TOKEN)
@@ -125,7 +126,7 @@ def main() -> int:
     # pass while a production router is broken or missing.
     from handlers import (
         start, menu, text_input, payments, demo, audio,
-        admin, admin_stats, admin_inline, share, weather,
+        admin, admin_release, admin_stats, admin_inline, share, weather,
         info, micro, settings as settings_router, mood,
         post_chart, diagnostics, gift_flow, kb_debug, messenger_audio,
     )
@@ -137,6 +138,7 @@ def main() -> int:
     dp.include_router(audio.router)
     dp.include_router(payments.router)
     dp.include_router(admin.router)
+    dp.include_router(admin_release.router)
     dp.include_router(admin_stats.router)
     dp.include_router(admin_inline.router)
     dp.include_router(share.router)
