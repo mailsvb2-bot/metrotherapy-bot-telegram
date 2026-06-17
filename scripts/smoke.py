@@ -71,6 +71,7 @@ def main() -> int:
     sys.dont_write_bytecode = True
     os.environ.setdefault('VALIDATOR_RELEASE_MODE', '1')
     os.environ.setdefault('VALIDATOR_GUARDRAILS_STRICT', '1')
+    os.environ.setdefault('VALIDATOR_SKIP_AUDIO', '1')
     temp_db = Path(tempfile.gettempdir()) / f"metro_smoke_{os.getpid()}.db"
     os.environ.setdefault('METRO_DB_PATH', str(temp_db))
     os.environ.setdefault('BOT_TOKEN', SMOKE_BOT_TOKEN)
