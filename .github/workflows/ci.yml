@@ -9,14 +9,54 @@ permissions:
   contents: read
 
 jobs:
-  baseline:
+  quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
+    env:
+      APP_ENV: prod
+      VALIDATOR_RELEASE_MODE: '1'
+      VALIDATOR_GUARDRAILS_STRICT: '1'
+      VALIDATOR_SKIP_AUDIO: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Green baseline marker
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
         run: |
-          echo "CI_GREEN_BASELINE_OK"
-          test -f README.md
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+
+      - name: Release hygiene before checks
+        run: python scripts/check_release_hygiene.py
+
+      - name: Compile project surface
+        run: |
+          python -m compileall \
+            services \
+            scripts \
+            handlers \
+            core \
+            runtime \
+            config \
+            app.py \
+            main.py
+
+      - name: Smoke no polling
+        run: python scripts/smoke.py
+
+      - name: Strict validation
+        run: python scripts/validate_project.py
+
+      - name: Ruff quality gate
+        run: python scripts/check_ruff.py
+
+      - name: Release hygiene after checks
+        run: python scripts/check_release_hygiene.py
