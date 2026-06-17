@@ -51,6 +51,8 @@ jobs:
       - name: Smoke no polling
         env:
           APP_ENV: prod
+          VALIDATOR_RELEASE_MODE: '1'
+          VALIDATOR_GUARDRAILS_STRICT: '1'
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           . "$CI_VENV/bin/activate"
