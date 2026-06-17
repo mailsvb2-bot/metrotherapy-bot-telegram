@@ -1,4 +1,4 @@
-name: Python 3.13 Compatibility
+name: Python 3.13 Compatibility Advisory
 
 on:
   workflow_dispatch:
@@ -8,11 +8,11 @@ permissions:
 
 jobs:
   py313-advisory:
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Advisory status
         run: |
           echo "PYTHON_313_COMPATIBILITY_ADVISORY"
           echo "This workflow is manual-only and does not block pull requests."
-          echo "A dedicated CI runner with Python 3.13 is required before making this gate blocking again."
+          echo "A dedicated Python 3.13 compatibility gate can be re-enabled after the baseline CI is green."
