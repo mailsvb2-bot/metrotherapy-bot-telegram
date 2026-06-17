@@ -1,22 +1,46 @@
 name: Release gate
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  baseline:
+  release-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Baseline marker
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
         run: |
-          echo "RELEASE_GATE_OK"
-          test -f README.md
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+
+      - name: Release hygiene
+        run: python scripts/check_release_hygiene.py
+
+      - name: Compile DR release files
+        run: |
+          python -m compileall \
+            services/disaster_recovery_status.py \
+            scripts/disaster_recovery_proof.py \
+            scripts/release_evidence_snapshot.py \
+            handlers/admin_reports/system_checks.py
+
+      - name: Ruff quality gate
+        run: python scripts/check_ruff.py
+
+      - name: Disaster recovery proof advisory
+        run: python scripts/disaster_recovery_proof.py --json
