@@ -1,22 +1,51 @@
 name: Postgres Smoke
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  baseline:
+  postgres-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: metro
+          POSTGRES_PASSWORD: metro
+          POSTGRES_DB: metrotherapy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      APP_ENV: prod
+      VALIDATOR_RELEASE_MODE: '1'
+      VALIDATOR_GUARDRAILS_STRICT: '1'
+      VALIDATOR_SKIP_AUDIO: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      METRO_DB_ENGINE: postgres
+      DATABASE_URL: postgresql://metro:metro@127.0.0.1:5432/metrotherapy
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Green Postgres smoke baseline marker
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
         run: |
-          echo "POSTGRES_SMOKE_GREEN_BASELINE_OK"
-          test -f README.md
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Postgres smoke no polling
+        run: python scripts/smoke.py
