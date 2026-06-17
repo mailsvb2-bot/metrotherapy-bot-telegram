@@ -1,6 +1,8 @@
-name: CI Manual Baseline
+name: CI
 
 on:
+  push:
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -14,7 +16,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Baseline marker
+      - name: Green baseline marker
         run: |
-          echo "CI_BASELINE_OK"
+          echo "CI_GREEN_BASELINE_OK"
           test -f README.md
