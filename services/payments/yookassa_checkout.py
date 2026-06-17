@@ -30,6 +30,13 @@ def _truthy_env(name: str, default: str = "0") -> bool:
     return (_env_value(name, default) or default).lower() in {"1", "true", "yes", "on"}
 
 
+def _provider_error_body_for_log(body: str) -> str:
+    """Keep provider diagnostics useful without leaking sensitive payloads in prod logs."""
+    if _is_prod():
+        return "<redacted in prod>"
+    return (body or "").replace("\n", " ")[:1000]
+
+
 def _explicit_idempotence_key_allowed() -> bool:
     """Allow static YooKassa idempotence keys only for intentional non-prod probes.
 
@@ -179,7 +186,7 @@ def create_yookassa_confirmation_url(
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")
-        log.error("YooKassa payment creation failed: status=%s body=%s", exc.code, body)
+        log.error("YooKassa payment creation failed: status=%s body=%s", exc.code, _provider_error_body_for_log(body))
         raise YooKassaCheckoutError(f"YooKassa HTTP {exc.code}") from exc
     except OSError as exc:
         raise YooKassaCheckoutError(f"YooKassa network error: {exc}") from exc
