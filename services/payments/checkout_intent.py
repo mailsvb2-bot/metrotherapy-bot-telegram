@@ -38,11 +38,9 @@ def checkout_intent_key() -> str:
 
 def _key_for_signing() -> str:
     key = checkout_intent_key()
-    if key:
-        return key
-    if _is_prod():
-        raise CheckoutIntentError("PAYMENT_CHECKOUT_SIGNING_KEY is required in prod")
-    return "metrotherapy-dev-checkout-key"
+    if not key:
+        raise CheckoutIntentError("PAYMENT_CHECKOUT_SIGNING_KEY is required")
+    return key
 
 
 def _b64e(raw: bytes) -> str:
