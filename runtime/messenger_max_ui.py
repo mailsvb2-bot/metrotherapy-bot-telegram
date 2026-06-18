@@ -3,26 +3,20 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from services.messenger.menu_contract import MAIN_MENU_ACTIONS, max_numbered_menu_text
-from services.messenger.package_payment_ui import extract_labeled_urls
-from runtime.telegram_button_parity import max_attachment_from_telegram
 from keyboards.inline import (
-    kb_after_post_actions,
     kb_delivery_channel_select,
-    kb_delivery_channel_slots,
-    kb_demo_kind,
     kb_full_access_menu,
     kb_main,
-    kb_mood_done,
-    kb_mood_scale,
     kb_ref_bonus_actions,
     kb_sales_offer,
     kb_settings_locked,
     kb_settings_menu,
     kb_state_period_menu,
     kb_state_rate_scale,
-    kb_weather,
 )
+from runtime.telegram_button_parity import max_attachment_from_telegram
+from services.messenger.menu_contract import max_numbered_menu_text
+from services.messenger.package_payment_ui import extract_labeled_urls
 
 BACK_LABEL = "⬅️ Назад"
 MAX_LEGACY_BACK_LABEL = "⬅️ Меню"
@@ -47,7 +41,7 @@ def inline_keyboard_attachment(rows: list[list[dict[str, Any]]]) -> dict[str, An
 
 
 def _score_label(value: int) -> str:
-    return f"{int(value):+d}" if int(value) != 0 else "0"
+    return str(int(value))
 
 
 def has_main_menu_text(text: str) -> bool:
@@ -66,20 +60,45 @@ def has_main_menu_text(text: str) -> bool:
     )
 
 
+def _replace_back_label(attachment: dict[str, Any], label: str = MAX_LEGACY_BACK_LABEL) -> dict[str, Any]:
+    out = {"type": attachment.get("type", "inline_keyboard"), "payload": {"buttons": []}}
+    for row in attachment.get("payload", {}).get("buttons", []):
+        out_row = []
+        for button in row:
+            copied = dict(button)
+            if copied.get("text") in {BACK_LABEL, "⬅️ Назад"} and (copied.get("payload") or {}).get("command") == MENU_COMMAND:
+                copied["text"] = label
+            out_row.append(copied)
+        out["payload"]["buttons"].append(out_row)
+    return out
+
+
 def main_menu_attachment() -> dict[str, Any]:
     return max_attachment_from_telegram(kb_main(None))
 
 
 def full_route_attachment() -> dict[str, Any]:
-    return max_attachment_from_telegram(kb_full_access_menu())
+    return inline_keyboard_attachment([
+        [max_message_button("🎧 Получить аудио", command="continue")],
+        [max_message_button("✅ Прослушал", command="done")],
+        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
+    ])
 
 
 def demo_kind_attachment() -> dict[str, Any]:
-    return max_attachment_from_telegram(kb_demo_kind())
+    return inline_keyboard_attachment([
+        [max_message_button("🚗 Практика на утро / дорогу", command="demo_work")],
+        [max_message_button("🌙 Практика на вечер / домой", command="demo_home")],
+        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
+    ])
 
 
 def weather_attachment() -> dict[str, Any]:
-    return max_attachment_from_telegram(kb_weather())
+    return inline_keyboard_attachment([
+        [max_message_button("🔄 Обновить погоду", command="weather")],
+        [max_message_button("🏙 Изменить город", command="weather_city")],
+        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
+    ])
 
 
 def weather_city_attachment() -> dict[str, Any]:
@@ -87,15 +106,32 @@ def weather_city_attachment() -> dict[str, Any]:
 
 
 def score_scale_attachment(session_id: int = 0, *, stage: str = "pre") -> dict[str, Any]:
-    return max_attachment_from_telegram(kb_mood_scale(int(session_id), stage=str(stage or "pre")))
+    _ = session_id, stage
+    values = list(range(-10, 11))
+    rows: list[list[dict[str, Any]]] = []
+    for i in range(0, len(values), 7):
+        rows.append([max_message_button(_score_label(value), command=f"score:{value}") for value in values[i : i + 7]])
+    rows.append([max_message_button("📈 Мой прогресс", command="progress")])
+    rows.append([max_message_button(BACK_LABEL, command=MENU_COMMAND)])
+    return inline_keyboard_attachment(rows)
 
 
 def post_audio_attachment(session_id: int = 0) -> dict[str, Any]:
-    return max_attachment_from_telegram(kb_mood_done(int(session_id)))
+    _ = session_id
+    return inline_keyboard_attachment([
+        [max_message_button("✅ Прослушал", command="done")],
+        [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
+    ])
 
 
 def progress_attachment() -> dict[str, Any]:
-    return state_period_attachment()
+    return inline_keyboard_attachment([
+        [max_message_button("🎧 Получить аудио", command="continue")],
+        [max_message_button("✅ Прослушал", command="done")],
+        [max_message_button("🔁 Повторить аудио", command="repeat")],
+        [max_message_button("🧾 История", command="history")],
+        [max_message_button(BACK_LABEL, command=MENU_COMMAND)],
+    ])
 
 
 def settings_attachment() -> dict[str, Any]:
@@ -103,12 +139,24 @@ def settings_attachment() -> dict[str, Any]:
 
 
 def delivery_slots_attachment(snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
-    return max_attachment_from_telegram(kb_delivery_channel_slots(snapshot or {"identities": [], "morning_channel": None, "evening_channel": None}))
+    _ = snapshot
+    return inline_keyboard_attachment([
+        [max_message_button("🌅 Утренние отправки", command="channel morning")],
+        [max_message_button("🌙 Вечерние отправки", command="channel evening")],
+        [max_message_button(BACK_LABEL, command="settings")],
+    ])
 
 
 def delivery_channel_select_attachment(slot: str = "morning", snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+    _ = snapshot
     slot = "evening" if str(slot).strip().lower() == "evening" else "morning"
-    return max_attachment_from_telegram(kb_delivery_channel_select(slot, snapshot or {"identities": [], "morning_channel": None, "evening_channel": None}))
+    return inline_keyboard_attachment([
+        [max_message_button("♻️ Авто", command=f"channel {slot} auto")],
+        [max_message_button("telegram", command=f"channel {slot} telegram")],
+        [max_message_button("max", command=f"channel {slot} max")],
+        [max_message_button("vk", command=f"channel {slot} vk")],
+        [max_message_button(BACK_LABEL, command="time")],
+    ])
 
 
 def state_period_attachment() -> dict[str, Any]:
@@ -116,15 +164,21 @@ def state_period_attachment() -> dict[str, Any]:
 
 
 def post_actions_attachment() -> dict[str, Any]:
-    return max_attachment_from_telegram(kb_after_post_actions())
+    return inline_keyboard_attachment([
+        [max_message_button("📈 Посмотреть изменение состояния", command="progress")],
+        [max_message_button("🔐 Открыть полный маршрут", command="pay")],
+        [max_message_button("🎧 Ещё одна бесплатная практика", command="demo")],
+        [max_message_button("🎁 Подарить подписку", command="gift")],
+        [max_message_button(MAIN_MENU_LABEL, command=MENU_COMMAND)],
+    ])
 
 
 def sales_offer_attachment() -> dict[str, Any]:
-    return max_attachment_from_telegram(kb_sales_offer(0))
+    return _replace_back_label(max_attachment_from_telegram(kb_sales_offer(0)))
 
 
 def full_access_attachment() -> dict[str, Any]:
-    return full_route_attachment()
+    return max_attachment_from_telegram(kb_full_access_menu())
 
 
 def settings_locked_attachment() -> dict[str, Any]:
@@ -153,18 +207,12 @@ def first_url(text: str) -> str:
     return match.group(0).rstrip(".,;") if match else ""
 
 
-def _labeled_link_rows(text: str) -> list[list[dict[str, Any]]]:
-    rows: list[list[dict[str, Any]]] = []
-    for label, url in extract_labeled_urls(text):
-        if label != "Открыть":
-            rows.append([max_link_button(label, url)])
-    return rows
-
-
 def link_action_attachment(text: str) -> dict[str, Any] | None:
-    # Payment/gift/share link keyboards are intentionally closed for MAX until
-    # they have explicit Telegram-parity coverage. URLs remain in message text.
-    return None
+    rows = [[max_link_button(label, url)] for label, url in extract_labeled_urls(text)]
+    if not rows:
+        return None
+    rows.append([max_message_button(BACK_LABEL, command=MENU_COMMAND)])
+    return inline_keyboard_attachment(rows)
 
 
 def native_keyboard_attachments(text: str) -> list[dict[str, Any]]:
@@ -223,6 +271,8 @@ def normalize_max_text(text: str) -> str:
 
 def prepare_text(text: str, *, has_native_keyboard: bool = False) -> str:
     raw = normalize_max_text(text)
+    if raw.lstrip().startswith("🔐 Полный маршрут") and "в этот мессенджер" not in raw and "MAX и ВКонтакте" not in raw:
+        raw = raw.rstrip() + "\n\nПолный маршрут доступен прямо в этот мессенджер."
     if has_main_menu_text(raw) and not has_native_keyboard and "отправьте:" not in raw:
         return raw.rstrip() + "\n\n" + max_numbered_menu_text()
     return raw
