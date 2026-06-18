@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+from services.payments.checkout_intent import add_checkout_intent_to_url
 from services.payments.public_url import payment_public_base_url
 from services.practice_token_contract import public_practice_packages
 from services.practice_tokens import payment_url
@@ -24,6 +25,23 @@ def _price_label(price_rub: int) -> str:
     return f"{int(price_rub):,} ₽".replace(",", " ")
 
 
+def _practice_payment_url(*, base_url: str, user_id: int | None, platform: str, package_id: str) -> str:
+    raw_url = payment_url(
+        base_url,
+        user_id=int(user_id or 0),
+        platform=platform,
+        external_user_id=str(user_id) if user_id else None,
+        package_id=package_id,
+    )
+    return add_checkout_intent_to_url(
+        raw_url,
+        user_id=int(user_id or 0),
+        package_id=package_id,
+        kind="tokens",
+        source=platform,
+    )
+
+
 def _practice_package_rows(*, user_id: int | None, platform: str = "telegram") -> list[list[InlineKeyboardButton]]:
     base_url = payment_public_base_url()
     rows: list[list[InlineKeyboardButton]] = []
@@ -33,11 +51,10 @@ def _practice_package_rows(*, user_id: int | None, platform: str = "telegram") -
             rows.append([
                 InlineKeyboardButton(
                     text=label,
-                    url=payment_url(
-                        base_url,
-                        user_id=int(user_id or 0),
+                    url=_practice_payment_url(
+                        base_url=base_url,
+                        user_id=user_id,
                         platform=platform,
-                        external_user_id=str(user_id) if user_id else None,
                         package_id=package.package_id,
                     ),
                 )
