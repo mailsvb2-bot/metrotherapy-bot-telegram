@@ -207,10 +207,25 @@ def first_url(text: str) -> str:
     return match.group(0).rstrip(".,;") if match else ""
 
 
+def _default_link_label(text: str) -> str:
+    raw = str(text or "").lstrip()
+    if raw.startswith("🎁") or "kind=gift" in raw or "gift=1" in raw:
+        return "🎁 Оплатить подарок"
+    if raw.startswith("💳") or "/pay/" in raw or "kind=tokens" in raw:
+        return "💳 Оплатить"
+    return "Открыть"
+
+
 def link_action_attachment(text: str) -> dict[str, Any] | None:
-    rows = [[max_link_button(label, url)] for label, url in extract_labeled_urls(text)]
+    pairs = extract_labeled_urls(text)
+    rows: list[list[dict[str, Any]]] = []
+    default_label = _default_link_label(text)
+    for label, url in pairs:
+        button_label = default_label if label == "Открыть" else label
+        rows.append([max_link_button(button_label, url)])
     if not rows:
         return None
+    rows.append([max_message_button("🎧 Получить аудио", command="continue")])
     rows.append([max_message_button(BACK_LABEL, command=MENU_COMMAND)])
     return inline_keyboard_attachment(rows)
 
@@ -271,7 +286,7 @@ def normalize_max_text(text: str) -> str:
 
 def prepare_text(text: str, *, has_native_keyboard: bool = False) -> str:
     raw = normalize_max_text(text)
-    if raw.lstrip().startswith("🔐 Полный маршрут") and "в этот мессенджер" not in raw and "MAX и ВКонтакте" not in raw:
+    if has_native_keyboard and raw.lstrip().startswith("🔐 Полный маршрут") and "в этот мессенджер" not in raw and "MAX и ВКонтакте" not in raw:
         raw = raw.rstrip() + "\n\nПолный маршрут доступен прямо в этот мессенджер."
     if has_main_menu_text(raw) and not has_native_keyboard and "отправьте:" not in raw:
         return raw.rstrip() + "\n\n" + max_numbered_menu_text()
