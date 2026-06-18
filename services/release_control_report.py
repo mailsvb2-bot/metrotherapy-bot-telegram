@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
 import subprocess
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +17,7 @@ from services.scheduler import scheduler_health_snapshot
 from services.storage_legacy_audit import storage_legacy_audit
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_HEALTH_URL = "http://127.0.0.1:8082/health"
 
 REQUIRED_PROBES = {
     "payment_entitlement_reconciliation_probe": "Payment entitlement",
@@ -130,6 +135,41 @@ def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
 
 
 
+def _live_health_scheduler_snapshot() -> dict[str, Any]:
+    """Return live scheduler facts from the running service when available.
+
+    Admin handlers execute this module inside the bot process and can trust the
+    in-process scheduler snapshot. The CLI release report, however, runs in a
+    short-lived helper process where the scheduler task is naturally absent.
+    In that case the local health endpoint is the authoritative live runtime
+    source, and a failure to reach it leaves the original in-process snapshot
+    unchanged.
+    """
+    url = os.getenv("METRO_HEALTH_URL", DEFAULT_HEALTH_URL)
+    try:
+        with urllib.request.urlopen(url, timeout=1.5) as response:  # noqa: S310 - local operator health URL
+            if int(getattr(response, "status", 0) or 0) != 200:
+                return {}
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, TimeoutError, ValueError, urllib.error.URLError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        return {}
+    return payload
+
+
+
+def _scheduler_snapshot_for_release_report() -> dict[str, Any]:
+    scheduler = scheduler_health_snapshot()
+    if bool(scheduler.get("scheduler_loop_task_running")):
+        return scheduler
+    live = _live_health_scheduler_snapshot()
+    if bool(live.get("scheduler_loop_task_running")):
+        return live
+    return scheduler
+
+
+
 def _overall_marker(
     *,
     statuses: list[ReleaseProbeStatus],
@@ -175,7 +215,7 @@ def build_release_control_snapshot(*, limit: int = 25) -> ReleaseControlSnapshot
     stale_auto_audio_lock_count = int(auto_audio_locks.get("stale_lock_count") or 0)
     storage = storage_legacy_audit()
     disaster = disaster_recovery_status(include_hash=False)
-    scheduler = scheduler_health_snapshot()
+    scheduler = _scheduler_snapshot_for_release_report()
     scheduler_loop_running = bool(scheduler.get("scheduler_loop_task_running"))
     scheduler_loop_error_count = int(scheduler.get("scheduler_loop_error_count") or 0)
     scheduler_loop_last_error = str(scheduler.get("scheduler_loop_last_error") or "")
