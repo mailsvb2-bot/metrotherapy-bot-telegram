@@ -40,6 +40,7 @@ ALLOWED_ROOT_FILES = {
     "app.py",
     "main.py",
     "check_db.py",
+    "pyproject.toml",
     "requirements.txt",
     "requirements-dev.txt",
     "pytest.ini",
