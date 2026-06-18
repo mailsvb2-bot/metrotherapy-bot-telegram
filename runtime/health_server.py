@@ -18,6 +18,19 @@ from services.scheduler import scheduler_health_snapshot
 
 log = logging.getLogger(__name__)
 
+_READY_TABLES = {
+    'users',
+    'jobs',
+    'plans',
+    'payments',
+    'schema_migrations',
+    'practice_wallets',
+    'payment_token_grants',
+    'premium_entitlements',
+    'premium_delivery_outbox',
+    'consultation_requests',
+}
+
 
 @dataclass
 class HealthRuntime:
@@ -81,16 +94,20 @@ def _db_ready() -> tuple[bool, str | None]:
 
 
 def _schema_ready() -> tuple[bool, str | None]:
-    required_tables = {'users', 'jobs'}
+    required_tables = set(_READY_TABLES)
+    placeholders = ','.join('?' for _ in sorted(required_tables))
     try:
         with get_connection() as conn:
             if CONFIG.uses_postgres:
                 rows = conn.execute(
-                    "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('users','jobs')"
+                    f"SELECT table_name AS name FROM information_schema.tables "
+                    f"WHERE table_schema=current_schema() AND table_name IN ({placeholders})",
+                    tuple(sorted(required_tables)),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','jobs')"
+                    f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
+                    tuple(sorted(required_tables)),
                 ).fetchall()
         names: set[str] = set()
         for row in rows:
@@ -209,6 +226,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         'schema_ready': schema_ok,
         'scheduler_ready': scheduler_ok,
         'webhook_ready': webhook_ok,
+        'required_tables': sorted(_READY_TABLES),
         'db_engine': CONFIG.engine,
         'db_target': redacted_db_target(),
         'telegram_transport': telegram_transport_value,
