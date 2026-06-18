@@ -9,6 +9,7 @@ from services.auto_audio_recovery import auto_audio_lock_summary
 from services.disaster_recovery_status import disaster_recovery_status
 from services.payments.reconciliation import payment_problem_summary
 from services.probe_ledger import ProbeRun, get_recent_probe_runs
+from services.scheduler import scheduler_health_snapshot
 from services.storage_legacy_audit import storage_legacy_audit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,11 +54,16 @@ class ReleaseControlSnapshot:
     disaster_latest_backup: str | None
     disaster_latest_backup_size_bytes: int
     disaster_restore_target_configured: bool
+    scheduler_loop_running: bool
+    scheduler_loop_error_count: int
+    scheduler_loop_last_error: str
+    scheduler_loop_last_tick_age_sec: int
     payment_problem_count: int
     stale_auto_audio_lock_count: int
     probe_statuses: list[ReleaseProbeStatus]
     recent_probe_runs: list[ProbeRun]
     stale_auto_audio_locks: list[dict[str, Any]]
+
 
 
 def _git_value(*args: str) -> str:
@@ -79,12 +85,14 @@ def _git_value(*args: str) -> str:
     return (proc.stdout or "").strip() or "unknown"
 
 
+
 def _latest_by_type(runs: list[ProbeRun]) -> dict[str, ProbeRun]:
     result: dict[str, ProbeRun] = {}
     for run in runs:
         if run.probe_type and run.probe_type not in result:
             result[run.probe_type] = run
     return result
+
 
 
 def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
@@ -121,21 +129,28 @@ def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
     return statuses
 
 
+
 def _overall_marker(
     *,
     statuses: list[ReleaseProbeStatus],
     storage_status: str,
     disaster_status: str,
+    scheduler_loop_running: bool,
+    scheduler_loop_error_count: int,
     payment_problem_count: int,
     stale_auto_audio_lock_count: int,
 ) -> tuple[str, str]:
     if storage_status == "RED":
+        return "🛑", "RED"
+    if not scheduler_loop_running:
         return "🛑", "RED"
     if not all(item.is_green for item in statuses):
         return "🛑", "RED"
     if storage_status != "GREEN":
         return "⚠️", "YELLOW"
     if disaster_status != "GREEN":
+        return "⚠️", "YELLOW"
+    if scheduler_loop_error_count > 0:
         return "⚠️", "YELLOW"
     if payment_problem_count > 0:
         return "⚠️", "YELLOW"
@@ -144,10 +159,12 @@ def _overall_marker(
     return "✅", "GREEN"
 
 
+
 def _short(value: str | None, *, length: int = 12) -> str:
     if not value:
         return "-"
     return str(value)[:length]
+
 
 
 def build_release_control_snapshot(*, limit: int = 25) -> ReleaseControlSnapshot:
@@ -158,10 +175,17 @@ def build_release_control_snapshot(*, limit: int = 25) -> ReleaseControlSnapshot
     stale_auto_audio_lock_count = int(auto_audio_locks.get("stale_lock_count") or 0)
     storage = storage_legacy_audit()
     disaster = disaster_recovery_status(include_hash=False)
+    scheduler = scheduler_health_snapshot()
+    scheduler_loop_running = bool(scheduler.get("scheduler_loop_task_running"))
+    scheduler_loop_error_count = int(scheduler.get("scheduler_loop_error_count") or 0)
+    scheduler_loop_last_error = str(scheduler.get("scheduler_loop_last_error") or "")
+    scheduler_loop_last_tick_age_sec = int(scheduler.get("scheduler_loop_last_tick_age_sec") or 0)
     marker, status = _overall_marker(
         statuses=statuses,
         storage_status=str(storage.status),
         disaster_status=str(disaster.status),
+        scheduler_loop_running=scheduler_loop_running,
+        scheduler_loop_error_count=scheduler_loop_error_count,
         payment_problem_count=payment_problem_count,
         stale_auto_audio_lock_count=stale_auto_audio_lock_count,
     )
@@ -180,6 +204,10 @@ def build_release_control_snapshot(*, limit: int = 25) -> ReleaseControlSnapshot
         disaster_latest_backup=disaster.latest_backup,
         disaster_latest_backup_size_bytes=int(disaster.latest_backup_size_bytes),
         disaster_restore_target_configured=bool(disaster.restore_target_configured),
+        scheduler_loop_running=scheduler_loop_running,
+        scheduler_loop_error_count=scheduler_loop_error_count,
+        scheduler_loop_last_error=scheduler_loop_last_error,
+        scheduler_loop_last_tick_age_sec=scheduler_loop_last_tick_age_sec,
         payment_problem_count=payment_problem_count,
         stale_auto_audio_lock_count=stale_auto_audio_lock_count,
         probe_statuses=statuses,
@@ -188,12 +216,13 @@ def build_release_control_snapshot(*, limit: int = 25) -> ReleaseControlSnapshot
     )
 
 
+
 def format_release_control_report(*, limit: int = 25) -> str:
     """Return an admin-facing release/control-plane status summary.
 
     The report is read-only: it does not run probes, mutate rows, contact external
     providers, or restart services. It only summarizes the latest already-recorded
-    probe ledger facts and current payment/storage/delivery problem surfaces.
+    probe ledger facts and current payment/storage/delivery/problem surfaces.
     """
     snapshot = build_release_control_snapshot(limit=limit)
     lines = [
@@ -210,11 +239,16 @@ def format_release_control_report(*, limit: int = 25) -> str:
         f"latest_size={snapshot.disaster_latest_backup_size_bytes} "
         f"restore_target={snapshot.disaster_restore_target_configured} "
         f"reason={snapshot.disaster_recovery_reason}",
+        f"Scheduler: running={snapshot.scheduler_loop_running} "
+        f"errors={snapshot.scheduler_loop_error_count} "
+        f"last_tick_age={snapshot.scheduler_loop_last_tick_age_sec}s",
         f"Проблемные платежи: {snapshot.payment_problem_count}",
         f"Stale auto-audio locks: {snapshot.stale_auto_audio_lock_count}",
-        "",
-        "Обязательные proof-проверки:",
     ]
+    if snapshot.scheduler_loop_last_error:
+        lines.append(f"Scheduler last error: {snapshot.scheduler_loop_last_error[:220]}")
+
+    lines.extend(["", "Обязательные proof-проверки:"])
 
     for item in snapshot.probe_statuses:
         probe_marker = "✅" if item.is_green else "⚠️"
@@ -254,7 +288,7 @@ def format_release_control_report(*, limit: int = 25) -> str:
     if snapshot.status == "GREEN":
         lines.append("\nИтог: релизный контур выглядит зелёным по последним proof-записям.")
     elif snapshot.status == "YELLOW":
-        lines.append("\nИтог: runtime probes зелёные, но есть storage/payment/auto-audio/DR пункт для ручной проверки.")
+        lines.append("\nИтог: runtime probes зелёные, но есть scheduler/storage/payment/auto-audio/DR пункт для ручной проверки.")
     else:
         lines.append("\nИтог: есть незакрытая proof-проблема. Релиз/изменения нужно остановить до разбора.")
 
