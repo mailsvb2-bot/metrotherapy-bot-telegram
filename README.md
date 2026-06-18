@@ -56,6 +56,7 @@ python -c "from services.schema import init_db; init_db(); print('DB OK')"
 3) ✅ Детерминированный scheduler (idempotent jobs)
    - `core/engine.py` атомарно забирает due-jobs через `services/jobs.claim_due_jobs()`.
    - при сетевых ошибках job возвращается в очередь с задержкой.
+   - `services/scheduler.py` держит protected tick-contour: сбой одного owner-tick логируется и выводится в health/release-control, но не убивает весь background loop.
 
 4) ✅ Воронка / аналитика / деньги
    - заготовки находятся в `services/funnel*.py`, `services/analytics.py`, `services/events.py`, `handlers/admin_*.py`.
@@ -104,7 +105,7 @@ APP_ENV=dev
 VALIDATOR_STRICT=0
 ```
 
-## CI-smoke (2–3 команды)
+## CI-smoke и release gate
 Минимальный smoke-набор для CI (быстро ловит поломки импортов/контрактов):
 
 ```bash
@@ -112,3 +113,36 @@ python -m compileall .
 python scripts/validate_project.py
 python -c "from services.validator import validate_all; validate_all(strict=False); print('OK')"
 ```
+
+GitHub Actions дополнительно запускает полный regression gate:
+
+```bash
+python -m pytest -q -p no:cacheprovider
+python scripts/check_ruff.py
+python scripts/check_release_hygiene.py
+```
+
+## Production readiness stop-condition
+
+Чтобы честно назвать deployment production-ready, должен проходить строгий gate без skip-флагов:
+
+```bash
+export METRO_RESTORE_DRILL_DATABASE_URL="postgresql://...safe_restore_target..."
+python scripts/production_gate.py
+```
+
+Этот gate требует:
+
+- full pytest;
+- strict validator + smoke;
+- storage/legacy SQLite audit;
+- disaster recovery GREEN;
+- Postgres restore drill на безопасной non-production БД;
+- scheduler job probe;
+- auto-audio dry-run probe;
+- payment reconciliation/idempotency proof;
+- synthetic user journey E2E proof;
+- Telegram live smoke;
+- `/health`/`/readyz` зелёные.
+
+Админская поверхность: `/release` или `/release_gate` показывает storage, DR, обязательные proof-пробы, payment problems, stale auto-audio locks и scheduler watchdog fields.
