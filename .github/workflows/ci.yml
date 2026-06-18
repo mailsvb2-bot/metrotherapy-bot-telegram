@@ -11,7 +11,7 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       APP_ENV: prod
       VALIDATOR_RELEASE_MODE: '1'
@@ -32,7 +32,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install ruff
+          python -m pip install pytest pytest-asyncio ruff
 
       - name: Release hygiene before checks
         run: python scripts/check_release_hygiene.py
@@ -51,6 +51,9 @@ jobs:
 
       - name: Smoke no polling
         run: python scripts/smoke.py
+
+      - name: Full pytest regression gate
+        run: python -m pytest -q -p no:cacheprovider
 
       - name: Strict validation
         run: python scripts/validate_project.py
