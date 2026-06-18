@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import base64
+import json
+import logging
+import os
+import urllib.error
+import urllib.request
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+_GRANT_KINDS = {"tokens", "practices", "practice_package"}
+
+
+class YooKassaProviderVerificationError(RuntimeError):
+    """Raised when a grant-producing YooKassa webhook cannot be verified."""
+
+
+def _is_prod() -> bool:
+    return (os.getenv("APP_ENV", "dev") or "dev").strip().lower() in {"prod", "production"}
+
+
+def _truthy(raw: str | None) -> bool:
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _falsy(raw: str | None) -> bool:
+    return str(raw or "").strip().lower() in {"0", "false", "no", "off"}
+
+
+def provider_verification_required() -> bool:
+    raw = os.getenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED")
+    if raw is not None:
+        return _truthy(raw)
+    if _is_prod() and _truthy(os.getenv("ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD")):
+        return False
+    return _is_prod()
+
+
+def _auth_header() -> str:
+    shop_id = (os.getenv("YOOKASSA_SHOP_ID") or "").strip()
+    api_key = (os.getenv("YOOKASSA_SECRET_KEY") or "").strip()
+    if not shop_id or not api_key:
+        raise YooKassaProviderVerificationError("missing_yookassa_credentials")
+    encoded = base64.b64encode(f"{shop_id}:{api_key}".encode("utf-8")).decode("ascii")
+    return f"Basic {encoded}"
+
+
+def fetch_yookassa_payment(payment_id: str) -> dict[str, Any]:
+    payment_id = (payment_id or "").strip()
+    if not payment_id:
+        raise YooKassaProviderVerificationError("missing_provider_payment_id")
+    req = urllib.request.Request(
+        f"https://api.yookassa.ru/v3/payments/{payment_id}",
+        method="GET",
+        headers={"Authorization": _auth_header(), "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        log.error("YooKassa payment verification failed: status=%s body=%s", exc.code, "<redacted>" if _is_prod() else body[:1000])
+        raise YooKassaProviderVerificationError(f"provider_http_{exc.code}") from exc
+    except OSError as exc:
+        raise YooKassaProviderVerificationError(f"provider_network:{type(exc).__name__}") from exc
+    try:
+        payload = json.loads(raw or "{}")
+    except json.JSONDecodeError as exc:
+        raise YooKassaProviderVerificationError("provider_bad_json") from exc
+    if not isinstance(payload, dict):
+        raise YooKassaProviderVerificationError("provider_bad_payload")
+    return payload
+
+
+def _minor(amount: dict[str, Any] | None) -> int:
+    if not isinstance(amount, dict):
+        return 0
+    raw = str(amount.get("value") or "0").replace(",", ".").strip()
+    try:
+        value = Decimal(raw).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError):
+        return 0
+    return int(value * 100)
+
+
+def _metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    meta = payload.get("metadata")
+    return meta if isinstance(meta, dict) else {}
+
+
+def webhook_requires_provider_verification(payload: dict[str, Any]) -> bool:
+    obj = payload.get("object") if isinstance(payload.get("object"), dict) else {}
+    status = str(obj.get("status") or payload.get("status") or "").strip().lower()
+    event = str(payload.get("event") or "").strip().lower()
+    meta = _metadata(obj)
+    kind = str(meta.get("kind") or "").strip().lower()
+    package_id = str(meta.get("package_id") or "").strip()
+    return (event == "payment.succeeded" or status == "succeeded") and (kind in _GRANT_KINDS or bool(package_id))
+
+
+def verify_yookassa_webhook_with_provider(payload: dict[str, Any]) -> None:
+    """Verify a grant-producing webhook against YooKassa's source of truth.
+
+    Only payment.succeeded/package grants require the network check. Non-granting
+    statuses can still be recorded as provider facts without spending a provider
+    request on every pending/canceled notification.
+    """
+    if not webhook_requires_provider_verification(payload):
+        return
+    if not provider_verification_required():
+        return
+
+    obj = payload.get("object") if isinstance(payload.get("object"), dict) else {}
+    payment_id = str(obj.get("id") or payload.get("id") or "").strip()
+    provider = fetch_yookassa_payment(payment_id)
+
+    if str(provider.get("id") or "").strip() != payment_id:
+        raise YooKassaProviderVerificationError("provider_id_mismatch")
+    if str(provider.get("status") or "").strip().lower() != "succeeded":
+        raise YooKassaProviderVerificationError("provider_status_not_succeeded")
+
+    webhook_amount = obj.get("amount") if isinstance(obj.get("amount"), dict) else {}
+    provider_amount = provider.get("amount") if isinstance(provider.get("amount"), dict) else {}
+    if _minor(webhook_amount) != _minor(provider_amount):
+        raise YooKassaProviderVerificationError("provider_amount_mismatch")
+    if str(webhook_amount.get("currency") or "RUB").upper() != str(provider_amount.get("currency") or "RUB").upper():
+        raise YooKassaProviderVerificationError("provider_currency_mismatch")
+
+    webhook_meta = _metadata(obj)
+    provider_meta = _metadata(provider)
+    for key in ("external_user_id", "user_id", "kind", "package_id", "gift_token"):
+        left = str(webhook_meta.get(key) or "").strip()
+        right = str(provider_meta.get(key) or "").strip()
+        if left != right:
+            raise YooKassaProviderVerificationError(f"provider_metadata_{key}_mismatch")
