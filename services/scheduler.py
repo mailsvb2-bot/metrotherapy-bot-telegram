@@ -43,6 +43,7 @@ def _tm_create(coro: Awaitable[None]) -> asyncio.Task:
                 log.exception("Background task callback failed task=%s", _coro_name(coro))
                 return
             if exc is not None:
+                _record_scheduler_error(_coro_name(coro), exc)
                 log.error(
                     "Background task crashed task=%s",
                     _coro_name(coro),
@@ -129,11 +130,46 @@ class PreciseScheduler:
             except asyncio.CancelledError:
                 break
             except (RuntimeError, OSError) as e:
+                _record_scheduler_error("precise_scheduler", e)
                 log.exception("PreciseScheduler task failed: %s", e)
+            except Exception as e:  # validator: allow-wide-except
+                _record_scheduler_error("precise_scheduler", e)
+                log.exception("PreciseScheduler unexpected failure")
 
 
 _precise: Optional[PreciseScheduler] = None
 _bg_task: Optional[asyncio.Task] = None
+_bg_started_at_monotonic: float = 0.0
+_bg_iteration_count: int = 0
+_bg_error_count: int = 0
+_bg_last_error: str = ""
+_bg_last_error_at_monotonic: float = 0.0
+_bg_last_tick_at_monotonic: float = 0.0
+
+
+def _record_scheduler_error(source: str, exc: BaseException) -> None:
+    global _bg_error_count, _bg_last_error, _bg_last_error_at_monotonic
+    _bg_error_count += 1
+    _bg_last_error = f"{source}:{type(exc).__name__}:{str(exc)[:180]}"
+    _bg_last_error_at_monotonic = time.monotonic()
+
+
+async def _run_protected_tick(name: str, factory: Callable[[], Awaitable[object]]) -> bool:
+    """Run one scheduler-owned tick without allowing it to kill the loop.
+
+    The scheduler is the owner of jobs, auto-audio, self-healing, rewards and
+    non-SLA diagnostics. A single broken owner must be visible in health/logs, but
+    must not terminate the whole background loop until systemd restarts it.
+    """
+    try:
+        await factory()
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # validator: allow-wide-except
+        _record_scheduler_error(name, exc)
+        log.exception("Scheduler protected tick failed: %s", name)
+        return False
 
 
 def get_precise_scheduler() -> PreciseScheduler:
@@ -143,7 +179,7 @@ def get_precise_scheduler() -> PreciseScheduler:
     return _precise
 
 
-def scheduler_health_snapshot() -> dict[str, bool | int]:
+def scheduler_health_snapshot() -> dict[str, bool | int | float | str]:
     """Cheap runtime diagnostics for health endpoint / ops checks."""
     precise = get_precise_scheduler()
     precise_task = getattr(precise, '_task', None)
@@ -151,11 +187,19 @@ def scheduler_health_snapshot() -> dict[str, bool | int]:
     precise_running = bool(getattr(precise, '_running', False))
     precise_task_running = bool(precise_task is not None and not precise_task.done())
     queue_size = int(len(getattr(precise, '_queue', ())))
+    now_m = time.monotonic()
     return {
         'scheduler_loop_task_running': bg_running,
         'precise_scheduler_running': precise_running,
         'precise_scheduler_task_running': precise_task_running,
         'precise_scheduler_queue_size': queue_size,
+        'scheduler_loop_started': bool(_bg_started_at_monotonic > 0),
+        'scheduler_loop_uptime_sec': int(now_m - _bg_started_at_monotonic) if _bg_started_at_monotonic else 0,
+        'scheduler_loop_iterations': int(_bg_iteration_count),
+        'scheduler_loop_error_count': int(_bg_error_count),
+        'scheduler_loop_last_error': _bg_last_error,
+        'scheduler_loop_last_error_age_sec': int(now_m - _bg_last_error_at_monotonic) if _bg_last_error_at_monotonic else 0,
+        'scheduler_loop_last_tick_age_sec': int(now_m - _bg_last_tick_at_monotonic) if _bg_last_tick_at_monotonic else 0,
     }
 
 
@@ -208,15 +252,18 @@ async def _safe_ux_guard_tick() -> None:
 
 
 async def _background_loop(bot: 'Bot') -> None:
-    """Non-SLA background ticks (reduced frequency).
+    """Canonical lightweight background loop with crash containment.
 
-    IMPORTANT: This is the canonical place for lightweight background ticks.
-    We avoid direct asyncio.create_task usage in app.py; validator expects scheduler-managed background work.
+    IMPORTANT: This loop must not die because one owner tick throws. Readiness
+    already exposes scheduler liveness; this function also exposes error counters
+    so operators see degraded ticks without losing the whole scheduler.
     """
     from services.auto_audio import tick as auto_audio_tick
     from core.engine import engine
     from core.runtime.self_healing import SelfHealingEngine
     from core.ai.reward_engine import compute_and_store_rewards
+
+    global _bg_iteration_count, _bg_last_tick_at_monotonic
 
     self_heal = SelfHealingEngine()
     last_heal = 0.0
@@ -229,41 +276,37 @@ async def _background_loop(bot: 'Bot') -> None:
     reward_interval = max(10.0, reward_interval)
     while True:
         await asyncio.sleep(1)
+        _bg_iteration_count += 1
+        _bg_last_tick_at_monotonic = time.monotonic()
+
         # Self-healing tick (best-effort, no side effects except SAFE_MODE state)
-        try:
-            now_m = time.monotonic()
-            if now_m - last_heal >= heal_interval:
-                last_heal = now_m
-                self_heal.tick()
-        except Exception:  # validator: allow-wide-except
-            log.exception('SelfHealingEngine.tick failed')
-        try:
-            await auto_audio_tick(bot)
-        except (RuntimeError, OSError) as e:
-            log.exception("Scheduler error: %s", e)
-            log.exception("auto_audio_tick failed")
-        try:
-            await engine.tick(bot)
-        except (RuntimeError, OSError) as e:
-            log.exception("Scheduler error: %s", e)
-            log.exception("engine.tick failed")
+        now_m = time.monotonic()
+        if now_m - last_heal >= heal_interval:
+            last_heal = now_m
+            await _run_protected_tick("SelfHealingEngine.tick", lambda: asyncio.to_thread(self_heal.tick))
+
+        await _run_protected_tick("auto_audio.tick", lambda: auto_audio_tick(bot))
+        await _run_protected_tick("engine.tick", lambda: engine.tick(bot))
+
         # RewardEngine tick (best-effort, writes aggregated rewards)
-        try:
-            now_m = time.monotonic()
-            if now_m - last_reward >= reward_interval:
-                last_reward = now_m
-                app_env = (os.getenv("APP_ENV") or "dev").lower()
-                reward_timeout = 5.0 if app_env == "prod" else 15.0
-                reward_window_sec = int(os.getenv('REWARD_WINDOW_SEC','3600') or '3600')
-                reward_lookback_h = int(os.getenv('REWARD_LOOKBACK_H','24') or '24')
+        now_m = time.monotonic()
+        if now_m - last_reward >= reward_interval:
+            last_reward = now_m
+            app_env = (os.getenv("APP_ENV") or "dev").lower()
+            reward_timeout = 5.0 if app_env == "prod" else 15.0
+            reward_window_sec = int(os.getenv('REWARD_WINDOW_SEC','3600') or '3600')
+            reward_lookback_h = int(os.getenv('REWARD_LOOKBACK_H','24') or '24')
+
+            async def _reward_tick() -> None:
                 reward_task = asyncio.to_thread(
                     compute_and_store_rewards,
                     reward_window_sec,
                     lookback_hours=reward_lookback_h,
                 )
                 await asyncio.wait_for(reward_task, timeout=reward_timeout)
-        except Exception:  # validator: allow-wide-except
-            log.exception('RewardEngine tick failed')
+
+            await _run_protected_tick("RewardEngine.tick", _reward_tick)
+
         # UX guard (best-effort)
         # Runs rarely and MUST be read-only (SQLite query_only=ON), to avoid competing with writes.
         # Interval can be tuned via UX_GUARD_INTERVAL_SEC.
@@ -274,12 +317,12 @@ async def _background_loop(bot: 'Bot') -> None:
         interval = max(10.0, interval)  # never spam
         if now_m - last_ux_guard >= interval:
             last_ux_guard = now_m
-            await _safe_ux_guard_tick()
+            await _run_protected_tick("UXGuard.tick", _safe_ux_guard_tick)
 
 
 def start_scheduler(bot: 'Bot') -> None:
     """Start scheduler loops. Keeps compatibility with app.py."""
-    global _bg_task
+    global _bg_task, _bg_started_at_monotonic
 
     # PreciseScheduler is kept for potential in-memory timers, but DB-backed jobs are executed by Engine.tick.
     async def runner_bg():
@@ -287,12 +330,13 @@ def start_scheduler(bot: 'Bot') -> None:
         await _background_loop(bot)
 
     if not _bg_task or _bg_task.done():
+        _bg_started_at_monotonic = time.monotonic()
         _bg_task = _tm_create(runner_bg())
 
 
 async def stop_scheduler() -> None:
     """Stop all loops + PreciseScheduler (no leaks)."""
-    global _bg_task
+    global _bg_task, _bg_started_at_monotonic
 
     for t in (_bg_task,):
         if t and not t.done():
@@ -305,6 +349,7 @@ async def stop_scheduler() -> None:
                 pass
 
     _bg_task = None
+    _bg_started_at_monotonic = 0.0
     await get_precise_scheduler().stop()
 
 # Resume pending/running jobs on startup
