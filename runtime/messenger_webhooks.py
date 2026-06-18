@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -39,6 +40,10 @@ async def _health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "service": "messenger-webhooks"})
 
 
+def _truthy_env(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _register_health_routes(app: web.Application) -> None:
     app.router.add_get("/", _health)
     app.router.add_get("/health", _health)
@@ -66,10 +71,11 @@ def _register_telegram_routes(
     app["telegram_dispatcher"] = dispatcher
     app["task_manager"] = dispatcher.workflow_data.get("task_manager")
     app.router.add_post(telegram_webhook_path(), telegram_webhook)
-    # Transitional compatibility: older deployments used /telegram-webhook/{BOT_TOKEN}.
-    # The public URL now points to the tokenless route, but this keeps existing
-    # reverse-proxy/server snippets working until they are updated.
-    app.router.add_post(telegram_legacy_webhook_path(), telegram_webhook)
+    # Legacy /telegram-webhook/{BOT_TOKEN} is disabled by default because bot
+    # tokens can leak through access logs and support screenshots. Enable only
+    # as a deliberate temporary migration bridge.
+    if _truthy_env("TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED"):
+        app.router.add_post(telegram_legacy_webhook_path(), telegram_webhook)
     public_url = telegram_public_webhook_url()
     if not public_url:
         raise RuntimeError("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL is required for telegram webhook transport")
