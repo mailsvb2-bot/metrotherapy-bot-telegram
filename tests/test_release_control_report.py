@@ -38,6 +38,15 @@ class _Recovery:
         self.restore_target_configured = status == "GREEN"
 
 
+def _scheduler_health(*, running: bool = True, errors: int = 0) -> dict[str, object]:
+    return {
+        "scheduler_loop_task_running": running,
+        "scheduler_loop_error_count": errors,
+        "scheduler_loop_last_error": "unit-test-error" if errors else "",
+        "scheduler_loop_last_tick_age_sec": 1,
+    }
+
+
 def _green_runs() -> list[ProbeRun]:
     return [
         _probe("payment_entitlement_reconciliation_probe", idx=1),
@@ -47,12 +56,13 @@ def _green_runs() -> list[ProbeRun]:
     ]
 
 
-def _patch_common(monkeypatch, *, storage: str = "GREEN", recovery: str = "GREEN") -> None:
+def _patch_common(monkeypatch, *, storage: str = "GREEN", recovery: str = "GREEN", scheduler_running: bool = True, scheduler_errors: int = 0) -> None:
     monkeypatch.setattr(report_module, "get_recent_probe_runs", lambda limit: _green_runs())
     monkeypatch.setattr(report_module, "payment_problem_summary", lambda limit: [])
     monkeypatch.setattr(report_module, "auto_audio_lock_summary", lambda limit: {"stale_lock_count": 0, "locks": []})
     monkeypatch.setattr(report_module, "storage_legacy_audit", lambda: _Storage(storage))
     monkeypatch.setattr(report_module, "disaster_recovery_status", lambda include_hash=False: _Recovery(recovery))
+    monkeypatch.setattr(report_module, "scheduler_health_snapshot", lambda: _scheduler_health(running=scheduler_running, errors=scheduler_errors))
     monkeypatch.setattr(report_module, "_git_value", lambda *args: "main" if "--abbrev-ref" in args else "abc123")
 
 
@@ -66,6 +76,7 @@ def test_release_report_green_when_storage_recovery_and_probes_are_green(monkeyp
     assert "Статус: ✅ GREEN" in text
     assert "Storage: GREEN legacy_sqlite=False" in text
     assert "Disaster recovery: GREEN" in text
+    assert "Scheduler: running=True errors=0" in text
     assert "Проблемные платежи: 0" in text
     assert "Stale auto-audio locks: 0" in text
     assert "User journey E2E: ok/clean" in text
@@ -89,12 +100,32 @@ def test_release_report_yellow_when_recovery_is_not_green(monkeypatch) -> None:
     assert "Disaster recovery: RED" in text
 
 
+def test_release_report_yellow_when_scheduler_has_errors(monkeypatch) -> None:
+    _patch_common(monkeypatch, scheduler_errors=2)
+
+    text = report_module.format_release_control_report(limit=10)
+
+    assert "Статус: ⚠️ YELLOW" in text
+    assert "Scheduler: running=True errors=2" in text
+    assert "Scheduler last error: unit-test-error" in text
+
+
+def test_release_report_red_when_scheduler_is_not_running(monkeypatch) -> None:
+    _patch_common(monkeypatch, scheduler_running=False)
+
+    text = report_module.format_release_control_report(limit=10)
+
+    assert "Статус: 🛑 RED" in text
+    assert "Scheduler: running=False" in text
+
+
 def test_release_report_red_when_required_probe_missing(monkeypatch) -> None:
     monkeypatch.setattr(report_module, "get_recent_probe_runs", lambda limit: [_probe("probe_scheduler_job_live", idx=2)])
     monkeypatch.setattr(report_module, "payment_problem_summary", lambda limit: [])
     monkeypatch.setattr(report_module, "auto_audio_lock_summary", lambda limit: {"stale_lock_count": 0, "locks": []})
     monkeypatch.setattr(report_module, "storage_legacy_audit", lambda: _Storage("GREEN"))
     monkeypatch.setattr(report_module, "disaster_recovery_status", lambda include_hash=False: _Recovery("GREEN"))
+    monkeypatch.setattr(report_module, "scheduler_health_snapshot", lambda: _scheduler_health())
     monkeypatch.setattr(report_module, "_git_value", lambda *args: "main")
 
     text = report_module.format_release_control_report(limit=10)
