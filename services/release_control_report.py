@@ -135,6 +135,17 @@ def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
 
 
 
+def _read_health_payload(url: str) -> dict[str, Any]:
+    with urllib.request.urlopen(url, timeout=1.5) as response:  # noqa: S310 - local operator health URL
+        if int(getattr(response, "status", 0) or 0) != 200:
+            return {}
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        return {}
+    return payload
+
+
+
 def _live_health_scheduler_snapshot() -> dict[str, Any]:
     """Return live scheduler facts from the running service when available.
 
@@ -147,15 +158,15 @@ def _live_health_scheduler_snapshot() -> dict[str, Any]:
     """
     url = os.getenv("METRO_HEALTH_URL", DEFAULT_HEALTH_URL)
     try:
-        with urllib.request.urlopen(url, timeout=1.5) as response:  # noqa: S310 - local operator health URL
-            if int(getattr(response, "status", 0) or 0) != 200:
-                return {}
-            payload = json.loads(response.read().decode("utf-8"))
-    except (OSError, TimeoutError, ValueError, urllib.error.URLError, json.JSONDecodeError):
+        return _read_health_payload(url)
+    except urllib.error.URLError:
         return {}
-    if not isinstance(payload, dict) or not payload.get("ok"):
+    except TimeoutError:
         return {}
-    return payload
+    except OSError:
+        return {}
+    except json.JSONDecodeError:
+        return {}
 
 
 
