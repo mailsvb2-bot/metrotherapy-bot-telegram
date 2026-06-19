@@ -63,7 +63,7 @@ def _patch_common(monkeypatch, *, storage: str = "GREEN", recovery: str = "GREEN
     monkeypatch.setattr(report_module, "storage_legacy_audit", lambda: _Storage(storage))
     monkeypatch.setattr(report_module, "disaster_recovery_status", lambda include_hash=False: _Recovery(recovery))
     monkeypatch.setattr(report_module, "scheduler_health_snapshot", lambda: _scheduler_health(running=scheduler_running, errors=scheduler_errors))
-    monkeypatch.setattr(report_module, "_live_health_scheduler_snapshot", lambda: {})
+    monkeypatch.setattr(report_module, "_runtime_health_scheduler_snapshot", lambda: {})
     monkeypatch.setattr(report_module, "_git_value", lambda *args: "main" if "--abbrev-ref" in args else "abc123")
 
 
@@ -127,7 +127,7 @@ def test_release_report_red_when_required_probe_missing(monkeypatch) -> None:
     monkeypatch.setattr(report_module, "storage_legacy_audit", lambda: _Storage("GREEN"))
     monkeypatch.setattr(report_module, "disaster_recovery_status", lambda include_hash=False: _Recovery("GREEN"))
     monkeypatch.setattr(report_module, "scheduler_health_snapshot", lambda: _scheduler_health())
-    monkeypatch.setattr(report_module, "_live_health_scheduler_snapshot", lambda: {})
+    monkeypatch.setattr(report_module, "_runtime_health_scheduler_snapshot", lambda: {})
     monkeypatch.setattr(report_module, "_git_value", lambda *args: "main")
 
     text = report_module.format_release_control_report(limit=10)
