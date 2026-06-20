@@ -88,8 +88,6 @@ def validate_prod_guardrails(*, strict: bool = True) -> None:
     The app already has a production config fail-fast, but release validation and
     architecture checks used to depend on optional environment flags. In prod this
     must be an explicit deployment contract, not a README recommendation.
-
-    Emergency bypass exists only for manual recovery and is intentionally noisy.
     """
     app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
     if app_env not in {"prod", "production"}:
@@ -99,7 +97,7 @@ def validate_prod_guardrails(*, strict: bool = True) -> None:
     validate_prod_postgres_contract(strict=True)
 
     if os.getenv("ALLOW_UNGUARDED_PROD", "").strip().lower() in {"1", "true", "yes", "on"}:
-        return
+        raise ValidationError("ALLOW_UNGUARDED_PROD is forbidden in prod")
 
     missing: list[str] = []
     if os.getenv("VALIDATOR_RELEASE_MODE", "").strip().lower() not in {"1", "true", "yes", "on"}:
