@@ -66,31 +66,9 @@ async def test_health_handler_reports_db_failure(tmp_path, monkeypatch):
 
 
 def test_build_health_payload_reports_schema_missing(monkeypatch, tmp_path):
-    class DummyCursor:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def fetchone(self):
-            return self._rows[0] if self._rows else None
-
-        def fetchall(self):
-            return list(self._rows)
-
-    class DummyConn:
-        def execute(self, query: str, *args, **kwargs):
-            if 'sqlite_master' in query:
-                return DummyCursor([('users',)])
-            return DummyCursor([(1,)])
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(health_server, 'get_connection', lambda: DummyConn())
     monkeypatch.setattr(health_server, 'DB_PATH', tmp_path / 'data.db')
     monkeypatch.setattr(health_server, 'ROOT', tmp_path)
+    monkeypatch.setattr(health_server, '_schema_ready', lambda: (False, 'schema_missing:jobs'))
     monkeypatch.setattr(health_server, '_scheduler_snapshot', lambda: {'scheduler_loop_task_running': True, 'precise_scheduler_running': True, 'precise_scheduler_task_running': True, 'precise_scheduler_queue_size': 0})
 
     payload, status = health_server.build_readiness_payload()
