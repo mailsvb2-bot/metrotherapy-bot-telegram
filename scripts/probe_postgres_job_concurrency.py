@@ -204,7 +204,17 @@ def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 2
             evidence=result.to_dict(),
         )
         return result
-    except BaseException as exc:
+    except SystemExit as exc:
+        finish_probe_run(
+            run_id=run_id,
+            status="failed",
+            cleanup_status="kept" if keep_artifacts else "unknown",
+            rows_touched=rows_touched,
+            error=str(exc),
+            evidence={"key_prefix": key_prefix},
+        )
+        raise
+    except (RuntimeError, TimeoutError, ValueError, OSError, threading.BrokenBarrierError) as exc:
         finish_probe_run(
             run_id=run_id,
             status="failed",
