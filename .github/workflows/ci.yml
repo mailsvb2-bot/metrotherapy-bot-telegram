@@ -13,18 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      APP_ENV: prod
-      BOT_TOKEN: '0:CI'
-      ADMIN_IDS: '1'
-      VALIDATOR_RELEASE_MODE: '1'
-      VALIDATOR_GUARDRAILS_STRICT: '1'
-      VALIDATOR_SKIP_AUDIO: '1'
       PYTHONDONTWRITEBYTECODE: '1'
-      YOOKASSA_SHOP_ID: smoke-shop
-      YOOKASSA_SECRET_KEY: smoke-secret
-      PAYMENT_CHECKOUT_SIGNING_KEY: smoke-checkout-signing-key
-      YOOKASSA_WEBHOOK_SECRET: smoke-webhook-secret
-      PAYMENT_PUBLIC_BASE_URL: 'https://metrotherapy.example'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,12 +45,31 @@ jobs:
             main.py
 
       - name: Smoke no polling
+        env:
+          APP_ENV: prod
+          VALIDATOR_RELEASE_MODE: '1'
+          VALIDATOR_GUARDRAILS_STRICT: '1'
+          VALIDATOR_SKIP_AUDIO: '1'
+          ADMIN_IDS: '1'
+          YOOKASSA_SHOP_ID: smoke-shop
+          YOOKASSA_SECRET_KEY: smoke-key
+          PAYMENT_CHECKOUT_SIGNING_KEY: smoke-checkout-key
+          YOOKASSA_WEBHOOK_SECRET: smoke-webhook-key
+          PAYMENT_PUBLIC_BASE_URL: 'https://metrotherapy.example'
         run: python scripts/smoke.py
 
       - name: Full pytest regression gate
+        env:
+          APP_ENV: test
+          LOAD_DOTENV: '0'
         run: python -m pytest -q -p no:cacheprovider
 
       - name: Strict validation
+        env:
+          APP_ENV: prod
+          VALIDATOR_RELEASE_MODE: '1'
+          VALIDATOR_GUARDRAILS_STRICT: '1'
+          VALIDATOR_SKIP_AUDIO: '1'
         run: python scripts/validate_project.py
 
       - name: Ruff quality gate
