@@ -18,6 +18,11 @@ jobs:
       VALIDATOR_GUARDRAILS_STRICT: '1'
       VALIDATOR_SKIP_AUDIO: '1'
       PYTHONDONTWRITEBYTECODE: '1'
+      YOOKASSA_SHOP_ID: smoke-shop
+      YOOKASSA_SECRET_KEY: smoke-secret
+      PAYMENT_CHECKOUT_SIGNING_KEY: smoke-checkout-signing-key
+      YOOKASSA_WEBHOOK_SECRET: smoke-webhook-secret
+      PAYMENT_PUBLIC_BASE_URL: https://metrotherapy.example
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -60,16 +65,17 @@ jobs:
       - name: Ruff quality gate
         run: python scripts/check_ruff.py
 
-      - name: Payment hardening type gate
+      - name: Payment/privacy type gate
         run: |
           python -m mypy \
             services/payments/checkout_intent.py \
             services/payments/yookassa_provider.py \
             services/payments/verified_reconciliation.py \
-            runtime/payment_http.py
+            runtime/payment_http.py \
+            services/privacy_controls.py
 
-      - name: Payment hardening security gate
-        run: python -m bandit -q -c pyproject.toml services/payments runtime/payment_http.py
+      - name: Payment/privacy security gate
+        run: python -m bandit -q -c pyproject.toml services/payments runtime/payment_http.py services/privacy_controls.py
 
       - name: Dependency audit gate
         run: python -m pip_audit -r requirements.txt --progress-spinner off
