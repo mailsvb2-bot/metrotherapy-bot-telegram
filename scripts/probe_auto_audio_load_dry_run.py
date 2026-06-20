@@ -46,7 +46,9 @@ def run_load_probe(*, users: int = DEFAULT_USERS, concurrency: int = DEFAULT_CON
             try:
                 result = future.result()
                 rows_touched += int(result.rows_touched)
-            except BaseException as exc:
+            except SystemExit as exc:
+                failures.append(f"user_id={user_id} error={type(exc).__name__}:{exc}")
+            except (RuntimeError, TimeoutError, ValueError, OSError) as exc:
                 failures.append(f"user_id={user_id} error={type(exc).__name__}:{exc}")
 
     elapsed = round(time.monotonic() - started, 3)
