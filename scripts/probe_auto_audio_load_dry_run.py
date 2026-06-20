@@ -1,12 +1,5 @@
 from __future__ import annotations
 
-"""Dry-run load probe for the auto-audio local path.
-
-This is a no-send load proof: it creates synthetic users, grants temporary access,
-executes the pre-score/session/idempotency path, and cleans up. It does not call
-Telegram and does not contact payment providers.
-"""
-
 import argparse
 import json
 import os
@@ -32,7 +25,7 @@ def run_load_probe(*, users: int = DEFAULT_USERS, concurrency: int = DEFAULT_CON
     if users <= 0:
         raise SystemExit("AUTO_AUDIO_LOAD_DRY_RUN_FAILED users must be positive")
     if users > 500:
-        raise SystemExit("AUTO_AUDIO_LOAD_DRY_RUN_FAILED users limit is 500 for a live-safe probe")
+        raise SystemExit("AUTO_AUDIO_LOAD_DRY_RUN_FAILED users limit is 500")
 
     started = time.monotonic()
     user_ids = [BASE_SYNTHETIC_USER_ID - idx for idx in range(users)]
@@ -47,8 +40,6 @@ def run_load_probe(*, users: int = DEFAULT_USERS, concurrency: int = DEFAULT_CON
                 result = future.result()
                 rows_touched += int(result.rows_touched)
             except SystemExit as exc:
-                failures.append(f"user_id={user_id} error={type(exc).__name__}:{exc}")
-            except (RuntimeError, TimeoutError, ValueError, OSError) as exc:
                 failures.append(f"user_id={user_id} error={type(exc).__name__}:{exc}")
 
     elapsed = round(time.monotonic() - started, 3)
@@ -73,7 +64,6 @@ def main() -> int:
     parser.add_argument("--concurrency", type=int, default=int(os.getenv("AUTO_AUDIO_LOAD_CONCURRENCY", str(DEFAULT_CONCURRENCY))))
     parser.add_argument("--slot", choices=("morning", "evening"), default=os.getenv("AUTO_AUDIO_LOAD_SLOT", "morning"))
     args = parser.parse_args()
-
     print(json.dumps(run_load_probe(users=int(args.users), concurrency=int(args.concurrency), slot=str(args.slot)), ensure_ascii=False, sort_keys=True))
     return 0
 
