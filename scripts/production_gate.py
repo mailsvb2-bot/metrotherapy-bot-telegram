@@ -11,7 +11,7 @@ calling a deployment production-ready:
 - storage ambiguity audit;
 - disaster recovery GREEN status;
 - real Postgres restore drill against a non-production restore target;
-- scheduler, auto-audio, payment reconciliation and synthetic journey probes;
+- scheduler, native Postgres concurrency, auto-audio, payment reconciliation and synthetic journey probes;
 - live Telegram Bot API smoke;
 - local health/readiness probes.
 
@@ -67,6 +67,10 @@ def main() -> int:
         "--restore-drill",
     ]
     _run(cmd)
+
+    print("==> postgres job concurrency")
+    _run([sys.executable, "scripts/probe_postgres_job_concurrency.py"])
+
     print("PRODUCTION_GATE_OK")
     return 0
 
