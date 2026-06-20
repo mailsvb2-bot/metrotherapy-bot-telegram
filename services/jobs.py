@@ -66,25 +66,23 @@ def _add_job_postgres(
     encoded_payload: str,
     job_key: str,
 ) -> bool:
-    """Idempotently enqueue a Postgres job without a job_key constraint.
+    """Idempotently enqueue a Postgres job with DB-enforced job_key uniqueness.
 
-    The current production database does not expose a unique constraint on
-    jobs.job_key, so a targeted ON CONFLICT clause is invalid. The safe contract
-    here is a transaction-scoped advisory lock keyed by job_key, then an
-    existence check and a plain insert while the lock is held.
+    The schema owns the invariant through the partial unique index
+    idx_jobs_job_key on jobs(job_key) where job_key is not null. The advisory
+    lock is retained only as a low-cost contention guard for concurrent workers;
+    correctness no longer depends on a pre-insert existence check.
     """
     with db() as conn:
         with tx(conn):
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(?)::bigint)", (str(job_key),))
-            existing = conn.execute("SELECT id FROM jobs WHERE job_key=? LIMIT 1", (str(job_key),)).fetchone()
-            if existing:
-                return False
             cur = conn.execute(
                 """
                 INSERT INTO jobs(
                     user_id, job_type, run_at_utc, payload,
                     job_key, retries, locked_at, lock_token, done_at, last_error
                 ) VALUES(?,?,?,?,?, 0, NULL, NULL, NULL, NULL)
+                ON CONFLICT (job_key) WHERE job_key IS NOT NULL DO NOTHING
                 """.strip(),
                 (int(user_id), str(job_type), run_at_utc, encoded_payload, str(job_key)),
             )
