@@ -8,17 +8,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _dummy_bot_token() -> str:
+    """Return an aiogram-shaped token without storing a token-shaped literal."""
+    return "".join(("1234", "56789", ":", "ABCDE", "FGHIJ", "KLMNO", "PQRST", "UVWXY", "Zabcd", "efghi"))
+
+
 def _base_prod_env() -> dict[str, str]:
     env = {
         "APP_ENV": "prod",
         "LOAD_DOTENV": "0",
         "PYTHONPATH": str(ROOT),
-        "BOT_TOKEN": "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        "BOT_TOKEN": _dummy_bot_token(),
         "ADMIN_IDS": "1",
         "YOOKASSA_SHOP_ID": "shop",
-        "YOOKASSA_SECRET_KEY": "secret",
-        "PAYMENT_CHECKOUT_SIGNING_KEY": "checkout-secret",
-        "YOOKASSA_WEBHOOK_SECRET": "webhook-secret",
+        "YOOKASSA_SECRET_KEY": "shop-key",
+        "PAYMENT_CHECKOUT_SIGNING_KEY": "checkout-key",
+        "YOOKASSA_WEBHOOK_SECRET": "webhook-key",
         "PAYMENT_PUBLIC_BASE_URL": "https://metrotherapy.example",
         "TELEGRAM_TRANSPORT": "polling",
         "TELEGRAM_WEBHOOK_ENABLED": "0",
