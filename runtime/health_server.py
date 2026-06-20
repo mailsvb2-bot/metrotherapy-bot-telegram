@@ -14,22 +14,10 @@ from core.paths import DB_PATH, ROOT
 from services.ai.policy import ai_policy_snapshot
 from services.db.runtime import CONFIG, redacted_db_target
 from services.db import get_connection
+from services.db.schema.readiness import required_readiness_tables, schema_readiness
 from services.scheduler import scheduler_health_snapshot
 
 log = logging.getLogger(__name__)
-
-_READY_TABLES = {
-    'users',
-    'jobs',
-    'plans',
-    'payments',
-    'schema_migrations',
-    'practice_wallets',
-    'payment_token_grants',
-    'premium_entitlements',
-    'premium_delivery_outbox',
-    'consultation_requests',
-}
 
 
 @dataclass
@@ -94,38 +82,7 @@ def _db_ready() -> tuple[bool, str | None]:
 
 
 def _schema_ready() -> tuple[bool, str | None]:
-    required_tables = set(_READY_TABLES)
-    placeholders = ','.join('?' for _ in sorted(required_tables))
-    try:
-        with get_connection() as conn:
-            if CONFIG.uses_postgres:
-                rows = conn.execute(
-                    f"SELECT table_name AS name FROM information_schema.tables "
-                    f"WHERE table_schema=current_schema() AND table_name IN ({placeholders})",
-                    tuple(sorted(required_tables)),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
-                    tuple(sorted(required_tables)),
-                ).fetchall()
-        names: set[str] = set()
-        for row in rows:
-            if isinstance(row, dict):
-                value = row.get('table_name') or row.get('name')
-            else:
-                try:
-                    value = row[0]
-                except Exception:  # validator: allow-wide-except
-                    value = None
-            if value:
-                names.add(str(value))
-        missing = sorted(required_tables - names)
-        if missing:
-            return False, 'schema_missing:' + ','.join(missing)
-        return True, None
-    except Exception as exc:  # validator: allow-wide-except
-        return False, f'schema:{exc}'
+    return schema_readiness()
 
 
 
@@ -226,7 +183,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         'schema_ready': schema_ok,
         'scheduler_ready': scheduler_ok,
         'webhook_ready': webhook_ok,
-        'required_tables': sorted(_READY_TABLES),
+        'required_tables': required_readiness_tables(),
         'db_engine': CONFIG.engine,
         'db_target': redacted_db_target(),
         'telegram_transport': telegram_transport_value,
@@ -258,24 +215,18 @@ async def start_health_runtime() -> HealthRuntime | None:
     enabled = (getattr(settings, 'HEALTHCHECK_ENABLED', True) or False)
     if not enabled:
         return None
-
+    host = getattr(settings, 'HEALTHCHECK_HOST', '127.0.0.1')
+    port = int(getattr(settings, 'HEALTHCHECK_PORT', 8082))
     app = web.Application()
     app.router.add_get('/health', _health)
-    app.router.add_get('/healthz', _health)
-    app.router.add_get('/ready', _ready)
     app.router.add_get('/readyz', _ready)
-
-    runner = web.AppRunner(app, access_log=None)
+    runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(
-        runner,
-        host=(settings.HEALTHCHECK_HOST or '127.0.0.1').strip(),
-        port=int(getattr(settings, 'HEALTHCHECK_PORT', 8082) or 8082),
-    )
-    await site.start()
-    log.info(
-        'Health runtime started on %s:%s',
-        settings.HEALTHCHECK_HOST,
-        settings.HEALTHCHECK_PORT,
-    )
-    return HealthRuntime(runner=runner, site=site)
+    try:
+        site = web.TCPSite(runner, host=host, port=port)
+        await site.start()
+        log.info('Health runtime started on %s:%s', host, port)
+        return HealthRuntime(runner=runner, site=site)
+    except Exception:  # validator: allow-wide-except
+        await runner.cleanup()
+        raise
