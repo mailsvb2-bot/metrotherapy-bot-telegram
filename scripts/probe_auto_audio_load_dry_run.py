@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.probe_auto_audio_dry_run import run_probe
+from services.schema import init_db
 
 DEFAULT_USERS = 150
 DEFAULT_CONCURRENCY = 16
@@ -27,13 +28,18 @@ def run_load_probe(*, users: int = DEFAULT_USERS, concurrency: int = DEFAULT_CON
     if users > 500:
         raise SystemExit("AUTO_AUDIO_LOAD_DRY_RUN_FAILED users limit is 500")
 
+    init_db()
+
     started = time.monotonic()
     user_ids = [BASE_SYNTHETIC_USER_ID - idx for idx in range(users)]
     rows_touched = 0
     failures: list[str] = []
 
     with ThreadPoolExecutor(max_workers=min(concurrency, users)) as pool:
-        futures = {pool.submit(run_probe, user_id=user_id, slot=slot, keep_artifacts=False): user_id for user_id in user_ids}
+        futures = {
+            pool.submit(run_probe, user_id=user_id, slot=slot, keep_artifacts=False, initialize_schema=False): user_id
+            for user_id in user_ids
+        }
         for future in as_completed(futures, timeout=max(60, users * 2)):
             user_id = futures[future]
             try:
