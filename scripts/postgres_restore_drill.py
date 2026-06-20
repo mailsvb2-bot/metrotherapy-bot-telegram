@@ -5,6 +5,7 @@ import gzip
 import os
 import subprocess
 from pathlib import Path
+from typing import TextIO
 from urllib.parse import unquote, urlparse
 
 
@@ -69,11 +70,23 @@ def latest_backup(*, backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path:
     return files[0]
 
 
+def _format_failure(cmd: list[str], output: str, returncode: int) -> str:
+    return (output.strip() or f"command {' '.join(cmd)} exited with {returncode}")
+
+
 def _run(cmd: list[str], *, input_text: str | None = None) -> str:
     proc = subprocess.run(cmd, check=False, capture_output=True, text=True, input=input_text)
     out = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
-        raise SystemExit(out.strip() or proc.returncode)
+        raise SystemExit(_format_failure(cmd, out, proc.returncode))
+    return out.strip()
+
+
+def _run_with_stdin(cmd: list[str], *, input_stream: TextIO) -> str:
+    proc = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True, stdin=input_stream)
+    out = proc.stderr or ""
+    if proc.returncode != 0:
+        raise SystemExit(_format_failure(cmd, out, proc.returncode))
     return out.strip()
 
 
@@ -88,10 +101,9 @@ def _restore_backup(*, dump_path: Path, target: str) -> None:
         _run(["pg_restore", "--clean", "--if-exists", "--no-owner", "--no-privileges", "--dbname", target, str(dump_path)])
         return
     if lower_name.endswith(".sql.gz"):
-        with gzip.open(dump_path, "rt", encoding="utf-8") as fh:
-            sql_text = fh.read()
         _reset_target_database(target)
-        _run(["psql", target, "--set", "ON_ERROR_STOP=1"], input_text=sql_text)
+        with gzip.open(dump_path, "rt", encoding="utf-8") as fh:
+            _run_with_stdin(["psql", target, "--set", "ON_ERROR_STOP=1"], input_stream=fh)
         return
     if lower_name.endswith(".sql"):
         _reset_target_database(target)
