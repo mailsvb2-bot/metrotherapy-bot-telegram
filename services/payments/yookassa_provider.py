@@ -86,13 +86,23 @@ def _minor(amount: dict[str, Any] | None) -> int:
     return int(value * 100)
 
 
+def _object(payload: dict[str, Any]) -> dict[str, Any]:
+    obj = payload.get("object")
+    return obj if isinstance(obj, dict) else {}
+
+
+def _amount(payload: dict[str, Any]) -> dict[str, Any]:
+    amount = payload.get("amount")
+    return amount if isinstance(amount, dict) else {}
+
+
 def _metadata(payload: dict[str, Any]) -> dict[str, Any]:
     meta = payload.get("metadata")
     return meta if isinstance(meta, dict) else {}
 
 
 def webhook_requires_provider_verification(payload: dict[str, Any]) -> bool:
-    obj = payload.get("object") if isinstance(payload.get("object"), dict) else {}
+    obj = _object(payload)
     status = str(obj.get("status") or payload.get("status") or "").strip().lower()
     event = str(payload.get("event") or "").strip().lower()
     meta = _metadata(obj)
@@ -113,7 +123,7 @@ def verify_yookassa_webhook_with_provider(payload: dict[str, Any]) -> None:
     if not provider_verification_required():
         return
 
-    obj = payload.get("object") if isinstance(payload.get("object"), dict) else {}
+    obj = _object(payload)
     payment_id = str(obj.get("id") or payload.get("id") or "").strip()
     provider = fetch_yookassa_payment(payment_id)
 
@@ -122,8 +132,8 @@ def verify_yookassa_webhook_with_provider(payload: dict[str, Any]) -> None:
     if str(provider.get("status") or "").strip().lower() != "succeeded":
         raise YooKassaProviderVerificationError("provider_status_not_succeeded")
 
-    webhook_amount = obj.get("amount") if isinstance(obj.get("amount"), dict) else {}
-    provider_amount = provider.get("amount") if isinstance(provider.get("amount"), dict) else {}
+    webhook_amount = _amount(obj)
+    provider_amount = _amount(provider)
     if _minor(webhook_amount) != _minor(provider_amount):
         raise YooKassaProviderVerificationError("provider_amount_mismatch")
     if str(webhook_amount.get("currency") or "RUB").upper() != str(provider_amount.get("currency") or "RUB").upper():
