@@ -27,20 +27,9 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      APP_ENV: prod
-      BOT_TOKEN: '0:CI'
-      ADMIN_IDS: '1'
-      VALIDATOR_RELEASE_MODE: '1'
-      VALIDATOR_GUARDRAILS_STRICT: '1'
-      VALIDATOR_SKIP_AUDIO: '1'
       PYTHONDONTWRITEBYTECODE: '1'
       METRO_DB_ENGINE: postgres
       DATABASE_URL: postgresql://metro:metro@127.0.0.1:5432/metrotherapy
-      YOOKASSA_SHOP_ID: smoke-shop
-      YOOKASSA_SECRET_KEY: smoke-secret
-      PAYMENT_CHECKOUT_SIGNING_KEY: smoke-checkout-signing-key
-      YOOKASSA_WEBHOOK_SECRET: smoke-webhook-secret
-      PAYMENT_PUBLIC_BASE_URL: 'https://metrotherapy.example'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,4 +46,15 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Postgres smoke no polling
+        env:
+          APP_ENV: prod
+          VALIDATOR_RELEASE_MODE: '1'
+          VALIDATOR_GUARDRAILS_STRICT: '1'
+          VALIDATOR_SKIP_AUDIO: '1'
+          ADMIN_IDS: '1'
+          YOOKASSA_SHOP_ID: smoke-shop
+          YOOKASSA_SECRET_KEY: smoke-key
+          PAYMENT_CHECKOUT_SIGNING_KEY: smoke-checkout-key
+          YOOKASSA_WEBHOOK_SECRET: smoke-webhook-key
+          PAYMENT_PUBLIC_BASE_URL: 'https://metrotherapy.example'
         run: python scripts/smoke.py
