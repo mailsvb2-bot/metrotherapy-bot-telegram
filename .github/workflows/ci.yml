@@ -31,8 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install pytest pytest-asyncio ruff
+          python -m pip install -r requirements-dev.txt
 
       - name: Release hygiene before checks
         run: python scripts/check_release_hygiene.py
@@ -60,6 +59,20 @@ jobs:
 
       - name: Ruff quality gate
         run: python scripts/check_ruff.py
+
+      - name: Payment hardening type gate
+        run: |
+          python -m mypy \
+            services/payments/checkout_intent.py \
+            services/payments/yookassa_provider.py \
+            services/payments/verified_reconciliation.py \
+            runtime/payment_http.py
+
+      - name: Payment hardening security gate
+        run: python -m bandit -q -c pyproject.toml services/payments runtime/payment_http.py
+
+      - name: Dependency audit gate
+        run: python -m pip_audit -r requirements.txt --progress-spinner off
 
       - name: Release hygiene after checks
         run: python scripts/check_release_hygiene.py

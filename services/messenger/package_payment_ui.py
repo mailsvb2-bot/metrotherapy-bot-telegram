@@ -4,6 +4,7 @@ import re
 import uuid
 from dataclasses import dataclass
 
+from services.payments.checkout_intent import add_checkout_intent_to_url
 from services.payments.public_url import payment_public_base_url
 from services.practice_token_contract import PracticePackage, public_practice_packages
 from services.practice_tokens import payment_url
@@ -64,18 +65,26 @@ def _package_link(
     external_user_id: str | None,
     gift_token: str = "",
 ) -> PackagePaymentLink:
+    raw_url = payment_url(
+        base_url,
+        user_id=int(user_id),
+        platform=platform,
+        external_user_id=external_user_id,
+        package_id=package.package_id,
+        gift_token=gift_token or None,
+    )
     return PackagePaymentLink(
         package_id=package.package_id,
         title=package.title,
         description=package.description,
         price_rub=package.price_rub,
         gift_token=gift_token,
-        url=payment_url(
-            base_url,
-            user_id=int(user_id),
-            platform=platform,
-            external_user_id=external_user_id,
+        url=add_checkout_intent_to_url(
+            raw_url,
+            user_id=(external_user_id or str(int(user_id))),
             package_id=package.package_id,
+            kind="tokens",
+            source=platform,
             gift_token=gift_token or None,
         ),
     )

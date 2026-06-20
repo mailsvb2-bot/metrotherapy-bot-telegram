@@ -7,7 +7,12 @@ import os
 
 from aiohttp import web
 
-from services.payments.reconciliation import record_yookassa_webhook
+from services.payments.checkout_intent import (
+    CheckoutIntentError,
+    checkout_intent_required,
+    verify_checkout_intent,
+)
+from services.payments.verified_reconciliation import record_verified_yookassa_webhook
 from services.payments.yookassa_checkout import create_yookassa_confirmation_url
 from services.practice_token_contract import package_by_id
 
@@ -131,11 +136,39 @@ def _user_id_error_response(user_id: str) -> web.Response | None:
     )
 
 
+def _checkout_intent_error_response(
+    *,
+    intent: str,
+    external_user_id: str,
+    package_id: str,
+    kind: str,
+    gift_token: str,
+) -> web.Response | None:
+    if not (checkout_intent_required() or str(intent or "").strip()):
+        return None
+    try:
+        verify_checkout_intent(
+            intent,
+            expected_user_id=external_user_id,
+            expected_package_id=package_id,
+            expected_kind=kind,
+            expected_gift_token=gift_token or None,
+        )
+    except CheckoutIntentError as exc:
+        return web.Response(
+            status=403,
+            text=f"Invalid or expired checkout intent: {exc}",
+            content_type="text/plain",
+        )
+    return None
+
+
 async def pay_yookassa_web(request: web.Request) -> web.Response:
     source = (request.query.get("source") or "unknown").strip()[:32]
     external_user_id = (request.query.get("user_id") or "").strip()[:64]
     package_id = (request.query.get("package_id") or "").strip()[:64]
     gift_token = (request.query.get("gift_token") or "").strip()[:80]
+    intent = (request.query.get("intent") or "").strip()
     kind = _normalize_payment_kind(request.query.get("kind"), package_id)
 
     legacy_error = _legacy_kind_error_response(kind)
@@ -149,6 +182,15 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
         package_error = _package_error_response(package_id)
         if package_error is not None:
             return package_error
+        intent_error = _checkout_intent_error_response(
+            intent=intent,
+            external_user_id=external_user_id,
+            package_id=package_id,
+            kind=kind,
+            gift_token=gift_token,
+        )
+        if intent_error is not None:
+            return intent_error
 
     try:
         confirmation_url = await asyncio.to_thread(
@@ -192,7 +234,7 @@ async def yookassa_reconciliation_webhook(request: web.Request) -> web.Response:
     if not isinstance(payload, dict):
         return web.json_response({"ok": False, "error": "bad_payload"}, status=400)
 
-    result = await asyncio.to_thread(record_yookassa_webhook, payload)
+    result = await asyncio.to_thread(record_verified_yookassa_webhook, payload)
     status = 200 if result.ok else 400
     return web.json_response(
         {

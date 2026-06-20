@@ -37,3 +37,19 @@ select = [
     "F822",
     "F823",
 ]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_configs = true
+no_implicit_optional = true
+check_untyped_defs = false
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "venv", "build", "dist", "data", "audio", "logs"]
+skips = [
+    "B101",  # assert is allowed in internal runtime guards/tests
+    "B110",  # try/except/pass is used by best-effort diagnostics and is separately reviewed
+    "B310",  # controlled urllib calls are already constrained to known provider/local URLs
+]

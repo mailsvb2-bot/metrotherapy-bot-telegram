@@ -135,27 +135,37 @@ def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
 
 
 
-def _live_health_scheduler_snapshot() -> dict[str, Any]:
-    """Return live scheduler facts from the running service when available.
-
-    Admin handlers execute this module inside the bot process and can trust the
-    in-process scheduler snapshot. The CLI release report, however, runs in a
-    short-lived helper process where the scheduler task is naturally absent.
-    In that case the local health endpoint is the authoritative live runtime
-    source, and a failure to reach it leaves the original in-process snapshot
-    unchanged.
-    """
-    url = os.getenv("METRO_HEALTH_URL", DEFAULT_HEALTH_URL)
-    try:
-        with urllib.request.urlopen(url, timeout=1.5) as response:  # noqa: S310 - local operator health URL
-            if int(getattr(response, "status", 0) or 0) != 200:
-                return {}
-            payload = json.loads(response.read().decode("utf-8"))
-    except (OSError, TimeoutError, ValueError, urllib.error.URLError, json.JSONDecodeError):
-        return {}
+def _read_health_payload(url: str) -> dict[str, Any]:
+    with urllib.request.urlopen(url, timeout=1.5) as response:  # noqa: S310 - local operator health URL
+        if int(getattr(response, "status", 0) or 0) != 200:
+            return {}
+        payload = json.loads(response.read().decode("utf-8"))
     if not isinstance(payload, dict) or not payload.get("ok"):
         return {}
     return payload
+
+
+
+def _runtime_health_scheduler_snapshot() -> dict[str, Any]:
+    """Return scheduler facts from the running service when available.
+
+    Admin handlers execute this module inside the bot process and can trust the
+    in-process scheduler snapshot. The CLI release report runs in a short-lived
+    helper process where the scheduler task is naturally absent. In that case
+    the local health endpoint is the authoritative runtime source, and a failure
+    to reach it leaves the original in-process snapshot unchanged.
+    """
+    url = os.getenv("METRO_HEALTH_URL", DEFAULT_HEALTH_URL)
+    try:
+        return _read_health_payload(url)
+    except urllib.error.URLError:
+        return {}
+    except TimeoutError:
+        return {}
+    except OSError:
+        return {}
+    except json.JSONDecodeError:
+        return {}
 
 
 
@@ -163,9 +173,9 @@ def _scheduler_snapshot_for_release_report() -> dict[str, Any]:
     scheduler = scheduler_health_snapshot()
     if bool(scheduler.get("scheduler_loop_task_running")):
         return scheduler
-    live = _live_health_scheduler_snapshot()
-    if bool(live.get("scheduler_loop_task_running")):
-        return live
+    runtime = _runtime_health_scheduler_snapshot()
+    if bool(runtime.get("scheduler_loop_task_running")):
+        return runtime
     return scheduler
 
 
