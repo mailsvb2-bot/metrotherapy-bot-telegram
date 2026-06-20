@@ -5,6 +5,7 @@ from services.db import schema as db_schema
 from services.schema_core import ensure_prod_tables
 from services.migrations.price_rub_migration_v1 import apply as _apply_price
 from services.migrations.scheduled_jobs_to_jobs_v1 import apply as _apply_sched
+from services.migrations.jobs_job_key_unique_v2 import apply as _apply_jobs_job_key_unique_v2
 from services.migrations.events_decision_tracking_v1 import apply as _apply_events
 from services.migrations.payments_decision_attribution_v1 import apply as _apply_pay_decision
 from services.migrations.user_channel_routing_v1 import apply as _apply_channel_routing
@@ -34,6 +35,7 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     ensure_prod_tables(conn)
     # Keep order deterministic.
     _apply_sched(conn)
+    _apply_jobs_job_key_unique_v2(conn)
     _apply_events(conn)
     _apply_pay_decision(conn)
     _apply_channel_routing(conn)
