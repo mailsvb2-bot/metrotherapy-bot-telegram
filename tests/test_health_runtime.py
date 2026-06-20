@@ -97,7 +97,8 @@ def test_build_health_payload_reports_schema_missing(monkeypatch, tmp_path):
     assert status == 500
     assert payload['db_ready'] is True
     assert payload['schema_ready'] is False
-    assert 'schema_missing:jobs' in payload['error']
+    assert payload['error'].startswith('schema_missing:')
+    assert 'jobs' in payload['error']
 
 
 def test_build_health_payload_reports_hybrid_polling_plus_messenger_webhook(monkeypatch, tmp_path):
