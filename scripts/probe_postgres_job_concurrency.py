@@ -1,12 +1,5 @@
 from __future__ import annotations
 
-"""Live-safe Postgres scheduler concurrency probe.
-
-The probe creates synthetic due jobs, claims only those jobs from several
-concurrent workers, and verifies that no synthetic job is claimed twice. It does
-not send Telegram messages and does not claim user jobs.
-"""
-
 import argparse
 import json
 import os
@@ -117,6 +110,17 @@ def _claim_worker(*, barrier: threading.Barrier, now_iso: str, limit: int, user_
     )
 
 
+def _finish_failure(*, run_id: str, keep_artifacts: bool, rows_touched: int, error: BaseException, key_prefix: str) -> None:
+    finish_probe_run(
+        run_id=run_id,
+        status="failed",
+        cleanup_status="kept" if keep_artifacts else "unknown",
+        rows_touched=rows_touched,
+        error=str(error),
+        evidence={"key_prefix": key_prefix},
+    )
+
+
 def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 24, keep_artifacts: bool = False) -> ProbeResult:
     if not CONFIG.uses_postgres:
         raise SystemExit("POSTGRES_JOB_CONCURRENCY_PROBE_FAILED active engine is not Postgres")
@@ -205,24 +209,22 @@ def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 2
         )
         return result
     except SystemExit as exc:
-        finish_probe_run(
-            run_id=run_id,
-            status="failed",
-            cleanup_status="kept" if keep_artifacts else "unknown",
-            rows_touched=rows_touched,
-            error=str(exc),
-            evidence={"key_prefix": key_prefix},
-        )
+        _finish_failure(run_id=run_id, keep_artifacts=keep_artifacts, rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
         raise
-    except (RuntimeError, TimeoutError, ValueError, OSError, threading.BrokenBarrierError) as exc:
-        finish_probe_run(
-            run_id=run_id,
-            status="failed",
-            cleanup_status="kept" if keep_artifacts else "unknown",
-            rows_touched=rows_touched,
-            error=str(exc),
-            evidence={"key_prefix": key_prefix},
-        )
+    except RuntimeError as exc:
+        _finish_failure(run_id=run_id, keep_artifacts=keep_artifacts, rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
+        raise
+    except TimeoutError as exc:
+        _finish_failure(run_id=run_id, keep_artifacts=keep_artifacts, rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
+        raise
+    except ValueError as exc:
+        _finish_failure(run_id=run_id, keep_artifacts=keep_artifacts, rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
+        raise
+    except OSError as exc:
+        _finish_failure(run_id=run_id, keep_artifacts=keep_artifacts, rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
+        raise
+    except threading.BrokenBarrierError as exc:
+        _finish_failure(run_id=run_id, keep_artifacts=keep_artifacts, rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
         raise
 
 
