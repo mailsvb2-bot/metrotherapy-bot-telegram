@@ -82,9 +82,16 @@ def _record_failure(*, run_id: str, rows_touched: int, keep_artifacts: bool, err
     )
 
 
-def run_probe(*, user_id: int = DEFAULT_PROBE_USER_ID, slot: str = DEFAULT_SLOT, keep_artifacts: bool = False) -> AutoAudioProbeResult:
+def run_probe(
+    *,
+    user_id: int = DEFAULT_PROBE_USER_ID,
+    slot: str = DEFAULT_SLOT,
+    keep_artifacts: bool = False,
+    initialize_schema: bool = True,
+) -> AutoAudioProbeResult:
     assert_synthetic_user_id(int(user_id))
-    init_db()
+    if initialize_schema:
+        init_db()
     slot = (slot or DEFAULT_SLOT).strip().lower()
     if slot not in {"morning", "evening"}:
         raise SystemExit("AUTO_AUDIO_DRY_RUN_FAILED slot must be morning or evening")
@@ -96,8 +103,6 @@ def run_probe(*, user_id: int = DEFAULT_PROBE_USER_ID, slot: str = DEFAULT_SLOT,
     try:
         rows_touched += _cleanup_probe_rows(user_id=int(user_id))
 
-        # A users row keeps channel/timezone preference code paths deterministic and
-        # mirrors real users without requiring a messenger identity.
         _ensure_probe_user(user_id=int(user_id))
         rows_touched += 1
 
