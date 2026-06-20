@@ -146,10 +146,8 @@ def erase_user_behavioral_data(user_id: int, *, reason: str = "user_request") ->
             if _table_exists(conn, "users"):
                 assignments = ", ".join(f"{column}=NULL" for column in _USER_PROFILE_COLUMNS)
                 # assignments is built only from the private allow-list above.
-                conn.execute(  # nosec B608
-                    f"UPDATE users SET {assignments}, demo_uses=0 WHERE user_id=?",
-                    (uid,),
-                )
+                sql = f"UPDATE users SET {assignments}, demo_uses=0 WHERE user_id=?"  # nosec B608
+                conn.execute(sql, (uid,))
                 anonymized = True
 
             for table in _BEHAVIORAL_USER_TABLES:
