@@ -61,9 +61,23 @@ def _env_bool(name: str, default: str = "0") -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on", "webhook"}
 
 
+def _truthy_env(name: str) -> bool:
+    return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on", "webhook"}
+
+
+def _first_env(*names: str) -> str:
+    for name in names:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 @dataclass
 class Settings:
     BOT_TOKEN: str = _env("BOT_TOKEN", "")
+    # Legacy Telegram Payments provider token. Kept for old local/manual flows only;
+    # production checkout is external YooKassa package checkout (runtime/payment_http.py).
     PAY_PROVIDER_TOKEN: str = _env("PAY_PROVIDER_TOKEN", "")
 
     # --- Multi-messenger routing ---
@@ -190,6 +204,16 @@ class Settings:
 settings = Settings()
 
 
+def _prod_payment_base_url() -> str:
+    return (
+        _first_env("MESSENGER_PUBLIC_BASE_URL")
+        or _first_env("PAYMENT_PUBLIC_BASE_URL")
+        or _first_env("PUBLIC_BASE_URL")
+        or str(settings.MESSENGER_PUBLIC_BASE_URL or "").strip()
+        or str(settings.TELEGRAM_WEBHOOK_PUBLIC_BASE_URL or "").strip()
+    ).rstrip("/")
+
+
 def _fail_fast_prod_config() -> None:
     """Fail fast in prod if critical env vars are missing or inconsistent.
 
@@ -203,10 +227,41 @@ def _fail_fast_prod_config() -> None:
     missing: list[str] = []
     if not (settings.BOT_TOKEN or '').strip():
         missing.append('BOT_TOKEN')
-    if not (settings.PAY_PROVIDER_TOKEN or '').strip():
-        missing.append('PAY_PROVIDER_TOKEN')
     if not (os.getenv('ADMIN_IDS') or os.getenv('ADMIN_ID') or '').strip():
         missing.append('ADMIN_IDS')
+
+    # Canonical production payment path: public YooKassa/package checkout.
+    # PAY_PROVIDER_TOKEN is intentionally not required here: Telegram invoice
+    # callbacks are legacy/disabled and must not keep production dependent on
+    # the old BotFather provider token.
+    if not _first_env('YOOKASSA_SHOP_ID'):
+        missing.append('YOOKASSA_SHOP_ID')
+    if not _first_env('YOOKASSA_SECRET_KEY'):
+        missing.append('YOOKASSA_SECRET_KEY')
+    if not _first_env('PAYMENT_CHECKOUT_SIGNING_KEY', 'CHECKOUT_SIGNING_KEY'):
+        missing.append('PAYMENT_CHECKOUT_SIGNING_KEY')
+    if not _first_env('YOOKASSA_WEBHOOK_SECRET', 'PAYMENT_WEBHOOK_SECRET', 'WEBHOOK_SECRET'):
+        missing.append('YOOKASSA_WEBHOOK_SECRET')
+
+    public_payment_base = _prod_payment_base_url()
+    if not public_payment_base:
+        missing.append('PAYMENT_PUBLIC_BASE_URL')
+    elif not public_payment_base.startswith('https://'):
+        raise SystemExit('Payment public base URL must start with https:// in prod')
+
+    dangerous_payment_overrides = [
+        'ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD',
+        'ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD',
+        'ALLOW_STATIC_PAYMENT_IDEMPOTENCE_KEY_IN_PROD',
+    ]
+    if not _truthy_env('PAYMENT_DANGEROUS_OVERRIDES_ALLOWED'):
+        enabled = [name for name in dangerous_payment_overrides if _truthy_env(name)]
+        if enabled:
+            raise SystemExit(
+                'Dangerous payment override(s) are forbidden in prod: '
+                + ', '.join(enabled)
+                + '. Set PAYMENT_DANGEROUS_OVERRIDES_ALLOWED=1 only for a documented emergency drill.'
+            )
 
     telegram_webhook = (settings.TELEGRAM_TRANSPORT == 'webhook') or bool(settings.TELEGRAM_WEBHOOK_ENABLED)
     if telegram_webhook:
