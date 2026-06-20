@@ -8,7 +8,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,7 @@ from services.schema import init_db
 
 PROBE_TYPE = "postgres_job_concurrency_probe"
 DEFAULT_USER_ID = -910_000_301
+LOCK_TTL_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -71,7 +72,20 @@ def _cleanup(*, user_id: int, key_prefix: str) -> int:
     return touched
 
 
-def _claim_synthetic_jobs(*, now_iso: str, limit: int, token: str, user_id: int, key_prefix: str) -> list[int]:
+def _stale_before_iso(*, now_iso: str) -> str:
+    now_dt = datetime.fromisoformat(str(now_iso))
+    return (now_dt - timedelta(seconds=LOCK_TTL_SECONDS)).replace(microsecond=0).isoformat()
+
+
+def _claim_synthetic_jobs(
+    *,
+    now_iso: str,
+    stale_before_iso: str,
+    limit: int,
+    token: str,
+    user_id: int,
+    key_prefix: str,
+) -> list[int]:
     with db() as conn:
         rows = conn.execute(
             """
@@ -94,7 +108,7 @@ def _claim_synthetic_jobs(*, now_iso: str, limit: int, token: str, user_id: int,
             WHERE jobs.id = due.id
             RETURNING jobs.id
             """.strip(),
-            (int(user_id), PROBE_TYPE, f"{key_prefix}%", now_iso, now_iso, int(limit), now_iso, token),
+            (int(user_id), PROBE_TYPE, f"{key_prefix}%", now_iso, stale_before_iso, int(limit), now_iso, token),
         ).fetchall()
     return [int(row["id"] if hasattr(row, "keys") else row[0]) for row in rows]
 
@@ -103,6 +117,7 @@ def _claim_worker(*, barrier: threading.Barrier, now_iso: str, limit: int, user_
     barrier.wait(timeout=10)
     return _claim_synthetic_jobs(
         now_iso=now_iso,
+        stale_before_iso=_stale_before_iso(now_iso=now_iso),
         limit=int(limit),
         token=uuid.uuid4().hex,
         user_id=int(user_id),
@@ -139,7 +154,7 @@ def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 2
         probe_type=PROBE_TYPE,
         user_id=int(user_id),
         run_id=run_id,
-        evidence={"workers": int(workers), "jobs": int(jobs), "key_prefix": key_prefix},
+        evidence={"workers": int(workers), "jobs": int(jobs), "key_prefix": key_prefix, "lock_ttl_sec": LOCK_TTL_SECONDS},
     )
     rows_touched = 0
     try:
