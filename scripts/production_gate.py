@@ -1,23 +1,6 @@
 from __future__ import annotations
 
-"""Strict production readiness gate.
-
-This wrapper intentionally has no skip flags. It is the stop-condition command for
-calling a deployment production-ready:
-
-- production runtime contract, including Telegram polling-only transport;
-- full pytest through post_deploy_verify.py;
-- strict validator + smoke;
-- storage ambiguity audit;
-- disaster recovery GREEN status;
-- real Postgres restore drill against a non-production restore target;
-- scheduler, native Postgres concurrency, auto-audio, payment reconciliation and synthetic journey probes;
-- live Telegram Bot API smoke;
-- local health/readiness probes.
-
-It does not send Telegram messages. It requires a safe restore target via
-METRO_RESTORE_DRILL_DATABASE_URL or RESTORE_DATABASE_URL.
-"""
+"""Strict production readiness gate."""
 
 import argparse
 import os
@@ -46,15 +29,12 @@ def main() -> int:
     args = parser.parse_args()
 
     if not _restore_target_configured():
-        raise SystemExit(
-            "PRODUCTION_GATE_FAILED restore target is required: "
-            "set METRO_RESTORE_DRILL_DATABASE_URL or RESTORE_DATABASE_URL to a safe non-production database"
-        )
+        raise SystemExit("PRODUCTION_GATE_FAILED restore target is required")
 
     print("==> runtime contract")
     _run([sys.executable, "scripts/runtime_contract.py"])
 
-    cmd = [
+    _run([
         sys.executable,
         "scripts/post_deploy_verify.py",
         "--env-file",
@@ -65,11 +45,13 @@ def main() -> int:
         str(args.ready_url),
         "--require-disaster-recovery-green",
         "--restore-drill",
-    ]
-    _run(cmd)
+    ])
 
     print("==> postgres job concurrency")
     _run([sys.executable, "scripts/probe_postgres_job_concurrency.py"])
+
+    print("==> auto-audio load dry-run")
+    _run([sys.executable, "scripts/probe_auto_audio_load_dry_run.py"])
 
     print("PRODUCTION_GATE_OK")
     return 0
