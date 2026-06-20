@@ -9,6 +9,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from services.admin import is_platform_admin
+from services.release_contract_report import format_runtime_contract_report
 from services.release_control_report import format_release_control_report
 
 router = Router()
@@ -47,7 +48,7 @@ async def release_control_cmd(message: Message) -> None:
         await _answer(message, "Недоступно.")
         return
     try:
-        report = format_release_control_report(limit=25)
+        report = format_release_control_report(limit=25) + "\n\n" + format_runtime_contract_report()
     except sqlite3.Error:
         logging.getLogger(__name__).exception("admin release: database error")
         await _answer(message, "🛑 Release/control отчёт недоступен: ошибка БД.")
