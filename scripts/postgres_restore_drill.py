@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import gzip
 import os
 import subprocess
 from pathlib import Path
-from typing import TextIO
 from urllib.parse import unquote, urlparse
 
 
@@ -82,12 +80,20 @@ def _run(cmd: list[str], *, input_text: str | None = None) -> str:
     return out.strip()
 
 
-def _run_with_stdin(cmd: list[str], *, input_stream: TextIO) -> str:
-    proc = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True, stdin=input_stream)
-    out = proc.stderr or ""
-    if proc.returncode != 0:
-        raise SystemExit(_format_failure(cmd, out, proc.returncode))
-    return out.strip()
+def _run_pipeline(producer_cmd: list[str], consumer_cmd: list[str]) -> str:
+    producer = subprocess.Popen(producer_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert producer.stdout is not None
+    consumer = subprocess.Popen(consumer_cmd, stdin=producer.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+    producer.stdout.close()
+    consumer_stdout, consumer_stderr = consumer.communicate()
+    producer_stderr = producer.stderr.read() if producer.stderr else b""
+    producer_returncode = producer.wait()
+    output = b"".join(part for part in (consumer_stdout, consumer_stderr, producer_stderr) if part).decode("utf-8", errors="replace")
+    if producer_returncode != 0:
+        raise SystemExit(_format_failure(producer_cmd, output, producer_returncode))
+    if consumer.returncode != 0:
+        raise SystemExit(_format_failure(consumer_cmd, output, consumer.returncode))
+    return output.strip()
 
 
 def _reset_target_database(target: str) -> None:
@@ -102,8 +108,10 @@ def _restore_backup(*, dump_path: Path, target: str) -> None:
         return
     if lower_name.endswith(".sql.gz"):
         _reset_target_database(target)
-        with gzip.open(dump_path, "rt", encoding="utf-8") as fh:
-            _run_with_stdin(["psql", target, "--set", "ON_ERROR_STOP=1"], input_stream=fh)
+        _run_pipeline(
+            ["gzip", "-dc", str(dump_path)],
+            ["psql", target, "--set", "ON_ERROR_STOP=1"],
+        )
         return
     if lower_name.endswith(".sql"):
         _reset_target_database(target)
