@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+
 from services.db import get_connection
 from services.db.runtime import CONFIG
 
@@ -44,7 +46,7 @@ def schema_readiness() -> tuple[bool, str | None]:
             else:
                 try:
                     value = row[0]
-                except Exception:  # validator: allow-wide-except
+                except (IndexError, KeyError, TypeError):
                     value = None
             if value:
                 names.add(str(value))
@@ -52,5 +54,5 @@ def schema_readiness() -> tuple[bool, str | None]:
         if missing:
             return False, 'schema_missing:' + ','.join(missing)
         return True, None
-    except Exception as exc:  # validator: allow-wide-except
+    except (sqlite3.Error, OSError, RuntimeError, TypeError, ValueError, AttributeError) as exc:
         return False, f'schema:{exc}'
