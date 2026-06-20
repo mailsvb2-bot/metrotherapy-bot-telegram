@@ -9,11 +9,11 @@ from typing import Any
 from aiohttp import web
 
 from config.settings import settings
-from runtime.telegram_transport import telegram_transport
 from core.paths import DB_PATH, ROOT
+from runtime.telegram_transport import telegram_transport
 from services.ai.policy import ai_policy_snapshot
-from services.db.runtime import CONFIG, redacted_db_target
 from services.db import get_connection
+from services.db.runtime import CONFIG, redacted_db_target
 from services.db.schema.readiness import required_readiness_tables, schema_readiness
 from services.scheduler import scheduler_health_snapshot
 
@@ -29,8 +29,7 @@ class HealthRuntime:
         await self.runner.cleanup()
 
 
-
-def _scheduler_snapshot() -> dict[str, bool | int]:
+def _scheduler_snapshot() -> dict[str, Any]:
     try:
         return scheduler_health_snapshot()
     except (ImportError, AttributeError, RuntimeError):
@@ -61,15 +60,7 @@ def _telegram_webhook_configured() -> bool:
 
 
 def _webhook_configured() -> bool:
-    """Return whether any local webhook ingress runtime should be up.
-
-    Kept as the backward-compatible aggregate health helper. The health payload
-    now also exposes Telegram and messenger webhook states separately so the
-    production-safe hybrid mode is not ambiguous:
-    Telegram polling + MAX/VK webhook runtime.
-    """
     return bool(_messenger_webhook_configured() or _telegram_webhook_configured())
-
 
 
 def _db_ready() -> tuple[bool, str | None]:
@@ -85,16 +76,8 @@ def _schema_ready() -> tuple[bool, str | None]:
     return schema_readiness()
 
 
-
 def _storage_health_fields() -> dict[str, Any]:
-    """Expose active storage unambiguously in health output.
-
-    In Postgres mode, the historical SQLite file path is still useful as a
-    migration/legacy signal, but it must not look like the active database.
-    """
-    fields: dict[str, Any] = {
-        'root_exists': False,
-    }
+    fields: dict[str, Any] = {'root_exists': False}
     try:
         fields['root_exists'] = ROOT.exists()
         if CONFIG.uses_postgres:
@@ -114,13 +97,7 @@ def _storage_health_fields() -> dict[str, Any]:
     return fields
 
 
-
 def build_health_payload() -> tuple[dict[str, Any], int]:
-    """Liveness probe: process is up and can report diagnostics.
-
-    This endpoint intentionally stays lightweight and should not fail because a
-    scheduler/webhook dependency is degraded. Use /readyz for deployment gating.
-    """
     scheduler = _scheduler_snapshot()
     telegram_transport_value = _telegram_transport()
     messenger_webhook_enabled = _messenger_webhook_configured()
@@ -144,9 +121,7 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
     return details, 200
 
 
-
 def build_readiness_payload() -> tuple[dict[str, Any], int]:
-    """Readiness probe: dependencies required for serving users are healthy."""
     db_ok, db_error = _db_ready()
     schema_ok, schema_error = _schema_ready()
     scheduler = _scheduler_snapshot()
@@ -155,15 +130,10 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
     telegram_webhook_enabled = telegram_transport_value == 'webhook'
     webhook_runtime_enabled = bool(messenger_webhook_enabled or telegram_webhook_enabled)
     app_env = (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower()
-
     scheduler_ok = bool(scheduler.get('scheduler_loop_task_running'))
-    # In webhook mode, the process will only reach this health runtime after the
-    # ingress runtime has started successfully, so configured == enabled here is
-    # the deployment contract we can assert from this isolated probe.
     webhook_ok = True
     if app_env in {'prod', 'production'} and telegram_webhook_enabled:
         webhook_ok = webhook_runtime_enabled
-
     errors: list[str] = []
     if db_error is not None:
         errors.append(db_error)
@@ -173,7 +143,6 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         errors.append('scheduler:not_running')
     if not webhook_ok:
         errors.append('webhook:not_ready')
-
     ready = bool(db_ok and schema_ok and scheduler_ok and webhook_ok)
     details: dict[str, Any] = {
         'ok': ready,
@@ -219,6 +188,7 @@ async def start_health_runtime() -> HealthRuntime | None:
     port = int(getattr(settings, 'HEALTHCHECK_PORT', 8082))
     app = web.Application()
     app.router.add_get('/health', _health)
+    app.router.add_get('/healthz', _health)
     app.router.add_get('/readyz', _ready)
     runner = web.AppRunner(app)
     await runner.setup()
