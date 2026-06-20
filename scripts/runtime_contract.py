@@ -22,6 +22,18 @@ def _value(name: str) -> str:
     return (os.getenv(name) or "").strip()
 
 
+def _first_value(*names: str) -> str:
+    for name in names:
+        value = _value(name)
+        if value:
+            return value
+    return ""
+
+
+def _payment_public_base_url() -> str:
+    return _first_value("MESSENGER_PUBLIC_BASE_URL", "PAYMENT_PUBLIC_BASE_URL", "PUBLIC_BASE_URL").rstrip("/")
+
+
 def _is_abs_outside_project(raw: str) -> bool:
     if not raw:
         return False
@@ -50,9 +62,22 @@ def run() -> tuple[list[str], list[str]]:
         errors.append("TELEGRAM_WEBHOOK_ENABLED must be 0; Telegram must not be switched to webhook")
 
     if prod:
-        for name in ("APP_ENV", "BOT_TOKEN", "PAY_PROVIDER_TOKEN", "ADMIN_IDS"):
+        for name in ("APP_ENV", "BOT_TOKEN", "ADMIN_IDS"):
             if not _value(name):
                 errors.append(f"{name} is required in prod")
+
+        # Canonical payment path is external YooKassa/package checkout. Legacy
+        # Telegram invoice provider token must not be a production dependency.
+        for name in ("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY", "PAYMENT_CHECKOUT_SIGNING_KEY"):
+            if not _value(name):
+                errors.append(f"{name} is required in prod")
+        if not _first_value("YOOKASSA_WEBHOOK_SECRET", "PAYMENT_WEBHOOK_SECRET", "WEBHOOK_SECRET"):
+            errors.append("YOOKASSA_WEBHOOK_SECRET is required in prod")
+        payment_base = _payment_public_base_url()
+        if not payment_base:
+            errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required in prod")
+        elif not payment_base.startswith("https://"):
+            errors.append("payment public base URL must start with https:// in prod")
 
         db_path = _value("METRO_DB_PATH")
         log_path = _value("LOG_PATH")

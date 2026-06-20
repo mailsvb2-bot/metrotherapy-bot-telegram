@@ -8,7 +8,7 @@ from services.schema_core import _cols, _add_col
 def ensure(c: sqlite3.Connection) -> None:
     """Ensure tables/columns/indexes exist.
 
-    Sections: ENGINE STATE (v7.0): coarse locks / flags for idempotent scheduler & engine, --- Support-AI (сопровождение) ---, --- SLA метрики (UX guard) ---, --- История изменения цен тарифов ---, --- Гранулярные права админов (задаёт супер-админ) ---, Payments idempotency (Telegram successful_payment can be delivered more than once)
+    Sections: ENGINE STATE (v7.0): coarse locks / flags for idempotent scheduler & engine, --- Support-AI (сопровождение) ---, --- SLA метрики (UX guard) ---, --- История изменения цен тарифов ---, --- Гранулярные права админов (задаёт супер-админ) ---, Payments idempotency (Telegram successful_payment can be delivered more than once), Privacy erasure audit log
     """
     # ENGINE STATE (v7.0): coarse locks / flags for idempotent scheduler & engine
     c.execute(
@@ -110,9 +110,6 @@ def ensure(c: sqlite3.Connection) -> None:
         """
     )
 
-
-
-
     # Payments idempotency (Telegram successful_payment can be delivered more than once)
     c.execute(
         """
@@ -128,3 +125,17 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
+
+    # Privacy erasure audit log. DDL belongs in schema, not runtime privacy services.
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS privacy_erasure_log(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            erased_at_utc TEXT NOT NULL,
+            reason TEXT,
+            retained_tables TEXT
+        )
+        """
+    )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_privacy_erasure_user ON privacy_erasure_log(user_id, erased_at_utc)")

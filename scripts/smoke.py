@@ -66,6 +66,20 @@ def _cleanup_temp_db(path: Path) -> None:
             pass
 
 
+def _set_smoke_prod_payment_env() -> None:
+    """Provide harmless prod-guardrail values for hermetic smoke checks.
+
+    The real production contract requires external YooKassa/package checkout
+    settings. Smoke does not call provider APIs, but it imports the production
+    config path, so defaults must satisfy the same fail-fast shape.
+    """
+    os.environ.setdefault('YOOKASSA_SHOP_ID', 'smoke-shop')
+    os.environ.setdefault('YOOKASSA_SECRET_KEY', 'smoke-secret')
+    os.environ.setdefault('PAYMENT_CHECKOUT_SIGNING_KEY', 'smoke-checkout-signing-key')
+    os.environ.setdefault('YOOKASSA_WEBHOOK_SECRET', 'smoke-webhook-secret')
+    os.environ.setdefault('PAYMENT_PUBLIC_BASE_URL', 'https://metrotherapy.example')
+
+
 def main() -> int:
     os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
     sys.dont_write_bytecode = True
@@ -80,6 +94,7 @@ def main() -> int:
     # The production settings contract requires an admin identity, so provide a
     # harmless dummy value for this hermetic no-network smoke run.
     os.environ.setdefault('ADMIN_IDS', '1')
+    _set_smoke_prod_payment_env()
 
     ok = compileall.compile_dir(str(ROOT), quiet=1)
     if not ok:
