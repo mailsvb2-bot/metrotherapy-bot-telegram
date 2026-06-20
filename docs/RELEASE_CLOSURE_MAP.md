@@ -16,6 +16,7 @@ This file tracks the production-readiness topics that must stay closed after the
 - Legacy SQLite cleanup has a conservative archive runbook and operator tool.
 - Scheduler job claiming uses a native Postgres concurrent claim path.
 - Production gate includes a Postgres job concurrency probe.
+- Production gate includes a no-send auto-audio load dry-run for 150 synthetic users by default.
 - Backup freshness is visible and can turn DR status red when backups are stale.
 - Admin release report includes a runtime contract summary.
 
@@ -29,5 +30,4 @@ This file tracks the production-readiness topics that must stay closed after the
 
 - Expand native Postgres paths beyond scheduler claim into more payment and delivery critical paths.
 - Add controlled real-provider payment proof for YooKassa outside synthetic probes.
-- Add a dedicated load test for 120 to 150 simultaneous audio consumers.
 - Add alerting for stale backups, failed probes, stale locks, payment problems and scheduler errors.
