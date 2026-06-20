@@ -4,25 +4,24 @@ import asyncio
 import logging
 import sqlite3
 
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, LabeledPrice, InlineKeyboardButton, ReplyKeyboardRemove
+from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, ReplyKeyboardRemove
 
-from config.settings import settings
 from keyboards.inline import kb_main
-from services.plans import get_plan_by_id
-from services.gifts import create_gift, mark_gift_paid
-from services.payments.ui import kb, kb_back, kb_gift_tariffs, pick_user_keyboard
-from services.payments.common import yookassa_provider_data_receipt, invoice_link_kb
-from services.pending import set_pending, peek_pending, pop_pending
 from services.gift_store import set_target, get_target, clear_target
+from services.payments.ui import kb, kb_back, kb_gift_tariffs, pick_user_keyboard
+from services.pending import set_pending, peek_pending, pop_pending
 from services.events import log_event
-from core.runtime.sovereignty.enforcement import get_current_token
 from services.promo_texts import get_gift_template
 from services.messenger.links import build_gift_share_targets
 
 
 logger = logging.getLogger(__name__)
+
+_LEGACY_GIFT_PAYMENT_DISABLED = (
+    "Этот старый способ оплаты подарка отключён. Откройте подарки заново и выберите актуальный пакет."
+)
 
 
 def _gift_share_keyboard(code: str, text: str):
@@ -136,135 +135,9 @@ async def gift_users_shared(message: Message, state: FSMContext) -> None:
 
 
 async def gift_buy(cb: CallbackQuery) -> None:
-
-    try:
-        _, _, plan_id_s, expected_s = (cb.data or "").split(":", 3)
-        plan_id = int(plan_id_s)
-        expected_price = int(expected_s)
-    except (ValueError, AttributeError):
-        logger.exception("gift_buy: bad callback")
-        await cb.message.edit_text("❌ Некорректный тариф.", reply_markup=kb_back("gift:menu"))
-        return
-
-    plan = get_plan_by_id(plan_id)
-    if not plan or not plan.get("is_active"):
-        await cb.message.edit_text("❌ Тариф не найден.", reply_markup=kb_back("gift:menu"))
-        return
-
-    current_price = int(plan.get("price") or 0)
-    if current_price <= 0:
-        await cb.message.edit_text("⚠️ Цена не найдена. Проверьте тарифы.", reply_markup=kb_back("gift:menu"))
-        return
-
-    if current_price != expected_price:
-        await cb.message.edit_text(
-            "⚠️ Цена обновилась. Выберите тариф ещё раз:",
-            reply_markup=kb_gift_tariffs(back_cb="gift:menu"),
-        )
-        return
-
-    scope = str(plan["scope"])
-    days = int(plan["days"])
-    title = str(plan["title"])
-
-    token = (settings.PAY_PROVIDER_TOKEN or "").strip()
-    if not token:
-        await cb.message.answer("❌ Не задан PAY_PROVIDER_TOKEN в .env.", reply_markup=kb_back("menu:main"))
-        return
-
-    tgt = get_target(int(cb.from_user.id))
-    recipient_id = int(tgt.to_id) if tgt else None
-
-    code = create_gift(int(plan.get('plan_id') or plan.get('id') or 0), cb.from_user.id, recipient_id=recipient_id)
-    payload = f"gift:{code}"
-    tok = get_current_token()
-    if tok is not None:
-        payload = f"{payload}|d={tok.decision_id}|c={tok.nonce}"
-
-    log_event(cb.from_user.id, "invoice_created", {
-        "type": "gift",
-        "scope": scope,
-        "days": days,
-        "price": int(current_price),
-        "code": code,
-        "to_id": recipient_id,
-    })
-    log_event(cb.from_user.id, "gift_invoice_created", {
-        "scope": scope,
-        "days": days,
-        "price": int(current_price),
-        "code": code,
-        "to_id": recipient_id,
-        "mode": "direct_target" if recipient_id else "universal_link",
-    })
-
-    price_rub = int(current_price)
-    if price_rub >= 100000 and price_rub % 100 == 0:
-        price_rub = price_rub // 100
-
-    amount = price_rub * 100
-    if amount <= 0 or amount > 2_147_483_647:
-        await cb.message.answer(
-            "❌ Невалидная сумма для платежа.\n\n"
-            f"Цена (руб): {price_rub}\n"
-            f"Сумма (коп): {amount}\n\n"
-            "Проверьте цену тарифа в админке.",
-            reply_markup=kb_back("menu:main"),
-        )
-        return
-
-    provider_data = yookassa_provider_data_receipt(f"Подарок: {title}", price_rub)
-    invoice_kwargs = dict(
-        title="Подарок: подписка «Метротерапия»",
-        description="Подписка считается по рабочим касаниям, а не по календарю.",
-        provider_token=token,
-        start_parameter="metrotherapy_gift",
-        currency="RUB",
-        prices=[LabeledPrice(label=f"Подарок: {title}", amount=amount)],
-        payload=payload,
-        need_email=True,
-        send_email_to_provider=True,
-        provider_data=provider_data,
-    )
-
-    logger.info("gift_buy: invoice requested", extra={"user_id": cb.from_user.id, "plan_id": int(plan_id), "amount": amount})
-    try:
-        await cb.message.answer_invoice(**invoice_kwargs)
-        return
-    except TelegramBadRequest as e:
-        msg = str(e)
-        if "CURRENCY_TOTAL_AMOUNT_INVALID" in msg:
-            await cb.message.answer(
-                "❌ Ошибка платежа: CURRENCY_TOTAL_AMOUNT_INVALID\n\n"
-                f"Подарок: {title}\n"
-                f"Цена (руб): {price_rub}\n"
-                f"Сумма (коп): {amount}\n\n"
-                "Проверьте, что провайдер из @BotFather → Payments поддерживает RUB, "
-                "и что сумма не ниже минимальной для провайдера.",
-                reply_markup=kb_back("menu:main"),
-            )
-            return
-        logger.exception("gift_buy: answer_invoice failed")
-    except TelegramAPIError:
-        logger.exception("gift_buy: answer_invoice failed unexpectedly")
-
-    try:
-        link = await cb.bot.create_invoice_link(**invoice_kwargs)
-    except TelegramBadRequest as e:
-        await cb.message.answer(f"❌ Ошибка платежа: {e}", reply_markup=kb_back("menu:main"))
-        return
-    except TelegramAPIError:
-        logger.exception("gift_buy: create_invoice_link failed")
-        await cb.message.answer(
-            "❌ Не удалось открыть оплату. Проверьте PAY_PROVIDER_TOKEN и настройки провайдера в @BotFather → Payments.",
-            reply_markup=kb_back("menu:main"),
-        )
-        return
-
-    await cb.message.answer(
-        "Платёжное окно не открылось автоматически. Откройте оплату по кнопке ниже:",
-        reply_markup=invoice_link_kb(link, back_cb="gift:menu"),
-    )
+    """Legacy Telegram invoice gift callback: intentionally disabled."""
+    log_event(int(cb.from_user.id), "legacy_payment_callback_blocked", {"stage": "gift_buy"})
+    await cb.message.answer(_LEGACY_GIFT_PAYMENT_DISABLED, reply_markup=kb_back("gift:menu"))
 
 
 async def deliver_gift_message(message: Message, code: str) -> None:
