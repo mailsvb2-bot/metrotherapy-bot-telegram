@@ -154,17 +154,6 @@ def erase_user_behavioral_data(user_id: int, *, reason: str = "user_request") ->
                 deleted[table] = _delete_user_rows(conn, table, uid)
 
             conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS privacy_erasure_log(
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    erased_at_utc TEXT NOT NULL,
-                    reason TEXT,
-                    retained_tables TEXT
-                )
-                """.strip()
-            )
-            conn.execute(
                 "INSERT INTO privacy_erasure_log(user_id, erased_at_utc, reason, retained_tables) VALUES(?,?,?,?)",
                 (uid, _utc_now_iso(), str(reason or "user_request"), json.dumps(_FINANCIAL_RETAINED_TABLES)),
             )
