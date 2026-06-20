@@ -5,6 +5,7 @@ from __future__ import annotations
 This wrapper intentionally has no skip flags. It is the stop-condition command for
 calling a deployment production-ready:
 
+- production runtime contract, including Telegram polling-only transport;
 - full pytest through post_deploy_verify.py;
 - strict validator + smoke;
 - storage ambiguity audit;
@@ -31,6 +32,12 @@ def _restore_target_configured() -> bool:
     return bool((os.getenv("METRO_RESTORE_DRILL_DATABASE_URL") or os.getenv("RESTORE_DATABASE_URL") or "").strip())
 
 
+def _run(cmd: list[str]) -> None:
+    proc = subprocess.run(cmd, cwd=str(ROOT), text=True, check=False)
+    if proc.returncode != 0:
+        raise SystemExit(proc.returncode)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the non-bypassable production readiness gate")
     parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", "/etc/metrotherapy/metrotherapy.env"))
@@ -44,6 +51,9 @@ def main() -> int:
             "set METRO_RESTORE_DRILL_DATABASE_URL or RESTORE_DATABASE_URL to a safe non-production database"
         )
 
+    print("==> runtime contract")
+    _run([sys.executable, "scripts/runtime_contract.py"])
+
     cmd = [
         sys.executable,
         "scripts/post_deploy_verify.py",
@@ -56,9 +66,7 @@ def main() -> int:
         "--require-disaster-recovery-green",
         "--restore-drill",
     ]
-    proc = subprocess.run(cmd, cwd=str(ROOT), text=True, check=False)
-    if proc.returncode != 0:
-        raise SystemExit(proc.returncode)
+    _run(cmd)
     print("PRODUCTION_GATE_OK")
     return 0
 
