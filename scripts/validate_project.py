@@ -22,13 +22,17 @@ if os.getenv("VALIDATOR_RELEASE_MODE") == "1":
     os.environ.setdefault("STORE_LOG_PATH", str(_tmp_dir / "metro_validator_store.log"))
 
 
-# In release validation mode, use dummy secrets/identity for import-time prod
-# fail-fast checks. This keeps preflight hermetic while still forcing real
-# deployments to provide their own env vars.
+# In release validation mode, use dummy identity/payment contract values for
+# import-time prod fail-fast checks. This keeps preflight hermetic while still
+# forcing real deployments to provide their own env vars.
 if os.getenv("VALIDATOR_RELEASE_MODE") == "1":
     os.environ.setdefault("BOT_TOKEN", "000000:VALIDATION")
-    os.environ.setdefault("PAY_PROVIDER_TOKEN", "000000:VALIDATION")
     os.environ.setdefault("ADMIN_IDS", "1")
+    os.environ.setdefault("YOOKASSA_SHOP_ID", "validation-shop")
+    os.environ.setdefault("YOOKASSA_SECRET_KEY", "validation-key")
+    os.environ.setdefault("PAYMENT_CHECKOUT_SIGNING_KEY", "validation-checkout-key")
+    os.environ.setdefault("YOOKASSA_WEBHOOK_SECRET", "validation-webhook-key")
+    os.environ.setdefault("PAYMENT_PUBLIC_BASE_URL", "https://metrotherapy.example")
 
 # In release validation mode, prevent creation of __pycache__ / .pyc during imports.
 if os.getenv("VALIDATOR_RELEASE_MODE") == "1":
