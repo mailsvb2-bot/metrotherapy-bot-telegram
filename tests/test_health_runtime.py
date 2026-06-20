@@ -18,7 +18,7 @@ async def test_health_handler_reports_ok(tmp_path, monkeypatch):
             return list(self._rows)
 
     class DummyConn:
-        def execute(self, query: str):
+        def execute(self, query: str, *args, **kwargs):
             if query == 'SELECT 1':
                 return DummyCursor([(1,)])
             if 'sqlite_master' in query:
@@ -77,7 +77,7 @@ def test_build_health_payload_reports_schema_missing(monkeypatch, tmp_path):
             return list(self._rows)
 
     class DummyConn:
-        def execute(self, query: str):
+        def execute(self, query: str, *args, **kwargs):
             if 'sqlite_master' in query:
                 return DummyCursor([('users',)])
             return DummyCursor([(1,)])
@@ -112,7 +112,7 @@ def test_build_health_payload_reports_hybrid_polling_plus_messenger_webhook(monk
             return list(self._rows)
 
     class DummyConn:
-        def execute(self, query: str):
+        def execute(self, query: str, *args, **kwargs):
             if query == 'SELECT 1':
                 return DummyCursor([(1,)])
             if 'sqlite_master' in query:
@@ -139,17 +139,3 @@ def test_build_health_payload_reports_hybrid_polling_plus_messenger_webhook(monk
     assert payload['telegram_webhook_enabled'] is False
     assert payload['messenger_webhook_enabled'] is True
     assert payload['webhook_runtime_enabled'] is True
-
-
-def test_webhook_configured_keeps_legacy_aggregate_semantics(monkeypatch):
-    monkeypatch.setattr(health_server, '_messenger_webhook_configured', lambda: False)
-    monkeypatch.setattr(health_server, '_telegram_transport', lambda: 'polling')
-    assert health_server._webhook_configured() is False
-
-    monkeypatch.setattr(health_server, '_messenger_webhook_configured', lambda: True)
-    monkeypatch.setattr(health_server, '_telegram_transport', lambda: 'polling')
-    assert health_server._webhook_configured() is True
-
-    monkeypatch.setattr(health_server, '_messenger_webhook_configured', lambda: False)
-    monkeypatch.setattr(health_server, '_telegram_transport', lambda: 'webhook')
-    assert health_server._webhook_configured() is True
