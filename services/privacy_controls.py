@@ -96,7 +96,8 @@ def _delete_user_rows(conn: Any, table: str, user_id: int) -> int:
     if not _table_exists(conn, table):
         return 0
     try:
-        cur = conn.execute(f"DELETE FROM {table} WHERE user_id=?", (int(user_id),))
+        # table is selected from the private allow-list above; user_id is parameterized.
+        cur = conn.execute(f"DELETE FROM {table} WHERE user_id=?", (int(user_id),))  # nosec B608
     except sqlite3.OperationalError:
         return 0
     try:
@@ -122,7 +123,8 @@ def export_user_data_snapshot(user_id: int) -> dict[str, Any]:
             if not _table_exists(conn, table):
                 continue
             try:
-                rows = conn.execute(f"SELECT * FROM {table} WHERE user_id=?", (uid,)).fetchall()
+                # table is selected from private allow-lists above; user_id is parameterized.
+                rows = conn.execute(f"SELECT * FROM {table} WHERE user_id=?", (uid,)).fetchall()  # nosec B608
             except sqlite3.OperationalError:
                 continue
             out["tables"][table] = [_row_to_dict(row) for row in rows]
@@ -143,7 +145,8 @@ def erase_user_behavioral_data(user_id: int, *, reason: str = "user_request") ->
         with tx(conn):
             if _table_exists(conn, "users"):
                 assignments = ", ".join(f"{column}=NULL" for column in _USER_PROFILE_COLUMNS)
-                conn.execute(
+                # assignments is built only from the private allow-list above.
+                conn.execute(  # nosec B608
                     f"UPDATE users SET {assignments}, demo_uses=0 WHERE user_id=?",
                     (uid,),
                 )
