@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Live-safe Postgres scheduler concurrency probe.
 
-The probe creates synthetic due jobs, claims them from several concurrent workers,
-and verifies that no job is claimed twice. It does not send Telegram messages and
-cleans up only rows created by this run unless --keep-artifacts is used.
+The probe creates synthetic due jobs, claims only those jobs from several
+concurrent workers, and verifies that no synthetic job is claimed twice. It does
+not send Telegram messages and does not claim user jobs.
 """
 
 import argparse
@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
 from core.time_utils import utc_now_iso
 from services.db import db
 from services.db.runtime import CONFIG
-from services.jobs import add_job, claim_due_jobs
+from services.jobs import add_job
 from services.probe_ledger import assert_synthetic_user_id, finish_probe_run, start_probe_run
 from services.schema import init_db
 
@@ -78,10 +78,43 @@ def _cleanup(*, user_id: int, key_prefix: str) -> int:
     return touched
 
 
-def _claim_worker(*, barrier: threading.Barrier, now_iso: str, limit: int) -> list[int]:
+def _claim_synthetic_jobs(*, now_iso: str, limit: int, token: str, user_id: int, key_prefix: str) -> list[int]:
+    with db() as conn:
+        rows = conn.execute(
+            """
+            WITH due AS (
+                SELECT id
+                FROM jobs
+                WHERE user_id=?
+                  AND job_type=?
+                  AND job_key LIKE ?
+                  AND done_at IS NULL
+                  AND run_at_utc <= ?
+                  AND (locked_at IS NULL OR locked_at <= ?)
+                ORDER BY id ASC
+                LIMIT ?
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE jobs
+            SET locked_at=?, lock_token=?
+            FROM due
+            WHERE jobs.id = due.id
+            RETURNING jobs.id
+            """.strip(),
+            (int(user_id), PROBE_TYPE, f"{key_prefix}%", now_iso, now_iso, int(limit), now_iso, token),
+        ).fetchall()
+    return [int(row["id"] if hasattr(row, "keys") else row[0]) for row in rows]
+
+
+def _claim_worker(*, barrier: threading.Barrier, now_iso: str, limit: int, user_id: int, key_prefix: str) -> list[int]:
     barrier.wait(timeout=10)
-    jobs = claim_due_jobs(now_iso, limit=int(limit), lock_ttl_sec=300)
-    return [int(job.id) for job in jobs if str(job.job_type) == PROBE_TYPE]
+    return _claim_synthetic_jobs(
+        now_iso=now_iso,
+        limit=int(limit),
+        token=uuid.uuid4().hex,
+        user_id=int(user_id),
+        key_prefix=str(key_prefix),
+    )
 
 
 def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 24, keep_artifacts: bool = False) -> ProbeResult:
@@ -124,7 +157,14 @@ def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 2
         claimed: list[int] = []
         with ThreadPoolExecutor(max_workers=int(workers)) as pool:
             futures = [
-                pool.submit(_claim_worker, barrier=barrier, now_iso=utc_now_iso(), limit=per_worker_limit)
+                pool.submit(
+                    _claim_worker,
+                    barrier=barrier,
+                    now_iso=utc_now_iso(),
+                    limit=per_worker_limit,
+                    user_id=int(user_id),
+                    key_prefix=key_prefix,
+                )
                 for _ in range(int(workers))
             ]
             for future in as_completed(futures, timeout=30):
