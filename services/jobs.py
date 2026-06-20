@@ -5,9 +5,11 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from core.time_utils import normalize_utc_iso, utc_now_iso
 from services.db import db, tx
+from services.db.runtime import CONFIG
 from services.job_keys import default_job_key
 
 log = logging.getLogger(__name__)
@@ -25,6 +27,33 @@ class ClaimedJob:
     lock_token: str
 
 
+def _row_get(row: Any, key: str, index: int) -> Any:
+    if hasattr(row, "keys"):
+        try:
+            return row[key]
+        except (KeyError, TypeError, IndexError):
+            pass
+    return row[index]
+
+
+def _claimed_jobs_from_rows(rows: list[Any], *, fallback_token: str) -> list[ClaimedJob]:
+    out: list[ClaimedJob] = []
+    for row in rows:
+        out.append(
+            ClaimedJob(
+                id=int(_row_get(row, "id", 0)),
+                user_id=int(_row_get(row, "user_id", 1)),
+                job_type=str(_row_get(row, "job_type", 2)),
+                run_at_utc=str(_row_get(row, "run_at_utc", 3)),
+                payload=str(_row_get(row, "payload", 4) or "{}"),
+                job_key=str(_row_get(row, "job_key", 5) or ""),
+                retries=int(_row_get(row, "retries", 6) or 0),
+                lock_token=str(_row_get(row, "lock_token", 7) or fallback_token),
+            )
+        )
+    return out
+
+
 def add_job(
     user_id: int,
     job_type: str,
@@ -37,26 +66,36 @@ def add_job(
 
     - run_at_utc is always normalized to tz-aware UTC ISO.
     - job_key is used for idempotent enqueue; duplicates become no-op.
+    - Postgres uses a native ON CONFLICT path instead of SQLite compatibility SQL.
     """
     run_at_utc = normalize_utc_iso(run_at_utc)
     payload_obj = payload or {}
     if job_key is None:
         job_key = default_job_key(int(user_id), str(job_type), run_at_utc, payload_obj)
-    p = json.dumps(payload_obj, ensure_ascii=False)
+    encoded_payload = json.dumps(payload_obj, ensure_ascii=False)
+
+    sql = (
+        """
+        INSERT INTO jobs(
+            user_id, job_type, run_at_utc, payload,
+            job_key, retries, locked_at, lock_token, done_at, last_error
+        ) VALUES(?,?,?,?,?, 0, NULL, NULL, NULL, NULL)
+        ON CONFLICT (job_key) DO NOTHING
+        """.strip()
+        if CONFIG.uses_postgres
+        else """
+        INSERT OR IGNORE INTO jobs(
+            user_id, job_type, run_at_utc, payload,
+            job_key, retries, locked_at, lock_token, done_at, last_error
+        ) VALUES(?,?,?,?,?, 0, NULL, NULL, NULL, NULL)
+        """.strip()
+    )
 
     with db() as conn:
         with tx(conn):
-            cur = conn.execute(
-                """
-                INSERT OR IGNORE INTO jobs(
-                    user_id, job_type, run_at_utc, payload,
-                    job_key, retries, locked_at, lock_token, done_at, last_error
-                ) VALUES(?,?,?,?,?, 0, NULL, NULL, NULL, NULL)
-                """.strip(),
-                (int(user_id), str(job_type), run_at_utc, p, str(job_key)),
-            )
-            inserted = conn.execute("SELECT changes() as c").fetchone()[0] == 1
-            return bool(inserted)
+            cur = conn.execute(sql, (int(user_id), str(job_type), run_at_utc, encoded_payload, str(job_key)))
+            return int(getattr(cur, "rowcount", 0) or 0) == 1
+
 
 def cancel_jobs(user_id: int, job_types: list[str] | None = None, prefix: str | None = None) -> None:
     user_id = int(user_id)
@@ -75,6 +114,7 @@ def cancel_jobs(user_id: int, job_types: list[str] | None = None, prefix: str | 
                     "DELETE FROM jobs WHERE user_id=? AND done_at IS NULL AND job_type LIKE ?",
                     (user_id, f"{prefix}%"),
                 )
+
 
 def cancel_funnel(user_id: int) -> None:
     cancel_jobs(int(user_id), prefix="funnel_")
@@ -99,21 +139,43 @@ def cancel_post_prompt(user_id: int, session_id: int | str) -> None:
             )
 
 
-def claim_due_jobs(now_utc_iso: str, *, limit: int = 50, lock_ttl_sec: int = 120) -> list[ClaimedJob]:
-    """Claim due jobs with a DB lock.
+def _claim_due_jobs_postgres(*, now_utc_iso: str, stale_before: str, limit: int, token: str) -> list[ClaimedJob]:
+    """Atomically claim due jobs using native Postgres row locks.
 
-    - short transaction
-    - claims by setting locked_at+lock_token
-    - returns only not-done jobs claimed by this token
+    This removes the most important scheduler critical path from the legacy
+    SQLite-compatibility translation surface. Multiple workers may run this at
+    the same time; FOR UPDATE SKIP LOCKED ensures each due job is claimed once.
     """
-    now_utc_iso = normalize_utc_iso(now_utc_iso)
-    now_dt = datetime.fromisoformat(now_utc_iso)
-    stale_before = (now_dt - timedelta(seconds=int(lock_ttl_sec))).replace(microsecond=0).isoformat()
-    token = uuid.uuid4().hex
-
     with db() as conn:
         with tx(conn):
-            conn.execute("BEGIN")
+            rows = conn.execute(
+                """
+                WITH due AS (
+                    SELECT id
+                    FROM jobs
+                    WHERE done_at IS NULL
+                      AND run_at_utc <= ?
+                      AND (locked_at IS NULL OR locked_at <= ?)
+                    ORDER BY id ASC
+                    LIMIT ?
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE jobs
+                SET locked_at=?, lock_token=?
+                FROM due
+                WHERE jobs.id = due.id
+                  AND jobs.done_at IS NULL
+                RETURNING jobs.id, jobs.user_id, jobs.job_type, jobs.run_at_utc,
+                          jobs.payload, jobs.job_key, jobs.retries, jobs.lock_token
+                """.strip(),
+                (now_utc_iso, stale_before, int(limit), now_utc_iso, token),
+            ).fetchall()
+    return _claimed_jobs_from_rows(list(rows), fallback_token=token)
+
+
+def _claim_due_jobs_sqlite(*, now_utc_iso: str, stale_before: str, limit: int, token: str) -> list[ClaimedJob]:
+    with db() as conn:
+        with tx(conn):
             rows = conn.execute(
                 """
                 SELECT id, user_id, job_type, run_at_utc, payload, job_key, retries
@@ -130,7 +192,7 @@ def claim_due_jobs(now_utc_iso: str, *, limit: int = 50, lock_ttl_sec: int = 120
             if not rows:
                 return []
 
-            ids = [int(r["id"]) if hasattr(r, "keys") else int(r[0]) for r in rows]
+            ids = [int(_row_get(row, "id", 0)) for row in rows]
             placeholders = ",".join(["?"] * len(ids))
 
             conn.execute(
@@ -154,22 +216,23 @@ def claim_due_jobs(now_utc_iso: str, *, limit: int = 50, lock_ttl_sec: int = 120
                 [token, *ids],
             ).fetchall()
 
-    out: list[ClaimedJob] = []
-    for r in claimed:
-        get = (lambda k: r[k]) if hasattr(r, "keys") else (lambda k: r[{"id": 0, "user_id": 1, "job_type": 2, "run_at_utc": 3, "payload": 4, "job_key": 5, "retries": 6, "lock_token": 7}[k]])
-        out.append(
-            ClaimedJob(
-                id=int(get("id")),
-                user_id=int(get("user_id")),
-                job_type=str(get("job_type")),
-                run_at_utc=str(get("run_at_utc")),
-                payload=str(get("payload") or "{}"),
-                job_key=str(get("job_key") or ""),
-                retries=int(get("retries") or 0),
-                lock_token=str(get("lock_token") or token),
-            )
-        )
-    return out
+    return _claimed_jobs_from_rows(list(claimed), fallback_token=token)
+
+
+def claim_due_jobs(now_utc_iso: str, *, limit: int = 50, lock_ttl_sec: int = 120) -> list[ClaimedJob]:
+    """Claim due jobs with a DB lock.
+
+    In production/Postgres this is a native atomic UPDATE ... RETURNING claim with
+    FOR UPDATE SKIP LOCKED. SQLite keeps the previous local/dev implementation.
+    """
+    now_utc_iso = normalize_utc_iso(now_utc_iso)
+    now_dt = datetime.fromisoformat(now_utc_iso)
+    stale_before = (now_dt - timedelta(seconds=int(lock_ttl_sec))).replace(microsecond=0).isoformat()
+    token = uuid.uuid4().hex
+
+    if CONFIG.uses_postgres:
+        return _claim_due_jobs_postgres(now_utc_iso=now_utc_iso, stale_before=stale_before, limit=int(limit), token=token)
+    return _claim_due_jobs_sqlite(now_utc_iso=now_utc_iso, stale_before=stale_before, limit=int(limit), token=token)
 
 
 def lock_job(job_id: int, lock_token: str) -> bool:
@@ -184,7 +247,7 @@ def lock_job(job_id: int, lock_token: str) -> bool:
 def mark_done(job_id: int, lock_token: str, *, last_error: str | None = None) -> bool:
     with db() as conn:
         with tx(conn):
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE jobs
                 SET done_at=?, locked_at=NULL, lock_token=NULL, last_error=COALESCE(?, last_error)
@@ -192,8 +255,8 @@ def mark_done(job_id: int, lock_token: str, *, last_error: str | None = None) ->
                 """.strip(),
                 (utc_now_iso(), last_error, int(job_id), str(lock_token)),
             )
-            inserted = conn.execute("SELECT changes() as c").fetchone()[0] == 1
-            return bool(inserted)
+            return int(getattr(cur, "rowcount", 0) or 0) == 1
+
 
 def reschedule(job: ClaimedJob, retry_at_utc: str, *, last_error: str | None = None) -> bool:
     """Reschedule a claimed job.
@@ -208,7 +271,7 @@ def reschedule(job: ClaimedJob, retry_at_utc: str, *, last_error: str | None = N
 
     with db() as conn:
         with tx(conn):
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE jobs
                 SET run_at_utc=?, retries=?, job_key=?, locked_at=NULL, lock_token=NULL, last_error=?
@@ -216,3 +279,4 @@ def reschedule(job: ClaimedJob, retry_at_utc: str, *, last_error: str | None = N
                 """.strip(),
                 (retry_at_utc, int(new_retries), str(new_key), last_error, int(job.id), str(job.lock_token)),
             )
+            return int(getattr(cur, "rowcount", 0) or 0) == 1
