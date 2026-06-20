@@ -4,7 +4,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from core.time_utils import normalize_utc_iso, utc_now_iso
@@ -31,7 +31,11 @@ def _row_get(row: Any, key: str, index: int) -> Any:
     if hasattr(row, "keys"):
         try:
             return row[key]
-        except (KeyError, TypeError, IndexError):
+        except KeyError:
+            pass
+        except TypeError:
+            pass
+        except IndexError:
             pass
     return row[index]
 
@@ -54,6 +58,39 @@ def _claimed_jobs_from_rows(rows: list[Any], *, fallback_token: str) -> list[Cla
     return out
 
 
+def _add_job_postgres(
+    *,
+    user_id: int,
+    job_type: str,
+    run_at_utc: str,
+    encoded_payload: str,
+    job_key: str,
+) -> bool:
+    """Idempotently enqueue a Postgres job without a job_key constraint.
+
+    The current production database does not expose a unique constraint on
+    jobs.job_key, so a targeted ON CONFLICT clause is invalid. The safe contract
+    here is a transaction-scoped advisory lock keyed by job_key, then an
+    existence check and a plain insert while the lock is held.
+    """
+    with db() as conn:
+        with tx(conn):
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(?)::bigint)", (str(job_key),))
+            existing = conn.execute("SELECT id FROM jobs WHERE job_key=? LIMIT 1", (str(job_key),)).fetchone()
+            if existing:
+                return False
+            cur = conn.execute(
+                """
+                INSERT INTO jobs(
+                    user_id, job_type, run_at_utc, payload,
+                    job_key, retries, locked_at, lock_token, done_at, last_error
+                ) VALUES(?,?,?,?,?, 0, NULL, NULL, NULL, NULL)
+                """.strip(),
+                (int(user_id), str(job_type), run_at_utc, encoded_payload, str(job_key)),
+            )
+            return int(getattr(cur, "rowcount", 0) or 0) == 1
+
+
 def add_job(
     user_id: int,
     job_type: str,
@@ -66,7 +103,6 @@ def add_job(
 
     - run_at_utc is always normalized to tz-aware UTC ISO.
     - job_key is used for idempotent enqueue; duplicates become no-op.
-    - Postgres uses a native ON CONFLICT path instead of SQLite compatibility SQL.
     """
     run_at_utc = normalize_utc_iso(run_at_utc)
     payload_obj = payload or {}
@@ -74,26 +110,26 @@ def add_job(
         job_key = default_job_key(int(user_id), str(job_type), run_at_utc, payload_obj)
     encoded_payload = json.dumps(payload_obj, ensure_ascii=False)
 
-    sql = (
-        """
-        INSERT INTO jobs(
-            user_id, job_type, run_at_utc, payload,
-            job_key, retries, locked_at, lock_token, done_at, last_error
-        ) VALUES(?,?,?,?,?, 0, NULL, NULL, NULL, NULL)
-        ON CONFLICT (job_key) DO NOTHING
-        """.strip()
-        if CONFIG.uses_postgres
-        else """
-        INSERT OR IGNORE INTO jobs(
-            user_id, job_type, run_at_utc, payload,
-            job_key, retries, locked_at, lock_token, done_at, last_error
-        ) VALUES(?,?,?,?,?, 0, NULL, NULL, NULL, NULL)
-        """.strip()
-    )
+    if CONFIG.uses_postgres:
+        return _add_job_postgres(
+            user_id=int(user_id),
+            job_type=str(job_type),
+            run_at_utc=run_at_utc,
+            encoded_payload=encoded_payload,
+            job_key=str(job_key),
+        )
 
     with db() as conn:
         with tx(conn):
-            cur = conn.execute(sql, (int(user_id), str(job_type), run_at_utc, encoded_payload, str(job_key)))
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO jobs(
+                    user_id, job_type, run_at_utc, payload,
+                    job_key, retries, locked_at, lock_token, done_at, last_error
+                ) VALUES(?,?,?,?,?, 0, NULL, NULL, NULL, NULL)
+                """.strip(),
+                (int(user_id), str(job_type), run_at_utc, encoded_payload, str(job_key)),
+            )
             return int(getattr(cur, "rowcount", 0) or 0) == 1
 
 
@@ -140,12 +176,7 @@ def cancel_post_prompt(user_id: int, session_id: int | str) -> None:
 
 
 def _claim_due_jobs_postgres(*, now_utc_iso: str, stale_before: str, limit: int, token: str) -> list[ClaimedJob]:
-    """Atomically claim due jobs using native Postgres row locks.
-
-    This removes the most important scheduler critical path from the legacy
-    SQLite-compatibility translation surface. Multiple workers may run this at
-    the same time; FOR UPDATE SKIP LOCKED ensures each due job is claimed once.
-    """
+    """Atomically claim due jobs using native Postgres row locks."""
     with db() as conn:
         with tx(conn):
             rows = conn.execute(
