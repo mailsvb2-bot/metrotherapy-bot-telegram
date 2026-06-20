@@ -54,5 +54,15 @@ def schema_readiness() -> tuple[bool, str | None]:
         if missing:
             return False, 'schema_missing:' + ','.join(missing)
         return True, None
-    except (sqlite3.Error, OSError, RuntimeError, TypeError, ValueError, AttributeError) as exc:
+    except sqlite3.Error as exc:
+        return False, f'schema:{exc}'
+    except OSError as exc:
+        return False, f'schema:{exc}'
+    except RuntimeError as exc:
+        return False, f'schema:{exc}'
+    except TypeError as exc:
+        return False, f'schema:{exc}'
+    except ValueError as exc:
+        return False, f'schema:{exc}'
+    except AttributeError as exc:
         return False, f'schema:{exc}'
