@@ -16,6 +16,14 @@ def _run(monkeypatch, **env):
         "MESSENGER_WEBHOOK_HOST",
         "MESSENGER_WEBHOOK_PORT",
         "MESSENGER_PUBLIC_BASE_URL",
+        "PAYMENT_PUBLIC_BASE_URL",
+        "PUBLIC_BASE_URL",
+        "YOOKASSA_SHOP_ID",
+        "YOOKASSA_SECRET_KEY",
+        "PAYMENT_CHECKOUT_SIGNING_KEY",
+        "YOOKASSA_WEBHOOK_SECRET",
+        "PAYMENT_WEBHOOK_SECRET",
+        "WEBHOOK_SECRET",
         "HEALTHCHECK_ENABLED",
         "HEALTHCHECK_HOST",
         "HEALTHCHECK_PORT",
@@ -35,8 +43,12 @@ def _prod_base(tmp_path) -> dict[str, str]:
     return {
         "APP_ENV": "prod",
         "BOT_TOKEN": "validation-bot-token",
-        "PAY_PROVIDER_TOKEN": "validation-pay-token",
         "ADMIN_IDS": "1",
+        "YOOKASSA_SHOP_ID": "validation-shop",
+        "YOOKASSA_SECRET_KEY": "validation-key",
+        "PAYMENT_CHECKOUT_SIGNING_KEY": "validation-checkout-key",
+        "YOOKASSA_WEBHOOK_SECRET": "validation-webhook-key",
+        "PAYMENT_PUBLIC_BASE_URL": "https://metrotherapy.example",
         "TELEGRAM_TRANSPORT": "polling",
         "TELEGRAM_WEBHOOK_ENABLED": "0",
         "HEALTHCHECK_ENABLED": "1",
@@ -49,6 +61,17 @@ def test_runtime_contract_accepts_prod_polling_with_out_of_tree_state(monkeypatc
     errors, warnings = _run(monkeypatch, **_prod_base(tmp_path))
 
     assert errors == []
+
+
+def test_runtime_contract_rejects_missing_canonical_payment_env(monkeypatch, tmp_path):
+    env = _prod_base(tmp_path)
+    env.pop("YOOKASSA_SECRET_KEY")
+    env.pop("PAYMENT_PUBLIC_BASE_URL")
+
+    errors, warnings = _run(monkeypatch, **env)
+
+    assert any("YOOKASSA_SECRET_KEY" in error for error in errors)
+    assert any("PAYMENT_PUBLIC_BASE_URL" in error for error in errors)
 
 
 def test_runtime_contract_rejects_telegram_webhook(monkeypatch, tmp_path):
@@ -64,8 +87,12 @@ def test_runtime_contract_rejects_repo_relative_state_paths(monkeypatch):
     env = {
         "APP_ENV": "prod",
         "BOT_TOKEN": "validation-bot-token",
-        "PAY_PROVIDER_TOKEN": "validation-pay-token",
         "ADMIN_IDS": "1",
+        "YOOKASSA_SHOP_ID": "validation-shop",
+        "YOOKASSA_SECRET_KEY": "validation-key",
+        "PAYMENT_CHECKOUT_SIGNING_KEY": "validation-checkout-key",
+        "YOOKASSA_WEBHOOK_SECRET": "validation-webhook-key",
+        "PAYMENT_PUBLIC_BASE_URL": "https://metrotherapy.example",
         "TELEGRAM_TRANSPORT": "polling",
         "TELEGRAM_WEBHOOK_ENABLED": "0",
         "HEALTHCHECK_ENABLED": "1",
