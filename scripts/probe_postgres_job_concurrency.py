@@ -26,7 +26,7 @@ from services.schema import init_db
 PROBE_TYPE = "postgres_job_concurrency_probe"
 DEFAULT_USER_ID = -910_000_301
 LOCK_TTL_SECONDS = 120
-PROBE_LIVE_SCHEDULER_GUARD_SECONDS = 300
+PROBE_SCHEDULER_GUARD_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -163,7 +163,7 @@ def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 2
 
     run_id = uuid.uuid4().hex
     key_prefix = f"probe:{PROBE_TYPE}:{run_id}:"
-    run_at_dt = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=PROBE_LIVE_SCHEDULER_GUARD_SECONDS)
+    run_at_dt = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=PROBE_SCHEDULER_GUARD_SECONDS)
     run_at = run_at_dt.isoformat()
     claim_now_iso = run_at
     start_probe_run(
@@ -175,7 +175,7 @@ def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 2
             "jobs": int(jobs),
             "key_prefix": key_prefix,
             "lock_ttl_sec": LOCK_TTL_SECONDS,
-            "live_scheduler_guard_sec": PROBE_LIVE_SCHEDULER_GUARD_SECONDS,
+            "scheduler_guard_sec": PROBE_SCHEDULER_GUARD_SECONDS,
         },
     )
     rows_touched = 0
