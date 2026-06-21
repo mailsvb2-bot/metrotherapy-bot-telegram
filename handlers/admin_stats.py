@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 log = logging.getLogger(__name__)
@@ -11,16 +12,25 @@ from services.admin import is_admin
 router = Router()
 
 
+def _stats_snapshot() -> tuple[int, int, int]:
+    with db() as conn:
+        users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        subs = conn.execute("SELECT COUNT(*) FROM subscriptions").fetchone()[0]
+    return int(users), int(events), int(subs)
+
+
+def _fetch_state_last(uid: int, *, limit: int):
+    return fetch_last(int(uid), limit=int(limit))
+
+
 @router.message(Command("stats"))
 async def stats(message: Message):
     uid = message.from_user.id if message.from_user else None
     if not is_admin(uid):
         return
 
-    with db() as conn:
-        users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        subs = conn.execute("SELECT COUNT(*) FROM subscriptions").fetchone()[0]
+    users, events, subs = await asyncio.to_thread(_stats_snapshot)
 
     await message.answer(
         "📊 Статистика\n\n"
@@ -52,7 +62,7 @@ async def state_last(message: Message):
     if len(parts) >= 3 and parts[2].isdigit():
         limit = int(parts[2])
 
-    items = fetch_last(uid, limit=limit)
+    items = await asyncio.to_thread(_fetch_state_last, uid, limit=limit)
     if not items:
         return await message.answer(f"🧾 state-log: записей нет (user_id={uid})")
 

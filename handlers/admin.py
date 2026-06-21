@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from aiogram.exceptions import TelegramAPIError
 
@@ -9,6 +10,11 @@ from services.admin import is_platform_admin
 from services.db import db
 
 router = Router()
+
+
+def _users_count() -> int:
+    with db() as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
 
 
 @router.message(Command("admin"))
@@ -37,6 +43,5 @@ async def users(message: Message):
     uid = message.from_user.id if message.from_user else None
     if not is_platform_admin(uid):
         return
-    with db() as conn:
-        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    count = await asyncio.to_thread(_users_count)
     await message.answer(f"👤 Пользователей: {count}")

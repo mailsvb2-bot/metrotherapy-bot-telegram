@@ -84,6 +84,9 @@ def main() -> int:
     if not _restore_target_configured():
         raise SystemExit("PRODUCTION_GATE_FAILED restore target is required")
 
+    print("==> handler DB boundary audit", flush=True)
+    _run([sys.executable, "scripts/handler_db_boundary_audit.py"])
+
     print("==> runtime contract", flush=True)
     _run([sys.executable, "scripts/runtime_contract.py"])
 
