@@ -131,7 +131,7 @@ async def settings_platform_set(cb: CallbackQuery):
         "Выберите, куда проект должен вести пользователя в первую очередь и какой канал считать основным для доставки при наличии нескольких идентичностей."
     )
     await safe_edit(cb.message, text, reply_markup=kb_messenger_platforms(snapshot, targets))
-    log_event(uid, "settings_platform_set", {"platform": platform})
+    await _to_thread(log_event, uid, "settings_platform_set", {"platform": platform})
 
 @router.callback_query(F.data == "settings:time:work")
 async def settings_time_work(cb: CallbackQuery):
@@ -145,14 +145,14 @@ async def settings_time_work(cb: CallbackQuery):
         )
         return
 
-    set_pending(uid, "set_time", {"slot": "work"}, ttl_sec=600)
+    await _to_thread(set_pending, uid, "set_time", {"slot": "work"}, ttl_sec=600)
     await cb.message.answer(
         "⏰ Время «Дорога на работу»\n\n"
         "Напишите желаемое время в формате HH:MM (например, 11:03).\n\n"
         "Я сохраню время — и утренний транс будет приходить ровно в него.",
         reply_markup=kb_back_main(),
     )
-    log_event(uid, "settings_time_prompt", {"slot": "work"})
+    await _to_thread(log_event, uid, "settings_time_prompt", {"slot": "work"})
 
 
 @router.callback_query(F.data == "settings:time:home")
@@ -167,21 +167,21 @@ async def settings_time_home(cb: CallbackQuery):
         )
         return
 
-    set_pending(uid, "set_time", {"slot": "home"}, ttl_sec=600)
+    await _to_thread(set_pending, uid, "set_time", {"slot": "home"}, ttl_sec=600)
     await cb.message.answer(
         "⏰ Время «Дорога домой»\n\n"
         "Напишите желаемое время в формате HH:MM (например, 19:47).\n\n"
         "Я сохраню время — и вечерний транс будет приходить ровно в него.",
         reply_markup=kb_back_main(),
     )
-    log_event(uid, "settings_time_prompt", {"slot": "home"})
+    await _to_thread(log_event, uid, "settings_time_prompt", {"slot": "home"})
 
 
 @router.callback_query(F.data == "settings:delivery:tz")
 async def settings_delivery_tz(cb: CallbackQuery):
     await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
-    set_pending(uid, "set_timezone", ttl_sec=600)
+    await _to_thread(set_pending, uid, "set_timezone", ttl_sec=600)
     await cb.message.answer("🌍 Укажите свой timezone, например Europe/Amsterdam.", reply_markup=kb_back_main())
 
 
@@ -189,7 +189,7 @@ async def settings_delivery_tz(cb: CallbackQuery):
 async def settings_delivery_quiet(cb: CallbackQuery):
     await safe_answer_callback(cb)
     uid = int(cb.from_user.id)
-    set_pending(uid, "set_quiet_hours", ttl_sec=600)
+    await _to_thread(set_pending, uid, "set_quiet_hours", ttl_sec=600)
     await cb.message.answer("🌙 Укажите quiet hours в формате HH:MM-HH:MM, например 22:00-08:00, или off.", reply_markup=kb_back_main())
 
 
@@ -295,10 +295,10 @@ async def settings_time_input(message: Message):
         logging.getLogger(__name__).debug("time_trace mark failed", exc_info=True)
 
     uid = int(message.from_user.id)
-    p = peek_pending(uid)
+    p = await _to_thread(peek_pending, uid)
     if not p or p.kind not in {"set_time", "set_timezone", "set_quiet_hours"}:
         raise SkipHandler
-    p = pop_pending(uid)
+    p = await _to_thread(pop_pending, uid)
     if not p:
         return
 
@@ -307,7 +307,7 @@ async def settings_time_input(message: Message):
             tz_name = await _to_thread(set_user_timezone, uid, (message.text or "").strip())
         except (ValueError, KeyError):
             return await message.answer("Пожалуйста, укажите корректный timezone, например Europe/Amsterdam.", reply_markup=kb_back_main())
-        log_event(uid, "settings_timezone_set", {"timezone": tz_name})
+        await _to_thread(log_event, uid, "settings_timezone_set", {"timezone": tz_name})
         prefs_text = await _to_thread(describe_delivery_preferences, uid)
         return await message.answer(f"✅ Часовой пояс сохранён: {tz_name}.\n\n{prefs_text}", reply_markup=kb_back_main())
 
@@ -315,7 +315,7 @@ async def settings_time_input(message: Message):
         raw = (message.text or "").strip().lower()
         if raw in {"off", "none", "disable", "выкл", "отключить"}:
             await _to_thread(clear_quiet_hours, uid)
-            log_event(uid, "settings_quiet_hours_cleared", {})
+            await _to_thread(log_event, uid, "settings_quiet_hours_cleared", {})
             prefs_text = await _to_thread(describe_delivery_preferences, uid)
             return await message.answer(f"✅ Тихие часы выключены.\n\n{prefs_text}", reply_markup=kb_back_main())
         if "-" not in raw:
@@ -325,7 +325,7 @@ async def settings_time_input(message: Message):
             start_hhmm, end_hhmm = await _to_thread(set_quiet_hours, uid, start_hhmm, end_hhmm)
         except (ValueError, KeyError):
             return await message.answer("Не смог распознать quiet hours. Пример: 22:00-08:00.", reply_markup=kb_back_main())
-        log_event(uid, "settings_quiet_hours_set", {"start": start_hhmm, "end": end_hhmm})
+        await _to_thread(log_event, uid, "settings_quiet_hours_set", {"start": start_hhmm, "end": end_hhmm})
         prefs_text = await _to_thread(describe_delivery_preferences, uid)
         return await message.answer(f"✅ Тихие часы сохранены: {start_hhmm}-{end_hhmm}.\n\n{prefs_text}", reply_markup=kb_back_main())
 
@@ -346,7 +346,7 @@ async def settings_time_input(message: Message):
 
     await _to_thread(_persist_user_time)
 
-    log_event(uid, "settings_time_set", {"slot": slot, "time": hhmm})
+    await _to_thread(log_event, uid, "settings_time_set", {"slot": slot, "time": hhmm})
     is_admin = uid in settings.admin_id_list
     # Быстрый UX: сразу предложить настроить второе время, чтобы не возвращаться в меню.
     try:
@@ -421,7 +421,7 @@ async def settings_ref(cb: CallbackQuery):
     )
 
     await safe_edit(cb.message, text, reply_markup=kb_ref_bonus_actions())
-    log_event(uid, "settings_ref", {"paid_count": n_paid, "earned": stats.earned_days, "used": stats.used_days, "remaining": stats.remaining_days})
+    await _to_thread(log_event, uid, "settings_ref", {"paid_count": n_paid, "earned": stats.earned_days, "used": stats.used_days, "remaining": stats.remaining_days})
 
 
 async def _prompt_after_time_set(message: Message, slot: str) -> None:
@@ -472,7 +472,7 @@ async def _prompt_after_time_set(message: Message, slot: str) -> None:
             "Нажмите оценку — и я сразу пришлю Вам аудиотранс.",
             reply_markup=kb_mood_scale(int(sid), stage="pre"),
         )
-        log_event(uid, "settings_time_prompted", {"slot": slot_norm, "anchor": aa.anchor})
+        await _to_thread(log_event, uid, "settings_time_prompted", {"slot": slot_norm, "anchor": aa.anchor})
     except (TelegramAPIError, TelegramBadRequest, asyncio.TimeoutError):
         logging.getLogger(__name__).exception("Unhandled exception")
     except (ValueError, KeyError, AttributeError):
