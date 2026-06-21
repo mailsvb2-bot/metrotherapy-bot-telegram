@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from aiogram.exceptions import TelegramAPIError
@@ -12,7 +13,6 @@ from config.settings import settings
 from core.time_utils import utc_now
 from services.db import db
 from services.events import log_event
-from services.gift_store import clear_target
 from services.gifts import mark_gift_paid_tx
 from services.jobs import add_job, cancel_funnel, cancel_jobs
 from services.payments.amounts import PaymentAmountError, amount_minor_from_plan
@@ -190,29 +190,105 @@ async def pre_checkout(pre: PreCheckoutQuery) -> None:
         await _answer_pre_checkout_temporarily_unavailable(pre)
 
 
-async def successful_payment(message: Message) -> None:
-    sp = message.successful_payment
-    payload = (sp.invoice_payload or "").strip()
+def _parse_paid_payload(raw_payload: str) -> tuple[str, str | None, str | None]:
+    payload = (raw_payload or "").strip()
     decision_id = None
     correlation_id = None
-    if "|d=" in payload:
-        try:
-            parts = payload.split("|")
-            base = parts[0]
-            for p in parts[1:]:
-                if p.startswith("d="):
-                    decision_id = p[2:] or None
-                if p.startswith("c="):
-                    correlation_id = p[2:] or None
-            payload = base
-        except (AttributeError, TypeError, ValueError):
-            decision_id = None
-            correlation_id = None
-    log_event(message.from_user.id, "invoice_paid", {"payload": payload, "amount": sp.total_amount})
+    if "|d=" not in payload:
+        return payload, decision_id, correlation_id
+    try:
+        parts = payload.split("|")
+        base = parts[0]
+        for p in parts[1:]:
+            if p.startswith("d="):
+                decision_id = p[2:] or None
+            if p.startswith("c="):
+                correlation_id = p[2:] or None
+        return base, decision_id, correlation_id
+    except (AttributeError, TypeError, ValueError):
+        return payload, None, None
 
-    charge_id = (getattr(sp, "telegram_payment_charge_id", "") or "").strip()
-    provider_id = (getattr(sp, "provider_payment_charge_id", "") or "").strip()
-    plan = None
+
+def _schedule_subscription_jobs(user_id: int) -> None:
+    try:
+        with db() as conn:
+            row = conn.execute("SELECT expires_at FROM subscriptions WHERE user_id=?", (int(user_id),)).fetchone()
+        if not row or not row["expires_at"]:
+            return
+        exp = datetime.fromisoformat(row["expires_at"]).replace(microsecond=0)
+        now = utc_now().replace(tzinfo=None, microsecond=0)
+
+        before_expiry = (exp - timedelta(days=3)).replace(microsecond=0)
+        if before_expiry > now:
+            add_job(int(user_id), "sub_expiring_soon", before_expiry.isoformat(), {"expires_at": exp.isoformat()})
+
+        after_expiry = (exp + timedelta(days=3)).replace(microsecond=0)
+        if after_expiry > now:
+            add_job(int(user_id), "funnel2_expired_return_3d", after_expiry.isoformat(), {"expires_at": exp.isoformat()})
+    except (sqlite3.Error, RuntimeError, ValueError):
+        logger.exception("subscription follow-up scheduling failed")
+
+
+def _cancel_paid_user_funnels(user_id: int) -> None:
+    cancel_funnel(int(user_id))
+    try:
+        from services.jobs import cancel_funnel2
+
+        cancel_funnel2(int(user_id))
+    except ImportError:
+        logger.debug("cancel_funnel2 import unavailable", exc_info=True)
+    except (RuntimeError, ValueError):
+        logger.exception("cancel_funnel2 failed")
+    clear_plan(int(user_id))
+
+
+def _schedule_after_paid_setup_ping(user_id: int) -> None:
+    try:
+        cancel_jobs(int(user_id), prefix="after_paid_setup_ping")
+        run_at = (datetime.now(timezone.utc) + timedelta(hours=4)).replace(microsecond=0).isoformat()
+        add_job(int(user_id), "after_paid_setup_ping", run_at, {})
+    except (sqlite3.Error, RuntimeError):
+        logger.exception("after_paid_setup_ping schedule failed")
+
+
+def _apply_referral_bonus(user_id: int, username: str | None, plan: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        referrer = get_referrer(int(user_id))
+        if not referrer or reward_already_given(int(user_id)) or not can_reward_referrer(referrer):
+            return None
+        bought_days = int(plan["days"])
+        bonus = int(settings.REF_BONUS_MONTH_DAYS) if bought_days >= 30 else int(settings.REF_BONUS_WEEK_DAYS)
+        grant(referrer, "both", bonus)
+        mark_reward_given(int(user_id), bonus)
+        buyer_tag = f"@{username}" if username else f"пользователь {int(user_id)}"
+        period = "1 месяц" if bought_days >= 30 else "1 неделю"
+        return {
+            "referrer": int(referrer),
+            "bonus": int(bonus),
+            "buyer_tag": buyer_tag,
+            "period": period,
+        }
+    except (sqlite3.Error, RuntimeError, ValueError, TypeError):
+        logger.exception("referral bonus failed")
+        return None
+
+
+def _record_successful_payment_sync(
+    *,
+    user_id: int,
+    username: str | None,
+    raw_payload: str,
+    total_amount: int,
+    currency: str | None,
+    charge_id: str,
+    provider_id: str,
+) -> dict[str, Any]:
+    payload, decision_id, correlation_id = _parse_paid_payload(raw_payload)
+    log_event(int(user_id), "invoice_paid", {"payload": payload, "amount": int(total_amount or 0)})
+
+    result: dict[str, Any] = {"duplicate": False, "gift_code": None, "plan": None, "referral": None}
+    plan: dict[str, Any] | None = None
+
     with db() as conn:
         try:
             conn.execute("BEGIN")
@@ -222,12 +298,12 @@ async def successful_payment(message: Message) -> None:
                     "INSERT OR IGNORE INTO payments(user_id, telegram_charge_id, provider_charge_id, payload, amount, currency, created_at, decision_id, correlation_id) "
                     "VALUES(?,?,?,?,?,?,?,?,?)",
                     payment_insert_values(
-                        user_id=int(message.from_user.id),
+                        user_id=int(user_id),
                         telegram_charge_id=charge_id,
                         provider_charge_id=provider_id or None,
                         payload=payload,
-                        amount=int(sp.total_amount or 0),
-                        currency=(sp.currency or "").strip() or None,
+                        amount=int(total_amount or 0),
+                        currency=(currency or "").strip() or None,
                         created_at=created_at,
                         decision_id=decision_id,
                         correlation_id=correlation_id,
@@ -236,7 +312,8 @@ async def successful_payment(message: Message) -> None:
                 n = conn.execute("SELECT changes() AS n").fetchone()["n"]
                 if int(n) != 1:
                     conn.execute("ROLLBACK")
-                    return
+                    result["duplicate"] = True
+                    return result
 
             if payload.startswith("gift:"):
                 code = payload.split(":", 1)[1].strip()
@@ -248,19 +325,19 @@ async def successful_payment(message: Message) -> None:
                 if bonus > 0:
                     conn.execute(
                         "INSERT OR IGNORE INTO gift_bonus_log(code, user_id, bonus_days, created_at_utc) VALUES(?,?,?,datetime('now'))",
-                        (code, int(message.from_user.id), int(bonus)),
+                        (code, int(user_id), int(bonus)),
                     )
                     applied = conn.execute("SELECT changes() AS n").fetchone()["n"]
                     if int(applied) == 1:
-                        grant_tx(conn, int(message.from_user.id), "both", int(bonus))
+                        grant_tx(conn, int(user_id), "both", int(bonus))
                         conn.execute(
                             "INSERT INTO bonus_grants(user_id, days, source, related_user_id, granted_at_utc) VALUES(?,?,?,?,datetime('now'))",
-                            (int(message.from_user.id), int(bonus), "gift", int(recipient_id) if recipient_id is not None else None),
+                            (int(user_id), int(bonus), "gift", int(recipient_id) if recipient_id is not None else None),
                         )
                 conn.execute("COMMIT")
-                log_event(message.from_user.id, "gift_paid", {"code": code, "amount": sp.total_amount})
-                await deliver_gift_message(message, code)
-                return
+                log_event(int(user_id), "gift_paid", {"code": code, "amount": int(total_amount or 0)})
+                result["gift_code"] = code
+                return result
 
             plan_id = 0
             if payload.startswith("sub:"):
@@ -269,73 +346,72 @@ async def successful_payment(message: Message) -> None:
                 except (ValueError, TypeError):
                     plan_id = 0
             if not plan_id:
-                plan_id = get_plan_id(message.from_user.id) or 0
+                plan_id = get_plan_id(int(user_id)) or 0
             plan = get_plan_by_id(int(plan_id)) if plan_id else None
             if plan:
-                grant_tx(conn, int(message.from_user.id), str(plan["scope"]), int(plan["days"]))
+                grant_tx(conn, int(user_id), str(plan["scope"]), int(plan["days"]))
             conn.execute("COMMIT")
         except sqlite3.Error:
             try:
                 conn.execute("ROLLBACK")
             except sqlite3.Error:
-                pass
+                logger.exception("payment transaction rollback failed")
             raise
 
-    if plan:
-        try:
-            paid_at = utc_now().replace(tzinfo=None, microsecond=0).isoformat()
-            with db() as conn:
-                conn.execute("UPDATE subscriptions SET paid_at=? WHERE user_id=?", (paid_at, int(message.from_user.id)))
-        except (sqlite3.Error, RuntimeError):
-            logger.exception("failed to set paid_at")
+    if not plan:
+        return result
 
-        try:
-            from datetime import datetime, timedelta
-            with db() as conn:
-                row = conn.execute("SELECT expires_at FROM subscriptions WHERE user_id=?", (int(message.from_user.id),)).fetchone()
-            if row and row["expires_at"]:
-                exp = datetime.fromisoformat(row["expires_at"]).replace(microsecond=0)
-                run_at = (exp - timedelta(days=3)).replace(microsecond=0)
-                if run_at > utc_now().replace(tzinfo=None, microsecond=0):
-                    add_job(int(message.from_user.id), "sub_expiring_soon", run_at.isoformat(), {"expires_at": exp.isoformat()})
-        except (sqlite3.Error, RuntimeError):
-            logger.exception("sub expiring soon scheduling failed")
+    result["plan"] = plan
 
-        cancel_funnel(message.from_user.id)
-        try:
-            from services.jobs import cancel_funnel2
-            cancel_funnel2(message.from_user.id)
-        except ImportError:
-            logger.debug("cancel_funnel2 import unavailable", exc_info=True)
-        except (RuntimeError, ValueError):
-            logger.exception("cancel_funnel2 failed")
-        clear_plan(message.from_user.id)
+    try:
+        paid_at = utc_now().replace(tzinfo=None, microsecond=0).isoformat()
+        with db() as conn:
+            conn.execute("UPDATE subscriptions SET paid_at=? WHERE user_id=?", (paid_at, int(user_id)))
+    except (sqlite3.Error, RuntimeError):
+        logger.exception("failed to set paid_at")
 
-        try:
-            from datetime import datetime, timedelta
-            with db() as conn:
-                row = conn.execute("SELECT expires_at FROM subscriptions WHERE user_id=?", (int(message.from_user.id),)).fetchone()
-            if row and row["expires_at"]:
-                exp = datetime.fromisoformat(row["expires_at"]).replace(microsecond=0)
-                run_at = (exp + timedelta(days=3)).replace(microsecond=0)
-                if run_at > utc_now().replace(tzinfo=None, microsecond=0):
-                    add_job(int(message.from_user.id), "funnel2_expired_return_3d", run_at.isoformat(), {"expires_at": exp.isoformat()})
-        except (sqlite3.Error, RuntimeError):
-            logger.exception("funnel2 schedule failed")
+    _schedule_subscription_jobs(int(user_id))
+    _cancel_paid_user_funnels(int(user_id))
+    result["referral"] = _apply_referral_bonus(int(user_id), username, plan)
+    _schedule_after_paid_setup_ping(int(user_id))
+    return result
 
-        referrer = get_referrer(message.from_user.id)
-        if referrer and not reward_already_given(message.from_user.id) and can_reward_referrer(referrer):
-            bought_days = int(plan["days"])
-            bonus = int(settings.REF_BONUS_MONTH_DAYS) if bought_days >= 30 else int(settings.REF_BONUS_WEEK_DAYS)
-            grant(referrer, "both", bonus)
-            mark_reward_given(message.from_user.id, bonus)
-            buyer_tag = f"@{message.from_user.username}" if message.from_user.username else f"пользователь {message.from_user.id}"
-            period = "1 месяц" if bought_days >= 30 else "1 неделю"
+
+async def successful_payment(message: Message) -> None:
+    sp = message.successful_payment
+    user_id = int(message.from_user.id)
+    username = getattr(message.from_user, "username", None)
+    raw_payload = (sp.invoice_payload or "").strip()
+    charge_id = (getattr(sp, "telegram_payment_charge_id", "") or "").strip()
+    provider_id = (getattr(sp, "provider_payment_charge_id", "") or "").strip()
+
+    result = await asyncio.to_thread(
+        _record_successful_payment_sync,
+        user_id=user_id,
+        username=username,
+        raw_payload=raw_payload,
+        total_amount=int(sp.total_amount or 0),
+        currency=(sp.currency or "").strip() or None,
+        charge_id=charge_id,
+        provider_id=provider_id,
+    )
+
+    if result.get("duplicate"):
+        return
+
+    gift_code = result.get("gift_code")
+    if gift_code:
+        await deliver_gift_message(message, str(gift_code))
+        return
+
+    if result.get("plan"):
+        referral = result.get("referral")
+        if referral:
             try:
                 await message.bot.send_message(
-                    referrer,
-                    f"🎁 По Вашей рекомендации {buyer_tag} оплатил подписку на {period}.\n"
-                    f"В связи с этим Вам бонус: +{bonus} касания ресурсных аудиотрансов в подарок!",
+                    int(referral["referrer"]),
+                    f"🎁 По Вашей рекомендации {referral['buyer_tag']} оплатил подписку на {referral['period']}.\n"
+                    f"В связи с этим Вам бонус: +{int(referral['bonus'])} касания ресурсных аудиотрансов в подарок!",
                 )
             except (TelegramAPIError, asyncio.TimeoutError):
                 logger.exception("failed to notify referrer")
@@ -345,13 +421,6 @@ async def successful_payment(message: Message) -> None:
             "Чтобы всё работало идеально — назначьте удобное время получения утреннего и вечернего транса.",
             reply_markup=kb_after_paid(),
         )
-        try:
-            from datetime import datetime, timedelta, timezone
-            cancel_jobs(int(message.from_user.id), prefix="after_paid_setup_ping")
-            run_at = (datetime.now(timezone.utc) + timedelta(hours=4)).replace(microsecond=0).isoformat()
-            add_job(int(message.from_user.id), "after_paid_setup_ping", run_at, {})
-        except (sqlite3.Error, RuntimeError):
-            logger.exception("after_paid_setup_ping schedule failed")
         return
 
     await message.answer("✅ Оплата прошла.", reply_markup=kb_after_paid())
