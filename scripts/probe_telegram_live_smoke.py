@@ -172,14 +172,14 @@ async def run_probe(*, chat_id: str | None = None, allow_send: bool = False, kee
 
     bot = Bot(token)
     try:
-        me = await _retry_telegram_network("get_me", bot.get_me, problems)
+        me = await _retry_telegram_network("get_me", lambda: bot.get_me(), problems)
         if me is not None:
             if me.is_bot is not True:
                 problems.append("get_me_not_bot")
             bot_id = int(me.id)
             bot_username = str(me.username or "")
 
-            webhook = await _retry_telegram_network("get_webhook_info", bot.get_webhook_info, problems)
+            webhook = await _retry_telegram_network("get_webhook_info", lambda: bot.get_webhook_info(), problems)
             if webhook is not None:
                 webhook_url_present = bool(str(webhook.url or "").strip())
                 pending_update_count = int(webhook.pending_update_count or 0)
