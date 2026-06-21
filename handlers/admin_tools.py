@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import logging
 
 from aiogram import Router
@@ -15,6 +16,12 @@ router = Router()
 
 def is_admin(uid: int) -> bool:
     return uid in settings.admin_id_list
+
+
+def _reset_demo_storage(uid: int) -> None:
+    with db() as conn:
+        conn.execute("UPDATE users SET demo_uses=0 WHERE user_id=?", (int(uid),))
+        conn.execute("DELETE FROM demo_events WHERE user_id=?", (int(uid),))
 
 
 @router.message(Command("grant"))
@@ -40,8 +47,6 @@ async def cmd_reset_demo(message: Message):
     uid = message.from_user.id
     if len(parts) == 2 and parts[1].isdigit():
         uid = int(parts[1])
-    with db() as conn:
-        conn.execute("UPDATE users SET demo_uses=0 WHERE user_id=?", (int(uid),))
-        conn.execute("DELETE FROM demo_events WHERE user_id=?", (int(uid),))
+    await asyncio.to_thread(_reset_demo_storage, int(uid))
     log_event(int(uid), "admin_reset_demo", {"by": message.from_user.id})
     await message.answer("✅ Демо сброшено.")
