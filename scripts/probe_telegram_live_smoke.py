@@ -18,9 +18,10 @@ import os
 import shlex
 import sys
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
@@ -28,6 +29,10 @@ from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
 PROBE_TYPE = "telegram_live_smoke_probe"
+TELEGRAM_NETWORK_ATTEMPTS = 3
+TELEGRAM_RETRY_BASE_DELAY_SECONDS = 1.0
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -108,6 +113,26 @@ def _record_probe(result: TelegramLiveSmokeResult) -> None:
     )
 
 
+async def _retry_telegram_network(
+    label: str,
+    call: Callable[[], Awaitable[T]],
+    problems: list[str],
+    *,
+    attempts: int = TELEGRAM_NETWORK_ATTEMPTS,
+) -> T | None:
+    last_error = ""
+    for attempt in range(1, int(attempts) + 1):
+        try:
+            return await call()
+        except TelegramNetworkError as exc:
+            last_error = str(exc)
+            if attempt >= int(attempts):
+                break
+            await asyncio.sleep(float(TELEGRAM_RETRY_BASE_DELAY_SECONDS) * attempt)
+    problems.append(f"telegram_network_error:{label}:{last_error}")
+    return None
+
+
 async def run_probe(*, chat_id: str | None = None, allow_send: bool = False, keep_message: bool = False) -> TelegramLiveSmokeResult:
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
@@ -147,38 +172,48 @@ async def run_probe(*, chat_id: str | None = None, allow_send: bool = False, kee
 
     bot = Bot(token)
     try:
-        me = await bot.get_me()
-        if me.is_bot is not True:
-            problems.append("get_me_not_bot")
-        bot_id = int(me.id)
-        bot_username = str(me.username or "")
+        me = await _retry_telegram_network("get_me", bot.get_me, problems)
+        if me is not None:
+            if me.is_bot is not True:
+                problems.append("get_me_not_bot")
+            bot_id = int(me.id)
+            bot_username = str(me.username or "")
 
-        webhook = await bot.get_webhook_info()
-        webhook_url_present = bool(str(webhook.url or "").strip())
-        pending_update_count = int(webhook.pending_update_count or 0)
-        if transport == "polling" and webhook_url_present:
-            problems.append("polling_selected_but_webhook_url_present")
-        if transport == "webhook" and not webhook_url_present:
-            problems.append("webhook_selected_but_webhook_url_missing")
+            webhook = await _retry_telegram_network("get_webhook_info", bot.get_webhook_info, problems)
+            if webhook is not None:
+                webhook_url_present = bool(str(webhook.url or "").strip())
+                pending_update_count = int(webhook.pending_update_count or 0)
+                if transport == "polling" and webhook_url_present:
+                    problems.append("polling_selected_but_webhook_url_present")
+                if transport == "webhook" and not webhook_url_present:
+                    problems.append("webhook_selected_but_webhook_url_missing")
 
-        target_chat_id = _chat_id(chat_id)
-        if allow_send:
-            if not target_chat_id:
-                problems.append("allow_send_without_chat_id")
-            else:
-                send_checked = True
-                text = f"🧪 Metrotherapy live Telegram smoke OK\nrun={run_id[:12]}\nБез платежей."
-                sent = await bot.send_message(chat_id=target_chat_id, text=text, disable_notification=True)
-                sent_message_id = int(sent.message_id)
-                if sent_message_id <= 0:
-                    problems.append("send_message_missing_message_id")
-                if sent_message_id and not keep_message:
-                    deleted_message = bool(await bot.delete_message(chat_id=target_chat_id, message_id=sent_message_id))
-                    if not deleted_message:
-                        problems.append("delete_message_not_true")
-                cleanup_status = "kept" if keep_message and sent_message_id else "clean"
-    except TelegramNetworkError as exc:
-        problems.append(f"telegram_network_error:{exc}")
+            target_chat_id = _chat_id(chat_id)
+            if allow_send:
+                if not target_chat_id:
+                    problems.append("allow_send_without_chat_id")
+                else:
+                    send_checked = True
+                    text = f"🧪 Metrotherapy live Telegram smoke OK\nrun={run_id[:12]}\nБез платежей."
+                    sent = await _retry_telegram_network(
+                        "send_message",
+                        lambda: bot.send_message(chat_id=target_chat_id, text=text, disable_notification=True),
+                        problems,
+                    )
+                    if sent is not None:
+                        sent_message_id = int(sent.message_id)
+                        if sent_message_id <= 0:
+                            problems.append("send_message_missing_message_id")
+                        if sent_message_id and not keep_message:
+                            deleted = await _retry_telegram_network(
+                                "delete_message",
+                                lambda: bot.delete_message(chat_id=target_chat_id, message_id=sent_message_id),
+                                problems,
+                            )
+                            deleted_message = bool(deleted)
+                            if not deleted_message:
+                                problems.append("delete_message_not_true")
+                        cleanup_status = "kept" if keep_message and sent_message_id else "clean"
     except TelegramAPIError as exc:
         problems.append(f"telegram_api_error:{exc}")
     finally:
