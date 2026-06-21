@@ -268,8 +268,14 @@ def _apply_referral_bonus(user_id: int, username: str | None, plan: dict[str, An
             "buyer_tag": buyer_tag,
             "period": period,
         }
-    except (sqlite3.Error, RuntimeError, ValueError, TypeError):
-        logger.exception("referral bonus failed")
+    except sqlite3.Error:
+        logger.exception("referral bonus database operation failed")
+        return None
+    except RuntimeError:
+        logger.exception("referral bonus runtime operation failed")
+        return None
+    except (ValueError, TypeError):
+        logger.exception("referral bonus payload normalization failed")
         return None
 
 
