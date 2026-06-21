@@ -87,6 +87,9 @@ def main() -> int:
     print("==> handler DB boundary audit", flush=True)
     _run([sys.executable, "scripts/handler_db_boundary_audit.py"])
 
+    print("==> handler exception boundary audit", flush=True)
+    _run([sys.executable, "scripts/handler_exception_boundary_audit.py"])
+
     print("==> runtime contract", flush=True)
     _run([sys.executable, "scripts/runtime_contract.py"])
 

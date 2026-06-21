@@ -149,7 +149,7 @@ async def safe_edit(cb: CallbackQuery, text, reply_markup=None):
         if "message is not modified" in str(e):
             return
     except (TelegramAPIError, asyncio.TimeoutError):
-        pass
+        logging.getLogger(__name__).debug("safe_edit primary edit failed", exc_info=True)
 
     try:
         if cb.message:
@@ -204,7 +204,7 @@ async def safe_edit_admin(
         if "message is not modified" in str(e):
             return
     except (TelegramAPIError, asyncio.TimeoutError):
-        pass
+        logging.getLogger(__name__).debug("safe_edit_admin primary edit failed", exc_info=True)
 
     try:
         await cb.message.answer(cur_view["text"], reply_markup=kb)

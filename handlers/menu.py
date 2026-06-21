@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import sqlite3
 
 
 from aiogram import Router
@@ -29,7 +30,7 @@ router = Router()
 def _log_funnel_safe(user_id: int, event: str, payload: dict | None = None) -> None:
     try:
         log_event(int(user_id), event, payload or {})
-    except Exception:
+    except (sqlite3.Error, RuntimeError, OSError, TypeError, ValueError):
         logging.getLogger(__name__).debug("funnel event skipped", exc_info=True)
 
 
