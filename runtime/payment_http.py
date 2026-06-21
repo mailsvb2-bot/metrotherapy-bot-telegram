@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 import os
 
@@ -13,7 +14,7 @@ from services.payments.checkout_intent import (
     verify_checkout_intent,
 )
 from services.payments.verified_reconciliation import record_verified_yookassa_webhook
-from services.payments.yookassa_checkout import create_yookassa_confirmation_url
+from services.payments.yookassa_checkout import YooKassaCheckoutError, create_yookassa_confirmation_url
 from services.practice_token_contract import package_by_id
 
 log = logging.getLogger(__name__)
@@ -201,7 +202,7 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
             package_id=package_id or None,
             gift_token=gift_token or None,
         )
-    except Exception as exc:  # validator: allow-wide-except
+    except (YooKassaCheckoutError, ValueError, TypeError, OSError) as exc:
         log.exception("YooKassa web payment endpoint failed")
         return web.Response(
             status=500,
@@ -228,7 +229,7 @@ async def yookassa_reconciliation_webhook(request: web.Request) -> web.Response:
 
     try:
         payload = await request.json()
-    except Exception as exc:  # validator: allow-wide-except
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
         return web.json_response({"ok": False, "error": f"bad_json:{type(exc).__name__}"}, status=400)
 
     if not isinstance(payload, dict):
