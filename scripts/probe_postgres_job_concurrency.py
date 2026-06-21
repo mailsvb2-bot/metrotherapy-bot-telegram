@@ -26,6 +26,7 @@ from services.schema import init_db
 PROBE_TYPE = "postgres_job_concurrency_probe"
 DEFAULT_USER_ID = -910_000_301
 LOCK_TTL_SECONDS = 120
+PROBE_SCHEDULER_GUARD_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,19 @@ def _finish_failure(*, run_id: str, keep_artifacts: bool, rows_touched: int, err
     )
 
 
+def _cleanup_failed_probe(*, keep_artifacts: bool, user_id: int, key_prefix: str, rows_touched: int) -> tuple[str, int]:
+    if keep_artifacts:
+        return "kept", rows_touched
+    try:
+        return "clean", rows_touched + _cleanup(user_id=int(user_id), key_prefix=str(key_prefix))
+    except RuntimeError:
+        return "unknown", rows_touched
+    except ValueError:
+        return "unknown", rows_touched
+    except OSError:
+        return "unknown", rows_touched
+
+
 def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 24, keep_artifacts: bool = False) -> ProbeResult:
     if not CONFIG.uses_postgres:
         raise SystemExit("POSTGRES_JOB_CONCURRENCY_PROBE_FAILED active engine is not Postgres")
@@ -149,12 +163,20 @@ def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 2
 
     run_id = uuid.uuid4().hex
     key_prefix = f"probe:{PROBE_TYPE}:{run_id}:"
-    run_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    run_at_dt = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=PROBE_SCHEDULER_GUARD_SECONDS)
+    run_at = run_at_dt.isoformat()
+    claim_now_iso = run_at
     start_probe_run(
         probe_type=PROBE_TYPE,
         user_id=int(user_id),
         run_id=run_id,
-        evidence={"workers": int(workers), "jobs": int(jobs), "key_prefix": key_prefix, "lock_ttl_sec": LOCK_TTL_SECONDS},
+        evidence={
+            "workers": int(workers),
+            "jobs": int(jobs),
+            "key_prefix": key_prefix,
+            "lock_ttl_sec": LOCK_TTL_SECONDS,
+            "scheduler_guard_sec": PROBE_SCHEDULER_GUARD_SECONDS,
+        },
     )
     rows_touched = 0
     try:
@@ -179,7 +201,7 @@ def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 2
                 pool.submit(
                     _claim_worker,
                     barrier=barrier,
-                    now_iso=utc_now_iso(),
+                    now_iso=claim_now_iso,
                     limit=per_worker_limit,
                     user_id=int(user_id),
                     key_prefix=key_prefix,
@@ -224,22 +246,58 @@ def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 2
         )
         return result
     except SystemExit as exc:
-        _finish_failure(run_id=run_id, keep_artifacts=keep_artifacts, rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
+        cleanup_status, rows_touched = _cleanup_failed_probe(
+            keep_artifacts=keep_artifacts,
+            user_id=int(user_id),
+            key_prefix=key_prefix,
+            rows_touched=rows_touched,
+        )
+        _finish_failure(run_id=run_id, keep_artifacts=cleanup_status == "kept", rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
         raise
     except RuntimeError as exc:
-        _finish_failure(run_id=run_id, keep_artifacts=keep_artifacts, rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
+        cleanup_status, rows_touched = _cleanup_failed_probe(
+            keep_artifacts=keep_artifacts,
+            user_id=int(user_id),
+            key_prefix=key_prefix,
+            rows_touched=rows_touched,
+        )
+        _finish_failure(run_id=run_id, keep_artifacts=cleanup_status == "kept", rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
         raise
     except TimeoutError as exc:
-        _finish_failure(run_id=run_id, keep_artifacts=keep_artifacts, rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
+        cleanup_status, rows_touched = _cleanup_failed_probe(
+            keep_artifacts=keep_artifacts,
+            user_id=int(user_id),
+            key_prefix=key_prefix,
+            rows_touched=rows_touched,
+        )
+        _finish_failure(run_id=run_id, keep_artifacts=cleanup_status == "kept", rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
         raise
     except ValueError as exc:
-        _finish_failure(run_id=run_id, keep_artifacts=keep_artifacts, rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
+        cleanup_status, rows_touched = _cleanup_failed_probe(
+            keep_artifacts=keep_artifacts,
+            user_id=int(user_id),
+            key_prefix=key_prefix,
+            rows_touched=rows_touched,
+        )
+        _finish_failure(run_id=run_id, keep_artifacts=cleanup_status == "kept", rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
         raise
     except OSError as exc:
-        _finish_failure(run_id=run_id, keep_artifacts=keep_artifacts, rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
+        cleanup_status, rows_touched = _cleanup_failed_probe(
+            keep_artifacts=keep_artifacts,
+            user_id=int(user_id),
+            key_prefix=key_prefix,
+            rows_touched=rows_touched,
+        )
+        _finish_failure(run_id=run_id, keep_artifacts=cleanup_status == "kept", rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
         raise
     except threading.BrokenBarrierError as exc:
-        _finish_failure(run_id=run_id, keep_artifacts=keep_artifacts, rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
+        cleanup_status, rows_touched = _cleanup_failed_probe(
+            keep_artifacts=keep_artifacts,
+            user_id=int(user_id),
+            key_prefix=key_prefix,
+            rows_touched=rows_touched,
+        )
+        _finish_failure(run_id=run_id, keep_artifacts=cleanup_status == "kept", rows_touched=rows_touched, error=exc, key_prefix=key_prefix)
         raise
 
 
