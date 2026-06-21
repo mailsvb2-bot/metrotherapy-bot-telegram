@@ -33,80 +33,49 @@ def _all_plans_sync() -> list[dict[str, Any]]:
 
 
 def _tariff_price_sync(code: str) -> Any:
-    target = str(code)
-    for p in get_plans(include_inactive=True):
-        if str(p.get("code")) == target:
-            return p.get("price")
-    return None
-
-
-def _tariff_dynamics_sync() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     with get_connection() as conn:
-        # события изменения цен
+        row = conn.execute("SELECT price FROM plans WHERE code=?", (code,)).fetchone()
+    if row is None:
+        return "не найдено"
+    return row["price"] if hasattr(row, "keys") else row[0]
+
+
+def _tariff_dynamics_sync() -> tuple[list[Any], list[Any]]:
+    with get_connection() as conn:
         try:
-            pe = conn.execute(
-                "SELECT plan_code, new_price, changed_at_utc FROM plan_price_history ORDER BY changed_at_utc ASC LIMIT 500"
+            price_events = conn.execute(
+                "SELECT plan_code, old_price, new_price, changed_at_utc, changed_by FROM plan_price_history ORDER BY changed_at_utc ASC"
             ).fetchall()
         except sqlite3.Error:
             logger.exception("plan_price_history read failed")
-            pe = []
+            price_events = []
 
-        price_events = []
-        for r in pe or []:
-            try:
-                price_events.append(
-                    {
-                        "code": r[0] if not hasattr(r, "keys") else r["plan_code"],
-                        "new_price": int(r[1] if not hasattr(r, "keys") else r["new_price"]),
-                        "created": str(r[2] if not hasattr(r, "keys") else r["changed_at_utc"]),
-                    }
-                )
-            except (TypeError, ValueError, KeyError):
-                continue
-            except IndexError:
-                continue
-
-        # оплаты по дням
         try:
-            pr = conn.execute(
-                "SELECT substr(created_at,1,10) as day, COUNT(*) as cnt, COALESCE(SUM(amount),0) as amount FROM payments GROUP BY day ORDER BY day ASC LIMIT 365"
+            payments_daily = conn.execute(
+                "SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS n "
+                "FROM payments WHERE status IN ('succeeded','paid','success') GROUP BY substr(created_at, 1, 10) ORDER BY day ASC"
             ).fetchall()
         except sqlite3.Error:
-            logger.exception("payments read failed")
-            pr = []
-        payments_daily = []
-        for r in pr or []:
-            try:
-                day = r[0] if not hasattr(r, "keys") else r["day"]
-                cnt = r[1] if not hasattr(r, "keys") else r["cnt"]
-                amount = r[2] if not hasattr(r, "keys") else r["amount"]
-                payments_daily.append({"day": str(day), "cnt": int(cnt), "amount": int(amount)})
-            except (TypeError, ValueError, KeyError):
-                continue
-            except IndexError:
-                continue
+            logger.exception("payments daily read failed")
+            payments_daily = []
     return price_events, payments_daily
 
 
-async def tariffs_edit(cb: CallbackQuery, state: FSMContext) -> None:
-    """Экран редактирования тарифов.
+async def tariffs_edit(cb: CallbackQuery, state: FSMContext, ctx: TariffsCtx) -> None:
+    if not ctx.can_manage_tariffs:
+        await safe_edit_admin(cb, state, "⛔ Нет доступа к управлению тарифами.", reply_markup=_kb_tariffs_nav())
+        return
 
-    Важно: используем edit (safe_edit), чтобы админское меню не "убегало".
-    """
-    await state.clear()
     plans = await asyncio.to_thread(_all_plans_sync)
-
-    pick_rows = []
+    rows = []
     for p in plans:
-        code = str(p.get("code") or "").strip()
-        title = str(p.get("title") or "").strip()
-        if not code or not title:
-            continue
+        code = str(p.get("code"))
+        title = str(p.get("title") or code)
         price = int(p.get("price") or 0)
-        pick_rows.append(
-            [InlineKeyboardButton(text=f"{title} ({price} ₽)", callback_data=f"admin:tariffs:pick:{code}")]
-        )
-    pick_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=ADMIN_TARIFFS)])
+        rows.append([InlineKeyboardButton(text=f"{title} — {price} ₽", callback_data=f"admin:tariffs:pick:{code}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=ADMIN_TARIFFS)])
+
+    pick_rows = rows
 
     await safe_edit_admin(
         cb,
@@ -125,7 +94,7 @@ async def tariffs_edit(cb: CallbackQuery, state: FSMContext) -> None:
     try:
         await safe_answer_callback(cb)
     except (TelegramAPIError, asyncio.TimeoutError):
-        pass
+        logger.debug("tariffs_edit callback answer failed", exc_info=True)
 
 
 
@@ -148,7 +117,7 @@ async def tariffs_pick(cb: CallbackQuery, state: FSMContext, code: str) -> None:
     try:
         await safe_answer_callback(cb)
     except (TelegramAPIError, asyncio.TimeoutError):
-        pass
+        logger.debug("tariffs_pick callback answer failed", exc_info=True)
 
 
 
@@ -171,7 +140,7 @@ async def tariffs_dynamics(cb: CallbackQuery, state: FSMContext, ctx: TariffsCtx
     try:
         await safe_answer_callback(cb, "Строю график…")
     except (TelegramAPIError, asyncio.TimeoutError):
-        pass
+        logger.debug("tariffs_dynamics callback answer failed", exc_info=True)
 
     png = await asyncio.to_thread(plot_tariffs_dynamics, "Динамика цен и оплат", price_events, payments_daily)
     if cb.message:
@@ -189,19 +158,12 @@ async def handle_tariffs_callback(cb: CallbackQuery, state: FSMContext, data: st
         await render_tariffs_menu(cb, state)
         return True
 
-    if not ctx.can_manage_tariffs:
-        return False
-
     if data == "admin:tariffs:edit":
-        await tariffs_edit(cb, state)
+        await tariffs_edit(cb, state, ctx)
         return True
 
     if data.startswith("admin:tariffs:pick:"):
-        code = data.split(":", 3)[-1].strip()
-        if code:
-            await tariffs_pick(cb, state, code)
-        else:
-            await safe_answer_callback(cb, "Некорректный тариф.", show_alert=True)
+        await tariffs_pick(cb, state, data.split(":", 3)[-1])
         return True
 
     if data == "admin:tariffs:history":
