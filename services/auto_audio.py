@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover
 from config.settings import settings
 from runtime.messenger_senders import MaxBotSender, TelegramBotSender, VkBotSender
 from services.audio_anchor import pick_for_slot
-from services.auto_audio_entitlement import eligible_user_ids, has_entitlement
+from services.auto_audio_entitlement import eligible_user_ids
 from services.auto_audio_recovery import acquire_delivery_lock
 from services.db import db, mark_delivery_once, unmark_delivery, was_delivered
 from services.delivery_preferences import build_delivery_policy_decision
@@ -97,9 +97,10 @@ def _is_due_for_user(uid: int, slot: str, now_utc: datetime) -> tuple[bool, str,
 def _collect_due_candidates(now_utc: datetime) -> list[dict[str, object]]:
     out: list[dict[str, object]] = []
     for slot in ("morning", "evening"):
+        # eligible_user_ids() already performs final entitlement filtering in bulk.
+        # Do not call has_entitlement() here: that recreates the old per-user
+        # subscription/wallet DB query storm and slows down audio delivery.
         for uid in eligible_user_ids(slot):
-            if not has_entitlement(uid, slot):
-                continue
             policy = build_delivery_policy_decision(uid, slot, now_utc=now_utc)
             hm = _slot_time_for_user(uid, slot)
             local_now = now_utc.astimezone(ZoneInfo(policy.timezone))

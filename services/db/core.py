@@ -4,6 +4,8 @@ import logging
 import os
 import re
 import sqlite3
+import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Sequence
@@ -124,8 +126,9 @@ class PostgresCompatCursor:
 
 
 class PostgresCompatConnection:
-    def __init__(self, conn):
+    def __init__(self, conn, *, reusable: bool = False):
         self._conn = conn
+        self._reusable = bool(reusable)
         self.last_rowcount = 0
 
     def __enter__(self):
@@ -166,6 +169,15 @@ class PostgresCompatConnection:
         self.last_rowcount = 0
 
     def close(self):
+        # For production Postgres we keep one connection per worker thread.
+        # This removes the observed connect/auth/close storm while preserving
+        # the existing sqlite-like context manager API. Transaction boundaries
+        # are still owned by get_db()/get_db_ro() through commit/rollback.
+        if self._reusable:
+            return
+        self._conn.close()
+
+    def force_close(self):
         self._conn.close()
 
 
@@ -310,9 +322,59 @@ def _load_psycopg():
         raise RuntimeError(postgres_driver_error_hint()) from exc
 
 
+_PG_LOCAL = threading.local()
+
+
+def _env_flag(name: str, default: str = "1") -> bool:
+    raw = (os.getenv(name, default) or default).strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _pg_connection_max_age_sec() -> float:
+    raw = (os.getenv("POSTGRES_CONNECTION_MAX_AGE_SEC") or "300").strip()
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 300.0
+
+
+def _raw_pg_connection_is_usable(conn: Any) -> bool:
+    try:
+        return not bool(getattr(conn, "closed", False))
+    except Exception:  # validator: allow-wide-except
+        return False
+
+
+def _close_raw_pg_connection(conn: Any) -> None:
+    try:
+        conn.close()
+    except Exception:  # validator: allow-wide-except
+        log.debug("Postgres reusable connection close failed", exc_info=True)
+
+
+def _get_reusable_postgres_connection(psycopg: Any, dict_row: Any) -> Any:
+    max_age = _pg_connection_max_age_sec()
+    now = time.monotonic()
+    cached = getattr(_PG_LOCAL, "postgres_connection", None)
+    created = float(getattr(_PG_LOCAL, "postgres_connection_created_at", 0.0) or 0.0)
+
+    if cached is not None and _raw_pg_connection_is_usable(cached):
+        if max_age <= 0 or (now - created) <= max_age:
+            return cached
+        _close_raw_pg_connection(cached)
+
+    conn = psycopg.connect(DATABASE_URL, autocommit=False, row_factory=dict_row)
+    _PG_LOCAL.postgres_connection = conn
+    _PG_LOCAL.postgres_connection_created_at = now
+    return conn
+
+
 def get_connection():
     if is_postgres_enabled():
         psycopg, dict_row = _load_psycopg()
+        if _env_flag("POSTGRES_REUSE_CONNECTIONS", "1"):
+            conn = _get_reusable_postgres_connection(psycopg, dict_row)
+            return PostgresCompatConnection(conn, reusable=True)
         conn = psycopg.connect(DATABASE_URL, autocommit=False, row_factory=dict_row)
         return PostgresCompatConnection(conn)
 
@@ -352,6 +414,18 @@ def get_db_ro() -> Iterator[Any]:
     conn = get_connection()
     try:
         yield conn
+        if is_postgres_enabled():
+            try:
+                conn.rollback()
+            except Exception:  # validator: allow-wide-except
+                logging.getLogger(__name__).exception("DB read-only rollback failed")
+    except Exception:
+        if is_postgres_enabled():
+            try:
+                conn.rollback()
+            except Exception:  # validator: allow-wide-except
+                logging.getLogger(__name__).exception("DB read-only rollback after failure failed")
+        raise
     finally:
         try:
             conn.close()
@@ -364,6 +438,13 @@ def get_db() -> Iterator[Any]:
     conn = get_connection()
     try:
         yield conn
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:  # validator: allow-wide-except
+            logging.getLogger(__name__).exception("DB rollback after body failure failed")
+        raise
+    else:
         try:
             conn.commit()
         except Exception:  # validator: allow-wide-except

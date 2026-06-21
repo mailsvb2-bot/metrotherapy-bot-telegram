@@ -40,17 +40,29 @@ def subscription_user_ids(slot: str) -> list[int]:
 
 
 def practice_wallet_user_ids() -> list[int]:
-    if not token_economy_enabled() or enforcement_mode() == "off":
+    if not token_economy_enabled():
         return []
+    mode = enforcement_mode()
+    if mode == "off":
+        return []
+
     try:
         with db() as conn:
-            rows = conn.execute(
-                """
-                SELECT user_id FROM practice_wallets
-                WHERE COALESCE(available_tokens,0) > 0
-                   OR COALESCE(reserved_tokens,0) > 0
-                """
-            ).fetchall()
+            if mode == "hard":
+                rows = conn.execute(
+                    """
+                    SELECT user_id FROM practice_wallets
+                    WHERE COALESCE(available_tokens,0) > 0
+                    """
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT user_id FROM practice_wallets
+                    WHERE COALESCE(available_tokens,0) > 0
+                       OR COALESCE(reserved_tokens,0) > 0
+                    """
+                ).fetchall()
         return [int(r[0]) for r in rows]
     except sqlite3.Error:
         log.exception("practice token entitlement query failed")
