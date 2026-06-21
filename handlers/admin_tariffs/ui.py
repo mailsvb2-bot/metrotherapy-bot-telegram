@@ -15,6 +15,8 @@ from services.plans import get_active_plans
 
 
 from core.callback_utils import safe_answer_callback
+
+
 def _kb_tariffs_nav() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -52,6 +54,18 @@ def _prices_text() -> str:
     return "\n".join([f"• {p['title']}: {p['price']} ₽ (код: {p['code']})" for p in plans])
 
 
+def _tariff_history_rows():
+    # Источник истины: plan_price_history (создаётся при init_db).
+    with get_connection() as conn:
+        try:
+            return conn.execute(
+                "SELECT plan_code, old_price, new_price, changed_at_utc, changed_by FROM plan_price_history ORDER BY changed_at_utc DESC LIMIT 100"
+            ).fetchall()
+        except sqlite3.Error:
+            log.exception("plan_price_history read failed")
+            return []
+
+
 async def render_tariffs_menu(cb: CallbackQuery, state: FSMContext | None = None) -> None:
     # Rule: every entry callback handler must acknowledge the callback first.
     # This prevents “hanging buttons” if some nested helper forgets to answer.
@@ -59,7 +73,7 @@ async def render_tariffs_menu(cb: CallbackQuery, state: FSMContext | None = None
         await safe_answer_callback(cb)
     except (TelegramAPIError, asyncio.TimeoutError):
         pass
-    text = "💳 Тарифы\n\n" + _prices_text()
+    text = "💳 Тарифы\n\n" + await asyncio.to_thread(_prices_text)
     if state is None:
         await safe_edit(cb, text, reply_markup=_tariffs_menu_kb())
     else:
@@ -75,15 +89,7 @@ async def tariffs_history(cb: CallbackQuery, ctx: TariffsCtx) -> None:
         await safe_answer_callback(cb)
     except (TelegramAPIError, asyncio.TimeoutError):
         pass
-    # Источник истины: plan_price_history (создаётся при init_db).
-    with get_connection() as conn:
-        try:
-            rows = conn.execute(
-                "SELECT plan_code, old_price, new_price, changed_at_utc, changed_by FROM plan_price_history ORDER BY changed_at_utc DESC LIMIT 100"
-            ).fetchall()
-        except sqlite3.Error:
-            log.exception("plan_price_history read failed")
-            rows = []
+    rows = await asyncio.to_thread(_tariff_history_rows)
 
     if not rows:
         text = "🗂 Архив тарифов\n\nПока нет записей об изменениях."
@@ -122,5 +128,3 @@ async def tariffs_history(cb: CallbackQuery, ctx: TariffsCtx) -> None:
         text = "\n".join(out)
 
     await safe_edit(cb, text, reply_markup=_kb_tariffs_nav())
-
-
