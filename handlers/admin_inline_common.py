@@ -256,3 +256,21 @@ def get_staff_roles(uid: int) -> set[str]:
     if is_superadmin(uid):
         return {ROLE_ADMIN, ROLE_SUPPORT, ROLE_MARKETING}
     return set(user_roles(uid) or set())
+
+
+def fmt_sec(x: int | None) -> str:
+    if x is None:
+        return "-"
+    m = int(x) // 60
+    s = int(x) % 60
+    return f"{m:02d}:{s:02d}"
+
+
+def fmt_ts(ts_iso: str | None, tz: ZoneInfo) -> str:
+    if not ts_iso:
+        return "-"
+    try:
+        return datetime.fromisoformat(ts_iso).astimezone(tz).strftime("%H:%M:%S")
+    except ValueError:
+        logging.getLogger(__name__).exception("Bad timestamp format")
+        return ts_iso
