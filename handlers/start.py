@@ -52,7 +52,7 @@ def _log_safe(user_id: int | None, event: str, payload: dict | None = None) -> N
         return
     try:
         log_event(int(user_id), event, payload or {})
-    except Exception:
+    except (sqlite3.Error, RuntimeError, OSError, TypeError, ValueError):
         log.debug("funnel event skipped", exc_info=True)
 
 
@@ -74,7 +74,7 @@ def _register_user_entry_safe(message: Message, payload: str) -> None:
             "Bad start payload",
             extra={"payload": payload, "user_id": message.from_user.id},
         )
-    except Exception:
+    except (sqlite3.Error, RuntimeError, OSError, TypeError, AttributeError):
         log.exception(
             "Failed to register start entry",
             extra={"payload": payload, "user_id": getattr(message.from_user, "id", None)},
@@ -89,7 +89,7 @@ def _claim_gift_safe(message: Message, token: str) -> str:
     result = claim_gift_token(gift_token=token, recipient_user_id=int(user_id), platform="telegram")
     try:
         log_event(int(user_id), "gift_claim_attempt", {"status": result.status, "package_id": result.package_id})
-    except Exception:
+    except (sqlite3.Error, RuntimeError, OSError, TypeError, ValueError):
         log.debug("gift claim event skipped", exc_info=True)
     return result.message
 
@@ -103,7 +103,7 @@ async def _open_main_menu_fail_open(message: Message, *, fallback_text: str = ST
     try:
         await send_main_menu(message)
         return
-    except Exception:
+    except (TelegramAPIError, sqlite3.Error, RuntimeError, OSError, TypeError, ValueError, AttributeError):
         log.exception(
             "Primary /start menu failed; sending minimal fail-open menu",
             extra={"user_id": _user_id(message)},
