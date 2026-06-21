@@ -27,35 +27,31 @@ def _kb_tariffs_nav() -> InlineKeyboardMarkup:
 
 
 def kb_tariffs_nav() -> InlineKeyboardMarkup:
-    """Публичная обёртка для навигационной клавиатуры тарифов.
-
-    Нужна для диагностики (/kb_debug) и чтобы внешние модули не импортировали
-    приватную функцию _kb_tariffs_nav().
-    """
+    """Публичная обёртка для навигационной клавиатуры тарифов."""
     return _kb_tariffs_nav()
 
 
 def _tariffs_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Показать текущие цены", callback_data="admin:tariffs:show")],
-            [InlineKeyboardButton(text="✏️ Изменить тарифы", callback_data="admin:tariffs:edit")],
-            [InlineKeyboardButton(text="🗂 Архив тарифов", callback_data="admin:tariffs:history")],
-            [InlineKeyboardButton(text="📈 Динамика цены и оплат", callback_data="admin:tariffs:dynamics")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")],
-        ]
-    )
+    rows = [
+        [InlineKeyboardButton(text="✏️ Изменить", callback_data="admin:tariffs:edit")],
+        [InlineKeyboardButton(text="🗂 Архив", callback_data="admin:tariffs:history")],
+        [InlineKeyboardButton(text="📈 Динамика", callback_data="admin:tariffs:dynamics")],
+        [InlineKeyboardButton(text="🏠 Меню", callback_data="admin:menu")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _prices_text() -> str:
     plans = get_active_plans()
     if not plans:
-        return "Тарифы не найдены."
-    return "\n".join([f"• {p['title']}: {p['price']} ₽ (код: {p['code']})" for p in plans])
+        return "Тарифы пока не настроены."
+    lines = []
+    for p in plans:
+        lines.append(f"• {p['title']} — {p['price']} ₽ ({p['code']})")
+    return "Текущие тарифы:\n" + "\n".join(lines)
 
 
 def _tariff_history_rows():
-    # Источник истины: plan_price_history (создаётся при init_db).
     with get_connection() as conn:
         try:
             return conn.execute(
@@ -72,7 +68,7 @@ async def render_tariffs_menu(cb: CallbackQuery, state: FSMContext | None = None
     try:
         await safe_answer_callback(cb)
     except (TelegramAPIError, asyncio.TimeoutError):
-        pass
+        log.debug("tariffs menu callback answer failed", exc_info=True)
     text = "💳 Тарифы\n\n" + await asyncio.to_thread(_prices_text)
     if state is None:
         await safe_edit(cb, text, reply_markup=_tariffs_menu_kb())
@@ -88,7 +84,7 @@ async def tariffs_history(cb: CallbackQuery, ctx: TariffsCtx) -> None:
     try:
         await safe_answer_callback(cb)
     except (TelegramAPIError, asyncio.TimeoutError):
-        pass
+        log.debug("tariff history callback answer failed", exc_info=True)
     rows = await asyncio.to_thread(_tariff_history_rows)
 
     if not rows:
@@ -123,7 +119,7 @@ async def tariffs_history(cb: CallbackQuery, ctx: TariffsCtx) -> None:
                 dt = datetime.fromisoformat(ts_s.replace("Z", "+00:00")).astimezone(tz)
                 ts_s = dt.strftime("%Y-%m-%d %H:%M")
             except (ValueError, TypeError):
-                pass
+                log.debug("tariff history timestamp parse failed", exc_info=True)
             out.append(f"• {ts_s} | {plan_code}: {old_p} → {new_p} ₽ (by {by})")
         text = "\n".join(out)
 
