@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+from typing import Any
 
 from core.callback_utils import safe_answer_callback
 try:
@@ -26,85 +27,20 @@ from services.plans import get_plans
 
 logger = logging.getLogger(__name__)
 
-async def tariffs_edit(cb: CallbackQuery, state: FSMContext) -> None:
-    """Экран редактирования тарифов.
 
-    Важно: используем edit (safe_edit), чтобы админское меню не "убегало".
-    """
-    await state.clear()
-    plans = get_plans(include_inactive=True)
-
-    pick_rows = []
-    for p in plans:
-        code = str(p.get("code") or "").strip()
-        title = str(p.get("title") or "").strip()
-        if not code or not title:
-            continue
-        price = int(p.get("price") or 0)
-        pick_rows.append(
-            [InlineKeyboardButton(text=f"{title} ({price} ₽)", callback_data=f"admin:tariffs:pick:{code}")]
-        )
-    pick_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=ADMIN_TARIFFS)])
-
-    await safe_edit_admin(
-        cb,
-        state,
-        "✏️ Изменение тарифов\n\n"
-        "1) Выберите тариф кнопкой ниже → я попрошу новую цену.\n\n"
-        "ИЛИ\n\n"
-        "2) Отправьте сообщением новые цены, по одной строке:\n"
-        "<название тарифа или code>=<цена в рублях>\n\n"
-        "Пример:\n"
-        "Утро — 1 неделя=990\n\n"
-        "Важно: вводите цену именно в рублях (например, 1 рубль = 1).\n",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=pick_rows),
-    )
-    await state.set_state(AdminManageState.waiting_tariffs_text)
-    try:
-        await safe_answer_callback(cb)
-    except (TelegramAPIError, asyncio.TimeoutError):
-        pass
+def _all_plans_sync() -> list[dict[str, Any]]:
+    return [dict(p) for p in get_plans(include_inactive=True)]
 
 
-
-
-async def tariffs_pick(cb: CallbackQuery, state: FSMContext, code: str) -> None:
-    await state.clear()
-    await state.set_state(AdminManageState.waiting_tariff_single_price)
-    await state.update_data(tariff_code=code)
-
-    # показать текущую цену
-    price = None
+def _tariff_price_sync(code: str) -> Any:
+    target = str(code)
     for p in get_plans(include_inactive=True):
-        if str(p.get("code")) == code:
-            price = p.get("price")
-            break
-
-    await safe_edit_admin(
-        cb,
-        state,
-        f"Введите новую цену для тарифа {code}.\n"
-        f"Текущая цена: {price} ₽\n\n"
-        "Просто отправьте число (например 990)."
-    )
-    try:
-        await safe_answer_callback(cb)
-    except (TelegramAPIError, asyncio.TimeoutError):
-        pass
+        if str(p.get("code")) == target:
+            return p.get("price")
+    return None
 
 
-
-
-async def tariffs_dynamics(cb: CallbackQuery, state: FSMContext, ctx: TariffsCtx) -> None:
-    """График "динамика цен и оплат".
-
-    Показывает:
-    - события изменения цены (points)
-    - количество оплат в день (line)
-    """
-    from aiogram.types import BufferedInputFile
-    from services.charts import plot_tariffs_dynamics
-
+def _tariff_dynamics_sync() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     with get_connection() as conn:
         # события изменения цен
         try:
@@ -149,7 +85,85 @@ async def tariffs_dynamics(cb: CallbackQuery, state: FSMContext, ctx: TariffsCtx
                 continue
             except IndexError:
                 continue
+    return price_events, payments_daily
 
+
+async def tariffs_edit(cb: CallbackQuery, state: FSMContext) -> None:
+    """Экран редактирования тарифов.
+
+    Важно: используем edit (safe_edit), чтобы админское меню не "убегало".
+    """
+    await state.clear()
+    plans = await asyncio.to_thread(_all_plans_sync)
+
+    pick_rows = []
+    for p in plans:
+        code = str(p.get("code") or "").strip()
+        title = str(p.get("title") or "").strip()
+        if not code or not title:
+            continue
+        price = int(p.get("price") or 0)
+        pick_rows.append(
+            [InlineKeyboardButton(text=f"{title} ({price} ₽)", callback_data=f"admin:tariffs:pick:{code}")]
+        )
+    pick_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=ADMIN_TARIFFS)])
+
+    await safe_edit_admin(
+        cb,
+        state,
+        "✏️ Изменение тарифов\n\n"
+        "1) Выберите тариф кнопкой ниже → я попрошу новую цену.\n\n"
+        "ИЛИ\n\n"
+        "2) Отправьте сообщением новые цены, по одной строке:\n"
+        "<название тарифа или code>=<цена в рублях>\n\n"
+        "Пример:\n"
+        "Утро — 1 неделя=990\n\n"
+        "Важно: вводите цену именно в рублях (например, 1 рубль = 1).\n",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=pick_rows),
+    )
+    await state.set_state(AdminManageState.waiting_tariffs_text)
+    try:
+        await safe_answer_callback(cb)
+    except (TelegramAPIError, asyncio.TimeoutError):
+        pass
+
+
+
+
+async def tariffs_pick(cb: CallbackQuery, state: FSMContext, code: str) -> None:
+    await state.clear()
+    await state.set_state(AdminManageState.waiting_tariff_single_price)
+    await state.update_data(tariff_code=code)
+
+    # показать текущую цену
+    price = await asyncio.to_thread(_tariff_price_sync, code)
+
+    await safe_edit_admin(
+        cb,
+        state,
+        f"Введите новую цену для тарифа {code}.\n"
+        f"Текущая цена: {price} ₽\n\n"
+        "Просто отправьте число (например 990)."
+    )
+    try:
+        await safe_answer_callback(cb)
+    except (TelegramAPIError, asyncio.TimeoutError):
+        pass
+
+
+
+
+async def tariffs_dynamics(cb: CallbackQuery, state: FSMContext, ctx: TariffsCtx) -> None:
+    """График "динамика цен и оплат".
+
+    Показывает:
+    - события изменения цены (points)
+    - количество оплат в день (line)
+    """
+    from aiogram.types import BufferedInputFile
+    from services.charts import plot_tariffs_dynamics
+
+    price_events, payments_daily = await asyncio.to_thread(_tariff_dynamics_sync)
     if not price_events and not payments_daily:
         return await safe_edit_admin(cb, state, "📈 Динамика\n\nНет данных для построения графика.", reply_markup=_kb_tariffs_nav())
 
@@ -162,8 +176,8 @@ async def tariffs_dynamics(cb: CallbackQuery, state: FSMContext, ctx: TariffsCtx
     png = await asyncio.to_thread(plot_tariffs_dynamics, "Динамика цен и оплат", price_events, payments_daily)
     if cb.message:
         await cb.message.answer_photo(BufferedInputFile(png, filename="tariffs_dynamics.png"), caption="📈 Динамика цен и оплат")
-    await safe_edit_admin(cb, state, "📈 Динамика\n\n" + _prices_text(), reply_markup=_kb_tariffs_nav())
-
+    prices_text = await asyncio.to_thread(_prices_text)
+    await safe_edit_admin(cb, state, "📈 Динамика\n\n" + prices_text, reply_markup=_kb_tariffs_nav())
 
 
 
@@ -199,5 +213,3 @@ async def handle_tariffs_callback(cb: CallbackQuery, state: FSMContext, data: st
         return True
 
     return False
-
-
