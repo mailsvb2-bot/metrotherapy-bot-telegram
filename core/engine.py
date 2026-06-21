@@ -62,6 +62,87 @@ class Job:
     payload: str
 
 
+def _is_sub_active_sync(user_id: int) -> bool:
+    return bool(is_sub_active(int(user_id)))
+
+
+def _demo_send_state_sync(user_id: int) -> tuple[set[str], bool]:
+    return set(demo_sent_kinds(int(user_id))), bool(can_repeat_demo_for_user(int(user_id)))
+
+
+def _create_demo_session_sync(user_id: int, *, kind: str, day: str) -> int:
+    return int(
+        create_session(
+            int(user_id),
+            kind=("work" if kind == "work" else "home"),
+            source="demo",
+            day=day,
+            slot="demo",
+            anchor_id=None,
+        )
+    )
+
+
+def _demo_ack_exists_sync(*, user_id: int, kind: str, message_id: int) -> bool:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT ack_at_utc FROM demo_events WHERE user_id=? AND kind=? AND message_id=?",
+            (int(user_id), str(kind), int(message_id)),
+        ).fetchone()
+    return bool(row and row["ack_at_utc"])
+
+
+def _hour_context_sync(user_id: int) -> str | None:
+    return first_hour_today_local(int(user_id), settings.TIMEZONE) or recent_hour_local(int(user_id), settings.TIMEZONE)
+
+
+def _has_viewed_tariffs_since_sync(*, user_id: int, ack_at: str) -> bool:
+    return bool(has_event_since(int(user_id), "view_tariffs", str(ack_at)))
+
+
+def _paid_setup_already_configured_sync(user_id: int) -> bool:
+    if not is_sub_active(int(user_id)):
+        return False
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT work_time, home_time FROM users WHERE user_id=?",
+            (int(user_id),),
+        ).fetchone()
+    return bool(row and ((row["work_time"] if "work_time" in row.keys() else None) or (row["home_time"] if "home_time" in row.keys() else None)))
+
+
+def _post_prompt_idem_kind_sync(session_id: str) -> str:
+    try:
+        from services.mood import get_session
+
+        s = get_session(int(session_id))
+        return str(getattr(s, "kind", "") or "") if s else ""
+    except (ImportError, sqlite3.Error, ValueError, AttributeError, KeyError, TypeError):  # validator: allow-wide-except
+        return ""
+
+
+def _funnel2_demo_nopay_guard_sync(user_id: int, payload: dict) -> str:
+    if already_sent(int(user_id), SC_DEMO_NOPAY_24H):
+        return "already_sent"
+    if not eligible_demo_nopay_24h(int(user_id)):
+        log_skip(int(user_id), SC_DEMO_NOPAY_24H, "not_eligible")
+        return "not_eligible"
+    if not mark_sent(int(user_id), SC_DEMO_NOPAY_24H, {"kind": payload.get("kind"), "ack_at_utc": payload.get("ack_at_utc")}):
+        return "duplicate"
+    return "send"
+
+
+def _funnel2_expired_return_guard_sync(user_id: int, payload: dict) -> str:
+    if already_sent(int(user_id), SC_EXPIRED_RETURN_3D):
+        return "already_sent"
+    if not eligible_expired_return_3d(int(user_id)):
+        log_skip(int(user_id), SC_EXPIRED_RETURN_3D, "not_eligible")
+        return "not_eligible"
+    if not mark_sent(int(user_id), SC_EXPIRED_RETURN_3D, {"expires_at": payload.get("expires_at")}):
+        return "duplicate"
+    return "send"
+
+
 class Engine:
     # v16.8: protect event loop latency.
     # - do not run tick concurrently
@@ -102,9 +183,9 @@ class Engine:
             [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
         ])
 
-    def _should_skip_sales(self, user_id: int) -> bool:
+    async def _should_skip_sales(self, user_id: int) -> bool:
         """Если у пользователя уже есть доступ (подписка) — продающие сообщения не отправляем."""
-        return bool(is_sub_active(int(user_id)))
+        return await asyncio.to_thread(_is_sub_active_sync, int(user_id))
 
     async def tick(self, bot: Bot):
         # Throttle: avoids DB lock contention that causes "SLOW update" spikes.
@@ -215,26 +296,26 @@ class Engine:
                             await self._post_prompt(bot, job.user_id, payload)
                         else:
                             # неизвестный job_type — просто логируем
-                            log_event(job.user_id, "job_unknown", {"job_type": job.job_type})
+                            await asyncio.to_thread(log_event, job.user_id, "job_unknown", {"job_type": job.job_type})
                     except asyncio.CancelledError:
                         raise
                     except TelegramNetworkError:
                         # сеть отвалилась — единый retry-поток в jobs (без второго scheduler)
                         retry_at = (utc_now().replace(microsecond=0) + timedelta(seconds=60)).isoformat()
                         await asyncio.to_thread(reschedule, cj, retry_at, last_error="TelegramNetworkError")
-                        log_event(job.user_id, "job_network_retry", {"job_type": job.job_type})
+                        await asyncio.to_thread(log_event, job.user_id, "job_network_retry", {"job_type": job.job_type})
                         continue
                     except TelegramAPIError as e:
-                        log_event(job.user_id, "job_telegram_error", {"job_type": job.job_type, "err": str(e)})
+                        await asyncio.to_thread(log_event, job.user_id, "job_telegram_error", {"job_type": job.job_type, "err": str(e)})
                         await asyncio.to_thread(mark_done, job.id, cj.lock_token, last_error=f"TelegramAPIError: {e}")
                     except (sqlite3.Error, ValueError, TypeError, KeyError) as e:
-                        log_event(job.user_id, "job_error", {"job_type": job.job_type, "err": str(e)})
+                        await asyncio.to_thread(log_event, job.user_id, "job_error", {"job_type": job.job_type, "err": str(e)})
                         await asyncio.to_thread(mark_done, job.id, cj.lock_token, last_error=f"{type(e).__name__}: {e}")
                     except (ArithmeticError, AssertionError, AttributeError, IndexError, LookupError, NameError, NotImplementedError, OSError, OverflowError, ReferenceError, RuntimeError, SystemError, UnboundLocalError) as e:  # validator: allow-except-exception
                         logging.getLogger(__name__).exception(
                             "Engine job crashed", extra={"job_type": job.job_type, "user_id": int(job.user_id)}
                         )
-                        log_event(job.user_id, "job_error", {"job_type": job.job_type, "err": str(e)})
+                        await asyncio.to_thread(log_event, job.user_id, "job_error", {"job_type": job.job_type, "err": str(e)})
                         await asyncio.to_thread(mark_done, job.id, cj.lock_token, last_error=f"{type(e).__name__}: {e}")
                     else:
                         await asyncio.to_thread(mark_done, job.id, cj.lock_token)
@@ -250,13 +331,12 @@ class Engine:
             "Если за рулём — просто включите и слушайте безопасно."
         )
         await bot.send_message(user_id, text)
-        log_event(user_id, "demo_reminder_sent", {"kind": kind})
+        await asyncio.to_thread(log_event, user_id, "demo_reminder_sent", {"kind": kind})
 
     async def _demo_send(self, bot: Bot, user_id: int, payload: dict):
         kind = (payload.get("kind") or "work").strip()
 
-        sent = demo_sent_kinds(user_id)
-        admin_demo_bypass = can_repeat_demo_for_user(int(user_id))
+        sent, admin_demo_bypass = await asyncio.to_thread(_demo_send_state_sync, int(user_id))
         other = "home" if kind == "work" else "work"
 
         # Лимит бесплатных демо: максимум 2 (work + home). Дальше предлагаем подписку.
@@ -266,7 +346,7 @@ class Engine:
                 "✅ Вы уже получили оба ресурсных демо-транса.\n\nЕсли Вы хотите продолжить — пожалуйста, оформите подписку.",
                 reply_markup=self._kb_after_demo(kind, allow_other=False),
             )
-            log_event(user_id, "demo_send_skipped", {"reason": "both_sent", "kind": kind})
+            await asyncio.to_thread(log_event, user_id, "demo_send_skipped", {"reason": "both_sent", "kind": kind})
             return
 
         # Если такой kind уже отправляли — не пересылаем бесконечно.
@@ -277,18 +357,17 @@ class Engine:
                 "Вы можете послушать второй ресурсный демо-транс или оформить подписку.",
                 reply_markup=self._kb_after_demo(other, allow_other=(other not in sent)),
             )
-            log_event(user_id, "demo_send_skipped", {"reason": "kind_already_sent", "kind": kind})
+            await asyncio.to_thread(log_event, user_id, "demo_send_skipped", {"reason": "kind_already_sent", "kind": kind})
             return
         file_path = pick_demo_file(kind)
 
         if not file_path or not file_path.exists():
-            log_event(user_id, "demo_missing_file", {"kind": kind, "path": str(file_path) if file_path else None})
+            await asyncio.to_thread(log_event, user_id, "demo_missing_file", {"kind": kind, "path": str(file_path) if file_path else None})
             await bot.send_message(
                 user_id,
                 "⚠️ Демо временно недоступно: аудиофайл не найден. Пожалуйста, сообщите администратору."
             )
             return
-
         caption = (
             "✨ Ваш ресурсный демо-транс готов.\n\n"
             "Рекомендация: наденьте наушники и просто позвольте себе расслабиться. "
@@ -306,14 +385,7 @@ class Engine:
         # --- ЭТАП 2: мини-опрос до/после демо ---
         # Для демо используем локальный день проекта; ошибки тут не ожидаются.
         day = today_tz().isoformat()
-        sid = create_session(
-            int(user_id),
-            kind=("work" if kind == "work" else "home"),
-            source="demo",
-            day=day,
-            slot="demo",
-            anchor_id=None,
-        )
+        sid = await asyncio.to_thread(_create_demo_session_sync, int(user_id), kind=kind, day=day)
         await bot.send_message(
             user_id,
             "📍 Перед прослушиванием: оцените своё состояние сейчас (−10 … +10):\n\nНажмите оценку — и я сразу пришлю демо-аудио.",
@@ -323,7 +395,7 @@ class Engine:
         # Аудио и последующие шаги отправим после клика по оценке (handlers/mood.py)
         return
 
-        log_event(user_id, "demo_sent", {"kind": kind})
+        await asyncio.to_thread(log_event, user_id, "demo_sent", {"kind": kind})
 
     def _kb_offer(self, user_id: int) -> InlineKeyboardMarkup:
         # Пробный доступ отключён по ТЗ. Оставляем только детерминированные кнопки.
@@ -336,8 +408,8 @@ class Engine:
 
     async def _funnel_nudge(self, bot: Bot, user_id: int, payload: dict):
         """Мягкое касание после отправки демо, если пользователь не нажал «Прослушал»."""
-        if self._should_skip_sales(user_id):
-            log_event(user_id, "funnel_skipped", {"step": "nudge", "reason": "active_access"})
+        if await self._should_skip_sales(user_id):
+            await asyncio.to_thread(log_event, user_id, "funnel_skipped", {"step": "nudge", "reason": "active_access"})
             return
 
         kind = (payload.get("kind") or "work").strip()
@@ -346,18 +418,13 @@ class Engine:
         # если по этому демо уже есть ack — не пишем
         try:
             if msg_id is not None:
-                with get_db() as conn:
-                    row = conn.execute(
-                        "SELECT ack_at_utc FROM demo_events WHERE user_id=? AND kind=? AND message_id=?",
-                        (int(user_id), kind, int(msg_id)),
-                    ).fetchone()
-                if row and row["ack_at_utc"]:
-                    log_event(user_id, "funnel_skipped", {"step": "nudge", "reason": "already_acked"})
+                if await asyncio.to_thread(_demo_ack_exists_sync, user_id=int(user_id), kind=kind, message_id=int(msg_id)):
+                    await asyncio.to_thread(log_event, user_id, "funnel_skipped", {"step": "nudge", "reason": "already_acked"})
                     return
         except sqlite3.Error:
             logging.getLogger(__name__).exception("Engine DB check failed (non-fatal)")
 
-        hour = first_hour_today_local(int(user_id), settings.TIMEZONE) or recent_hour_local(int(user_id), settings.TIMEZONE)
+        hour = await asyncio.to_thread(_hour_context_sync, int(user_id))
         v = (payload.get("variant") or "").strip().lower()
         if v.startswith("nextday"):
             text = (
@@ -370,7 +437,7 @@ class Engine:
             # kind уже есть в payload: work/home
             text = funnel_text("nudge", kind=kind if kind in ("work", "home") else "both", hour=hour)
         await bot.send_message(user_id, text, reply_markup=self._kb_offer(user_id))
-        log_event(user_id, "funnel_nudge_sent", {"kind": kind})
+        await asyncio.to_thread(log_event, user_id, "funnel_nudge_sent", {"kind": kind})
 
     async def _funnel_postdemo(self, bot: Bot, user_id: int, payload: dict):
         """Мягкий апсейл после demo_ack.
@@ -379,33 +446,33 @@ class Engine:
           - если у пользователя уже есть доступ → ничего не шлём
           - если после ack он уже открыл тарифы → ничего не шлём
         """
-        if is_sub_active(int(user_id)):
-            log_event(user_id, "funnel_skipped", {"step": "postdemo", "reason": "active_access"})
+        if await asyncio.to_thread(_is_sub_active_sync, int(user_id)):
+            await asyncio.to_thread(log_event, user_id, "funnel_skipped", {"step": "postdemo", "reason": "active_access"})
             return
 
         ack_at = (payload.get("ack_at_utc") or "").strip()
         if ack_at:
             # если человек уже открыл тарифы после ack — не беспокоим
             try:
-                if has_event_since(int(user_id), "view_tariffs", ack_at):
-                    log_event(user_id, "funnel_skipped", {"step": "postdemo", "reason": "already_viewed_tariffs"})
+                if await asyncio.to_thread(_has_viewed_tariffs_since_sync, user_id=int(user_id), ack_at=ack_at):
+                    await asyncio.to_thread(log_event, user_id, "funnel_skipped", {"step": "postdemo", "reason": "already_viewed_tariffs"})
                     return
             except sqlite3.Error:
                 logging.getLogger(__name__).exception("Engine DB check failed (non-fatal)")
 
         kind = (payload.get("kind") or "both").strip()
-        hour = first_hour_today_local(int(user_id), settings.TIMEZONE) or recent_hour_local(int(user_id), settings.TIMEZONE)
+        hour = await asyncio.to_thread(_hour_context_sync, int(user_id))
         text = funnel_text("postdemo", kind=kind if kind in ("work", "home") else "both", hour=hour)
         await bot.send_message(user_id, text, reply_markup=self._kb_offer(user_id))
-        log_event(user_id, "funnel_postdemo_sent", {"kind": kind})
+        await asyncio.to_thread(log_event, user_id, "funnel_postdemo_sent", {"kind": kind})
 
     async def _funnel_offer(self, bot: Bot, user_id: int, payload: dict):
-        if is_sub_active(int(user_id)):
-            log_event(user_id, "funnel_skipped", {"step": "offer", "reason": "active_access"})
+        if await asyncio.to_thread(_is_sub_active_sync, int(user_id)):
+            await asyncio.to_thread(log_event, user_id, "funnel_skipped", {"step": "offer", "reason": "active_access"})
             return
 
         kind = (payload.get("kind") or "both").strip()
-        hour = first_hour_today_local(int(user_id), settings.TIMEZONE) or recent_hour_local(int(user_id), settings.TIMEZONE)
+        hour = await asyncio.to_thread(_hour_context_sync, int(user_id))
         variant = (payload.get("variant") or "").strip().lower()
         step = "offer_nextday" if variant.startswith("nextday") else "offer"
 
@@ -421,23 +488,15 @@ class Engine:
 
         # событие для админ-аналитики
         ev = f"funnel_{step}_variant_{ab}"
-        log_event(user_id, ev, {"variant": variant} if variant else {})
-        log_event(user_id, "funnel_offer_sent", {"step": step, "ab": ab, "variant": variant} if variant else {"step": step, "ab": ab})
+        await asyncio.to_thread(log_event, user_id, ev, {"variant": variant} if variant else {})
+        await asyncio.to_thread(log_event, user_id, "funnel_offer_sent", {"step": step, "ab": ab, "variant": variant} if variant else {"step": step, "ab": ab})
 
 
     async def _after_paid_setup_ping(self, bot: Bot, user_id: int, payload: dict):
         """Если после оплаты человек не назначил время — мягко напомнить."""
         try:
-            if is_sub_active(int(user_id)):
-                # если время уже назначено — не беспокоим
-                with get_db() as conn:
-                    row = conn.execute(
-                        "SELECT work_time, home_time FROM users WHERE user_id=?",
-                        (int(user_id),),
-                    ).fetchone()
-                # sqlite3.Row не поддерживает .get()
-                if row and ((row["work_time"] if "work_time" in row.keys() else None) or (row["home_time"] if "home_time" in row.keys() else None)):
-                    return
+            if await asyncio.to_thread(_paid_setup_already_configured_sync, int(user_id)):
+                return
 
             text = (
                 "🕰 Небольшое напоминание\n\n"
@@ -449,32 +508,31 @@ class Engine:
                 [InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:main")],
             ])
             await bot.send_message(user_id, text, reply_markup=kb)
-            log_event(user_id, "after_paid_setup_ping_sent", {})
+            await asyncio.to_thread(log_event, user_id, "after_paid_setup_ping_sent", {})
         except (sqlite3.Error, TelegramAPIError, TelegramNetworkError) as e:
             logging.getLogger(__name__).exception("after_paid_setup_ping failed", extra={"user_id": int(user_id)})
-            log_event(user_id, "after_paid_setup_ping_error", {"err": str(e)})
+            await asyncio.to_thread(log_event, user_id, "after_paid_setup_ping_error", {"err": str(e)})
 
     async def _funnel_deadline(self, bot: Bot, user_id: int, payload: dict):
-        if is_sub_active(int(user_id)):
-            log_event(user_id, "funnel_skipped", {"step": "deadline", "reason": "active_access"})
+        if await asyncio.to_thread(_is_sub_active_sync, int(user_id)):
+            await asyncio.to_thread(log_event, user_id, "funnel_skipped", {"step": "deadline", "reason": "active_access"})
             return
-
         kind = (payload.get("kind") or "both").strip()
-        hour = first_hour_today_local(int(user_id), settings.TIMEZONE) or recent_hour_local(int(user_id), settings.TIMEZONE)
+        hour = await asyncio.to_thread(_hour_context_sync, int(user_id))
         text = funnel_text("deadline", kind=kind if kind in ("work", "home") else "both", hour=hour)
         await bot.send_message(user_id, text, reply_markup=self._kb_offer(user_id))
-        log_event(user_id, "funnel_deadline_sent", {})
+        await asyncio.to_thread(log_event, user_id, "funnel_deadline_sent", {})
 
     async def _funnel_lastcall(self, bot: Bot, user_id: int, payload: dict):
-        if is_sub_active(int(user_id)):
-            log_event(user_id, "funnel_skipped", {"step": "lastcall", "reason": "active_access"})
+        if await asyncio.to_thread(_is_sub_active_sync, int(user_id)):
+            await asyncio.to_thread(log_event, user_id, "funnel_skipped", {"step": "lastcall", "reason": "active_access"})
             return
 
         kind = (payload.get("kind") or "both").strip()
-        hour = first_hour_today_local(int(user_id), settings.TIMEZONE) or recent_hour_local(int(user_id), settings.TIMEZONE)
+        hour = await asyncio.to_thread(_hour_context_sync, int(user_id))
         text = funnel_text("lastcall", kind=kind if kind in ("work", "home") else "both", hour=hour)
         await bot.send_message(user_id, text, reply_markup=self._kb_offer(user_id))
-        log_event(user_id, "funnel_lastcall_sent", {})
+        await asyncio.to_thread(log_event, user_id, "funnel_lastcall_sent", {})
 
     async def _remind_continue(self, bot: Bot, user_id: int, payload: dict):
         """Напоминание «продолжить завтра утром».
@@ -483,8 +541,8 @@ class Engine:
           - уважительный стиль (Вы)
           - не спамить: постановка задачи уже детерминирована через cancel_jobs(prefix)
         """
-        if is_sub_active(int(user_id)):
-            log_event(user_id, "remind_skipped", {"reason": "active_access"})
+        if await asyncio.to_thread(_is_sub_active_sync, int(user_id)):
+            await asyncio.to_thread(log_event, user_id, "remind_skipped", {"reason": "active_access"})
             return
 
         text = (
@@ -493,7 +551,7 @@ class Engine:
             "Тогда бот будет присылать утренние и/или вечерние сессии по расписанию."
         )
         await bot.send_message(user_id, text, reply_markup=self._kb_offer(user_id))
-        log_event(user_id, "remind_continue_sent", {"src": payload.get("src")})
+        await asyncio.to_thread(log_event, user_id, "remind_continue_sent", {"src": payload.get("src")})
 
     async def _post_prompt(self, bot: Bot, user_id: int, payload: dict):
         """Пост-оценка состояния после транса.
@@ -511,13 +569,7 @@ class Engine:
 
         # Единый замок: post_prompt должен отправляться ровно один раз,
         # независимо от того, что его триггернуло (job, кнопка, рестарт, ...).
-        try:
-            from services.mood import get_session
-
-            s = get_session(int(session_id))
-            idem_kind = str(getattr(s, "kind", "") or "") if s else ""
-        except (ImportError, sqlite3.Error, ValueError, AttributeError, KeyError, TypeError):  # validator: allow-wide-except
-            idem_kind = ""
+        idem_kind = await asyncio.to_thread(_post_prompt_idem_kind_sync, session_id)
 
         # Ключ идемпотентности: для сессии канонично sid:<id>,
         # но если передали run_at — добавляем wall_key, чтобы различать редкие кейсы.
@@ -528,7 +580,7 @@ class Engine:
             wall_key = ""
 
         idem_scheduled_at = for_session(session_id) if session_id else (wall_key or "")
-        if was_delivered(int(user_id), idem_kind, "post_prompt_sent", str(idem_scheduled_at)):
+        if await asyncio.to_thread(was_delivered, int(user_id), idem_kind, "post_prompt_sent", str(idem_scheduled_at)):
             return
 
         await bot.send_message(
@@ -538,14 +590,14 @@ class Engine:
         )
 
         # Маркер ставим ПОСЛЕ успешной отправки, чтобы при Telegram-ошибках был retry.
-        mark_delivery_once(int(user_id), idem_kind, "post_prompt_sent", str(idem_scheduled_at))
+        await asyncio.to_thread(mark_delivery_once, int(user_id), idem_kind, "post_prompt_sent", str(idem_scheduled_at))
 
     async def _sub_expiring_soon(self, bot: Bot, user_id: int, payload: dict):
         """Напоминание о продлении (за 3 дня до конца).
 
         ВАЖНО: Telegram не поддерживает автосписание, поэтому мы легально просим продлить.
         """
-        if not is_sub_active(int(user_id)):
+        if not await asyncio.to_thread(_is_sub_active_sync, int(user_id)):
             return
         exp = (payload.get("expires_at") or "").strip()
         tail = f"\n\nДата окончания: {exp}" if exp else ""
@@ -559,7 +611,7 @@ class Engine:
             "Чтобы продолжать получать утренние и вечерние трансы — продлите подписку." + tail,
             reply_markup=kb,
         )
-        log_event(user_id, "sub_expiring_soon_sent", {})
+        await asyncio.to_thread(log_event, user_id, "sub_expiring_soon_sent", {})
 
     async def _funnel2_demo_nopay_24h(self, bot: Bot, user_id: int, payload: dict):
         """Сценарий 2.0: после демо прошло 24ч, оплаты нет.
@@ -568,13 +620,8 @@ class Engine:
           - idempotency через funnel_events (mark_sent)
           - UX: мягко, 1 сообщение, кнопки стандартные
         """
-        if already_sent(user_id, SC_DEMO_NOPAY_24H):
-            return
-        if not eligible_demo_nopay_24h(user_id):
-            log_skip(user_id, SC_DEMO_NOPAY_24H, "not_eligible")
-            return
-        # фиксируем отправку до network-call (idempotency)
-        if not mark_sent(user_id, SC_DEMO_NOPAY_24H, {"kind": payload.get("kind"), "ack_at_utc": payload.get("ack_at_utc")}):
+        guard = await asyncio.to_thread(_funnel2_demo_nopay_guard_sync, int(user_id), payload)
+        if guard != "send":
             return
 
         text = (
@@ -584,16 +631,12 @@ class Engine:
             "Если хотите — откройте подписку и выберите удобный тариф."
         )
         await bot.send_message(user_id, text, reply_markup=self._kb_funnel(user_id))
-        log_event(user_id, "funnel2_sent", {"scenario": SC_DEMO_NOPAY_24H})
+        await asyncio.to_thread(log_event, user_id, "funnel2_sent", {"scenario": SC_DEMO_NOPAY_24H})
 
     async def _funnel2_expired_return_3d(self, bot: Bot, user_id: int, payload: dict):
         """Сценарий 2.0: подписка закончилась, прошло 3 дня — мягкий возврат."""
-        if already_sent(user_id, SC_EXPIRED_RETURN_3D):
-            return
-        if not eligible_expired_return_3d(user_id):
-            log_skip(user_id, SC_EXPIRED_RETURN_3D, "not_eligible")
-            return
-        if not mark_sent(user_id, SC_EXPIRED_RETURN_3D, {"expires_at": payload.get("expires_at")}):
+        guard = await asyncio.to_thread(_funnel2_expired_return_guard_sync, int(user_id), payload)
+        if guard != "send":
             return
 
         text = (
@@ -602,7 +645,7 @@ class Engine:
             "будут приходить автоматически."
         )
         await bot.send_message(user_id, text, reply_markup=self._kb_funnel(user_id))
-        log_event(user_id, "funnel2_sent", {"scenario": SC_EXPIRED_RETURN_3D})
+        await asyncio.to_thread(log_event, user_id, "funnel2_sent", {"scenario": SC_EXPIRED_RETURN_3D})
 
 engine = Engine()
 
