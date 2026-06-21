@@ -20,6 +20,10 @@ from config.settings import settings
 router = Router()
 
 
+async def _to_thread(func, *args, **kwargs):
+    return await asyncio.to_thread(func, *args, **kwargs)
+
+
 @router.callback_query(F.data == "weather:show")
 async def weather_show(cb: CallbackQuery):
     txt = await get_weather_text_async(int(cb.from_user.id))
@@ -37,7 +41,7 @@ async def weather_city(cb: CallbackQuery, state: FSMContext):
         await state.clear()
     except (TelegramAPIError, TelegramBadRequest):
         logging.getLogger(__name__).debug("Callback answer failed", exc_info=True)
-    set_pending(cb.from_user.id, "weather_city", {})
+    await _to_thread(set_pending, cb.from_user.id, "weather_city", {})
     await cb.message.answer(
         "🏙 Пожалуйста, напишите название города (например: «Казань»).\n\n"
         "Город можно будет изменить в любой момент.",
@@ -50,7 +54,7 @@ async def weather_location(message: Message):
     loc = message.location
     if not loc:
         return
-    set_location(int(message.from_user.id), float(loc.latitude), float(loc.longitude))
+    await _to_thread(set_location, int(message.from_user.id), float(loc.latitude), float(loc.longitude))
     await message.answer(
         "✅ Спасибо! Я сохранил Вашу локацию. Теперь погода будет точнее.\n\n"
         + (await get_weather_text_async(int(message.from_user.id))),
@@ -72,12 +76,12 @@ async def weather_city_input(message: Message):
         logging.getLogger(__name__).debug("time_trace unavailable", exc_info=True)
 
     uid = int(message.from_user.id)
-    p = peek_pending(uid)
+    p = await _to_thread(peek_pending, uid)
     if not p or p.kind != "weather_city":
         raise SkipHandler
 
     # фиксируем ввод, даже если дальше будет ошибка поиска
-    pop_pending(uid)
+    await _to_thread(pop_pending, uid)
 
     city_raw = (message.text or "").strip()
     if not city_raw:
@@ -87,7 +91,7 @@ async def weather_city_input(message: Message):
     if not ok:
         return await message.answer("❌ " + str(info), reply_markup=kb_back_main())
 
-    log_event(uid, "weather_city_set", {"city": str(info)})
+    await _to_thread(log_event, uid, "weather_city_set", {"city": str(info)})
     txt = await get_weather_text_async(uid, timeout_sec=1.5)
     await message.answer(
         f"✅ Город принят: {info}.\n\n{txt}\n\n"
