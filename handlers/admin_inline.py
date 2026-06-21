@@ -26,19 +26,13 @@ from core.callback_utils import safe_answer_callback
 router = Router()
 
 
-@router.callback_query(lambda c: (c.data or "").startswith("admin:"))
-async def admin_gate(cb: CallbackQuery, state: FSMContext):
-    uid = cb.from_user.id if cb.from_user else None
+def _load_admin_ctx(uid: int) -> AdminCtx | None:
     if not is_admin(uid):
-        try:
-            await safe_answer_callback(cb, "Недоступно.", show_alert=True)
-        except (TelegramAPIError, asyncio.TimeoutError):
-            logging.getLogger(__name__).exception("Unhandled exception")
-        return
+        return None
 
     roles = get_staff_roles(int(uid))
     if not roles:
-        return await safe_answer_callback(cb, "", show_alert=False)
+        return None
 
     from services.admin_permissions import get_allowed_perms
 
@@ -47,8 +41,28 @@ async def admin_gate(cb: CallbackQuery, state: FSMContext):
         allowed = get_allowed_perms(int(uid))
 
     staff_kb = kb_staff_menu(roles, is_superadmin=is_superadmin(int(uid)), allowed_perms=allowed)
-    ctx = AdminCtx(uid=int(uid), roles=roles, staff_kb=staff_kb, is_superadmin=is_superadmin(int(uid)), allowed_perms=allowed)
+    return AdminCtx(uid=int(uid), roles=roles, staff_kb=staff_kb, is_superadmin=is_superadmin(int(uid)), allowed_perms=allowed)
 
+
+def _grant_admin_role_sync(target_id: int) -> None:
+    from services.roles import grant_role
+
+    grant_role(int(target_id), ROLE_ADMIN)
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("admin:"))
+async def admin_gate(cb: CallbackQuery, state: FSMContext):
+    uid = cb.from_user.id if cb.from_user else None
+    ctx = await asyncio.to_thread(_load_admin_ctx, int(uid)) if uid is not None else None
+    if ctx is None:
+        try:
+            await safe_answer_callback(cb, "Недоступно.", show_alert=True)
+        except (TelegramAPIError, asyncio.TimeoutError):
+            logging.getLogger(__name__).exception("Unhandled exception")
+        return
+
+    roles = ctx.roles
+    staff_kb = ctx.staff_kb
     data = cb.data or ""
 
     # Back navigation (single-message admin UI)
@@ -170,8 +184,7 @@ async def admin_add_admin_input(msg: Message, state: FSMContext):
         return
 
     try:
-        from services.roles import grant_role
-        grant_role(int(target_id), ROLE_ADMIN)
+        await asyncio.to_thread(_grant_admin_role_sync, int(target_id))
     except RuntimeError:
         logging.getLogger(__name__).exception("Failed to add admin")
     except OSError:

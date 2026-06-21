@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 
@@ -9,11 +10,44 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from handlers.admin_inline_common import AdminCtx, safe_edit_admin
 from config.settings import ADMIN_IDS
 from handlers.text_input import RolesInputState
-from services.admin_permissions import list_admin_ids
-from services.roles import ALL_ROLES, grant_role, revoke_role, user_roles, list_role_holders
+from services.roles import ALL_ROLES
 
 
 from core.callback_utils import safe_answer_callback
+
+
+def _role_users_sync() -> list[tuple[int, set[str]]]:
+    from services.admin_permissions import list_admin_ids
+    from services.roles import user_roles
+
+    ids = set(int(x) for x in (ADMIN_IDS or []))
+    for x in list_admin_ids():
+        ids.add(int(x))
+    return [(uid, set(user_roles(uid) or set())) for uid in sorted(ids)]
+
+
+def _user_roles_sync(target_id: int) -> set[str]:
+    from services.roles import user_roles
+
+    return set(user_roles(int(target_id)) or set())
+
+
+def _toggle_role_sync(target_id: int, role: str) -> None:
+    from services.roles import grant_role, revoke_role, user_roles
+
+    current = set(user_roles(int(target_id)) or set())
+    if role in current:
+        revoke_role(int(target_id), role)
+    else:
+        grant_role(int(target_id), role)
+
+
+def _role_holders_sync(role: str) -> list[int]:
+    from services.roles import list_role_holders
+
+    return list(list_role_holders(str(role)))
+
+
 async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx) -> bool:
     if data == "admin:roles:menu":
         if not ctx.is_superadmin:
@@ -44,14 +78,10 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             await safe_answer_callback(cb, "", show_alert=False)
             return True
 
-        ids = set(int(x) for x in (ADMIN_IDS or []))
-        for x in list_admin_ids():
-            ids.add(int(x))
-        ids_list = sorted(ids)
+        role_users = await asyncio.to_thread(_role_users_sync)
 
         rows: list[list[InlineKeyboardButton]] = []
-        for uid in ids_list[:150]:
-            rs = user_roles(uid)
+        for uid, rs in role_users[:150]:
             tail = (" — " + ",".join(sorted(rs))) if rs else ""
             rows.append([InlineKeyboardButton(text=f"{uid}{tail}", callback_data=f"admin:roles:user:{uid}")])
         rows.append([InlineKeyboardButton(text="➕ Добавить администратора", callback_data="admin:add_admin")])
@@ -70,7 +100,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             await safe_answer_callback(cb, "", show_alert=False)
             return True
 
-        current = user_roles(target_id)
+        current = await asyncio.to_thread(_user_roles_sync, target_id)
         rows: list[list[InlineKeyboardButton]] = []
         for role in ALL_ROLES:
             mark = "✅" if role in current else "⬜️"
@@ -100,12 +130,8 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             return True
         role = str(parts[4]).strip().lower()
 
-        cur = user_roles(target_id)
         try:
-            if role in cur:
-                revoke_role(target_id, role)
-            else:
-                grant_role(target_id, role)
+            await asyncio.to_thread(_toggle_role_sync, target_id, role)
         except (sqlite3.Error, TypeError, ValueError):
             logging.getLogger(__name__).exception("Role toggle failed")
             await safe_answer_callback(cb, "Ошибка", show_alert=True)
@@ -129,7 +155,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             await safe_answer_callback(cb, "", show_alert=False)
             return True
         role = str(data.split(":")[-1]).strip().lower()
-        holders = list_role_holders(role)
+        holders = await asyncio.to_thread(_role_holders_sync, role)
         if not holders:
             text = f"📚 Роль {role}\n\nПока никому не назначена."
         else:
