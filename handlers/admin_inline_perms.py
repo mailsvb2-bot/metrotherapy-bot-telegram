@@ -21,6 +21,36 @@ from handlers.admin_inline_states import AdminManageState
 
 
 from core.callback_utils import safe_answer_callback
+
+
+def _list_admin_ids_sync() -> list[int]:
+    from services.admin_permissions import list_admin_ids
+
+    return list(list_admin_ids())
+
+
+def _allowed_perms_sync(target_id: int):
+    from services.admin_permissions import get_allowed_perms
+
+    return get_allowed_perms(int(target_id))
+
+
+def _toggle_perm_sync(target_id: int, perm: str, updated_by: int) -> None:
+    from services.admin_permissions import PERMS, get_allowed_perms, set_perm, toggle_perm
+
+    # If no explicit restrictions exist, persist "all allowed" first, then toggle the specific one.
+    if get_allowed_perms(int(target_id)) is None:
+        for item in PERMS:
+            set_perm(int(target_id), item.perm, True, updated_by=int(updated_by))
+    toggle_perm(int(target_id), str(perm), updated_by=int(updated_by))
+
+
+def _grant_role_sync(target_id: int, role: str) -> None:
+    from services.roles import grant_role
+
+    grant_role(int(target_id), str(role))
+
+
 async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx) -> bool:
     log = logging.getLogger(__name__)
 
@@ -29,9 +59,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             await safe_answer_callback(cb, "", show_alert=False)
             return True
 
-        from services.admin_permissions import list_admin_ids
-
-        admin_ids = list_admin_ids()
+        admin_ids = await asyncio.to_thread(_list_admin_ids_sync)
         if not admin_ids:
             kb = InlineKeyboardMarkup(
                 inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")]]
@@ -42,7 +70,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
         rows: list[list[InlineKeyboardButton]] = []
         for uid in admin_ids:
             rows.append([InlineKeyboardButton(text=str(uid), callback_data=f"admin:perms:user:{uid}")])
-        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")])
+        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:perms")])
         kb = InlineKeyboardMarkup(inline_keyboard=rows)
         await safe_edit_admin(cb, state, "🔐 Выберите администратора:", reply_markup=kb)
         return True
@@ -57,9 +85,9 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             await safe_answer_callback(cb, "", show_alert=False)
             return True
 
-        from services.admin_permissions import PERMS, get_allowed_perms
+        from services.admin_permissions import PERMS
 
-        allowed = get_allowed_perms(target_id)
+        allowed = await asyncio.to_thread(_allowed_perms_sync, target_id)
         allowed_set = allowed or set()
 
         buttons: list[list[InlineKeyboardButton]] = []
@@ -98,13 +126,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             return True
         perm = parts[4]
 
-        from services.admin_permissions import PERMS, get_allowed_perms, set_perm, toggle_perm
-
-        # If no explicit restrictions exist, persist "all allowed" first, then toggle the specific one.
-        if get_allowed_perms(target_id) is None:
-            for item in PERMS:
-                set_perm(target_id, item.perm, True, updated_by=int(ctx.uid))
-        toggle_perm(target_id, perm, updated_by=int(ctx.uid))
+        await asyncio.to_thread(_toggle_perm_sync, target_id, perm, int(ctx.uid))
 
         # Re-render the same screen (no recursion to admin_inline()).
         return await handle(cb, state, f"admin:perms:user:{target_id}", ctx)
@@ -158,8 +180,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             return True
 
         try:
-            from services.roles import grant_role
-            grant_role(target_id, role)
+            await asyncio.to_thread(_grant_role_sync, target_id, role)
         except ImportError:
             log.exception("Не удалось выдать роль")
             await safe_answer_callback(cb, "Ошибка", show_alert=True)
