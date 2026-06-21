@@ -278,6 +278,28 @@ def _parse_hhmm(s: str) -> str | None:
     return f"{h:02d}:{m:02d}"
 
 
+def _persist_user_time(uid: int, slot: str, hhmm: str) -> None:
+    columns = {"work": "work_time", "home": "home_time"}
+    col = columns.get(str(slot))
+    if col is None:
+        raise ValueError(f"unsupported time slot: {slot}")
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO users(user_id, joined_at) VALUES(?, COALESCE((SELECT joined_at FROM users WHERE user_id=?), datetime('now'))) "
+            "ON CONFLICT(user_id) DO NOTHING",
+            (int(uid), int(uid)),
+        )
+        conn.execute(f"UPDATE users SET {col}=? WHERE user_id=?", (str(hhmm), int(uid)))
+
+
+def _load_user_times(uid: int):
+    with db() as conn:
+        return conn.execute(
+            "SELECT work_time, home_time FROM users WHERE user_id=?",
+            (int(uid),),
+        ).fetchone()
+
+
 @router.message(F.text)
 async def settings_time_input(message: Message):
     # Диагностика конфликтов ввода HH:MM
@@ -334,30 +356,13 @@ async def settings_time_input(message: Message):
     if not hhmm:
         return await message.answer("Пожалуйста, время в формате HH:MM (например, 08:30).", reply_markup=kb_back_main())
 
-    col = "work_time" if slot == "work" else "home_time"
-    def _persist_user_time():
-        with db() as conn:
-            conn.execute(
-                "INSERT INTO users(user_id, joined_at) VALUES(?, COALESCE((SELECT joined_at FROM users WHERE user_id=?), datetime('now'))) "
-                "ON CONFLICT(user_id) DO NOTHING",
-                (uid, uid),
-            )
-            conn.execute(f"UPDATE users SET {col}=? WHERE user_id=?", (hhmm, uid))
-
-    await _to_thread(_persist_user_time)
+    await _to_thread(_persist_user_time, uid, slot, hhmm)
 
     await _to_thread(log_event, uid, "settings_time_set", {"slot": slot, "time": hhmm})
     is_admin = uid in settings.admin_id_list
     # Быстрый UX: сразу предложить настроить второе время, чтобы не возвращаться в меню.
     try:
-        def _load_user_times():
-            with db() as conn:
-                return conn.execute(
-                    "SELECT work_time, home_time FROM users WHERE user_id=?",
-                    (uid,),
-                ).fetchone()
-
-        row = await _to_thread(_load_user_times)
+        row = await _to_thread(_load_user_times, uid)
         wt = (row[0] if row and not hasattr(row, "keys") else (row["work_time"] if row else None))
         ht = (row[1] if row and not hasattr(row, "keys") else (row["home_time"] if row else None))
     except (TelegramAPIError, TelegramBadRequest, asyncio.TimeoutError):

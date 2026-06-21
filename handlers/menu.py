@@ -52,6 +52,11 @@ def _parse_hhmm(s: str) -> tuple[int, int] | None:
     return h, m
 
 
+def _load_work_time_row(user_id: int) -> object:
+    with db() as conn:
+        return conn.execute("SELECT work_time FROM users WHERE user_id=?", (int(user_id),)).fetchone()
+
+
 async def safe_edit(message: Message, text: str, reply_markup=None, parse_mode=None):
     """
     Убирает лаги/ошибки Telegram 'message is not modified'
@@ -179,11 +184,7 @@ async def cb_remind_continue_tomorrow(cb: CallbackQuery):
     tz = _tz()
 
     # базовое время: work_time (если пользователь уже настраивал), иначе MORNING_TIME из настроек
-    def _load_work_time_row() -> object:
-        with db() as conn:
-            return conn.execute("SELECT work_time FROM users WHERE user_id=?", (user_id,)).fetchone()
-
-    row = await asyncio.to_thread(_load_work_time_row)
+    row = await asyncio.to_thread(_load_work_time_row, user_id)
     hhmm = (row["work_time"] if row and row["work_time"] else "") or getattr(settings, "MORNING_TIME", "08:30")
     parsed = _parse_hhmm(str(hhmm)) or _parse_hhmm(getattr(settings, "MORNING_TIME", "08:30"))
     h, m = parsed if parsed else (8, 30)

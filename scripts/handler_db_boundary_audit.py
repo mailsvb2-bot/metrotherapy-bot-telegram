@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Detect direct low-level DB work inside async Telegram handlers.
 
-Handlers may call synchronous storage code through asyncio.to_thread helpers, but
-low-level DB calls inside an async handler body can block the event loop. This
-script is a regression guard for that boundary.
+Handlers may call module-level synchronous storage helpers through
+asyncio.to_thread, but low-level DB calls inside an async handler body or inside
+nested helper functions declared under that async body make the boundary
+ambiguous and are rejected. This script is a regression guard for that boundary.
 """
 
 import argparse
@@ -65,12 +66,39 @@ class _AsyncBodyScanner(ast.NodeVisitor):
         self.async_name = async_name
         self.offenses: list[dict[str, Any]] = []
         self._allowed_depth = 0
+        self._nested_func_stack: list[str] = []
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # nested sync helper is allowed
-        return
+    def _record(self, node: ast.Call) -> None:
+        nested = ".".join(self._nested_func_stack)
+        self.offenses.append(
+            {
+                "path": str(self.path.relative_to(ROOT)),
+                "async_function": self.async_name,
+                "nested_function": nested,
+                "line": int(getattr(node, "lineno", 0) or 0),
+                "call": _call_name(node.func),
+            }
+        )
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # nested async helper has own scan
-        return
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        # Nested sync helpers inside async handlers are intentionally scanned.
+        # Module-level sync helpers are not visited by _ModuleScanner, so they remain allowed
+        # when invoked through asyncio.to_thread/_to_thread.
+        self._nested_func_stack.append(node.name)
+        try:
+            for item in node.body:
+                self.visit(item)
+        finally:
+            self._nested_func_stack.pop()
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        # Nested async helper has its own async body but is still under a handler scope.
+        self._nested_func_stack.append(node.name)
+        try:
+            for item in node.body:
+                self.visit(item)
+        finally:
+            self._nested_func_stack.pop()
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         return
@@ -84,14 +112,7 @@ class _AsyncBodyScanner(ast.NodeVisitor):
             self._allowed_depth += 1
         try:
             if self._allowed_depth == 0 and _is_low_level_db_call(node):
-                self.offenses.append(
-                    {
-                        "path": str(self.path.relative_to(ROOT)),
-                        "async_function": self.async_name,
-                        "line": int(getattr(node, "lineno", 0) or 0),
-                        "call": _call_name(node.func),
-                    }
-                )
+                self._record(node)
             self.generic_visit(node)
         finally:
             if is_wrapper:
@@ -121,6 +142,7 @@ def _scan_file(path: Path) -> list[dict[str, Any]]:
             {
                 "path": str(path.relative_to(ROOT)),
                 "async_function": "<parse>",
+                "nested_function": "",
                 "line": int(exc.lineno or 0),
                 "call": "syntax_error",
             }
@@ -155,7 +177,8 @@ def main() -> int:
     else:
         print(f"HANDLER_DB_BOUNDARY_AUDIT_{payload['status']} offenses={payload['offense_count']} files={payload['files_scanned']}")
         for item in payload["offenses"]:
-            print(f"{item['path']}:{item['line']} {item['async_function']} direct {item['call']}")
+            nested = f".{item.get('nested_function')}" if item.get("nested_function") else ""
+            print(f"{item['path']}:{item['line']} {item['async_function']}{nested} direct {item['call']}")
     return 0 if payload["ok"] else 1
 
 
