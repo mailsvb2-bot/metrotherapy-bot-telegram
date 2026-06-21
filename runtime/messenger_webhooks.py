@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from aiogram.exceptions import TelegramAPIError
 from aiohttp import web
 
 from config.settings import settings
@@ -137,6 +138,6 @@ async def start_messenger_webhook_runtime(
             log.info("Messenger webhook runtime started on %s:%s", host, port)
 
         return MessengerWebhookRuntime(runner=runner, site=site, telegram_public_url=telegram_public_url)
-    except Exception:  # validator: allow-wide-except
+    except (OSError, RuntimeError, ValueError, TypeError, AttributeError, TelegramAPIError):
         await runner.cleanup()
         raise
