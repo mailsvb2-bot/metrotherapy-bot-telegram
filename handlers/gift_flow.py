@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -43,13 +45,44 @@ GIFT_EXPLAIN = (
     "Дорога остаётся дорогой — но состояние начинает меняться."
 )
 
-async def send_gift_intro(message: Message, code: str) -> None:
+
+def _gift_intro_state(code: str, user_id: int) -> tuple[bool, str]:
+    ok, msg, _gift = get_gift_status(code)
+    if ok:
+        log_event(int(user_id), "gift_intro_shown", {"code": code})
+    return bool(ok), str(msg)
+
+
+def _accept_gift_state(code: str, uid: int) -> tuple[bool, str, bool]:
     ok, msg, gift = get_gift_status(code)
+    if not ok or not gift:
+        return False, str(msg), False
+
+    ok2, msg2, gift2 = redeem_gift(code, int(uid))
+    if ok2 and gift2:
+        grant(int(uid), gift2["scope"], gift2["days"])
+        log_event(int(uid), "gift_accepted", {"code": code, "scope": gift2["scope"], "days": gift2["days"]})
+        return True, str(msg2), True
+    return False, str(msg2), True
+
+
+def _accept_gift_for_time_state(code: str, uid: int) -> None:
+    ok, _msg, gift = get_gift_status(code)
+    if ok and gift:
+        ok2, _, gift2 = redeem_gift(code, int(uid))
+        if ok2 and gift2:
+            grant(int(uid), gift2["scope"], gift2["days"])
+            activate_gift(code, int(uid))
+            log_event(int(uid), "gift_redeemed", {"code": code, "scope": gift2["scope"], "days": gift2["days"]})
+
+
+async def send_gift_intro(message: Message, code: str) -> None:
+    user_id = int(message.from_user.id) if message.from_user else 0
+    ok, msg = await asyncio.to_thread(_gift_intro_state, code, user_id)
     if not ok:
         await message.answer(msg)
         return
     await message.answer(GIFT_INTRO, reply_markup=_kb_intro(code), parse_mode="Markdown")
-    log_event(int(message.from_user.id), "gift_intro_shown", {"code": code})
 
 
 @router.callback_query(F.data.startswith("gift:how:"))
@@ -64,15 +97,8 @@ async def gift_accept(cb: CallbackQuery):
     code = cb.data.split(":", 2)[2].strip()
     uid = int(cb.from_user.id)
 
-    ok, msg, gift = get_gift_status(code)
-    if not ok or not gift:
-        return await cb.message.answer(msg)
-
-    # redeem now (idempotent on DB row)
-    ok2, msg2, gift2 = redeem_gift(code, uid)
-    if ok2 and gift2:
-        grant(uid, gift2["scope"], gift2["days"])
-        log_event(uid, "gift_accepted", {"code": code, "scope": gift2["scope"], "days": gift2["days"]})
+    ok2, msg2, gift_known = await asyncio.to_thread(_accept_gift_state, code, uid)
+    if ok2:
         # show explain + go time
         from aiogram.exceptions import TelegramBadRequest
         try:
@@ -80,7 +106,7 @@ async def gift_accept(cb: CallbackQuery):
         except TelegramBadRequest:
             await cb.message.answer(GIFT_EXPLAIN, reply_markup=_kb_to_time(code), parse_mode="Markdown")
         return
-    # if already activated
+    # if invalid or already activated
     await cb.message.answer(msg2)
 
 @router.callback_query(F.data.startswith("gift:later:"))
@@ -96,13 +122,7 @@ async def gift_time(cb: CallbackQuery):
     uid = int(cb.from_user.id)
 
     # Если подарок ещё не принят — принимаем идемпотентно.
-    ok, msg, gift = get_gift_status(code)
-    if ok and gift:
-        ok2, _, gift2 = redeem_gift(code, uid)
-        if ok2 and gift2:
-            grant(uid, gift2["scope"], gift2["days"])
-            activate_gift(code, uid)
-            log_event(uid, "gift_redeemed", {"code": code, "scope": gift2["scope"], "days": gift2["days"]})
+    await asyncio.to_thread(_accept_gift_for_time_state, code, uid)
 
     # После принятия — переиспользуем существующую клавиатуру настройки времени.
     await cb.message.answer(
