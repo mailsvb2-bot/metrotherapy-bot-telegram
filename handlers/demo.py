@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 
 from config.settings import settings
 from keyboards.inline import kb_sales_offer
@@ -26,6 +26,11 @@ router = Router()
 UTC = ZoneInfo("UTC")
 
 
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
 @router.callback_query(F.data.regexp(r"^demo:other:(work|home)$"))
 async def demo_send_other(cb: CallbackQuery):
     """По кнопке под демо-аудио отправляем второй демо-транс.
@@ -35,6 +40,9 @@ async def demo_send_other(cb: CallbackQuery):
     - без дубликатов (на всякий случай убираем старые demo_send)
     """
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
 
     parts = (cb.data or "").split(":")
     if len(parts) != 3:
@@ -49,13 +57,13 @@ async def demo_send_other(cb: CallbackQuery):
     sent = demo_sent_kinds(user_id)
     # Если оба демо уже были отправлены — дальше не раздаём бесплатные повторы.
     if not admin_demo_bypass and "work" in sent and "home" in sent:
-        return await cb.message.answer(
+        return await message.answer(
             "✅ Вы уже получили оба ресурсных демо-транса.\n\n"
             "Если Вы хотите продолжить — пожалуйста, оформите подписку.",
             reply_markup=kb_sales_offer(user_id),
         )
     if not admin_demo_bypass and kind in sent:
-        return await cb.message.answer(
+        return await message.answer(
             "✅ Этот демо-транс уже был отправлен Вам ранее.\n\n"
             "Если Вы хотите продолжить — пожалуйста, оформите подписку.",
             reply_markup=kb_sales_offer(user_id),
@@ -68,7 +76,7 @@ async def demo_send_other(cb: CallbackQuery):
     add_job(user_id, "demo_send", run_now, {"kind": kind, "src": "cross"})
     log_event(user_id, "demo_cross_requested", {"kind": kind})
 
-    await cb.message.answer("✅ Хорошо. Сейчас пришлю Вам второй ресурсный демо-транс.")
+    await message.answer("✅ Хорошо. Сейчас пришлю Вам второй ресурсный демо-транс.")
 
 
 def _get_demo_sent_at_utc(user_id: int, kind: str, message_id: int) -> str | None:
@@ -88,17 +96,20 @@ def _get_demo_sent_at_utc(user_id: int, kind: str, message_id: int) -> str | Non
 @router.callback_query(F.data.startswith("demo:ack:"))
 async def demo_ack(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
 
     # ожидаем: demo:ack:{kind}:{message_id}
     parts = (cb.data or "").split(":")
     if len(parts) != 4:
-        return await cb.message.answer(
+        return await message.answer(
             "⚠️ Некорректная кнопка демо. Откройте меню → «Демо» и запланируйте демо заново."
         )
 
     _, _, kind, msgid = parts
     if kind not in ("work", "home"):
-        return await cb.message.answer(
+        return await message.answer(
             "⚠️ Некорректный тип демо. Откройте меню → «Демо» и запланируйте демо заново."
         )
 
@@ -106,7 +117,7 @@ async def demo_ack(cb: CallbackQuery):
         msg_id = int(msgid)
     except (TypeError, ValueError):
         logging.getLogger(__name__).exception("Unhandled exception")
-        return await cb.message.answer(
+        return await message.answer(
             "⚠️ Некорректный идентификатор демо. Откройте меню → «Демо» и запланируйте демо заново."
         )
 
@@ -115,7 +126,7 @@ async def demo_ack(cb: CallbackQuery):
 
     if ok:
         # аккуратный апсейл без изменения UX: просто удобные кнопки
-        await cb.message.answer(
+        await message.answer(
             "✅ Спасибо! Я отметил, что Вы прослушали демо.\n\n"
             "Если захотите продолжить — можно открыть подписку, подарить доступ другу или посоветовать бота.",
             reply_markup=kb_sales_offer(cb.from_user.id),
@@ -127,7 +138,7 @@ async def demo_ack(cb: CallbackQuery):
             if q_key:
                 q = get_micro_question(q_key)
                 if q:
-                    await cb.message.answer(
+                    await message.answer(
                         str(q.get("question")),
                         reply_markup=kb_micro_question(str(q.get("key")), list(q.get("options") or [])),
                     )
@@ -246,7 +257,7 @@ async def demo_ack(cb: CallbackQuery):
 
             log_event(cb.from_user.id, "funnel_scheduled", {"from": "demo_ack"})
     else:
-        await cb.message.answer(
+        await message.answer(
             "Я не нашёл запись демо для этой кнопки.\n"
             "Это бывает, если сообщение переслали/удалили.\n\n"
             "Откройте меню → «Демо» и запланируйте демо заново."
