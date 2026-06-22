@@ -59,7 +59,7 @@ async def share_menu(cb: CallbackQuery):
 
     uid = int(cb.from_user.id)
     _, from_name, share_text = _build_share_payload(cb)
-    set_pending(uid, 'share', {'text': share_text, 'from_name': from_name})
+    # Platform share uses inline URL buttons and must not open a stale user-pick mode.
     log_event(uid, 'share_menu', {'mode': 'platform_choice'})
     await cb.message.answer(
         '📣 Куда хотите посоветовать «Метротерапию»?\n\n'

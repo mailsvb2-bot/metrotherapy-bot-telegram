@@ -132,14 +132,8 @@ class QuickAckCallbackMiddleware(BaseMiddleware):
                 pass
         if not should_clear:
             return
+        # Silent cleanup: stale picker state must not create an extra chat message.
         clear_pending(uid)
-        try:
-            await event.message.answer(
-                'Режим выбора закрыт.',
-                reply_markup=ReplyKeyboardRemove(),
-            )
-        except (TelegramBadRequest, TelegramNetworkError, TelegramAPIError, asyncio.TimeoutError, AttributeError):  # validator: allow-wide-except
-            return
 
     async def __call__(
         self,
