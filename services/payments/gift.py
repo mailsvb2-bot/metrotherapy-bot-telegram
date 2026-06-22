@@ -19,6 +19,22 @@ from services.messenger.links import build_gift_share_targets
 
 logger = logging.getLogger(__name__)
 
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return int(user.id) if user else None
+
+
+def _message_user_full_name(message: Message) -> str:
+    user = message.from_user
+    return (user.full_name or "").strip() if user else ""
+
+
 _LEGACY_GIFT_PAYMENT_DISABLED = (
     "Этот старый способ оплаты подарка отключён. Откройте подарки заново и выберите актуальный пакет."
 )
@@ -34,10 +50,14 @@ def _gift_share_keyboard(code: str, text: str):
 
 async def gift_menu(cb: CallbackQuery) -> None:
     # Canonical flow: gift is a universal code/link. Recipient channel is selected after payment.
+    message = _callback_message(cb)
+    if message is None:
+        return
+
     set_pending(int(cb.from_user.id), "gift_universal", {"from_name": (cb.from_user.full_name or "").strip()})
     log_event(int(cb.from_user.id), "gift_menu", {"mode": "universal_link"})
 
-    await cb.message.edit_text(
+    await message.edit_text(
         "🎁 Подарить подписку\n\n"
         "Сначала выберите тариф и оплатите подарок. После оплаты проект даст ссылки для отправки подарка в Telegram, ВКонтакте или MAX.\n\n"
         "Получатель откроет подарок в выбранном мессенджере и войдёт в тот же маршрут Метротерапии.",
@@ -47,17 +67,21 @@ async def gift_menu(cb: CallbackQuery) -> None:
 
 async def gift_pick_target(cb: CallbackQuery) -> None:
     # Legacy Telegram direct-target flow. Kept for old callback contracts, but no longer the main UX.
+    message = _callback_message(cb)
+    if message is None:
+        return
+
     uid = int(cb.from_user.id)
     kb_r = pick_user_keyboard()
     if kb_r is None:
-        await cb.message.answer(
+        await message.answer(
             "⚠️ Ваш клиент Telegram не поддерживает выбор пользователя кнопкой.\n"
             "Выберите тариф и после оплаты отправьте универсальную ссылку подарка в нужный мессенджер.",
             reply_markup=kb_gift_tariffs(back_cb="menu:main"),
         )
         return
     set_pending(uid, "gift_target", {"from_name": (cb.from_user.full_name or "").strip()})
-    await cb.message.answer(
+    await message.answer(
         "Выберите получателя в Telegram.\n"
         "После выбора откроется список тарифов.",
         reply_markup=kb_r,
@@ -66,8 +90,8 @@ async def gift_pick_target(cb: CallbackQuery) -> None:
 
 async def gift_pick_cancel(message: Message) -> None:
     """Отмена выбора получателя подарка."""
-    uid = int(message.from_user.id) if message.from_user else 0
-    if not uid:
+    uid = _message_user_id(message)
+    if uid is None:
         return
     peek = peek_pending(uid)
     if peek and peek.kind in {"gift_target", "gift_universal"}:
@@ -78,11 +102,13 @@ async def gift_pick_cancel(message: Message) -> None:
             "✅ Хорошо. Выбор подарка отменён.",
             reply_markup=ReplyKeyboardRemove(),
         )
-        await message.answer('Главное меню:', reply_markup=kb_main(user_id=message.from_user.id))
+        await message.answer('Главное меню:', reply_markup=kb_main(user_id=uid))
 
 
 async def gift_users_shared(message: Message, state: FSMContext) -> None:
-    uid = int(message.from_user.id)
+    uid = _message_user_id(message)
+    if uid is None:
+        return
     # выбор получателя не должен попадать в чужие FSM-сценарии
     try:
         await state.clear()
@@ -97,11 +123,12 @@ async def gift_users_shared(message: Message, state: FSMContext) -> None:
         return
 
     try:
-        if getattr(message, "user_shared", None) is not None:
-            to_id = int(message.user_shared.user_id)
+        shared_user = getattr(message, "user_shared", None)
+        if shared_user is not None:
+            to_id = int(shared_user.user_id)
         else:
-            shared = message.users_shared
-            picked = (shared.users or [])[:1]
+            shared_users = getattr(message, "users_shared", None)
+            picked = (getattr(shared_users, "users", None) or [])[:1]
             to_id = int(picked[0].user_id) if picked else 0
     except sqlite3.Error:
         logger.exception("gift_users_shared: failed to parse shared user (user_id=%s)", uid)
@@ -136,38 +163,47 @@ async def gift_users_shared(message: Message, state: FSMContext) -> None:
 
 async def gift_buy(cb: CallbackQuery) -> None:
     """Legacy Telegram invoice gift callback: intentionally disabled."""
+    message = _callback_message(cb)
+    if message is None:
+        return
+
     log_event(int(cb.from_user.id), "legacy_payment_callback_blocked", {"stage": "gift_buy"})
-    await cb.message.answer(_LEGACY_GIFT_PAYMENT_DISABLED, reply_markup=kb_back("gift:menu"))
+    await message.answer(_LEGACY_GIFT_PAYMENT_DISABLED, reply_markup=kb_back("gift:menu"))
 
 
 async def deliver_gift_message(message: Message, code: str) -> None:
     """Show sender platform choices for a paid gift; legacy direct Telegram target is best-effort."""
-    from_name = (message.from_user.full_name or "").strip() or "друг"
+    user_id = _message_user_id(message)
+    if user_id is None:
+        return
+
+    from_name = _message_user_full_name(message) or "друг"
     template = get_gift_template()
     txt = template.format(link='', from_name=from_name).strip()
 
     sent_ok = 0
-    tgt = get_target(message.from_user.id)
-    if tgt:
-        me = await message.bot.get_me()
+    tgt = get_target(user_id)
+    bot = message.bot
+    if tgt and bot is not None:
+        me = await bot.get_me()
         telegram_link = f"https://t.me/{me.username}?start=gift_{code}"
         direct_txt = template.format(link=telegram_link, from_name=from_name)
         try:
-            await message.bot.send_message(int(tgt.to_id), direct_txt)
+            await bot.send_message(int(tgt.to_id), direct_txt)
             sent_ok = 1
         except (TelegramAPIError, asyncio.TimeoutError):
             logger.info("gift delivery send_message failed", exc_info=True)
             sent_ok = 0
 
     if sent_ok:
-        log_event(message.from_user.id, "gift_delivered_ok", {"code": code, "to_id": int(tgt.to_id) if tgt else None})
+        log_event(user_id, "gift_delivered_ok", {"code": code, "to_id": int(tgt.to_id) if tgt else None})
         await message.answer(
             "✅ Оплата прошла. Подарок оплачен и отправлен получателю в Telegram.\n\n"
             "Также можно отправить универсальную ссылку в другой мессенджер:",
             reply_markup=_gift_share_keyboard(code, txt),
         )
     else:
-        log_event(message.from_user.id, "gift_delivery_platform_choice", {"code": code, "to_id": int(tgt.to_id) if tgt else None})
+        log_event(user_id, "gift_delivery_platform_choice", {"code": code, "to_id": int(tgt.to_id) if tgt else None})
         await message.answer(
             "✅ Оплата прошла. Подарок готов.\n\n"
             "Куда отправить подарок? Выберите мессенджер — получатель откроет ссылку именно там:",
@@ -175,7 +211,7 @@ async def deliver_gift_message(message: Message, code: str) -> None:
         )
         await message.answer(
             "Главное меню:",
-            reply_markup=kb_main(user_id=message.from_user.id),
+            reply_markup=kb_main(user_id=user_id),
         )
 
-    clear_target(message.from_user.id)
+    clear_target(user_id)
