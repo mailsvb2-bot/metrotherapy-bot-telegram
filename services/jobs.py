@@ -15,6 +15,18 @@ from services.job_keys import default_job_key
 log = logging.getLogger(__name__)
 
 
+def _sql_placeholders(count: int) -> str:
+    """Return a validated SQL placeholder list for parameterized IN clauses.
+
+    Only the placeholder fragment is generated dynamically; all values remain
+    bound parameters passed separately to conn.execute().
+    """
+    count = int(count)
+    if count <= 0:
+        raise ValueError("placeholder count must be positive")
+    return ",".join("?" for _ in range(count))
+
+
 @dataclass
 class ClaimedJob:
     id: int
@@ -138,9 +150,11 @@ def cancel_jobs(user_id: int, job_types: list[str] | None = None, prefix: str | 
     with db() as conn:
         with tx(conn):
             if job_types:
-                placeholders = ",".join(["?"] * len(job_types))
+                placeholders = _sql_placeholders(len(job_types))
                 conn.execute(
-                    f"DELETE FROM jobs WHERE user_id=? AND done_at IS NULL AND job_type IN ({placeholders})",
+                    # placeholders are generated from a validated count;
+                    # values are still passed as bound parameters.
+                    f"DELETE FROM jobs WHERE user_id=? AND done_at IS NULL AND job_type IN ({placeholders})",  # nosec B608
                     [user_id, *job_types],
                 )
             if prefix:
@@ -222,26 +236,29 @@ def _claim_due_jobs_sqlite(*, now_utc_iso: str, stale_before: str, limit: int, t
                 return []
 
             ids = [int(_row_get(row, "id", 0)) for row in rows]
-            placeholders = ",".join(["?"] * len(ids))
+            placeholders = _sql_placeholders(len(ids))
 
+            update_sql = (
+                "UPDATE jobs "
+                "SET locked_at=?, lock_token=? "
+                f"WHERE id IN ({placeholders}) "  # nosec B608
+                "AND done_at IS NULL "
+                "AND (locked_at IS NULL OR locked_at <= ?)"
+            )
             conn.execute(
-                f"""
-                UPDATE jobs
-                SET locked_at=?, lock_token=?
-                WHERE id IN ({placeholders})
-                  AND done_at IS NULL
-                  AND (locked_at IS NULL OR locked_at <= ?)
-                """.strip(),
+                update_sql,
                 [now_utc_iso, token, *ids, stale_before],
             )
 
+            select_sql = (
+                "SELECT id, user_id, job_type, run_at_utc, payload, job_key, retries, lock_token "
+                "FROM jobs "
+                "WHERE lock_token=? "
+                f"AND id IN ({placeholders}) "  # nosec B608
+                "ORDER BY id ASC"
+            )
             claimed = conn.execute(
-                f"""
-                SELECT id, user_id, job_type, run_at_utc, payload, job_key, retries, lock_token
-                FROM jobs
-                WHERE lock_token=? AND id IN ({placeholders})
-                ORDER BY id ASC
-                """.strip(),
+                select_sql,
                 [token, *ids],
             ).fetchall()
 
