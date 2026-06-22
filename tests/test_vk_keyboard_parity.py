@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+import json
+
+from runtime.messenger_senders import VkBotSender
+
+
+def _vk_keyboard_with_legacy_extra_controls() -> str:
+    return json.dumps(
+        {
+            "one_time": False,
+            "inline": False,
+            "buttons": [
+                [
+                    {"action": {"type": "text", "label": "🌿 Попробовать бесплатно", "payload": json.dumps({"command": "demo"})}, "color": "positive"},
+                    {"action": {"type": "text", "label": "🔐 Полный маршрут", "payload": json.dumps({"command": "full"})}, "color": "primary"},
+                ],
+                [
+                    {"action": {"type": "text", "label": "💳 Тарифы", "payload": json.dumps({"command": "pay"})}, "color": "primary"},
+                    {"action": {"type": "text", "label": "🎁 Подарить", "payload": json.dumps({"command": "gift"})}, "color": "secondary"},
+                ],
+                [
+                    {"action": {"type": "text", "label": "📈 Мой прогресс", "payload": json.dumps({"command": "progress"})}, "color": "primary"},
+                    {"action": {"type": "text", "label": "🧠 Настройки", "payload": json.dumps({"command": "settings"})}, "color": "secondary"},
+                ],
+                [
+                    {"action": {"type": "text", "label": "📣 Посоветовать", "payload": json.dumps({"command": "share"})}, "color": "secondary"},
+                    {"action": {"type": "text", "label": "🌤 Погода", "payload": json.dumps({"command": "weather"})}, "color": "secondary"},
+                ],
+                [
+                    {"action": {"type": "text", "label": "🎧 Получить аудио", "payload": json.dumps({"command": "continue"})}, "color": "secondary"},
+                    {"action": {"type": "text", "label": "✅ Прослушал", "payload": json.dumps({"command": "done"})}, "color": "positive"},
+                ],
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _commands(keyboard_json: str) -> list[str]:
+    keyboard = json.loads(keyboard_json)
+    commands: list[str] = []
+    for row in keyboard["buttons"]:
+        for button in row:
+            action = button["action"]
+            if action["type"] != "text":
+                continue
+            payload = json.loads(action["payload"])
+            commands.append(payload["command"])
+    return commands
+
+
+def _action_types(keyboard_json: str) -> list[str]:
+    keyboard = json.loads(keyboard_json)
+    return [button["action"]["type"] for row in keyboard["buttons"] for button in row]
+
+
+def test_vk_main_keyboard_is_telegram_main_parity_without_legacy_controls():
+    normalized = VkBotSender._telegram_main_parity_keyboard_json(_vk_keyboard_with_legacy_extra_controls())
+
+    assert _commands(normalized) == [
+        "demo",
+        "full",
+        "pay",
+        "gift",
+        "progress",
+        "settings",
+        "share",
+        "weather",
+    ]
+    assert set(_action_types(normalized)) == {"text"}
+
+
+def test_vk_context_keyboard_is_not_normalized_as_main_menu():
+    contextual = json.dumps(
+        {
+            "one_time": False,
+            "inline": False,
+            "buttons": [
+                [
+                    {"action": {"type": "text", "label": "🎧 Получить аудио", "payload": json.dumps({"command": "continue"})}, "color": "secondary"},
+                    {"action": {"type": "text", "label": "✅ Прослушал", "payload": json.dumps({"command": "done"})}, "color": "positive"},
+                ]
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    assert VkBotSender._telegram_main_parity_keyboard_json(contextual) == contextual
+
+
+def test_vk_full_route_branch_gets_contextual_continue_done_keyboard():
+    prepared = VkBotSender._prepare_vk_keyboard_json(
+        _vk_keyboard_with_legacy_extra_controls(),
+        external_user_id="12345",
+        text="🔐 Полный маршрут\n\nНажмите «🎧 Получить аудио».",
+    )
+
+    assert _commands(prepared) == ["continue", "done", "start"]
+    assert set(_action_types(prepared)) == {"text"}
+
+
+def test_vk_start_menu_keeps_only_text_buttons_supported_by_persistent_keyboard():
+    prepared = VkBotSender._prepare_vk_keyboard_json(
+        _vk_keyboard_with_legacy_extra_controls(),
+        external_user_id="12345",
+        text="Главное меню",
+    )
+
+    assert _commands(prepared) == [
+        "demo",
+        "full",
+        "pay",
+        "gift",
+        "progress",
+        "settings",
+        "share",
+        "weather",
+    ]
+    assert set(_action_types(prepared)) == {"text"}

@@ -1,0 +1,60 @@
+name: Postgres Smoke
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: metro
+          POSTGRES_PASSWORD: metro
+          POSTGRES_DB: metrotherapy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      METRO_DB_ENGINE: postgres
+      DATABASE_URL: postgresql://metro:metro@127.0.0.1:5432/metrotherapy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Postgres smoke no polling
+        env:
+          APP_ENV: prod
+          VALIDATOR_RELEASE_MODE: '1'
+          VALIDATOR_GUARDRAILS_STRICT: '1'
+          VALIDATOR_SKIP_AUDIO: '1'
+          ADMIN_IDS: '1'
+          YOOKASSA_SHOP_ID: smoke-shop
+          YOOKASSA_SECRET_KEY: smoke-key
+          PAYMENT_CHECKOUT_SIGNING_KEY: smoke-checkout-key
+          YOOKASSA_WEBHOOK_SECRET: smoke-webhook-key
+          PAYMENT_PUBLIC_BASE_URL: 'https://metrotherapy.example'
+        run: python scripts/smoke.py

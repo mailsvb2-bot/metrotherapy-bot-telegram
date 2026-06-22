@@ -1,0 +1,69 @@
+# env
+.env
+.env.*
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# sqlite
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+# sqlite db
+data.db
+data.db-journal
+data.db-wal
+data.db-shm
+
+# logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# backups
+backups/*.db
+backups/*.sqlite
+backups/*.sqlite3
+.pytest_cache/
+.ruff_cache/
+dist/
+data/mplcache/
+.mypy_cache/
+.coverage
+.idea/
+.vscode/
+
+# Local generated artifacts
+artifacts/
+
+# Runtime/server local state
+data/
+logs/
+*.log
+*.sqlite
+*.db
+*.bak*
+max_user_reset_backup_*.json
+max_user_state_before_clean_reset_*.json
+
+# Runtime state must not be shipped
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+logs/*.log
+*.log
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

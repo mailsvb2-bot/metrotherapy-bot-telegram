@@ -1,0 +1,55 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+src = ["."]
+exclude = [
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "data",
+    "backups",
+    "audio",
+    "logs",
+    "tmp",
+]
+
+[tool.ruff.lint]
+# Production-safe first-stage gate.
+# Keep this narrow: block only syntax/runtime-dangerous errors, not legacy style debt.
+select = [
+    "E9",    # syntax / parser level pycodestyle errors
+    "F821",  # undefined name
+    "F822",  # undefined name in __all__
+    "F823",  # local variable referenced before assignment
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests intentionally keep local bootstrap/import patterns; the production gate
+# should not be blocked by test style debt.
+"tests/**/*.py" = [
+    "F821",
+    "F822",
+    "F823",
+]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_configs = true
+no_implicit_optional = true
+check_untyped_defs = false
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "venv", "build", "dist", "data", "audio", "logs"]
+skips = [
+    "B101",  # assert is allowed in internal runtime guards/tests
+    "B110",  # try/except/pass is used by best-effort diagnostics and is separately reviewed
+    "B310",  # controlled urllib calls are already constrained to known provider/local URLs
+]
