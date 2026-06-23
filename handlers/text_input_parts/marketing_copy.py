@@ -14,6 +14,11 @@ from services.funnel_copies import upsert_copy
 
 router = Router()
 
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return user.id if user is not None else None
+
+
 _STEP_TITLES = {
     "nudge": "мягкое напоминание",
     "postdemo": "сообщение после пробной практики",
@@ -32,7 +37,8 @@ def _step_help() -> str:
 
 @router.message(MarketingCopyState.key)
 async def msg_copy_key(message: Message, state: FSMContext):
-    if not is_marketing(message.from_user.id):
+    marketer_id = _message_user_id(message)
+    if marketer_id is None or not is_marketing(marketer_id):
         await state.clear()
         return
 
@@ -55,7 +61,8 @@ async def msg_copy_key(message: Message, state: FSMContext):
 
 @router.message(MarketingCopyState.context)
 async def msg_copy_context(message: Message, state: FSMContext):
-    if not is_marketing(message.from_user.id):
+    marketer_id = _message_user_id(message)
+    if marketer_id is None or not is_marketing(marketer_id):
         await state.clear()
         return
 
@@ -75,7 +82,8 @@ async def msg_copy_context(message: Message, state: FSMContext):
 
 @router.message(MarketingCopyState.goal)
 async def msg_copy_goal(message: Message, state: FSMContext):
-    if not is_marketing(message.from_user.id):
+    marketer_id = _message_user_id(message)
+    if marketer_id is None or not is_marketing(marketer_id):
         await state.clear()
         return
 
@@ -88,8 +96,8 @@ async def msg_copy_goal(message: Message, state: FSMContext):
     context = str(data.get("copy_context") or "").strip()
 
     a, b = await asyncio.to_thread(generate_ab_texts, context=context, goal=goal)
-    upsert_copy(key, "A", a, created_by=message.from_user.id)
-    upsert_copy(key, "B", b, created_by=message.from_user.id)
+    upsert_copy(key, "A", a, created_by=marketer_id)
+    upsert_copy(key, "B", b, created_by=marketer_id)
 
     await state.clear()
 
