@@ -4,16 +4,19 @@ import asyncio
 import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from typing import TypedDict
 from zoneinfo import ZoneInfo
+
+TELEGRAM_API_ERROR: type[BaseException]
 
 try:
     from aiogram import Bot
-    from aiogram.exceptions import TelegramAPIError
+    from aiogram.exceptions import TelegramAPIError as _TelegramAPIError
 except ImportError:  # pragma: no cover
     Bot = object  # type: ignore[misc,assignment]
-
-    class TelegramAPIError(RuntimeError):
-        pass
+    TELEGRAM_API_ERROR = RuntimeError
+else:
+    TELEGRAM_API_ERROR = _TelegramAPIError
 
 from config.settings import settings
 from runtime.messenger_senders import MaxBotSender, TelegramBotSender, VkBotSender
@@ -21,7 +24,7 @@ from services.audio_anchor import pick_for_slot
 from services.auto_audio_entitlement import eligible_user_ids
 from services.auto_audio_recovery import acquire_delivery_lock
 from services.db import db, mark_delivery_once, unmark_delivery, was_delivered
-from services.delivery_preferences import build_delivery_policy_decision
+from services.delivery_preferences import DeliveryPolicyDecision, build_delivery_policy_decision
 from services.events import log_event
 from services.idempotency_keys import for_pre_score
 from services.messenger.outbound import SenderRegistry, build_delivery_plan
@@ -29,6 +32,14 @@ from services.mood import create_session
 from services.progress import get_index
 
 log = logging.getLogger(__name__)
+
+
+class DueCandidate(TypedDict):
+    uid: int
+    slot: str
+    policy: DeliveryPolicyDecision
+    hm: str
+    scheduled_now: bool
 
 
 def _norm_hms(hm: str) -> tuple[int, int, int]:
@@ -94,8 +105,8 @@ def _is_due_for_user(uid: int, slot: str, now_utc: datetime) -> tuple[bool, str,
     return _is_due_local_day(local_now, hm), policy.timezone, hm
 
 
-def _collect_due_candidates(now_utc: datetime) -> list[dict[str, object]]:
-    out: list[dict[str, object]] = []
+def _collect_due_candidates(now_utc: datetime) -> list[DueCandidate]:
+    out: list[DueCandidate] = []
     for slot in ("morning", "evening"):
         # eligible_user_ids() already performs final entitlement filtering in bulk.
         # Do not call has_entitlement() here: that recreates the old per-user
@@ -155,7 +166,6 @@ async def tick(bot: Bot):
             uid = int(item["uid"])
             slot = str(item["slot"])
             policy = item["policy"]
-            assert hasattr(policy, "timezone")
             if policy.blocked_by_quiet_hours:
                 log_event(uid, "auto_audio_quiet_hours_block", {"slot": slot, "tz": policy.timezone, "preferred": policy.preferred_channel, "resolved": policy.resolved_channel, "next_allowed_at": policy.next_allowed_at.isoformat() if policy.next_allowed_at else None})
                 continue
@@ -191,7 +201,7 @@ async def tick(bot: Bot):
                 log_event(uid, "auto_audio_prompted", {"slot": slot, "anchor": aa.anchor, "day": local_day, "channel": policy.resolved_channel, "preferred": policy.preferred_channel, "tz": tz_name})
                 if policy.fallback_used:
                     log_event(uid, "auto_audio_channel_fallback", {"slot": slot, "preferred": policy.preferred_channel, "resolved": policy.resolved_channel, "tz": tz_name})
-            except TelegramAPIError as exc:
+            except TELEGRAM_API_ERROR as exc:
                 await _unmark_pre_score_lock(uid, kind, scheduled_at)
                 log_event(uid, "auto_audio_telegram_delivery_error", {"slot": slot, "err": str(exc), "channel": policy.resolved_channel})
                 continue
