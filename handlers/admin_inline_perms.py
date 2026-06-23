@@ -145,7 +145,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
         await state.clear()
         await state.set_state(AdminManageState.waiting_admin_user)
 
-        kb = ReplyKeyboardMarkup(
+        reply_kb = ReplyKeyboardMarkup(
             keyboard=[
                 [
                     KeyboardButton(
@@ -169,7 +169,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             "• Или отправьте @username\n"
             "• Или отправьте числом его user_id\n\n"
             "Отмена — кнопкой ниже.",
-            reply_markup=kb,
+            reply_markup=reply_kb,
         )
         return True
 
