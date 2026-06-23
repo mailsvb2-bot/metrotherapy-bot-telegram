@@ -1,7 +1,7 @@
 from services.fast_send_audio import send_audio_cached
 from services.bg import tm
 from aiogram import Router
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 
 from keyboards.inline import kb_full_access_menu
 from services.audio_guard import get_full_files_guarded
@@ -10,24 +10,34 @@ from pathlib import Path
 from core.callback_utils import safe_answer_callback
 router = Router()
 
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
 @router.callback_query(lambda c: c.data == "full")
 async def full(cb: CallbackQuery):
     await safe_answer_callback(cb)
-    user_id = cb.from_user.id
+    message = _callback_message(cb)
+    if message is None:
+        return
+
+    user_id = int(cb.from_user.id)
 
     res = get_full_files_guarded(user_id)
     if not res.ok:
-        await cb.message.answer(res.message or "⚠️ Сейчас это недоступно.", reply_markup=kb_full_access_menu())
+        await message.answer(res.message or "⚠️ Сейчас это недоступно.", reply_markup=kb_full_access_menu())
         return
 
     files = res.paths or []
 
-    await cb.message.answer("✅ Полный доступ активен. Треки:", reply_markup=kb_full_access_menu())
+    await message.answer("✅ Полный доступ активен. Треки:", reply_markup=kb_full_access_menu())
 
     # Отправку треков уводим в фон: клики должны ощущаться мгновенными,
     # а сеть/загрузка файлов могут занимать секунды.
     bot = cb.bot
-    chat_id = int(cb.message.chat.id)
+    chat_id = int(message.chat.id)
 
     async def _send_all() -> None:
         import asyncio
