@@ -8,7 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from aiogram.exceptions import TelegramBadRequest, TelegramAPIError
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config.settings import settings
 from services.roles import ROLE_ADMIN, ROLE_SUPPORT, ROLE_MARKETING, user_roles
@@ -85,6 +85,11 @@ _ADMIN_NAV_STACK_KEY = "admin_nav_stack"
 _ADMIN_NAV_CURRENT_KEY = "admin_nav_current"
 
 
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
 def _kb_serialize(kb: InlineKeyboardMarkup | None) -> list[list[dict]] | None:
     if kb is None:
         return None
@@ -142,8 +147,12 @@ async def safe_edit(cb: CallbackQuery, text, reply_markup=None):
         except (TypeError, ValueError):
             text = str(text)
 
+    message = _callback_message(cb)
+    if message is None:
+        return
+
     try:
-        await cb.message.edit_text(text, reply_markup=reply_markup)
+        await message.edit_text(text, reply_markup=reply_markup)
         return
     except TelegramBadRequest as e:
         if "message is not modified" in str(e):
@@ -152,8 +161,7 @@ async def safe_edit(cb: CallbackQuery, text, reply_markup=None):
         logging.getLogger(__name__).debug("safe_edit primary edit failed", exc_info=True)
 
     try:
-        if cb.message:
-            await cb.message.answer(text, reply_markup=reply_markup)
+        await message.answer(text, reply_markup=reply_markup)
     except (TelegramAPIError, asyncio.TimeoutError):
         logging.getLogger(__name__).exception("safe_edit fallback send failed")
 
@@ -194,11 +202,17 @@ async def safe_edit_admin(
     kb = _ensure_admin_back_button(kb, enabled=can_back)
     kb = _ensure_admin_home_button(kb)
 
-    cur_view = {"text": text if isinstance(text, str) else str(text), "kb": _kb_serialize(kb if isinstance(kb, InlineKeyboardMarkup) else None)}
+    view_text = text if isinstance(text, str) else str(text)
+    view_kb = _kb_serialize(kb if isinstance(kb, InlineKeyboardMarkup) else None)
+    cur_view = {"text": view_text, "kb": view_kb}
     await state.update_data({_ADMIN_NAV_STACK_KEY: stack, _ADMIN_NAV_CURRENT_KEY: cur_view})
 
+    message = _callback_message(cb)
+    if message is None:
+        return
+
     try:
-        await cb.message.edit_text(cur_view["text"], reply_markup=kb)
+        await message.edit_text(view_text, reply_markup=kb)
         return
     except TelegramBadRequest as e:
         if "message is not modified" in str(e):
@@ -207,7 +221,7 @@ async def safe_edit_admin(
         logging.getLogger(__name__).debug("safe_edit_admin primary edit failed", exc_info=True)
 
     try:
-        await cb.message.answer(cur_view["text"], reply_markup=kb)
+        await message.answer(view_text, reply_markup=kb)
     except (TelegramAPIError, asyncio.TimeoutError):
         logging.getLogger(__name__).exception("safe_edit_admin fallback send failed")
 
@@ -224,8 +238,12 @@ async def admin_nav_back(cb: CallbackQuery, state) -> bool:
     if not stack:
         return False
 
+    message = _callback_message(cb)
+    if message is None:
+        return False
+
     prev = stack.pop()
-    text = prev.get("text", "")
+    text = str(prev.get("text", ""))
     kb = _kb_deserialize(prev.get("kb"))
 
     await state.update_data({_ADMIN_NAV_STACK_KEY: stack, _ADMIN_NAV_CURRENT_KEY: prev})
@@ -233,9 +251,9 @@ async def admin_nav_back(cb: CallbackQuery, state) -> bool:
     kb2 = _ensure_admin_back_button(kb, enabled=len(stack) > 0)
     kb2 = _ensure_admin_home_button(kb2)
     try:
-        await cb.message.edit_text(text, reply_markup=kb2)
+        await message.edit_text(text, reply_markup=kb2)
     except TelegramBadRequest:
-        await cb.message.answer(text, reply_markup=kb2)
+        await message.answer(text, reply_markup=kb2)
     return True
 
 
