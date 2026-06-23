@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aiogram import Router, F
+from aiogram import Bot, F, Router
 from aiogram.types import Message
 
 from runtime.messenger_senders import TelegramBotSender, MaxBotSender, VkBotSender
@@ -20,9 +20,9 @@ def _message_user_id(message: Message) -> int | None:
     return user.id if user is not None else None
 
 
-def _registry(message: Message) -> SenderRegistry:
+def _registry(bot: Bot) -> SenderRegistry:
     return SenderRegistry(
-        telegram=TelegramBotSender(message.bot),
+        telegram=TelegramBotSender(bot),
         max=MaxBotSender(),
         vk=VkBotSender(),
     )
@@ -31,10 +31,11 @@ def _registry(message: Message) -> SenderRegistry:
 @router.message(F.text.in_({'/continue', 'continue', '/next', 'next', '/audio', 'audio', 'следующее аудио'}))
 async def continue_audio(message: Message) -> None:
     uid = _message_user_id(message)
-    if uid is None:
+    bot = message.bot
+    if uid is None or bot is None:
         return
     try:
-        result = await send_next_audio_to_user(uid, senders=_registry(message), telegram_bot=message.bot)
+        result = await send_next_audio_to_user(uid, senders=_registry(bot), telegram_bot=bot)
         if result.platform != 'telegram':
             await message.answer(result.message)
     except UnsupportedMessengerDelivery:
@@ -49,7 +50,8 @@ async def continue_audio(message: Message) -> None:
 @router.message(F.text.in_({'/done', 'done', 'готово', 'прослушал', 'дослушал'}))
 async def confirm_audio(message: Message) -> None:
     uid = _message_user_id(message)
-    if uid is None:
+    bot = message.bot
+    if uid is None or bot is None:
         return
     confirmed = confirm_pending_audio_delivery(uid, platform='telegram')
     if confirmed is None:
@@ -57,7 +59,7 @@ async def confirm_audio(message: Message) -> None:
         return
     await message.answer(f'✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}. Отправляю дальше.')
     try:
-        result = await send_next_audio_to_user(uid, senders=_registry(message), telegram_bot=message.bot, target_platform='telegram', fallback='telegram')
+        result = await send_next_audio_to_user(uid, senders=_registry(bot), telegram_bot=bot, target_platform='telegram', fallback='telegram')
         if result.platform != 'telegram':
             await message.answer(result.message)
     except UnsupportedMessengerDelivery:
