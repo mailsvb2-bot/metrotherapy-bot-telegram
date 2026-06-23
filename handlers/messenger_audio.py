@@ -15,6 +15,11 @@ from services.messenger.platforms import platform_title
 router = Router()
 
 
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return user.id if user is not None else None
+
+
 def _registry(message: Message) -> SenderRegistry:
     return SenderRegistry(
         telegram=TelegramBotSender(message.bot),
@@ -25,7 +30,9 @@ def _registry(message: Message) -> SenderRegistry:
 
 @router.message(F.text.in_({'/continue', 'continue', '/next', 'next', '/audio', 'audio', 'следующее аудио'}))
 async def continue_audio(message: Message) -> None:
-    uid = int(message.from_user.id)
+    uid = _message_user_id(message)
+    if uid is None:
+        return
     try:
         result = await send_next_audio_to_user(uid, senders=_registry(message), telegram_bot=message.bot)
         if result.platform != 'telegram':
@@ -41,7 +48,9 @@ async def continue_audio(message: Message) -> None:
 
 @router.message(F.text.in_({'/done', 'done', 'готово', 'прослушал', 'дослушал'}))
 async def confirm_audio(message: Message) -> None:
-    uid = int(message.from_user.id)
+    uid = _message_user_id(message)
+    if uid is None:
+        return
     confirmed = confirm_pending_audio_delivery(uid, platform='telegram')
     if confirmed is None:
         await message.answer('ℹ️ Сейчас нет аудио, ожидающего подтверждения. Отправьте /continue, чтобы получить текущее или следующее аудио.')
@@ -56,7 +65,10 @@ async def confirm_audio(message: Message) -> None:
 
 @router.message(F.text.in_({'/progress', 'progress', 'прогресс', 'где остановился'}))
 async def audio_progress(message: Message) -> None:
-    snap = get_progress_snapshot(int(message.from_user.id))
+    uid = _message_user_id(message)
+    if uid is None:
+        return
+    snap = get_progress_snapshot(uid)
     pending_tail = ''
     if snap.pending_item is not None:
         pending_tail = (
@@ -82,7 +94,10 @@ async def audio_progress(message: Message) -> None:
 
 @router.message(F.text.in_({'/history', 'history', '/timeline', 'timeline', 'история'}))
 async def audio_history(message: Message) -> None:
-    events = get_recent_audio_timeline(int(message.from_user.id), sequence_key=SEQUENCE_FULL_SERIES, limit=8)
+    uid = _message_user_id(message)
+    if uid is None:
+        return
+    events = get_recent_audio_timeline(uid, sequence_key=SEQUENCE_FULL_SERIES, limit=8)
     if not events:
         await message.answer('🧾 История аудио и переходов пока пуста.')
         return
@@ -113,7 +128,10 @@ async def audio_history(message: Message) -> None:
 
 @router.message(F.text.in_({'/switch', 'switch', 'другой мессенджер', 'сменить канал'}))
 async def switch_channel(message: Message) -> None:
-    token = issue_bridge_token(int(message.from_user.id))
+    uid = _message_user_id(message)
+    if uid is None:
+        return
+    token = issue_bridge_token(uid)
     targets = build_switch_targets(token)
     if not targets:
         await message.answer('🔁 Ссылки переключения пока не настроены. Нужно задать TELEGRAM_BOT_USERNAME, MAX_BOT_LINK_BASE/MAX_BOT_NAME и VK_GROUP_ID.')
