@@ -9,9 +9,14 @@ from services.messenger.setup import render_setup_text, render_setup_links_previ
 
 router = Router()
 
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return user.id if user is not None else None
+
+
 @router.message(Command("whoami"))
 async def cmd_whoami(message: Message):
-    uid = message.from_user.id if message.from_user else None
+    uid = _message_user_id(message)
     uname = (message.from_user.username or "").strip() if message.from_user else ""
     is_admin = bool(uid and uid in settings.admin_id_list)
 
@@ -33,7 +38,7 @@ async def cmd_whoami(message: Message):
 
 @router.message(Command("messenger_setup"))
 async def cmd_messenger_setup(message: Message):
-    uid = message.from_user.id if message.from_user else None
+    uid = _message_user_id(message)
     if not uid or uid not in settings.admin_id_list:
         await message.answer('Эта команда доступна только администратору.')
         return
@@ -42,7 +47,7 @@ async def cmd_messenger_setup(message: Message):
 
 @router.message(Command("messenger_links"))
 async def cmd_messenger_links(message: Message):
-    uid = message.from_user.id if message.from_user else None
+    uid = _message_user_id(message)
     if not uid or uid not in settings.admin_id_list:
         await message.answer('Эта команда доступна только администратору.')
         return
