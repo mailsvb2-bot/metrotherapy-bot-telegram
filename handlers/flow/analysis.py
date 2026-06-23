@@ -4,7 +4,7 @@ import logging
 import os
 
 
-from aiogram import Router, F
+from aiogram import Bot, Router, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.dispatcher.event.bases import SkipHandler
@@ -37,6 +37,15 @@ from core.callback_utils import safe_answer_callback
 router = Router()
 
 
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
+def _callback_bot(cb: CallbackQuery) -> Bot | None:
+    return cb.bot
+
+
 async def safe_edit(message: Message, text: str, reply_markup=None, parse_mode=None, **kwargs):
     """Безопасный edit_text.
 
@@ -59,10 +68,14 @@ async def settings_state(cb: CallbackQuery):
     except (TelegramAPIError, TelegramBadRequest, asyncio.TimeoutError):
         logging.getLogger(__name__).debug("cb.answer failed", exc_info=True)
 
+    message = _callback_message(cb)
+    if message is None:
+        return
+
     from keyboards.inline import kb_state_period_menu
 
     await safe_edit(
-        cb.message,
+        message,
         "📈 Анализ моего состояния\n\n"
         "Можно поставить быструю оценку прямо сейчас (1–10) — она сохранится, даже если график построите позже.\n\n"
         "Выберите действие:",
@@ -78,10 +91,14 @@ async def state_rate_menu(cb: CallbackQuery):
     except (TelegramAPIError, TelegramBadRequest, asyncio.TimeoutError):
         logging.getLogger(__name__).debug("cb.answer failed", exc_info=True)
 
+    message = _callback_message(cb)
+    if message is None:
+        return
+
     from keyboards.inline import kb_state_rate_scale
 
     await safe_edit(
-        cb.message,
+        message,
         "⭐ Оцените своё состояние прямо сейчас (1 — хуже, 10 — лучше):",
         reply_markup=kb_state_rate_scale(),
         parse_mode=None,
@@ -97,6 +114,10 @@ async def state_rate_click(cb: CallbackQuery):
     except asyncio.TimeoutError:
         logging.getLogger(__name__).debug("cb.answer failed", exc_info=True)
 
+    message = _callback_message(cb)
+    if message is None:
+        return
+
     parts = (cb.data or "").split(":")
     if len(parts) != 3:
         return
@@ -110,12 +131,12 @@ async def state_rate_click(cb: CallbackQuery):
 
     ok = add_rating(uid, rating)
     if not ok:
-        return await cb.message.answer("⚠️ Не удалось сохранить оценку. Попробуйте ещё раз.")
+        return await message.answer("⚠️ Не удалось сохранить оценку. Попробуйте ещё раз.")
 
     # После сохранения возвращаем пользователя в меню анализа
     from keyboards.inline import kb_state_period_menu
     await safe_edit(
-        cb.message,
+        message,
         f"✅ Сохранил: {rating}/10\n\nВыберите период, чтобы построить график:",
         reply_markup=kb_state_period_menu(),
         parse_mode=None,
@@ -132,9 +153,16 @@ async def state_period(cb: CallbackQuery):
     except asyncio.TimeoutError:
         logging.getLogger(__name__).debug("cb.answer failed", exc_info=True)
 
+    message = _callback_message(cb)
+    if message is None:
+        return
+    bot = _callback_bot(cb)
+    if bot is None:
+        await message.answer("⚠️ Не удалось построить графики. Попробуйте позже.")
+        return
+
     from services.bg import tm
-    bot = cb.bot
-    chat_id = int(cb.message.chat.id)
+    chat_id = int(message.chat.id)
     uid = int(cb.from_user.id)
     period = (cb.data or "").split(":", 1)[1] if ":" in (cb.data or "") else "all"
 
@@ -142,7 +170,7 @@ async def state_period(cb: CallbackQuery):
         try:
             import os
             import asyncio
-            from datetime import datetime, timedelta, timezone
+            from datetime import datetime, timedelta
             from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
             from aiogram.types import BufferedInputFile
             from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -157,7 +185,7 @@ async def state_period(cb: CallbackQuery):
                 tz_name = (get_user_tz(uid) or os.environ.get("TIMEZONE") or "UTC").strip() or "UTC"
                 tz = ZoneInfo(tz_name)
             except (ZoneInfoNotFoundError, ValueError):
-                tz = timezone.utc
+                tz = ZoneInfo("UTC")
 
             today = datetime.now(tz).date()
             if period == "yesterday":
