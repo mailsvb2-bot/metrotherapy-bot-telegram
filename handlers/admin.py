@@ -12,6 +12,11 @@ from services.db import db
 router = Router()
 
 
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return user.id if user is not None else None
+
+
 def _users_count() -> int:
     with db() as conn:
         return int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
@@ -19,7 +24,7 @@ def _users_count() -> int:
 
 @router.message(Command("admin"))
 async def admin_cmd(message: Message):
-    uid = message.from_user.id if message.from_user else None
+    uid = _message_user_id(message)
     if not is_platform_admin(uid):
         try:
             await message.answer("Недоступно.")
@@ -40,7 +45,7 @@ async def admin_cmd(message: Message):
 
 @router.message(Command("users"))
 async def users(message: Message):
-    uid = message.from_user.id if message.from_user else None
+    uid = _message_user_id(message)
     if not is_platform_admin(uid):
         return
     count = await asyncio.to_thread(_users_count)
