@@ -16,7 +16,7 @@ except ImportError:
 
 from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from handlers.admin_inline_states import AdminManageState
 from handlers.admin_inline_common import safe_edit_admin
@@ -26,6 +26,11 @@ from services.db import get_connection
 from services.plans import get_plans
 
 logger = logging.getLogger(__name__)
+
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
 
 
 def _all_plans_sync() -> list[dict[str, Any]]:
@@ -143,8 +148,9 @@ async def tariffs_dynamics(cb: CallbackQuery, state: FSMContext, ctx: TariffsCtx
         logger.debug("tariffs_dynamics callback answer failed", exc_info=True)
 
     png = await asyncio.to_thread(plot_tariffs_dynamics, "Динамика цен и оплат", price_events, payments_daily)
-    if cb.message:
-        await cb.message.answer_photo(BufferedInputFile(png, filename="tariffs_dynamics.png"), caption="📈 Динамика цен и оплат")
+    message = _callback_message(cb)
+    if message is not None:
+        await message.answer_photo(BufferedInputFile(png, filename="tariffs_dynamics.png"), caption="📈 Динамика цен и оплат")
     prices_text = await asyncio.to_thread(_prices_text)
     await safe_edit_admin(cb, state, "📈 Динамика\n\n" + prices_text, reply_markup=_kb_tariffs_nav())
 
