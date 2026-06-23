@@ -12,12 +12,17 @@ from services.admin_cards import user_card
 
 router = Router()
 
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return user.id if user is not None else None
+
+
 @router.message(AdminInputState.user_card)
 async def msg_admin_user_card(message: Message, state: FSMContext):
     """Админ вводит user_id для карточки пользователя."""
     try:
-        admin_id = int(message.from_user.id) if message.from_user else None
-    except (TypeError, ValueError, AttributeError):
+        admin_id = _message_user_id(message)
+    except AttributeError:
         logging.getLogger(__name__).exception("Admin check failed in user_card input")
         await state.clear()
         return
