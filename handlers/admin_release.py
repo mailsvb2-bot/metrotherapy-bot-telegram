@@ -16,6 +16,11 @@ router = Router()
 _MAX_MESSAGE_CHARS = 3900
 
 
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return user.id if user is not None else None
+
+
 async def _answer(message: Message, text: str) -> None:
     try:
         await message.answer(text)
@@ -43,7 +48,7 @@ async def _answer_chunks(message: Message, text: str) -> None:
 
 @router.message(Command("release", "release_gate"))
 async def release_control_cmd(message: Message) -> None:
-    user_id = message.from_user.id if message.from_user else None
+    user_id = _message_user_id(message)
     if not is_platform_admin(user_id):
         await _answer(message, "Недоступно.")
         return
