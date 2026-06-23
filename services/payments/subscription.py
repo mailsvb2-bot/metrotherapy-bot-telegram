@@ -24,7 +24,8 @@ def _callback_message(cb: CallbackQuery) -> Message | None:
 
 
 def _callback_user_id(cb: CallbackQuery) -> int:
-    return int(cb.from_user.id)
+    user = cb.from_user
+    return int(user.id)
 
 
 async def cmd_subscribe(message: Message) -> None:
