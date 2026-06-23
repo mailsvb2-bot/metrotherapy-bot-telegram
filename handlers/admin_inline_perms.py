@@ -12,6 +12,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     KeyboardButton,
     KeyboardButtonRequestUser,
+    Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
@@ -21,6 +22,11 @@ from handlers.admin_inline_states import AdminManageState
 
 
 from core.callback_utils import safe_answer_callback
+
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
 
 
 def _list_admin_ids_sync() -> list[int]:
@@ -152,7 +158,10 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             resize_keyboard=True,
             one_time_keyboard=True,
         )
-        await cb.message.answer(
+        message = _callback_message(cb)
+        if message is None:
+            return True
+        await message.answer(
             "👥 Добавить администратора\n\n"
             "Можно любым способом:\n"
             "• Нажмите «Выбрать пользователя» (пикер Telegram)\n"
@@ -191,7 +200,10 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             return True
 
         await state.clear()
-        await cb.message.answer(
+        message = _callback_message(cb)
+        if message is None:
+            return True
+        await message.answer(
             f"✅ Пользователю {target_id} назначена роль: {role}",
             reply_markup=ReplyKeyboardRemove(),
         )
