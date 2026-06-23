@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.gifts import get_gift_status, redeem_gift, activate_gift
@@ -13,6 +14,29 @@ from services.time_trace import mark as _mark_time  # optional
 
 from core.callback_utils import safe_answer_callback
 router = Router()
+
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
+def _callback_user_id(cb: CallbackQuery) -> int:
+    user = cb.from_user
+    return int(user.id)
+
+
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return int(user.id) if user is not None else None
+
+
+def _gift_code(cb: CallbackQuery, prefix: str) -> str | None:
+    data = cb.data
+    if not data or not data.startswith(prefix):
+        return None
+    return data.split(":", 2)[2].strip()
+
 
 def _kb_intro(code: str) -> InlineKeyboardMarkup:
     """Клавиатура первого экрана подарка."""
@@ -77,7 +101,10 @@ def _accept_gift_for_time_state(code: str, uid: int) -> None:
 
 
 async def send_gift_intro(message: Message, code: str) -> None:
-    user_id = int(message.from_user.id) if message.from_user else 0
+    user_id = _message_user_id(message)
+    if user_id is None:
+        return
+
     ok, msg = await asyncio.to_thread(_gift_intro_state, code, user_id)
     if not ok:
         await message.answer(msg)
@@ -88,44 +115,59 @@ async def send_gift_intro(message: Message, code: str) -> None:
 @router.callback_query(F.data.startswith("gift:how:"))
 async def gift_how(cb: CallbackQuery):
     await safe_answer_callback(cb)
-    code = cb.data.split(":", 2)[2].strip()
-    await cb.message.answer(GIFT_EXPLAIN, reply_markup=_kb_intro(code), parse_mode="Markdown")
+    message = _callback_message(cb)
+    code = _gift_code(cb, "gift:how:")
+    if message is None or code is None:
+        return
+
+    await message.answer(GIFT_EXPLAIN, reply_markup=_kb_intro(code), parse_mode="Markdown")
 
 @router.callback_query(F.data.startswith("gift:accept:"))
 async def gift_accept(cb: CallbackQuery):
     await safe_answer_callback(cb)
-    code = cb.data.split(":", 2)[2].strip()
-    uid = int(cb.from_user.id)
+    message = _callback_message(cb)
+    code = _gift_code(cb, "gift:accept:")
+    if message is None or code is None:
+        return
+
+    uid = _callback_user_id(cb)
 
     ok2, msg2, gift_known = await asyncio.to_thread(_accept_gift_state, code, uid)
     if ok2:
         # show explain + go time
-        from aiogram.exceptions import TelegramBadRequest
         try:
-            await cb.message.edit_text(GIFT_EXPLAIN, reply_markup=_kb_to_time(code), parse_mode="Markdown")
+            await message.edit_text(GIFT_EXPLAIN, reply_markup=_kb_to_time(code), parse_mode="Markdown")
         except TelegramBadRequest:
-            await cb.message.answer(GIFT_EXPLAIN, reply_markup=_kb_to_time(code), parse_mode="Markdown")
+            await message.answer(GIFT_EXPLAIN, reply_markup=_kb_to_time(code), parse_mode="Markdown")
         return
     # if invalid or already activated
-    await cb.message.answer(msg2)
+    await message.answer(msg2)
 
 @router.callback_query(F.data.startswith("gift:later:"))
 async def gift_later(cb: CallbackQuery):
     await safe_answer_callback(cb)
-    code = cb.data.split(":", 2)[2].strip()
-    await cb.message.answer("Хорошо. Когда будете готовы — просто нажмите «Принять подарок» по этой ссылке снова.", reply_markup=None)
+    message = _callback_message(cb)
+    code = _gift_code(cb, "gift:later:")
+    if message is None or code is None:
+        return
+
+    await message.answer("Хорошо. Когда будете готовы — просто нажмите «Принять подарок» по этой ссылке снова.", reply_markup=None)
 
 @router.callback_query(F.data.startswith("gift:time:"))
 async def gift_time(cb: CallbackQuery):
     await safe_answer_callback(cb)
-    code = cb.data.split(":", 2)[2].strip()
-    uid = int(cb.from_user.id)
+    message = _callback_message(cb)
+    code = _gift_code(cb, "gift:time:")
+    if message is None or code is None:
+        return
+
+    uid = _callback_user_id(cb)
 
     # Если подарок ещё не принят — принимаем идемпотентно.
     await asyncio.to_thread(_accept_gift_for_time_state, code, uid)
 
     # После принятия — переиспользуем существующую клавиатуру настройки времени.
-    await cb.message.answer(
+    await message.answer(
         "✅ Подарок активирован.\n\n"
         "Чтобы всё работало идеально — назначьте удобное время получения утреннего и вечернего транса.",
         reply_markup=kb_after_paid(),
