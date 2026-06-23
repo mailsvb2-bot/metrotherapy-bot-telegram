@@ -12,6 +12,11 @@ from services.admin import is_admin
 router = Router()
 
 
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return user.id if user is not None else None
+
+
 def _stats_snapshot() -> tuple[int, int, int]:
     with db() as conn:
         users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
@@ -26,7 +31,7 @@ def _fetch_state_last(uid: int, *, limit: int):
 
 @router.message(Command("stats"))
 async def stats(message: Message):
-    uid = message.from_user.id if message.from_user else None
+    uid = _message_user_id(message)
     if not is_admin(uid):
         return
 
@@ -50,12 +55,12 @@ async def state_last(message: Message):
       /state_last <user_id> <n> -> лимит (1..50)
     """
 
-    uid0 = message.from_user.id if message.from_user else None
-    if not is_admin(uid0):
+    uid0 = _message_user_id(message)
+    if uid0 is None or not is_admin(uid0):
         return
 
     parts = (message.text or "").split()
-    uid = message.from_user.id
+    uid = uid0
     limit = 10
     if len(parts) >= 2 and parts[1].isdigit():
         uid = int(parts[1])
