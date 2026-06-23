@@ -13,7 +13,7 @@ from services.jobs import add_job, cancel_post_prompt
 import asyncio
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, BufferedInputFile
+from aiogram.types import CallbackQuery, BufferedInputFile, Message
 from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramNetworkError
 
@@ -39,6 +39,11 @@ from core.callback_utils import safe_answer_callback
 router = Router()
 
 
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
 @router.callback_query(F.data.regexp(r"^post:chart:\d+$"))
 async def post_show_chart(cb: CallbackQuery):
     try:
@@ -61,8 +66,13 @@ async def post_show_chart(cb: CallbackQuery):
 
     # Строим график + отправляем фото в фоне, чтобы апдейт не висел (и не попадал в SLOW).
     from services.bg import tm
+    message = _callback_message(cb)
+    if message is None:
+        return
     bot = cb.bot
-    chat_id = int(cb.message.chat.id)
+    if bot is None:
+        return
+    chat_id = int(message.chat.id)
 
     async def _build_and_send() -> None:
         try:

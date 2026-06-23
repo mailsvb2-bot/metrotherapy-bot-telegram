@@ -5,7 +5,7 @@ import logging
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import BufferedInputFile, CallbackQuery
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from core.callback_utils import safe_answer_callback
 from keyboards.inline import kb_menu_only
@@ -14,6 +14,11 @@ from services.mood import get_session
 
 router = Router()
 log = logging.getLogger(__name__)
+
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
 
 
 @router.callback_query(F.data.regexp(r"^post:chart:\d+$"))
@@ -32,6 +37,10 @@ async def post_score_chart(cb: CallbackQuery) -> None:
     except asyncio.TimeoutError:
         log.debug("post chart callback answer timed out", exc_info=True)
 
+    message = _callback_message(cb)
+    if message is None:
+        return
+
     raw = cb.data or ""
     try:
         session_id = int(raw.rsplit(":", 1)[1])
@@ -40,13 +49,13 @@ async def post_score_chart(cb: CallbackQuery) -> None:
 
     session = await asyncio.to_thread(get_session, session_id)
     if session is None:
-        await cb.message.answer("⚠️ Не нашёл сессию для построения графика.", reply_markup=kb_menu_only())
+        await message.answer("⚠️ Не нашёл сессию для построения графика.", reply_markup=kb_menu_only())
         return
 
     user_id = int(cb.from_user.id)
     chart_path = await asyncio.to_thread(build_vk_mood_progress_chart_path, user_id)
     if chart_path is None:
-        await cb.message.answer(
+        await message.answer(
             "📈 Пока недостаточно данных для графика. Пройдите цикл: шкала ДО → аудио → Прослушал → шкала ПОСЛЕ.",
             reply_markup=kb_menu_only(),
         )
@@ -54,7 +63,7 @@ async def post_score_chart(cb: CallbackQuery) -> None:
 
     try:
         data = await asyncio.to_thread(chart_path.read_bytes)
-        await cb.message.answer_photo(
+        await message.answer_photo(
             BufferedInputFile(data, filename="metrotherapy_state_change.png"),
             caption="📈 График изменения состояния после практики",
             reply_markup=kb_menu_only(),
@@ -62,13 +71,13 @@ async def post_score_chart(cb: CallbackQuery) -> None:
         log.info("Telegram post-score chart sent: user_id=%s session_id=%s path=%s", user_id, session_id, chart_path)
     except TelegramAPIError:
         log.exception("Telegram post-score chart send failed")
-        await cb.message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())
+        await message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())
     except OSError:
         log.exception("Telegram post-score chart file read failed")
-        await cb.message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())
+        await message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())
     except RuntimeError:
         log.exception("Telegram post-score chart runtime failed")
-        await cb.message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())
+        await message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())
     except ValueError:
         log.exception("Telegram post-score chart value failed")
-        await cb.message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())
+        await message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())

@@ -13,7 +13,7 @@ from services.jobs import add_job, cancel_post_prompt
 import asyncio
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, BufferedInputFile
+from aiogram.types import CallbackQuery, BufferedInputFile, Message
 from aiogram.types import FSInputFile
 
 from keyboards.inline import kb_mood_scale, kb_mood_done, kb_body_question, kb_after_post_actions, kb_post_show_chart
@@ -37,6 +37,11 @@ from core.callback_utils import safe_answer_callback
 router = Router()
 
 
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
 @router.callback_query(F.data.regexp(r"^body:\d+:[^:]+:\d+$"))
 async def body_answer(cb: CallbackQuery):
     """Ответ на вопрос "где в теле".
@@ -45,6 +50,10 @@ async def body_answer(cb: CallbackQuery):
       body:<session_id>:<q_key>:<idx>
     """
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
+
     parts = (cb.data or "").split(":")
     if len(parts) != 4:
         return
@@ -78,7 +87,7 @@ async def body_answer(cb: CallbackQuery):
     if not txt:
         txt = "Сделайте 3 медленных выдоха чуть длиннее вдоха — и отметьте, где стало хотя бы на 1% легче."
 
-    await cb.message.answer(txt, reply_markup=kb_post_show_chart(sid))
+    await message.answer(txt, reply_markup=kb_post_show_chart(sid))
 
 
 async def _schedule_post(session_id: str, user_id: int, delay_sec: int, *, kind: str = ""):

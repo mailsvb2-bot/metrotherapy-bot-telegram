@@ -16,6 +16,16 @@ from services.events import log_event
 from core.callback_utils import safe_answer_callback
 router = Router()
 
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return int(user.id) if user is not None else None
+
 @router.callback_query(lambda c: c.data in ("demo_kind_work", "demo_kind_home"))
 async def pick_demo_kind(cb: CallbackQuery, state: FSMContext):
     await safe_answer_callback(cb)
@@ -32,7 +42,10 @@ async def pick_demo_kind(cb: CallbackQuery, state: FSMContext):
         "состояние становится легче и яснее, как после освежающего душа.\n\n"
         "Часовой пояс: Europe/Moscow."
     )
-    await cb.message.answer(text, reply_markup=kb_back_main())
+    message = _callback_message(cb)
+    if message is None:
+        return
+    await message.answer(text, reply_markup=kb_back_main())
 
 
 
@@ -47,6 +60,9 @@ async def msg_demo_time(message: Message, state: FSMContext):
     h, m = t
     data = await state.get_data()
     kind = data.get("demo_kind", "work")
+    user_id = _message_user_id(message)
+    if user_id is None:
+        return
 
     now_local = datetime.now(tzinfo())
     send_local = now_local.replace(hour=h, minute=m, second=0, microsecond=0)
@@ -59,15 +75,15 @@ async def msg_demo_time(message: Message, state: FSMContext):
     now_utc = datetime.now(ZoneInfo("UTC"))
 
     # ставим job на отправку демо
-    add_job(message.from_user.id, "demo_send", send_utc.isoformat(), {"kind": kind})
-    log_event(message.from_user.id, "demo_scheduled", {"kind": kind, "send_utc": send_utc.isoformat()})
+    add_job(user_id, "demo_send", send_utc.isoformat(), {"kind": kind})
+    log_event(user_id, "demo_scheduled", {"kind": kind, "send_utc": send_utc.isoformat()})
 
     # напоминание за 5 минут — только если до отправки больше 5 минут
     delta_sec = (send_utc - now_utc).total_seconds()
     if delta_sec > 5 * 60:
         remind_utc = send_utc - timedelta(minutes=5)
-        add_job(message.from_user.id, "demo_reminder", remind_utc.isoformat(), {"kind": kind})
-        log_event(message.from_user.id, "demo_reminder_scheduled", {"kind": kind, "remind_utc": remind_utc.isoformat()})
+        add_job(user_id, "demo_reminder", remind_utc.isoformat(), {"kind": kind})
+        log_event(user_id, "demo_reminder_scheduled", {"kind": kind, "remind_utc": remind_utc.isoformat()})
 
     await state.clear()
 
