@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+from typing import Any
 
 
 from aiogram import Router
@@ -26,6 +27,22 @@ from zoneinfo import ZoneInfo
 
 from core.callback_utils import safe_answer_callback
 router = Router()
+
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
+def _callback_user_id(cb: CallbackQuery) -> int:
+    user = cb.from_user
+    return int(user.id)
+
+
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return int(user.id) if user is not None else None
+
 
 def _log_funnel_safe(user_id: int, event: str, payload: dict | None = None) -> None:
     try:
@@ -53,7 +70,7 @@ def _parse_hhmm(s: str) -> tuple[int, int] | None:
     return h, m
 
 
-def _load_work_time_row(user_id: int) -> object:
+def _load_work_time_row(user_id: int) -> Any:
     with db() as conn:
         return conn.execute("SELECT work_time FROM users WHERE user_id=?", (int(user_id),)).fetchone()
 
@@ -94,9 +111,16 @@ def _is_admin(uid: int) -> bool:
 
 
 async def send_main_menu(target: CallbackQuery | Message):
-    user_id = target.from_user.id
+    if isinstance(target, CallbackQuery):
+        user_id = _callback_user_id(target)
+    else:
+        message_user_id = _message_user_id(target)
+        if message_user_id is None:
+            return
+        user_id = message_user_id
+
     _log_funnel_safe(user_id, "funnel_main_menu_opened", {"source": type(target).__name__})
-    preface = await asyncio.to_thread(get_preface, int(user_id), "menu")
+    preface = await asyncio.to_thread(get_preface, user_id, "menu")
     text = (
         f"{preface}"
         "Главное меню\n\n"
@@ -110,14 +134,18 @@ async def send_main_menu(target: CallbackQuery | Message):
         except (TelegramAPIError, TelegramBadRequest):
             logging.getLogger(__name__).debug("Callback answer failed", exc_info=True)
 
+        message = _callback_message(target)
+        if message is None:
+            return
+
         await safe_edit(
-            target.message,
+            message,
             text,
-            reply_markup=kb_main(user_id=target.from_user.id),
+            reply_markup=kb_main(user_id=user_id),
             parse_mode=None,
         )
     else:
-        await target.answer(text, reply_markup=kb_main(user_id=target.from_user.id))
+        await target.answer(text, reply_markup=kb_main(user_id=user_id))
 
 
 @router.callback_query(lambda c: c.data == "menu_main")
@@ -146,9 +174,14 @@ async def cb_menu_main_v2(cb: CallbackQuery, state: FSMContext | None = None):
 @router.callback_query(lambda c: c.data in ("demo_menu", "demo", "demo:menu"))
 async def cb_demo_menu(cb: CallbackQuery):
     await safe_answer_callback(cb)
-    _log_funnel_safe(cb.from_user.id, "funnel_demo_clicked", {"source": "main_menu"})
-    await asyncio.to_thread(set_funnel_stage, int(cb.from_user.id), "d0")
-    preface = await asyncio.to_thread(get_preface, int(cb.from_user.id), "demo")
+    message = _callback_message(cb)
+    if message is None:
+        return
+
+    user_id = _callback_user_id(cb)
+    _log_funnel_safe(user_id, "funnel_demo_clicked", {"source": "main_menu"})
+    await asyncio.to_thread(set_funnel_stage, user_id, "d0")
+    preface = await asyncio.to_thread(get_preface, user_id, "demo")
     text = (
         f"{preface}"
         "🌿 Бесплатная практика\n\n"
@@ -158,7 +191,7 @@ async def cb_demo_menu(cb: CallbackQuery):
         "🌙 Вечер / домой — снять напряжение и завершить день спокойнее.\n\n"
         "После выбора я попрошу указать удобное время отправки."
     )
-    await safe_edit(cb.message, text, reply_markup=kb_demo_kind(), parse_mode=None)
+    await safe_edit(message, text, reply_markup=kb_demo_kind(), parse_mode=None)
 
 
 @router.callback_query(lambda c: c.data in ("back_main", "back"))
@@ -180,8 +213,11 @@ async def cb_remind_continue_tomorrow(cb: CallbackQuery):
     Детерминированность: перед постановкой задачи удаляем предыдущие remind_*.
     """
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
 
-    user_id = int(cb.from_user.id)
+    user_id = _callback_user_id(cb)
     tz = _tz()
 
     # базовое время: work_time (если пользователь уже настраивал), иначе MORNING_TIME из настроек
@@ -199,7 +235,7 @@ async def cb_remind_continue_tomorrow(cb: CallbackQuery):
     await asyncio.to_thread(add_job, user_id, "remind_continue", run_utc, {"src": "full_access", "hhmm": f"{h:02d}:{m:02d}"})
 
     tz_name = getattr(settings, "TIMEZONE", "Europe/Moscow")
-    await cb.message.answer(
+    await message.answer(
         f"✅ Хорошо. Я напомню Вам завтра в {run_local.strftime('%H:%M')} ({tz_name}).",
         reply_markup=kb_back_main(),
     )
