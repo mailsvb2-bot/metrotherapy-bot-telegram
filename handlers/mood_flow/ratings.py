@@ -12,9 +12,9 @@ from services.jobs import add_job, cancel_post_prompt
 
 import asyncio
 
-from aiogram import Router, F
+from aiogram import Bot, Router, F
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import CallbackQuery, BufferedInputFile
+from aiogram.types import CallbackQuery, BufferedInputFile, Message
 from aiogram.types import FSInputFile
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -42,6 +42,15 @@ from services.subscription import register_touch
 
 from core.callback_utils import safe_answer_callback
 router = Router()
+
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
+def _callback_bot(cb: CallbackQuery) -> Bot | None:
+    return cb.bot
 
 
 def _fmt_score(v):
@@ -147,6 +156,9 @@ async def mood_answer(cb: CallbackQuery):
     # Сразу отвечаем на callback, чтобы у пользователя не висел "часик".
     # Дальше тяжёлые операции (отправка аудио) можно выполнить без блокировки UI.
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
 
     data = (cb.data or "").split(":")
     if len(data) != 4:
@@ -173,7 +185,7 @@ async def mood_answer(cb: CallbackQuery):
         ok = await asyncio.to_thread(set_post, sid, val)
 
     if not ok:
-        return await cb.message.answer("⚠️ Не удалось сохранить оценку. Попробуйте ещё раз.")
+        return await message.answer("⚠️ Не удалось сохранить оценку. Попробуйте ещё раз.")
     # Мгновенное подтверждение делаем через cb.answer() в начале (без лишнего сообщения в чат)
 
     log_event(int(cb.from_user.id), "mood_score", {"stage": stage, "value": val, "kind": s.kind, "source": s.source})
@@ -198,7 +210,7 @@ async def mood_answer(cb: CallbackQuery):
                 require_subscription=(str(s.source) != "demo"),
             )
             if dec and dec.message:
-                await cb.message.answer(dec.message)
+                await message.answer(dec.message)
         except ValueError:
             logging.getLogger(__name__).exception("Unhandled exception")
         except RuntimeError:
@@ -241,13 +253,13 @@ async def mood_answer(cb: CallbackQuery):
 
         # Если файл не найден — мягкая ошибка
         if not file_path or not file_path.exists():
-            await cb.message.answer("⚠️ Не удалось найти аудиофайл. Попробуйте позже или сообщите в поддержку.")
+            await message.answer("⚠️ Не удалось найти аудиофайл. Попробуйте позже или сообщите в поддержку.")
             return
         # --- Idempotency (канон) ---
         # demo/full use the same two-phase lock: lock before send, final marker after send.
         user_id = int(cb.from_user.id)
         idem_kind = "demo" if s.source == "demo" else str(s.kind or "")
-        idem_scheduled_at = for_demo_click() if s.source == "demo" else for_session(sid)
+        idem_scheduled_at = str(for_demo_click(user_id, session_id=sid) if s.source == "demo" else for_session(sid))
 
         if was_delivered(user_id, idem_kind, "audio", idem_scheduled_at):
             return
@@ -278,9 +290,18 @@ async def mood_answer(cb: CallbackQuery):
             except sqlite3.Error:
                 logging.getLogger(__name__).debug("audio_lock cleanup after access denial failed", exc_info=True)
             log_event(user_id, "mood_audio_access_denied", {"reason": access_decision.reason, "source": s.source})
-            return await cb.message.answer(access_decision.message or "⚠️ Для продолжения нужен доступ к практике.")
+            return await message.answer(access_decision.message or "⚠️ Для продолжения нужен доступ к практике.")
         if access_decision.warning:
-            await cb.message.answer(access_decision.warning)
+            await message.answer(access_decision.warning)
+
+        bot = _callback_bot(cb)
+        if bot is None:
+            try:
+                unmark_delivery(user_id, idem_kind, "audio_lock", idem_scheduled_at)
+            except sqlite3.Error:
+                logging.getLogger(__name__).debug("audio_lock cleanup after missing bot failed", exc_info=True)
+            await asyncio.to_thread(finalize_audio_access, access_decision, delivered=False)
+            return await message.answer("⚠️ Не удалось отправить аудио. Попробуйте ещё раз.")
 
         async def _send_audio() -> None:
             """Отправить аудио не блокируя UI (кнопка должна ощущаться мгновенной)."""
@@ -305,18 +326,18 @@ async def mood_answer(cb: CallbackQuery):
                     # last-resort: не ломаем UX из-за cleanup
                     logging.getLogger(__name__).debug("audio_lock cleanup failed", exc_info=True)
                 log_event(int(cb.from_user.id), "mood_audio_send_error", {"err": str(exc), "source": s.source})
-                await cb.message.answer("⚠️ Не удалось отправить аудио. Попробуйте ещё раз.")
+                await message.answer("⚠️ Не удалось отправить аудио. Попробуйте ещё раз.")
 
             try:
                 if cached_id and cached_kind == "voice":
-                    msg = await cb.bot.send_voice(chat_id=int(cb.from_user.id), voice=cached_id, caption=caption, protect_content=True)
+                    msg = await bot.send_voice(chat_id=int(cb.from_user.id), voice=cached_id, caption=caption, protect_content=True)
                 elif cached_id and cached_kind == "audio":
-                    msg = await cb.bot.send_audio(chat_id=int(cb.from_user.id), audio=cached_id, caption=caption, protect_content=True)
+                    msg = await bot.send_audio(chat_id=int(cb.from_user.id), audio=cached_id, caption=caption, protect_content=True)
                 elif file_path.suffix.lower() in (".ogg", ".opus"):
-                    msg = await cb.bot.send_voice(chat_id=int(cb.from_user.id), voice=FSInputFile(file_path), caption=caption, protect_content=True)
+                    msg = await bot.send_voice(chat_id=int(cb.from_user.id), voice=FSInputFile(file_path), caption=caption, protect_content=True)
                 else:
                     msg = await send_audio_cached(
-                        bot=cb.bot,
+                        bot=bot,
                         chat_id=int(cb.from_user.id),
                         key=str(file_path),
                         file_path=file_path,
@@ -338,10 +359,12 @@ async def mood_answer(cb: CallbackQuery):
 
                 # кеш file_id
                 try:
-                    if getattr(msg, "voice", None) and getattr(msg.voice, "file_id", None):
-                        save_cached_file_id(file_path, "voice", str(msg.voice.file_id))
-                    if getattr(msg, "audio", None) and getattr(msg.audio, "file_id", None):
-                        save_cached_file_id(file_path, "audio", str(msg.audio.file_id))
+                    voice = getattr(msg, "voice", None)
+                    if voice is not None and getattr(voice, "file_id", None):
+                        save_cached_file_id(file_path, "voice", str(voice.file_id))
+                    audio = getattr(msg, "audio", None)
+                    if audio is not None and getattr(audio, "file_id", None):
+                        save_cached_file_id(file_path, "audio", str(audio.file_id))
                 except ValueError:
                     logging.getLogger(__name__).exception("Unhandled exception")
                 except RuntimeError:
@@ -351,10 +374,12 @@ async def mood_answer(cb: CallbackQuery):
                 try:
                     if s.source == "demo" and msg:
                         dur = None
-                        if getattr(msg, "voice", None):
-                            dur = getattr(msg.voice, "duration", None)
-                        if getattr(msg, "audio", None):
-                            dur = getattr(msg.audio, "duration", dur)
+                        voice = getattr(msg, "voice", None)
+                        if voice is not None:
+                            dur = getattr(voice, "duration", None)
+                        audio = getattr(msg, "audio", None)
+                        if audio is not None:
+                            dur = getattr(audio, "duration", dur)
                         from datetime import datetime, timezone
                         sent_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
                         record_demo_sent(int(cb.from_user.id), "work" if s.kind == "work" else "home", int(msg.message_id), sent_at, int(dur) if dur else None)
@@ -395,7 +420,7 @@ async def mood_answer(cb: CallbackQuery):
                     logging.getLogger(__name__).debug("audio_lock cleanup after send failed", exc_info=True)
 
                 mark_audio_sent(sid)
-                await cb.message.answer("Когда прослушаете — нажмите кнопку:", reply_markup=kb_mood_done(sid))
+                await message.answer("Когда прослушаете — нажмите кнопку:", reply_markup=kb_mood_done(sid))
             except TelegramAPIError as exc:
                 await _handle_audio_send_failure(exc)
             except OSError as exc:
@@ -430,7 +455,7 @@ async def mood_answer(cb: CallbackQuery):
                 else:
                     log_event(int(cb.from_user.id), "trial_delta_neutral", {"kind": kind, "delta": delta, "session_id": sid})
             log_event(int(cb.from_user.id), "trial_outcome_recorded", {"kind": kind, "delta": delta, "session_id": sid})
-            await cb.message.answer(
+            await message.answer(
                 _trial_outcome_text(pre=pre_score, post=post_score, delta=delta, avg_delta=ad),
                 reply_markup=_trial_outcome_keyboard(int(cb.from_user.id), kind, delta=delta, session_id=sid),
             )
@@ -443,5 +468,5 @@ async def mood_answer(cb: CallbackQuery):
         if ad is not None:
             msg += f"\nСредняя динамика за последние дни: {_fmt_score(ad)}"
 
-        await cb.message.answer(msg, reply_markup=kb_post_show_chart(sid))
+        await message.answer(msg, reply_markup=kb_post_show_chart(sid))
         return
