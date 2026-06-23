@@ -14,6 +14,11 @@ from services.store import store
 router = Router()
 
 
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return user.id if user is not None else None
+
+
 def _fmt_sec(x: int | float | None) -> str:
     if x is None:
         return "-"
@@ -35,7 +40,7 @@ async def _deny(message: Message) -> None:
 
 def _uid(message: Message) -> int | None:
     try:
-        return message.from_user.id if message.from_user else None
+        return _message_user_id(message)
     except AttributeError:
         return None
 
