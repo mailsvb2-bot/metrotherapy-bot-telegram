@@ -106,17 +106,17 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             return True
 
         current = await asyncio.to_thread(_user_roles_sync, target_id)
-        rows: list[list[InlineKeyboardButton]] = []
+        user_rows: list[list[InlineKeyboardButton]] = []
         for role in ALL_ROLES:
             mark = "✅" if role in current else "⬜️"
-            rows.append([InlineKeyboardButton(text=f"{mark} {role}", callback_data=f"admin:roles:toggle:{target_id}:{role}")])
-        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:roles:list")])
-        rows.append([InlineKeyboardButton(text="🏠 Админ-меню", callback_data="admin:menu")])
+            user_rows.append([InlineKeyboardButton(text=f"{mark} {role}", callback_data=f"admin:roles:toggle:{target_id}:{role}")])
+        user_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:roles:list")])
+        user_rows.append([InlineKeyboardButton(text="🏠 Админ-меню", callback_data="admin:menu")])
         await safe_edit_admin(
             cb,
             state,
             f"👤 Администратор {target_id}\n\nНажимайте, чтобы назначить/снять роль:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=user_rows),
         )
         return True
 
@@ -148,11 +148,11 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
         if not ctx.is_superadmin:
             await safe_answer_callback(cb, "", show_alert=False)
             return True
-        rows: list[list[InlineKeyboardButton]] = []
+        role_rows: list[list[InlineKeyboardButton]] = []
         for role in ALL_ROLES:
-            rows.append([InlineKeyboardButton(text=role, callback_data=f"admin:roles:role:{role}")])
-        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:roles:menu")])
-        await safe_edit_admin(cb, state, "📚 Роли — выберите роль:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+            role_rows.append([InlineKeyboardButton(text=role, callback_data=f"admin:roles:role:{role}")])
+        role_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:roles:menu")])
+        await safe_edit_admin(cb, state, "📚 Роли — выберите роль:", reply_markup=InlineKeyboardMarkup(inline_keyboard=role_rows))
         return True
 
     if data.startswith("admin:roles:role:"):
