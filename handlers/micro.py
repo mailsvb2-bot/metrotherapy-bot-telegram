@@ -4,12 +4,17 @@ from aiogram.exceptions import TelegramAPIError
 
 
 from aiogram import Router
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 
 from services.personalization import get_micro_question, save_micro_answer
 
 from core.callback_utils import safe_answer_callback
 router = Router()
+
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
 
 
 @router.callback_query(lambda c: (c.data or "").startswith("micro:"))
@@ -42,8 +47,11 @@ async def cb_micro_answer(cb: CallbackQuery):
 
     # UX: коротко, без аналитики, только поддержка.
     await safe_answer_callback(cb, "✅ Спасибо.", show_alert=False)
+    message = _callback_message(cb)
+    if message is None:
+        return
     try:
-        await cb.message.answer(
+        await message.answer(
             "Спасибо. Возможно, сейчас Вам важно двигаться именно в таком темпе. Я подстроюсь под Ваш ритм."
         )
     except TelegramAPIError:
