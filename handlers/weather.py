@@ -20,14 +20,28 @@ from config.settings import settings
 router = Router()
 
 
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return int(user.id) if user is not None else None
+
+
 async def _to_thread(func, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
 
 @router.callback_query(F.data == "weather:show")
 async def weather_show(cb: CallbackQuery):
+    message = _callback_message(cb)
+    if message is None:
+        return
+
     txt = await get_weather_text_async(int(cb.from_user.id))
-    await cb.message.edit_text(
+    await message.edit_text(
         txt + "\n\nВы можете отправить геолокацию или указать город вручную.",
         reply_markup=kb_weather(),
     )
@@ -35,14 +49,18 @@ async def weather_show(cb: CallbackQuery):
 
 @router.callback_query(F.data == "weather:city")
 async def weather_city(cb: CallbackQuery, state: FSMContext):
+    message = _callback_message(cb)
+    if message is None:
+        return
+
     # Если пользователь был в другом сценарии со state (например, ввод времени),
     # сбрасываем state, чтобы ввод города не перехватился чужим обработчиком.
     try:
         await state.clear()
     except (TelegramAPIError, TelegramBadRequest):
         logging.getLogger(__name__).debug("Callback answer failed", exc_info=True)
-    await _to_thread(set_pending, cb.from_user.id, "weather_city", {})
-    await cb.message.answer(
+    await _to_thread(set_pending, int(cb.from_user.id), "weather_city", {})
+    await message.answer(
         "🏙 Пожалуйста, напишите название города (например: «Казань»).\n\n"
         "Город можно будет изменить в любой момент.",
         reply_markup=kb_back_main(),
@@ -51,14 +69,18 @@ async def weather_city(cb: CallbackQuery, state: FSMContext):
 
 @router.message(F.location)
 async def weather_location(message: Message):
+    uid = _message_user_id(message)
+    if uid is None:
+        return
+
     loc = message.location
     if not loc:
         return
-    await _to_thread(set_location, int(message.from_user.id), float(loc.latitude), float(loc.longitude))
+    await _to_thread(set_location, uid, float(loc.latitude), float(loc.longitude))
     await message.answer(
         "✅ Спасибо! Я сохранил Вашу локацию. Теперь погода будет точнее.\n\n"
-        + (await get_weather_text_async(int(message.from_user.id))),
-        reply_markup=kb_main(user_id=message.from_user.id),
+        + (await get_weather_text_async(uid)),
+        reply_markup=kb_main(user_id=uid),
     )
 
 
@@ -75,7 +97,10 @@ async def weather_city_input(message: Message):
     except (ImportError, AttributeError):
         logging.getLogger(__name__).debug("time_trace unavailable", exc_info=True)
 
-    uid = int(message.from_user.id)
+    uid = _message_user_id(message)
+    if uid is None:
+        return
+
     p = await _to_thread(peek_pending, uid)
     if not p or p.kind != "weather_city":
         raise SkipHandler
@@ -96,5 +121,5 @@ async def weather_city_input(message: Message):
     await message.answer(
         f"✅ Город принят: {info}.\n\n{txt}\n\n"
         "Если Вы захотите изменить город — нажмите «Погода» и выберите «Изменить город».",
-        reply_markup=kb_main(user_id=message.from_user.id),
+        reply_markup=kb_main(user_id=uid),
     )
