@@ -12,9 +12,15 @@ from services.roles import ALL_ROLES, grant_role, revoke_role
 
 router = Router()
 
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return user.id if user is not None else None
+
+
 @router.message(RolesInputState.grant)
 async def msg_role_grant(message: Message, state: FSMContext):
-    if not is_superadmin(message.from_user.id):
+    admin_id = _message_user_id(message)
+    if admin_id is None or not is_superadmin(admin_id):
         await state.clear()
         return
     parts = (message.text or "").strip().split()
@@ -36,7 +42,8 @@ async def msg_role_grant(message: Message, state: FSMContext):
 
 @router.message(RolesInputState.revoke)
 async def msg_role_revoke(message: Message, state: FSMContext):
-    if not is_superadmin(message.from_user.id):
+    admin_id = _message_user_id(message)
+    if admin_id is None or not is_superadmin(admin_id):
         await state.clear()
         return
     parts = (message.text or "").strip().split()
