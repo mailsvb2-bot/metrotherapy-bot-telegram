@@ -26,6 +26,16 @@ from services.subscription import grant, grant_tx
 logger = logging.getLogger(__name__)
 
 
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return user.id if user is not None else None
+
+
+def _message_username(message: Message) -> str | None:
+    user = message.from_user
+    return user.username if user is not None else None
+
+
 def payment_insert_values(
     *,
     user_id: int,
@@ -385,8 +395,12 @@ def _record_successful_payment_sync(
 
 async def successful_payment(message: Message) -> None:
     sp = message.successful_payment
-    user_id = int(message.from_user.id)
-    username = getattr(message.from_user, "username", None)
+    if sp is None:
+        return
+    user_id = _message_user_id(message)
+    if user_id is None:
+        return
+    username = _message_username(message)
     raw_payload = (sp.invoice_payload or "").strip()
     charge_id = (getattr(sp, "telegram_payment_charge_id", "") or "").strip()
     provider_id = (getattr(sp, "provider_payment_charge_id", "") or "").strip()
@@ -412,9 +426,10 @@ async def successful_payment(message: Message) -> None:
 
     if result.get("plan"):
         referral = result.get("referral")
-        if referral:
+        bot = message.bot
+        if referral and bot is not None:
             try:
-                await message.bot.send_message(
+                await bot.send_message(
                     int(referral["referrer"]),
                     f"🎁 По Вашей рекомендации {referral['buyer_tag']} оплатил подписку на {referral['period']}.\n"
                     f"В связи с этим Вам бонус: +{int(referral['bonus'])} касания ресурсных аудиотрансов в подарок!",
