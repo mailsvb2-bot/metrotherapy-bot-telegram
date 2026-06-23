@@ -5,7 +5,7 @@ import sqlite3
 from aiogram import Router, F
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, User
 
 from services.acquisition_attribution import start_attribution_meta
 from services.gift_claims import claim_gift_token, is_gift_token, normalize_gift_token
@@ -40,11 +40,13 @@ START_FALLBACK_TEXT = (
 )
 
 
+def _message_user(message: Message) -> User | None:
+    return message.from_user
+
+
 def _user_id(message: Message) -> int | None:
-    try:
-        return int(message.from_user.id) if message.from_user else None
-    except (TypeError, ValueError, AttributeError):
-        return None
+    user = _message_user(message)
+    return user.id if user is not None else None
 
 
 def _log_safe(user_id: int | None, event: str, payload: dict | None = None) -> None:
@@ -57,27 +59,29 @@ def _log_safe(user_id: int | None, event: str, payload: dict | None = None) -> N
 
 
 def _register_user_entry_safe(message: Message, payload: str) -> None:
-    if message.from_user is None:
+    user = _message_user(message)
+    if user is None:
         return
+    user_id = user.id
     try:
         register_user_entry(
-            message.from_user.id,
+            user_id,
             platform="telegram",
-            external_user_id=str(message.from_user.id),
-            username=message.from_user.username,
-            display_name=message.from_user.full_name,
-            first_name=message.from_user.first_name,
+            external_user_id=str(user_id),
+            username=user.username,
+            display_name=user.full_name,
+            first_name=user.first_name,
             start_payload=payload,
         )
     except ValueError:
         log.exception(
             "Bad start payload",
-            extra={"payload": payload, "user_id": message.from_user.id},
+            extra={"payload": payload, "user_id": user_id},
         )
     except (sqlite3.Error, RuntimeError, OSError, TypeError, AttributeError):
         log.exception(
             "Failed to register start entry",
-            extra={"payload": payload, "user_id": getattr(message.from_user, "id", None)},
+            extra={"payload": payload, "user_id": user_id},
         )
 
 
