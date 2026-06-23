@@ -11,8 +11,13 @@ from services.roles import user_roles
 
 router = Router()
 
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return user.id if user is not None else None
+
+
 def _is_admin(user_id: int | None) -> bool:
-    return bool(user_id) and int(user_id) in set(ADMIN_IDS)
+    return user_id is not None and user_id in set(ADMIN_IDS)
 
 def _fmt_kb(markup) -> str:
     # InlineKeyboardMarkup
@@ -44,12 +49,12 @@ def _maybe_call(obj, names: list[str], *args, **kwargs):
 
 @router.message(Command("kb_debug"))
 async def kb_debug_cmd(message: Message) -> None:
-    user_id = message.from_user.id if message.from_user else None
-    if not _is_admin(user_id):
+    user_id = _message_user_id(message)
+    if user_id is None or not _is_admin(user_id):
         return
 
-    roles = set(user_roles(int(user_id))) if user_id else set()
-    is_superadmin = bool(user_id) and int(user_id) in set(ADMIN_IDS)
+    roles = set(user_roles(user_id))
+    is_superadmin = user_id in set(ADMIN_IDS)
 
     blocks: list[tuple[str, object]] = [
         ("Главное меню", kb_inline.kb_main(user_id)),
