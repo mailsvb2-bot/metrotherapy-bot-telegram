@@ -5,7 +5,7 @@ import logging
 import sqlite3
 
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from handlers.admin_inline_common import AdminCtx, safe_edit_admin
 from config.settings import ADMIN_IDS
@@ -14,6 +14,11 @@ from services.roles import ALL_ROLES
 
 
 from core.callback_utils import safe_answer_callback
+
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
 
 
 def _role_users_sync() -> list[tuple[int, set[str]]]:
@@ -176,7 +181,10 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             return True
         await state.clear()
         await state.set_state(RolesInputState.grant)
-        await cb.message.answer(
+        message = _callback_message(cb)
+        if message is None:
+            return True
+        await message.answer(
             "➕ Выдать роль\n\n"
             "Отправьте: <user_id> <role>\n"
             "Роли: admin / support / marketing",
@@ -189,7 +197,10 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             return True
         await state.clear()
         await state.set_state(RolesInputState.revoke)
-        await cb.message.answer(
+        message = _callback_message(cb)
+        if message is None:
+            return True
+        await message.answer(
             "➖ Снять роль\n\n"
             "Отправьте: <user_id> <role>\n"
             "Роли: admin / support / marketing",
