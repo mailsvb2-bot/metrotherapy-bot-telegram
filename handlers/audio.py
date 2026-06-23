@@ -1,8 +1,10 @@
-from services.fast_send_audio import send_audio_cached
-from services.bg import tm
-from aiogram import Router
+from typing import cast
+
+from aiogram import Bot, Router
 from aiogram.types import CallbackQuery, Message
 
+from services.fast_send_audio import send_audio_cached
+from services.bg import tm
 from keyboards.inline import kb_full_access_menu
 from services.audio_guard import get_full_files_guarded
 from pathlib import Path
@@ -36,7 +38,7 @@ async def full(cb: CallbackQuery):
 
     # Отправку треков уводим в фон: клики должны ощущаться мгновенными,
     # а сеть/загрузка файлов могут занимать секунды.
-    bot = cb.bot
+    bot = cast(Bot, cb.bot)
     chat_id = int(message.chat.id)
 
     async def _send_all() -> None:
