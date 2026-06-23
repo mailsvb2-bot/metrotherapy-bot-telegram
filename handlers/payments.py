@@ -23,6 +23,11 @@ router = Router()
 _DISABLED = "Этот старый способ оплаты отключён. Откройте тарифы заново и выберите актуальный пакет."
 
 
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
 @router.message(F.text == "❌ Отмена")
 async def _gift_pick_cancel(message: Message):
     await gift_pick_cancel(message)
@@ -42,13 +47,19 @@ async def _sub_menu(cb: CallbackQuery):
 @router.callback_query(F.data.regexp(r"^sub:buy:\d+:\d+$"))
 async def _sub_pick_disabled(cb: CallbackQuery):
     await safe_answer_callback(cb)
-    await cb.message.answer(_DISABLED, reply_markup=kb_back("sub:menu"))
+    message = _callback_message(cb)
+    if message is None:
+        return
+    await message.answer(_DISABLED, reply_markup=kb_back("sub:menu"))
 
 
 @router.callback_query(F.data == "pay:selected")
 async def _pay_selected_disabled(cb: CallbackQuery):
     await safe_answer_callback(cb)
-    await cb.message.answer(_DISABLED, reply_markup=kb_back("sub:menu"))
+    message = _callback_message(cb)
+    if message is None:
+        return
+    await message.answer(_DISABLED, reply_markup=kb_back("sub:menu"))
 
 
 @router.callback_query(F.data == "gift:menu")
@@ -71,7 +82,10 @@ async def _gift_users_shared(message: Message, state: FSMContext):
 @router.callback_query(F.data.regexp(r"^gift:buy:\d+:\d+$"))
 async def _gift_buy_disabled(cb: CallbackQuery):
     await safe_answer_callback(cb)
-    await cb.message.answer(_DISABLED, reply_markup=kb_back("gift:menu"))
+    message = _callback_message(cb)
+    if message is None:
+        return
+    await message.answer(_DISABLED, reply_markup=kb_back("gift:menu"))
 
 
 @router.pre_checkout_query()

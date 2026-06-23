@@ -3,11 +3,16 @@ import logging
 
 
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 
 from handlers.admin_inline_common import AdminCtx, safe_edit_admin
 from handlers.text_input import AdminInputState
 from services.admin_cards import users_joined_today, users_joined_today_count
+
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
 
 
 async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx) -> bool:
@@ -30,7 +35,10 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
 
     if data == "admin:user:card":
         await state.set_state(AdminInputState.user_card)
-        await cb.message.answer(
+        message = _callback_message(cb)
+        if message is None:
+            return True
+        await message.answer(
             "🔎 Карточка пользователя\n\n"
             "Пожалуйста, отправьте user_id (числом).\n"
             "Например: 123456789",

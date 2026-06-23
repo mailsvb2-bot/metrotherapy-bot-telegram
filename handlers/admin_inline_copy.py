@@ -5,7 +5,7 @@ import logging
 
 from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from handlers.admin_inline_common import AdminCtx, safe_edit_admin
 from handlers.text_input import MarketingCopyState
@@ -17,6 +17,16 @@ from core.ai.decision_types import WorldState
 
 
 from core.callback_utils import safe_answer_callback
+
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
+def _callback_user_id(cb: CallbackQuery) -> int:
+    user = cb.from_user
+    return int(user.id)
 
 
 def _format_ai_price_recommendations(res: dict) -> str:
@@ -87,7 +97,10 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
         back_kb = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="🏠 Админка", callback_data="admin:menu")]]
         )
-        await cb.message.answer(
+        message = _callback_message(cb)
+        if message is None:
+            return True
+        await message.answer(
             "✍️ Тексты для сообщений\n\n"
             "Я помогу подготовить два варианта текста для выбранного шага. "
             "Тексты будут сохранены, а бот сможет использовать их автоматически.\n\n"
@@ -110,7 +123,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
             return True
 
         # Sovereign execution: DecisionCore decides the action; handler only executes.
-        world: WorldState = {"intent": "admin_ai_prices", "user_id": int(cb.from_user.id)}
+        world: WorldState = {"intent": "admin_ai_prices", "user_id": _callback_user_id(cb)}
         decision = DecisionCore.instance().decide(world)
 
         class _AdminPricesRunner:
