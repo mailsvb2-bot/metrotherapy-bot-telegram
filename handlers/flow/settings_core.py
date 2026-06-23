@@ -56,6 +56,16 @@ async def _to_thread(func, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
 
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    message = cb.message
+    return message if isinstance(message, Message) else None
+
+
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return int(user.id) if user else None
+
+
 async def safe_edit(message: Message, text: str, reply_markup=None, parse_mode=None, **kwargs):
     """Безопасный edit_text.
 
@@ -73,8 +83,11 @@ async def safe_edit(message: Message, text: str, reply_markup=None, parse_mode=N
 @router.callback_query(F.data == "settings:menu")
 async def settings_menu(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
     await safe_edit(
-        cb.message,
+        message,
         "⚙️ Мои настройки Метротерапии\n\n"
         "Здесь Вы можете настроить погоду, время отправки трансов, часовой пояс, тихие часы и каналы по времени дня.",
         reply_markup=kb_settings_menu(),
@@ -86,6 +99,9 @@ async def settings_menu(cb: CallbackQuery):
 @router.callback_query(F.data == "settings:platform:menu")
 async def settings_platform_menu(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
     uid = int(cb.from_user.id)
     snapshot, targets = await asyncio.gather(
         _to_thread(get_channel_snapshot, uid),
@@ -104,14 +120,20 @@ async def settings_platform_menu(cb: CallbackQuery):
         f"Подключённые каналы: {connected_line}.\n\n"
         "Выберите, куда проект должен вести пользователя в первую очередь и какой канал считать основным для доставки при наличии нескольких идентичностей."
     )
-    await safe_edit(cb.message, text, reply_markup=kb_messenger_platforms(snapshot, targets))
+    await safe_edit(message, text, reply_markup=kb_messenger_platforms(snapshot, targets))
 
 
 @router.callback_query(F.data.startswith("settings:platform:set:"))
 async def settings_platform_set(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
+    data = cb.data
+    if data is None:
+        return
     uid = int(cb.from_user.id)
-    platform = cb.data.rsplit(':', 1)[-1]
+    platform = data.rsplit(':', 1)[-1]
     await _to_thread(set_preferred_platform, uid, platform)
     snapshot, targets = await asyncio.gather(
         _to_thread(get_channel_snapshot, uid),
@@ -130,23 +152,26 @@ async def settings_platform_set(cb: CallbackQuery):
         f"Подключённые каналы: {connected_line}.\n\n"
         "Выберите, куда проект должен вести пользователя в первую очередь и какой канал считать основным для доставки при наличии нескольких идентичностей."
     )
-    await safe_edit(cb.message, text, reply_markup=kb_messenger_platforms(snapshot, targets))
+    await safe_edit(message, text, reply_markup=kb_messenger_platforms(snapshot, targets))
     await _to_thread(log_event, uid, "settings_platform_set", {"platform": platform})
 
 @router.callback_query(F.data == "settings:time:work")
 async def settings_time_work(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
     uid = int(cb.from_user.id)
     # Полный доступ к настройке времени — только по подписке (scope: morning)
     if not await _to_thread(has_access, uid, "morning"):
-        await cb.message.answer(
+        await message.answer(
             "🔐 Полный доступ доступен по подписке.\n\n"            "Нажмите «💳 Подписка / тарифы».",
             reply_markup=kb_settings_locked(),
         )
         return
 
     await _to_thread(set_pending, uid, "set_time", {"slot": "work"}, ttl_sec=600)
-    await cb.message.answer(
+    await message.answer(
         "⏰ Время «Дорога на работу»\n\n"
         "Напишите желаемое время в формате HH:MM (например, 11:03).\n\n"
         "Я сохраню время — и утренний транс будет приходить ровно в него.",
@@ -158,17 +183,20 @@ async def settings_time_work(cb: CallbackQuery):
 @router.callback_query(F.data == "settings:time:home")
 async def settings_time_home(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
     uid = int(cb.from_user.id)
     # Полный доступ к настройке времени — только по подписке (scope: evening)
     if not await _to_thread(has_access, uid, "evening"):
-        await cb.message.answer(
+        await message.answer(
             "🔐 Полный доступ доступен по подписке.\n\n"            "Нажмите «💳 Подписка / тарифы».",
             reply_markup=kb_settings_locked(),
         )
         return
 
     await _to_thread(set_pending, uid, "set_time", {"slot": "home"}, ttl_sec=600)
-    await cb.message.answer(
+    await message.answer(
         "⏰ Время «Дорога домой»\n\n"
         "Напишите желаемое время в формате HH:MM (например, 19:47).\n\n"
         "Я сохраню время — и вечерний транс будет приходить ровно в него.",
@@ -180,17 +208,23 @@ async def settings_time_home(cb: CallbackQuery):
 @router.callback_query(F.data == "settings:delivery:tz")
 async def settings_delivery_tz(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
     uid = int(cb.from_user.id)
     await _to_thread(set_pending, uid, "set_timezone", ttl_sec=600)
-    await cb.message.answer("🌍 Укажите свой timezone, например Europe/Amsterdam.", reply_markup=kb_back_main())
+    await message.answer("🌍 Укажите свой timezone, например Europe/Amsterdam.", reply_markup=kb_back_main())
 
 
 @router.callback_query(F.data == "settings:delivery:quiet")
 async def settings_delivery_quiet(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
     uid = int(cb.from_user.id)
     await _to_thread(set_pending, uid, "set_quiet_hours", ttl_sec=600)
-    await cb.message.answer("🌙 Укажите quiet hours в формате HH:MM-HH:MM, например 22:00-08:00, или off.", reply_markup=kb_back_main())
+    await message.answer("🌙 Укажите quiet hours в формате HH:MM-HH:MM, например 22:00-08:00, или off.", reply_markup=kb_back_main())
 
 
 
@@ -198,9 +232,12 @@ async def settings_delivery_quiet(cb: CallbackQuery):
 @router.callback_query(F.data == "settings:delivery:menu")
 async def settings_delivery_menu(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
     uid = int(cb.from_user.id)
     await safe_edit(
-        cb.message,
+        message,
         "🕒 Время и правила отправки\n\n"
         + await _to_thread(describe_delivery_preferences, uid)
         + "\n\nПримеры: timezone Europe/Amsterdam, quiet 22:00-08:00, channel morning max",
@@ -211,6 +248,9 @@ async def settings_delivery_menu(cb: CallbackQuery):
 @router.callback_query(F.data == "settings:delivery:channels")
 async def settings_delivery_channels(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
     uid = int(cb.from_user.id)
     prefs, snapshot = await asyncio.gather(
         _to_thread(get_delivery_preferences, uid),
@@ -218,7 +258,7 @@ async def settings_delivery_channels(cb: CallbackQuery):
     )
     payload = {**snapshot, 'morning_channel': prefs.morning_channel, 'evening_channel': prefs.evening_channel}
     await safe_edit(
-        cb.message,
+        message,
         "📨 Каналы по времени дня\n\n" + await _to_thread(describe_delivery_preferences, uid) + "\n\nВыберите, куда сначала пытаться доставлять утренние и вечерние касания.",
         reply_markup=kb_delivery_channel_slots(payload),
     )
@@ -227,15 +267,21 @@ async def settings_delivery_channels(cb: CallbackQuery):
 @router.callback_query(F.data.startswith("settings:delivery:slot:") & ~F.data.startswith("settings:delivery:slot:set:"))
 async def settings_delivery_slot_menu(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
+    data = cb.data
+    if data is None:
+        return
     uid = int(cb.from_user.id)
-    slot = cb.data.rsplit(':', 1)[-1]
+    slot = data.rsplit(':', 1)[-1]
     prefs, snapshot = await asyncio.gather(
         _to_thread(get_delivery_preferences, uid),
         _to_thread(get_channel_snapshot, uid),
     )
     payload = {**snapshot, 'morning_channel': prefs.morning_channel, 'evening_channel': prefs.evening_channel}
     await safe_edit(
-        cb.message,
+        message,
         f"📨 Канал для {'утренних' if slot == 'morning' else 'вечерних'} отправок\n\n" + await _to_thread(describe_delivery_preferences, uid),
         reply_markup=kb_delivery_channel_select(slot, payload),
     )
@@ -244,8 +290,16 @@ async def settings_delivery_slot_menu(cb: CallbackQuery):
 @router.callback_query(F.data.startswith("settings:delivery:slot:set:"))
 async def settings_delivery_slot_set(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
+    data = cb.data
+    if data is None:
+        return
+    parts = data.split(':')
+    if len(parts) < 6:
+        return
     uid = int(cb.from_user.id)
-    parts = cb.data.split(':')
     slot = parts[4]
     platform = parts[5]
     await _to_thread(set_slot_channel, uid, slot, None if platform == 'auto' else platform)
@@ -259,7 +313,7 @@ async def settings_delivery_slot_set(cb: CallbackQuery):
     if decision.fallback_used:
         note = f"\nСейчас фактическая доставка fallback-нется на {platform_title(decision.resolved_channel)}."
     await safe_edit(
-        cb.message,
+        message,
         f"✅ Канал обновлён: {platform}.\n\n" + await _to_thread(describe_delivery_preferences, uid) + note,
         reply_markup=kb_delivery_channel_select(slot, payload),
     )
@@ -316,7 +370,9 @@ async def settings_time_input(message: Message):
     except OSError:
         logging.getLogger(__name__).debug("time_trace mark failed", exc_info=True)
 
-    uid = int(message.from_user.id)
+    uid = _message_user_id(message)
+    if uid is None:
+        raise SkipHandler
     p = await _to_thread(peek_pending, uid)
     if not p or p.kind not in {"set_time", "set_timezone", "set_quiet_hours"}:
         raise SkipHandler
@@ -351,7 +407,9 @@ async def settings_time_input(message: Message):
         prefs_text = await _to_thread(describe_delivery_preferences, uid)
         return await message.answer(f"✅ Тихие часы сохранены: {start_hhmm}-{end_hhmm}.\n\n{prefs_text}", reply_markup=kb_back_main())
 
-    slot = (p.data or {}).get("slot")
+    slot = str((p.data or {}).get("slot") or "")
+    if slot not in {"work", "home"}:
+        return await message.answer("Не смог распознать, какое время нужно сохранить.", reply_markup=kb_back_main())
     hhmm = _parse_hhmm(message.text or "")
     if not hhmm:
         return await message.answer("Пожалуйста, время в формате HH:MM (например, 08:30).", reply_markup=kb_back_main())
@@ -376,10 +434,9 @@ async def settings_time_input(message: Message):
         wt, ht = None, None
 
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-    from keyboards.inline import kb as _kb
 
     if slot == "work" and not ht:
-        rm = _kb([
+        rm = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⏰ Настроить время: дорога домой", callback_data="settings:time:home")],
             [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
         ])
@@ -388,7 +445,7 @@ async def settings_time_input(message: Message):
         return
 
     if slot == "home" and not wt:
-        rm = _kb([
+        rm = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⏰ Настроить время: дорога на работу", callback_data="settings:time:work")],
             [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
         ])
@@ -396,13 +453,16 @@ async def settings_time_input(message: Message):
         await _prompt_after_time_set(message, slot)
         return
 
-    await message.answer(f"✅ Сохранил время: {hhmm}", reply_markup=kb_main(user_id=message.from_user.id))
+    await message.answer(f"✅ Сохранил время: {hhmm}", reply_markup=kb_main(user_id=uid))
     await _prompt_after_time_set(message, slot)
 
 
 @router.callback_query(F.data == "settings:ref")
 async def settings_ref(cb: CallbackQuery):
     await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
     uid = int(cb.from_user.id)
 
     n_paid, n_gifts, gift_days, stats = await asyncio.gather(
@@ -425,7 +485,7 @@ async def settings_ref(cb: CallbackQuery):
         "Дни не обнуляются — всё сохраняется."
     )
 
-    await safe_edit(cb.message, text, reply_markup=kb_ref_bonus_actions())
+    await safe_edit(message, text, reply_markup=kb_ref_bonus_actions())
     await _to_thread(log_event, uid, "settings_ref", {"paid_count": n_paid, "earned": stats.earned_days, "used": stats.used_days, "remaining": stats.remaining_days})
 
 
@@ -434,7 +494,9 @@ async def _prompt_after_time_set(message: Message, slot: str) -> None:
     Это помогает пользователю убедиться, что всё настроено, без ожидания следующего тика времени.
     """
     try:
-        uid = int(message.from_user.id)
+        uid = _message_user_id(message)
+        if uid is None:
+            return
         # slot: work/home -> morning/evening
         slot_norm = "morning" if slot == "work" else "evening"
         kind = "work" if slot == "work" else "home"
@@ -458,7 +520,8 @@ async def _prompt_after_time_set(message: Message, slot: str) -> None:
 
         # Idempotency (до любых side-effects): защита от повторных апдейтов/двойного клика
         # После смены времени Telegram может прислать update повторно; нам нельзя дублировать окно.
-        scheduled_at_key = for_settings_prompt(slot_norm)
+        day_iso = today_tz().isoformat()
+        scheduled_at_key = for_settings_prompt(uid, day_iso, slot_norm)
         if not await _to_thread(mark_delivery_once, uid, kind, "pre_score", scheduled_at_key):
             return
 
@@ -468,7 +531,7 @@ async def _prompt_after_time_set(message: Message, slot: str) -> None:
             user_id=uid,
             kind=kind,
             source="settings",
-            day=today_tz().isoformat(),
+            day=day_iso,
             slot=slot_norm,
             anchor_id=aa.anchor,
         )
