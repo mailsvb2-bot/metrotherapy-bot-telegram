@@ -10,6 +10,7 @@ import time
 
 import json
 from collections.abc import Awaitable, Callable
+from typing import Literal
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from core.ai.decision_core import DecisionCore
@@ -67,6 +68,22 @@ class Job:
 
 JobHandler = Callable[[Bot, int, dict], Awaitable[None]]
 
+FunnelKind = Literal["work", "home", "both"]
+FunnelStep = Literal["nudge", "postdemo", "offer", "offer_nextday", "deadline", "lastcall"]
+FunnelVariant = Literal["A", "B"]
+
+
+def _funnel_kind(raw: object, *, default: FunnelKind = "both") -> FunnelKind:
+    value = str(raw or default).strip()
+    if value == "work":
+        return "work"
+    if value == "home":
+        return "home"
+    if value == "both":
+        return "both"
+    return default
+
+
 
 def _is_sub_active_sync(user_id: int) -> bool:
     return bool(is_sub_active(int(user_id)))
@@ -98,7 +115,7 @@ def _demo_ack_exists_sync(*, user_id: int, kind: str, message_id: int) -> bool:
     return bool(row and row["ack_at_utc"])
 
 
-def _hour_context_sync(user_id: int) -> str | None:
+def _hour_context_sync(user_id: int) -> int | None:
     return first_hour_today_local(int(user_id), settings.TIMEZONE) or recent_hour_local(int(user_id), settings.TIMEZONE)
 
 
@@ -383,7 +400,7 @@ class Engine:
                 await release_lock("engine_tick")
 
     async def _demo_reminder(self, bot: Bot, user_id: int, payload: dict):
-        kind = (payload.get("kind") or "work").strip()
+        kind = _funnel_kind(payload.get("kind"), default="work")
         text = (
             "🕊 Напоминание\n\n"
             "Совсем скоро я пришлю Вам ресурсный демо-транс. "
@@ -470,7 +487,7 @@ class Engine:
             await asyncio.to_thread(log_event, user_id, "funnel_skipped", {"step": "nudge", "reason": "active_access"})
             return
 
-        kind = (payload.get("kind") or "work").strip()
+        kind = _funnel_kind(payload.get("kind"), default="work")
         msg_id = payload.get("message_id")
 
         # если по этому демо уже есть ack — не пишем
@@ -493,7 +510,7 @@ class Engine:
             )
         else:
             # kind уже есть в payload: work/home
-            text = funnel_text("nudge", kind=kind if kind in ("work", "home") else "both", hour=hour)
+            text = funnel_text("nudge", kind=kind, hour=hour)
         await bot.send_message(user_id, text, reply_markup=self._kb_offer(user_id))
         await asyncio.to_thread(log_event, user_id, "funnel_nudge_sent", {"kind": kind})
 
@@ -518,9 +535,9 @@ class Engine:
             except sqlite3.Error:
                 logging.getLogger(__name__).exception("Engine DB check failed (non-fatal)")
 
-        kind = (payload.get("kind") or "both").strip()
+        kind = _funnel_kind(payload.get("kind"))
         hour = await asyncio.to_thread(_hour_context_sync, int(user_id))
-        text = funnel_text("postdemo", kind=kind if kind in ("work", "home") else "both", hour=hour)
+        text = funnel_text("postdemo", kind=kind, hour=hour)
         await bot.send_message(user_id, text, reply_markup=self._kb_offer(user_id))
         await asyncio.to_thread(log_event, user_id, "funnel_postdemo_sent", {"kind": kind})
 
@@ -529,19 +546,19 @@ class Engine:
             await asyncio.to_thread(log_event, user_id, "funnel_skipped", {"step": "offer", "reason": "active_access"})
             return
 
-        kind = (payload.get("kind") or "both").strip()
+        kind = _funnel_kind(payload.get("kind"))
         hour = await asyncio.to_thread(_hour_context_sync, int(user_id))
         variant = (payload.get("variant") or "").strip().lower()
-        step = "offer_nextday" if variant.startswith("nextday") else "offer"
+        step: FunnelStep = "offer_nextday" if variant.startswith("nextday") else "offer"
 
         # A/B (детерминированно, чтобы рестарт не менял вариант):
         # offer: A для чётных, B для нечётных; nextday — наоборот (чтобы балансировать).
         if step == "offer":
-            ab = "A" if (int(user_id) % 2 == 0) else "B"
+            ab: FunnelVariant = "A" if (int(user_id) % 2 == 0) else "B"
         else:
             ab = "B" if (int(user_id) % 2 == 0) else "A"
 
-        text = funnel_text_ab(step, ab, kind=kind if kind in ("work", "home") else "both", hour=hour)
+        text = funnel_text_ab(step, ab, kind=kind, hour=hour)
         await bot.send_message(user_id, text, reply_markup=self._kb_offer(user_id))
 
         # событие для админ-аналитики
@@ -575,9 +592,9 @@ class Engine:
         if await asyncio.to_thread(_is_sub_active_sync, int(user_id)):
             await asyncio.to_thread(log_event, user_id, "funnel_skipped", {"step": "deadline", "reason": "active_access"})
             return
-        kind = (payload.get("kind") or "both").strip()
+        kind = _funnel_kind(payload.get("kind"))
         hour = await asyncio.to_thread(_hour_context_sync, int(user_id))
-        text = funnel_text("deadline", kind=kind if kind in ("work", "home") else "both", hour=hour)
+        text = funnel_text("deadline", kind=kind, hour=hour)
         await bot.send_message(user_id, text, reply_markup=self._kb_offer(user_id))
         await asyncio.to_thread(log_event, user_id, "funnel_deadline_sent", {})
 
@@ -586,9 +603,9 @@ class Engine:
             await asyncio.to_thread(log_event, user_id, "funnel_skipped", {"step": "lastcall", "reason": "active_access"})
             return
 
-        kind = (payload.get("kind") or "both").strip()
+        kind = _funnel_kind(payload.get("kind"))
         hour = await asyncio.to_thread(_hour_context_sync, int(user_id))
-        text = funnel_text("lastcall", kind=kind if kind in ("work", "home") else "both", hour=hour)
+        text = funnel_text("lastcall", kind=kind, hour=hour)
         await bot.send_message(user_id, text, reply_markup=self._kb_offer(user_id))
         await asyncio.to_thread(log_event, user_id, "funnel_lastcall_sent", {})
 
