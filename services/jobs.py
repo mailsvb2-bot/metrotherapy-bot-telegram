@@ -53,6 +53,17 @@ def _row_get(row: Any, key: str, index: int) -> Any:
     return row[index]
 
 
+def _row_get_optional(row: Any, key: str, index: int) -> Any:
+    try:
+        return _row_get(row, key, index)
+    except KeyError:
+        return None
+    except TypeError:
+        return None
+    except IndexError:
+        return None
+
+
 def _claimed_jobs_from_rows(rows: list[Any], *, fallback_token: str) -> list[ClaimedJob]:
     out: list[ClaimedJob] = []
     for row in rows:
@@ -76,12 +87,19 @@ def _idempotency_created_at_epoch() -> int:
 
 
 def _job_delivery_key_from_row(row: Any) -> tuple[int, str] | None:
+    raw_user_id = _row_get_optional(row, "user_id", 0)
+    raw_job_type = _row_get_optional(row, "job_type", 1)
+    raw_job_key = _row_get_optional(row, "job_key", 2)
+
     try:
-        user_id = int(_row_get(row, "user_id", 0))
-        job_type = str(_row_get(row, "job_type", 1) or "").strip()
-        job_key = str(_row_get(row, "job_key", 2) or "").strip()
-    except (TypeError, ValueError, IndexError, KeyError):
+        user_id = int(raw_user_id)
+    except TypeError:
         return None
+    except ValueError:
+        return None
+
+    job_type = str(raw_job_type or "").strip()
+    job_key = str(raw_job_key or "").strip()
     if not job_type or not job_key:
         return None
     return user_id, f"job:{job_type}:{job_key}"
