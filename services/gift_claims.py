@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import sqlite3
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +20,50 @@ class GiftClaimResult:
     status: str
     message: str
     package_id: str = ""
+
+
+def new_gift_token() -> str:
+    """Create an opaque universal gift token suitable for /start payloads and public links."""
+    return f"gift_{uuid.uuid4().hex}"
+
+
+def create_gift_checkout_token(*, buyer_user_id: int, package_id: str, source_platform: str = "telegram") -> str:
+    """Reserve a paid-gift claim row before the buyer leaves Telegram for checkout.
+
+    YooKassa returns only metadata from the payment object. Therefore the public
+    checkout URL must already carry a real gift_token and a real buyer id; using
+    user_id=0 or creating the token only after payment makes the gift impossible
+    to claim safely.
+    """
+    buyer_id = int(buyer_user_id or 0)
+    if buyer_id <= 0:
+        raise ValueError("buyer_user_id is required for gift checkout")
+
+    package = package_by_id(package_id)
+    platform = (source_platform or "telegram").strip()[:32] or "telegram"
+    last_exc: sqlite3.IntegrityError | None = None
+
+    for _ in range(5):
+        token = new_gift_token()
+        try:
+            with db() as conn:
+                with tx(conn):
+                    conn.execute(
+                        """
+                        INSERT INTO gift_claims(
+                            gift_token, buyer_user_id, package_id, source_platform, status
+                        ) VALUES(?,?,?,?, 'created')
+                        """.strip(),
+                        (token, buyer_id, package.package_id, platform),
+                    )
+            return token
+        except sqlite3.IntegrityError as exc:
+            # uuid4 collisions are effectively impossible, but the loop keeps the
+            # DB UNIQUE constraint as the source of truth instead of assuming.
+            last_exc = exc
+            continue
+
+    raise RuntimeError("failed_to_create_unique_gift_token") from last_exc
 
 
 def normalize_gift_token(raw: str | None) -> str:
@@ -55,11 +101,26 @@ def mark_gift_paid(
                     provider_payment_id, source_platform, status, paid_at
                 ) VALUES(?,?,?,?,?,?, 'paid', CURRENT_TIMESTAMP)
                 ON CONFLICT(gift_token) DO UPDATE SET
-                    buyer_user_id=excluded.buyer_user_id,
-                    package_id=excluded.package_id,
-                    provider=excluded.provider,
-                    provider_payment_id=excluded.provider_payment_id,
-                    source_platform=excluded.source_platform,
+                    buyer_user_id=CASE
+                        WHEN gift_claims.status='claimed' THEN gift_claims.buyer_user_id
+                        ELSE excluded.buyer_user_id
+                    END,
+                    package_id=CASE
+                        WHEN gift_claims.status='claimed' THEN gift_claims.package_id
+                        ELSE excluded.package_id
+                    END,
+                    provider=CASE
+                        WHEN gift_claims.status='claimed' THEN gift_claims.provider
+                        ELSE excluded.provider
+                    END,
+                    provider_payment_id=CASE
+                        WHEN gift_claims.status='claimed' THEN gift_claims.provider_payment_id
+                        ELSE excluded.provider_payment_id
+                    END,
+                    source_platform=CASE
+                        WHEN gift_claims.status='claimed' THEN gift_claims.source_platform
+                        ELSE excluded.source_platform
+                    END,
                     status=CASE
                         WHEN gift_claims.status='claimed' THEN gift_claims.status
                         ELSE 'paid'
