@@ -4,13 +4,23 @@
 
 ## Production ingress contract
 
-Канонический production-режим для Telegram: **polling**.
+Канонический production-режим для Telegram: **polling only**.
 
 - `TELEGRAM_TRANSPORT=polling`
 - `TELEGRAM_WEBHOOK_ENABLED=0`
+- `TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED=0`
 - Telegram updates не принимаются через public webhook в production.
 - Локальный aiohttp ingress может использоваться для MAX/VK, YooKassa reconciliation и media/audio links, но не должен становиться Telegram update ingress в production.
 - Telegram webhook-код в репозитории остаётся compatibility/dev capability, а не production-contract.
+
+## Production storage contract
+
+Каноническое production-хранилище: **Postgres only**.
+
+- `METRO_DB_ENGINE=postgres`
+- `DATABASE_URL=postgresql://...`
+- SQLite разрешён только для local/dev/hermetic tests.
+- Production gate должен падать, если `APP_ENV=prod` запущен без Postgres.
 
 ## Структура
 - `main.py` — запуск
@@ -21,7 +31,7 @@
 - `audio/` — контент
   - `audio/demo/` — демо-файлы (work/home)
   - `audio/full/` — полный доступ (если используется)
-- `data/` — тексты/тарифы
+- `data/` — runtime data для local/dev; production state должен жить вне repo или в Postgres
 
 ## Установка
 ```bat
@@ -31,7 +41,8 @@ pip install -r requirements.txt
 ```
 
 ## Настройка
-Скопируй `.env.example` в `.env` и заполни значения.
+
+Для production ориентир — `deploy/metrotherapy.env.example`. Реальные секреты хранить только на сервере, не в репозитории.
 
 ## Запуск
 ```bat
@@ -47,7 +58,8 @@ python -c "from services.schema import init_db; init_db(); print('DB OK')"
 ## Продакшн-ядро (что уже закрыто)
 
 1) ✅ БД и конкурентность
-   - WAL + timeout + сериализация доступа в `services/db.py`.
+   - WAL + timeout + сериализация доступа в `services/db.py` для SQLite local/dev.
+   - Postgres является обязательным production engine.
 
 2) ✅ Единая проверка доступа/подписки
    - `services/access.py` — стабильный API для handlers.
@@ -72,7 +84,7 @@ python -c "from services.schema import init_db; init_db(); print('DB OK')"
 - Linux/Mac: `bash scripts/check_imports.sh`
 
 ## Окружение и режимы валидации
-Валидация контента/схемы запускается на старте приложения. Жёсткость управляется через `.env`.
+Валидация контента/схемы запускается на старте приложения. Жёсткость управляется через env.
 
 ### Переменные окружения
 ```env
@@ -96,7 +108,12 @@ VALIDATOR_RELEASE_MODE=0|1
 **Прод:**
 ```env
 APP_ENV=prod
+TELEGRAM_TRANSPORT=polling
+TELEGRAM_WEBHOOK_ENABLED=0
+METRO_DB_ENGINE=postgres
+DATABASE_URL=postgresql://...
 VALIDATOR_RELEASE_MODE=1
+VALIDATOR_GUARDRAILS_STRICT=1
 ```
 
 **Dev:**
