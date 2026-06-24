@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -71,14 +72,36 @@ def _claimed_jobs_from_rows(rows: list[Any], *, fallback_token: str) -> list[Cla
     return out
 
 
-def _release_job_delivery_marker(conn: Any, job_id: int) -> None:
-    """Recover the engine lock/idempotency boundary after a lost lock.
+def _job_delivery_key_from_row(row: Any) -> tuple[int, str] | None:
+    try:
+        user_id = int(_row_get(row, "user_id", 0))
+        job_type = str(_row_get(row, "job_type", 1) or "").strip()
+        job_key = str(_row_get(row, "job_key", 2) or "").strip()
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+    if not job_type or not job_key:
+        return None
+    return user_id, f"job:{job_type}:{job_key}"
 
-    Engine.tick marks the delivery idempotency key immediately before verifying
-    that the claimed job still owns its lock_token. If the lock is lost between
-    those two calls, the job effect is not executed but the marker can block the
-    next attempt. The recovery boundary is intentionally narrow so release
-    validation keeps catching accidental wide exception handling in jobs code.
+
+def _mark_job_delivery_done(conn: Any, row: Any) -> None:
+    marker = _job_delivery_key_from_row(row)
+    if marker is None:
+        return
+    user_id, delivery_key = marker
+    conn.execute(
+        "INSERT OR IGNORE INTO idempotency(user_id, key, created_at) VALUES(?,?,?)",
+        (user_id, delivery_key, int(time.time())),
+    )
+
+
+def _release_job_delivery_marker(conn: Any, job_id: int) -> None:
+    """Clean up legacy pre-effect delivery markers after a lost lock.
+
+    Older Engine.tick versions wrote the job idempotency marker before executing
+    the effect. The current contract writes the marker from mark_done() only
+    after successful completion, but this cleanup remains for existing rows and
+    safe recovery from deployments that still have a stale pre-effect marker.
     """
     try:
         row = conn.execute(
@@ -93,19 +116,10 @@ def _release_job_delivery_marker(conn: Any, job_id: int) -> None:
         return
     if not row:
         return
-    try:
-        user_id = int(_row_get(row, "user_id", 0))
-        job_type = str(_row_get(row, "job_type", 1) or "").strip()
-        job_key = str(_row_get(row, "job_key", 2) or "").strip()
-    except (TypeError, ValueError, IndexError):
-        log.exception("Bad job row while releasing idempotency marker job_id=%s", job_id)
+    marker = _job_delivery_key_from_row(row)
+    if marker is None:
         return
-    except KeyError:
-        log.exception("Missing job row key while releasing idempotency marker job_id=%s", job_id)
-        return
-    if not job_type or not job_key:
-        return
-    delivery_key = f"job:{job_type}:{job_key}"
+    user_id, delivery_key = marker
     try:
         conn.execute(
             "DELETE FROM idempotency WHERE user_id=? AND key=?",
@@ -352,6 +366,12 @@ def lock_job(job_id: int, lock_token: str) -> bool:
 def mark_done(job_id: int, lock_token: str, *, last_error: str | None = None) -> bool:
     with db() as conn:
         with tx(conn):
+            row = conn.execute(
+                "SELECT user_id, job_type, job_key FROM jobs WHERE id=? AND lock_token=? AND done_at IS NULL LIMIT 1",
+                (int(job_id), str(lock_token)),
+            ).fetchone()
+            if not row:
+                return False
             cur = conn.execute(
                 """
                 UPDATE jobs
@@ -360,7 +380,10 @@ def mark_done(job_id: int, lock_token: str, *, last_error: str | None = None) ->
                 """.strip(),
                 (utc_now_iso(), last_error, int(job_id), str(lock_token)),
             )
-            return int(getattr(cur, "rowcount", 0) or 0) == 1
+            updated = int(getattr(cur, "rowcount", 0) or 0) == 1
+            if updated and last_error is None:
+                _mark_job_delivery_done(conn, row)
+            return updated
 
 
 def reschedule(job: ClaimedJob, retry_at_utc: str, *, last_error: str | None = None) -> bool:
