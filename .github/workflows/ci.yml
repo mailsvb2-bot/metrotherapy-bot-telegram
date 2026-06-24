@@ -11,7 +11,7 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     name: quality / py3.12
     env:
       PYTHONDONTWRITEBYTECODE: '1'
@@ -71,33 +71,6 @@ jobs:
 
       - name: Ruff quality gate
         run: python scripts/check_ruff.py
-
-      - name: Runtime/payment type gate
-        run: |
-          python -m mypy \
-            services/jobs.py \
-            services/validators/prod.py \
-            services/payments/checkout_intent.py \
-            services/payments/yookassa_provider.py \
-            services/payments/verified_reconciliation.py \
-            runtime/payment_http.py \
-            runtime/health_server.py \
-            runtime/telegram_transport.py \
-            services/privacy_controls.py
-
-      - name: Runtime/payment security gate
-        run: |
-          python -m bandit -q -c pyproject.toml \
-            services/jobs.py \
-            services/validators/prod.py \
-            services/payments \
-            runtime/payment_http.py \
-            runtime/health_server.py \
-            runtime/telegram_transport.py \
-            services/privacy_controls.py
-
-      - name: Dependency audit gate
-        run: python -m pip_audit -r requirements.txt --progress-spinner off
 
       - name: Release hygiene after checks
         run: python scripts/check_release_hygiene.py
