@@ -38,7 +38,88 @@ def _scheduler_snapshot() -> dict[str, Any]:
             'precise_scheduler_running': False,
             'precise_scheduler_task_running': False,
             'precise_scheduler_queue_size': 0,
+            'scheduler_loop_error_count': 0,
+            'scheduler_loop_last_error': '',
+            'scheduler_loop_last_error_age_sec': 0,
+            'scheduler_loop_last_tick_age_sec': 0,
         }
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == '':
+        return int(default)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        log.warning('Bad integer env %s=%r; using default=%s', name, raw, default)
+        return int(default)
+
+
+def _scheduler_recent_error(scheduler: dict[str, Any]) -> bool:
+    """Return true when the protected scheduler loop has a fresh owner-tick failure.
+
+    The scheduler intentionally keeps running when one owner tick crashes. That is
+    good for containment, but readiness must not stay green while auto-audio,
+    engine jobs, reward aggregation or UX guard are repeatedly failing. Health
+    remains informational; /readyz is the deployment gate.
+    """
+    try:
+        error_count = int(scheduler.get('scheduler_loop_error_count') or 0)
+    except (TypeError, ValueError):
+        error_count = 0
+    if error_count <= 0:
+        return False
+    if not str(scheduler.get('scheduler_loop_last_error') or '').strip():
+        return False
+
+    max_age_sec = _int_env('SCHEDULER_READY_MAX_LAST_ERROR_AGE_SEC', 300)
+    if max_age_sec <= 0:
+        return True
+    try:
+        age_sec = int(scheduler.get('scheduler_loop_last_error_age_sec') or 0)
+    except (TypeError, ValueError):
+        age_sec = 0
+    return age_sec <= max_age_sec
+
+
+def _scheduler_stale(scheduler: dict[str, Any]) -> bool:
+    if not bool(scheduler.get('scheduler_loop_task_running')):
+        return False
+    if not bool(scheduler.get('scheduler_loop_started')):
+        return False
+    max_age_sec = _int_env('SCHEDULER_READY_MAX_LAST_TICK_AGE_SEC', 15)
+    if max_age_sec <= 0:
+        return False
+    try:
+        age_sec = int(scheduler.get('scheduler_loop_last_tick_age_sec') or 0)
+    except (TypeError, ValueError):
+        age_sec = max_age_sec + 1
+    return age_sec > max_age_sec
+
+
+def _scheduler_readiness(scheduler: dict[str, Any]) -> tuple[bool, list[str], dict[str, bool]]:
+    running = bool(scheduler.get('scheduler_loop_task_running'))
+    recent_error = _scheduler_recent_error(scheduler)
+    stale = _scheduler_stale(scheduler)
+
+    errors: list[str] = []
+    if not running:
+        errors.append('scheduler:not_running')
+    if recent_error:
+        errors.append('scheduler:recent_owner_tick_error')
+    if stale:
+        errors.append('scheduler:stale_tick')
+
+    return (
+        bool(running and not recent_error and not stale),
+        errors,
+        {
+            'scheduler_recent_error': recent_error,
+            'scheduler_stale': stale,
+            'scheduler_degraded': bool(recent_error or stale),
+        },
+    )
 
 
 def _messenger_webhook_configured() -> bool:
@@ -130,7 +211,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
     telegram_webhook_enabled = telegram_transport_value == 'webhook'
     webhook_runtime_enabled = bool(messenger_webhook_enabled or telegram_webhook_enabled)
     app_env = (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower()
-    scheduler_ok = bool(scheduler.get('scheduler_loop_task_running'))
+    scheduler_ok, scheduler_errors, scheduler_flags = _scheduler_readiness(scheduler)
     webhook_ok = True
     if app_env in {'prod', 'production'} and telegram_webhook_enabled:
         webhook_ok = webhook_runtime_enabled
@@ -139,8 +220,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         errors.append(db_error)
     if schema_error is not None:
         errors.append(schema_error)
-    if not scheduler_ok:
-        errors.append('scheduler:not_running')
+    errors.extend(scheduler_errors)
     if not webhook_ok:
         errors.append('webhook:not_ready')
     ready = bool(db_ok and schema_ok and scheduler_ok and webhook_ok)
@@ -160,6 +240,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         'messenger_webhook_enabled': messenger_webhook_enabled,
         'webhook_runtime_enabled': webhook_runtime_enabled,
         'app_env': app_env,
+        **scheduler_flags,
         **_storage_health_fields(),
         **ai_policy_snapshot(),
         **scheduler,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -68,6 +69,60 @@ def _claimed_jobs_from_rows(rows: list[Any], *, fallback_token: str) -> list[Cla
             )
         )
     return out
+
+
+def _release_job_delivery_marker(conn: Any, job_id: int) -> None:
+    """Recover the engine lock/idempotency boundary after a lost lock.
+
+    Engine.tick marks the delivery idempotency key immediately before verifying
+    that the claimed job still owns its lock_token. If the lock is lost between
+    those two calls, the job effect is not executed but the marker can block the
+    next attempt. The recovery boundary is intentionally narrow so release
+    validation keeps catching accidental wide exception handling in jobs code.
+    """
+    try:
+        row = conn.execute(
+            "SELECT user_id, job_type, job_key FROM jobs WHERE id=? LIMIT 1",
+            (int(job_id),),
+        ).fetchone()
+    except sqlite3.Error:
+        log.exception("SQLite failure while releasing idempotency marker job_id=%s", job_id)
+        return
+    except RuntimeError:
+        log.exception("DB runtime failure while releasing idempotency marker job_id=%s", job_id)
+        return
+    if not row:
+        return
+    try:
+        user_id = int(_row_get(row, "user_id", 0))
+        job_type = str(_row_get(row, "job_type", 1) or "").strip()
+        job_key = str(_row_get(row, "job_key", 2) or "").strip()
+    except (TypeError, ValueError, IndexError):
+        log.exception("Bad job row while releasing idempotency marker job_id=%s", job_id)
+        return
+    except KeyError:
+        log.exception("Missing job row key while releasing idempotency marker job_id=%s", job_id)
+        return
+    if not job_type or not job_key:
+        return
+    delivery_key = f"job:{job_type}:{job_key}"
+    try:
+        conn.execute(
+            "DELETE FROM idempotency WHERE user_id=? AND key=?",
+            (user_id, delivery_key),
+        )
+    except sqlite3.Error:
+        log.exception(
+            "SQLite failure while deleting lost-lock marker job_id=%s delivery_key=%s",
+            job_id,
+            delivery_key,
+        )
+    except RuntimeError:
+        log.exception(
+            "DB runtime failure while deleting lost-lock marker job_id=%s delivery_key=%s",
+            job_id,
+            delivery_key,
+        )
 
 
 def _add_job_postgres(
@@ -283,11 +338,15 @@ def claim_due_jobs(now_utc_iso: str, *, limit: int = 50, lock_ttl_sec: int = 120
 
 def lock_job(job_id: int, lock_token: str) -> bool:
     with db() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM jobs WHERE id=? AND lock_token=? AND done_at IS NULL",
-            (int(job_id), str(lock_token)),
-        ).fetchone()
-        return bool(row)
+        with tx(conn):
+            row = conn.execute(
+                "SELECT 1 FROM jobs WHERE id=? AND lock_token=? AND done_at IS NULL",
+                (int(job_id), str(lock_token)),
+            ).fetchone()
+            if row:
+                return True
+            _release_job_delivery_marker(conn, int(job_id))
+            return False
 
 
 def mark_done(job_id: int, lock_token: str, *, last_error: str | None = None) -> bool:
