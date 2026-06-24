@@ -188,7 +188,8 @@ def trial_conversion_summary() -> dict[str, Any]:
             """
         ).fetchone()["c"]
         paid_users = conn.execute(
-            "SELECT COUNT(DISTINCT user_id) AS c FROM payments WHERE payload NOT LIKE 'gift:%'"
+            "SELECT COUNT(DISTINCT user_id) AS c FROM payments WHERE payload NOT LIKE ?",
+            ("gift:%",),
         ).fetchone()["c"]
 
     demo_i = int(demo_users or 0)
