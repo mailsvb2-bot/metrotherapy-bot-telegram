@@ -29,9 +29,24 @@ from app import create_application
 log = logging.getLogger(__name__)
 
 
+def _restart_limit() -> int:
+    """Return crash-loop limit for APP_SELF_HEAL_RESTART.
+
+    0 means intentionally unlimited. The default is finite so a repeated boot
+    failure is visible to systemd/monitoring instead of being hidden forever.
+    """
+    raw = (os.getenv("APP_SELF_HEAL_MAX_RESTARTS") or "3").strip()
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 3
+
+
 async def _run_with_restart() -> None:
     restart_enabled = (os.getenv("APP_SELF_HEAL_RESTART", "0") or "0").strip() in {"1", "true", "yes", "on"}
     backoff = max(1, int(os.getenv("APP_SELF_HEAL_BACKOFF_SEC", "2") or 2))
+    max_restarts = _restart_limit()
+    crash_count = 0
 
     while True:
         try:
@@ -40,10 +55,19 @@ async def _run_with_restart() -> None:
         except KeyboardInterrupt:
             return
         except (RuntimeError, OSError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
+            crash_count += 1
             log.exception("Application crashed")
             if not restart_enabled:
                 raise
+            if max_restarts and crash_count >= max_restarts:
+                log.critical(
+                    "Application crash-loop limit reached (%s/%s); refusing to hide repeated failure",
+                    crash_count,
+                    max_restarts,
+                )
+                raise
             await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
 
 
 if __name__ == "__main__":
