@@ -27,7 +27,14 @@ def _base_prod_env() -> dict[str, str]:
         "PAYMENT_PUBLIC_BASE_URL": "https://metrotherapy.example",
         "TELEGRAM_TRANSPORT": "polling",
         "TELEGRAM_WEBHOOK_ENABLED": "0",
+        "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
+        "ALLOW_INSECURE_TELEGRAM_WEBHOOK": "0",
         "MESSENGER_WEBHOOK_ENABLED": "0",
+        # Prod settings tests must satisfy the canonical production storage
+        # contract first, otherwise the early prod contract correctly fails
+        # before payment-specific assertions are reached.
+        "METRO_DB_ENGINE": "postgres",
+        "DATABASE_URL": "postgresql:///metrotherapy_test",
     }
     return {**os.environ, **env}
 
