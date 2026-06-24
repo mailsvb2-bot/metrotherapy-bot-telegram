@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+from services.gift_claims import create_gift_checkout_token
 from services.payments.checkout_intent import add_checkout_intent_to_url
 from services.payments.public_url import payment_public_base_url
 from services.practice_token_contract import public_practice_packages
@@ -25,13 +26,21 @@ def _price_label(price_rub: int) -> str:
     return f"{int(price_rub):,} ₽".replace(",", " ")
 
 
-def _practice_payment_url(*, base_url: str, user_id: int | None, platform: str, package_id: str) -> str:
+def _practice_payment_url(
+    *,
+    base_url: str,
+    user_id: int | None,
+    platform: str,
+    package_id: str,
+    gift_token: str | None = None,
+) -> str:
     raw_url = payment_url(
         base_url,
         user_id=int(user_id or 0),
         platform=platform,
         external_user_id=str(user_id) if user_id else None,
         package_id=package_id,
+        gift_token=gift_token,
     )
     return add_checkout_intent_to_url(
         raw_url,
@@ -39,15 +48,37 @@ def _practice_payment_url(*, base_url: str, user_id: int | None, platform: str, 
         package_id=package_id,
         kind="tokens",
         source=platform,
+        gift_token=gift_token,
     )
 
 
-def _practice_package_rows(*, user_id: int | None, platform: str = "telegram") -> list[list[InlineKeyboardButton]]:
+def _practice_package_rows(
+    *,
+    user_id: int | None,
+    platform: str = "telegram",
+    gift: bool = False,
+) -> list[list[InlineKeyboardButton]]:
     base_url = payment_public_base_url()
     rows: list[list[InlineKeyboardButton]] = []
+    if gift and not int(user_id or 0):
+        rows.append([
+            InlineKeyboardButton(
+                text="⚠️ Не удалось определить покупателя подарка",
+                callback_data="gift:menu",
+            )
+        ])
+        return rows
+
     for package in public_practice_packages():
         label = f"{package.title} — {_price_label(package.price_rub)}"
         if base_url:
+            gift_token = None
+            if gift:
+                gift_token = create_gift_checkout_token(
+                    buyer_user_id=int(user_id or 0),
+                    package_id=package.package_id,
+                    source_platform=platform,
+                )
             rows.append([
                 InlineKeyboardButton(
                     text=label,
@@ -56,6 +87,7 @@ def _practice_package_rows(*, user_id: int | None, platform: str = "telegram") -
                         user_id=user_id,
                         platform=platform,
                         package_id=package.package_id,
+                        gift_token=gift_token,
                     ),
                 )
             ])
@@ -78,8 +110,8 @@ def kb_tariffs(user_id: int | None = None) -> InlineKeyboardMarkup:
     return kb(rows)
 
 
-def kb_gift_tariffs(back_cb: str = "gift:menu") -> InlineKeyboardMarkup:
-    rows = _practice_package_rows(user_id=None, platform="telegram")
+def kb_gift_tariffs(user_id: int | None = None, back_cb: str = "gift:menu") -> InlineKeyboardMarkup:
+    rows = _practice_package_rows(user_id=user_id, platform="telegram", gift=True)
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb)])
     return kb(rows)
 
