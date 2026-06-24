@@ -22,6 +22,14 @@
 - SQLite разрешён только для local/dev/hermetic tests.
 - Production gate должен падать, если `APP_ENV=prod` запущен без Postgres.
 
+## Production monetization contract
+
+Канонический production-режим пакетной экономики: **hard token enforcement**.
+
+- `TOKEN_ENFORCEMENT_MODE=hard`
+- Soft/off режимы допустимы только для local/dev migration drills.
+- Если у пользователя нет доступных практик, paid audio не должен выдаваться как оплаченный доступ.
+
 ## Структура
 - `main.py` — запуск
 - `app.py` — сборка приложения (DP, роутеры, scheduler, init_db)
@@ -112,6 +120,7 @@ TELEGRAM_TRANSPORT=polling
 TELEGRAM_WEBHOOK_ENABLED=0
 METRO_DB_ENGINE=postgres
 DATABASE_URL=postgresql://...
+TOKEN_ENFORCEMENT_MODE=hard
 VALIDATOR_RELEASE_MODE=1
 VALIDATOR_GUARDRAILS_STRICT=1
 ```
