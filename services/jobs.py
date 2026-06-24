@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -71,22 +72,24 @@ def _claimed_jobs_from_rows(rows: list[Any], *, fallback_token: str) -> list[Cla
 
 
 def _release_job_delivery_marker(conn: Any, job_id: int) -> None:
-    """Best-effort recovery for the engine lock/idempotency boundary.
+    """Recover the engine lock/idempotency boundary after a lost lock.
 
-    Engine.tick historically marks the delivery idempotency key immediately before
-    it verifies that the claimed job still owns its lock_token. If the lock is
-    lost between those two calls, the job effect is not executed but the marker
-    can block the next attempt. Keeping the recovery here avoids a second marker
-    implementation in the engine and preserves the single jobs/idempotency
-    contract surface.
+    Engine.tick marks the delivery idempotency key immediately before verifying
+    that the claimed job still owns its lock_token. If the lock is lost between
+    those two calls, the job effect is not executed but the marker can block the
+    next attempt. The recovery boundary is intentionally narrow so release
+    validation keeps catching accidental wide exception handling in jobs code.
     """
     try:
         row = conn.execute(
             "SELECT user_id, job_type, job_key FROM jobs WHERE id=? LIMIT 1",
             (int(job_id),),
         ).fetchone()
-    except Exception:  # validator: allow-wide-except
-        log.exception("Failed to inspect job while releasing idempotency marker job_id=%s", job_id)
+    except sqlite3.Error:
+        log.exception("SQLite failure while releasing idempotency marker job_id=%s", job_id)
+        return
+    except RuntimeError:
+        log.exception("DB runtime failure while releasing idempotency marker job_id=%s", job_id)
         return
     if not row:
         return
@@ -94,8 +97,11 @@ def _release_job_delivery_marker(conn: Any, job_id: int) -> None:
         user_id = int(_row_get(row, "user_id", 0))
         job_type = str(_row_get(row, "job_type", 1) or "").strip()
         job_key = str(_row_get(row, "job_key", 2) or "").strip()
-    except (TypeError, ValueError, IndexError, KeyError):
+    except (TypeError, ValueError, IndexError):
         log.exception("Bad job row while releasing idempotency marker job_id=%s", job_id)
+        return
+    except KeyError:
+        log.exception("Missing job row key while releasing idempotency marker job_id=%s", job_id)
         return
     if not job_type or not job_key:
         return
@@ -105,9 +111,15 @@ def _release_job_delivery_marker(conn: Any, job_id: int) -> None:
             "DELETE FROM idempotency WHERE user_id=? AND key=?",
             (user_id, delivery_key),
         )
-    except Exception:  # validator: allow-wide-except
+    except sqlite3.Error:
         log.exception(
-            "Failed to release idempotency marker after lost job lock job_id=%s delivery_key=%s",
+            "SQLite failure while deleting lost-lock marker job_id=%s delivery_key=%s",
+            job_id,
+            delivery_key,
+        )
+    except RuntimeError:
+        log.exception(
+            "DB runtime failure while deleting lost-lock marker job_id=%s delivery_key=%s",
             job_id,
             delivery_key,
         )
