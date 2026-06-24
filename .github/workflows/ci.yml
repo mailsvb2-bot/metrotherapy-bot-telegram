@@ -18,7 +18,7 @@ jobs:
         env:
           POSTGRES_DB: metrotherapy_ci
           POSTGRES_USER: metrotherapy
-          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_PASSWORD: metrotherapy
         ports:
           - 5432:5432
         options: >-
@@ -33,6 +33,12 @@ jobs:
     name: quality / py${{ matrix.python-version }}
     env:
       PYTHONDONTWRITEBYTECODE: '1'
+      METRO_DB_ENGINE: postgres
+      DATABASE_URL: postgresql://metrotherapy:metrotherapy@127.0.0.1:5432/metrotherapy_ci
+      TELEGRAM_TRANSPORT: polling
+      TELEGRAM_WEBHOOK_ENABLED: '0'
+      TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED: '0'
+      ALLOW_INSECURE_TELEGRAM_WEBHOOK: '0'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,16 +75,6 @@ jobs:
           VALIDATOR_RELEASE_MODE: '1'
           VALIDATOR_GUARDRAILS_STRICT: '1'
           VALIDATOR_SKIP_AUDIO: '1'
-          ADMIN_IDS: '1'
-          METRO_DB_ENGINE: postgres
-          DATABASE_URL: postgresql://metrotherapy@127.0.0.1:5432/metrotherapy_ci
-          YOOKASSA_SHOP_ID: x
-          YOOKASSA_SECRET_KEY: x
-          PAYMENT_CHECKOUT_SIGNING_KEY: x
-          YOOKASSA_WEBHOOK_SECRET: x
-          PAYMENT_PUBLIC_BASE_URL: 'https://metrotherapy.example'
-          TELEGRAM_TRANSPORT: polling
-          TELEGRAM_WEBHOOK_ENABLED: '0'
         run: python scripts/smoke.py
 
       - name: Full pytest regression gate
@@ -93,16 +89,6 @@ jobs:
           VALIDATOR_RELEASE_MODE: '1'
           VALIDATOR_GUARDRAILS_STRICT: '1'
           VALIDATOR_SKIP_AUDIO: '1'
-          ADMIN_IDS: '1'
-          METRO_DB_ENGINE: postgres
-          DATABASE_URL: postgresql://metrotherapy@127.0.0.1:5432/metrotherapy_ci
-          YOOKASSA_SHOP_ID: x
-          YOOKASSA_SECRET_KEY: x
-          PAYMENT_CHECKOUT_SIGNING_KEY: x
-          YOOKASSA_WEBHOOK_SECRET: x
-          PAYMENT_PUBLIC_BASE_URL: 'https://metrotherapy.example'
-          TELEGRAM_TRANSPORT: polling
-          TELEGRAM_WEBHOOK_ENABLED: '0'
         run: python scripts/validate_project.py
 
       - name: Ruff quality gate
