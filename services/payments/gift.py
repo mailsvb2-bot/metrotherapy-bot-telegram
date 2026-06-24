@@ -54,14 +54,15 @@ async def gift_menu(cb: CallbackQuery) -> None:
     if message is None:
         return
 
-    set_pending(int(cb.from_user.id), "gift_universal", {"from_name": (cb.from_user.full_name or "").strip()})
-    log_event(int(cb.from_user.id), "gift_menu", {"mode": "universal_link"})
+    uid = int(cb.from_user.id)
+    set_pending(uid, "gift_universal", {"from_name": (cb.from_user.full_name or "").strip()})
+    log_event(uid, "gift_menu", {"mode": "universal_link"})
 
     await message.edit_text(
         "🎁 Подарить подписку\n\n"
         "Сначала выберите тариф и оплатите подарок. После оплаты проект даст ссылки для отправки подарка в Telegram, ВКонтакте или MAX.\n\n"
         "Получатель откроет подарок в выбранном мессенджере и войдёт в тот же маршрут Метротерапии.",
-        reply_markup=kb_gift_tariffs(back_cb="menu:main"),
+        reply_markup=kb_gift_tariffs(user_id=uid, back_cb="menu:main"),
     )
 
 
@@ -77,7 +78,7 @@ async def gift_pick_target(cb: CallbackQuery) -> None:
         await message.answer(
             "⚠️ Ваш клиент Telegram не поддерживает выбор пользователя кнопкой.\n"
             "Выберите тариф и после оплаты отправьте универсальную ссылку подарка в нужный мессенджер.",
-            reply_markup=kb_gift_tariffs(back_cb="menu:main"),
+            reply_markup=kb_gift_tariffs(user_id=uid, back_cb="menu:main"),
         )
         return
     set_pending(uid, "gift_target", {"from_name": (cb.from_user.full_name or "").strip()})
@@ -157,7 +158,7 @@ async def gift_users_shared(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         "Теперь выберите тариф для подарка:",
-        reply_markup=kb_gift_tariffs(back_cb="gift:menu"),
+        reply_markup=kb_gift_tariffs(user_id=uid, back_cb="gift:menu"),
     )
 
 
