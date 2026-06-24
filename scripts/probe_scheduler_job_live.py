@@ -111,16 +111,21 @@ def run_probe(*, user_id: int = DEFAULT_PROBE_USER_ID, keep_artifacts: bool = Fa
         if target is None:
             raise SystemExit("SCHEDULER_JOB_PROBE_FAILED probe job was not claimed")
 
+        # Engine compatibility boundary: this call must not create a delivered
+        # marker before the effect. The final delivered marker is written by
+        # mark_done() after successful execution.
         idempotency_ok = mark_delivery_once(int(user_id), "job", PROBE_JOB_TYPE, job_key)
         if not idempotency_ok:
-            raise SystemExit("SCHEDULER_JOB_PROBE_FAILED idempotency insert returned duplicate")
-        rows_touched += 1
-
-        if not was_delivered(int(user_id), "job", PROBE_JOB_TYPE, job_key):
-            raise SystemExit("SCHEDULER_JOB_PROBE_FAILED idempotency row not visible")
+            raise SystemExit("SCHEDULER_JOB_PROBE_FAILED idempotency compatibility call returned false")
+        if was_delivered(int(user_id), "job", PROBE_JOB_TYPE, job_key):
+            raise SystemExit("SCHEDULER_JOB_PROBE_FAILED pre-effect idempotency marker was written")
 
         if not mark_done(int(target.id), str(target.lock_token)):
             raise SystemExit("SCHEDULER_JOB_PROBE_FAILED mark_done returned false")
+        rows_touched += 1
+
+        if not was_delivered(int(user_id), "job", PROBE_JOB_TYPE, job_key):
+            raise SystemExit("SCHEDULER_JOB_PROBE_FAILED final idempotency row not visible after mark_done")
 
         with db() as conn:
             row = conn.execute(
