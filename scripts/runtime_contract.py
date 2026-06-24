@@ -8,7 +8,6 @@ ads or live traffic are sent to the bot.
 """
 
 import os
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,7 +30,16 @@ def _first_value(*names: str) -> str:
 
 
 def _payment_public_base_url() -> str:
-    return _first_value("MESSENGER_PUBLIC_BASE_URL", "PAYMENT_PUBLIC_BASE_URL", "PUBLIC_BASE_URL").rstrip("/")
+    return _first_value("PAYMENT_PUBLIC_BASE_URL", "MESSENGER_PUBLIC_BASE_URL", "PUBLIC_BASE_URL").rstrip("/")
+
+
+def _resolved_db_engine() -> str:
+    raw = _value("METRO_DB_ENGINE").lower()
+    if raw in {"postgres", "postgresql", "pg"}:
+        return "postgres"
+    if raw in {"sqlite", "sqlite3"}:
+        return "sqlite"
+    return "postgres" if _value("DATABASE_URL") else "sqlite"
 
 
 def _is_abs_outside_project(raw: str) -> bool:
@@ -60,6 +68,10 @@ def run() -> tuple[list[str], list[str]]:
         errors.append("TELEGRAM_TRANSPORT must remain polling for this deployment")
     if _truthy("TELEGRAM_WEBHOOK_ENABLED"):
         errors.append("TELEGRAM_WEBHOOK_ENABLED must be 0; Telegram must not be switched to webhook")
+    if _truthy("TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED"):
+        errors.append("TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED must be 0 in production")
+    if _truthy("ALLOW_INSECURE_TELEGRAM_WEBHOOK"):
+        errors.append("ALLOW_INSECURE_TELEGRAM_WEBHOOK is forbidden in production")
 
     if prod:
         for name in ("APP_ENV", "BOT_TOKEN", "ADMIN_IDS"):
@@ -79,10 +91,17 @@ def run() -> tuple[list[str], list[str]]:
         elif not payment_base.startswith("https://"):
             errors.append("payment public base URL must start with https:// in prod")
 
-        db_path = _value("METRO_DB_PATH")
+        if _resolved_db_engine() != "postgres":
+            errors.append("METRO_DB_ENGINE must be postgres in prod")
+        database_url = _value("DATABASE_URL")
+        if not database_url:
+            errors.append("DATABASE_URL is required in prod")
+        elif not database_url.lower().startswith(("postgresql://", "postgres://")):
+            errors.append("DATABASE_URL must use postgres/postgresql scheme in prod")
+        if _truthy("ALLOW_SQLITE_IN_PROD"):
+            errors.append("ALLOW_SQLITE_IN_PROD is not a supported production bypass")
+
         log_path = _value("LOG_PATH")
-        if not _is_abs_outside_project(db_path):
-            errors.append("METRO_DB_PATH must be an absolute path outside the project tree in prod")
         if not _is_abs_outside_project(log_path):
             errors.append("LOG_PATH must be an absolute path outside the project tree in prod")
         if _truthy("HEALTHCHECK_ENABLED", "1") is False:
