@@ -4,33 +4,26 @@ import importlib
 
 
 def _run(monkeypatch, **env):
-    keys = {
+    for key in {
         "APP_ENV",
-        "BOT_TOKEN",
-        "PAY_PROVIDER_TOKEN",
-        "ADMIN_IDS",
         "TELEGRAM_TRANSPORT",
         "RUN_MODE",
         "TELEGRAM_WEBHOOK_ENABLED",
+        "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED",
+        "ALLOW_INSECURE_TELEGRAM_WEBHOOK",
         "MESSENGER_WEBHOOK_ENABLED",
         "MESSENGER_WEBHOOK_HOST",
         "MESSENGER_WEBHOOK_PORT",
         "MESSENGER_PUBLIC_BASE_URL",
-        "PAYMENT_PUBLIC_BASE_URL",
         "PUBLIC_BASE_URL",
-        "YOOKASSA_SHOP_ID",
-        "YOOKASSA_SECRET_KEY",
-        "PAYMENT_CHECKOUT_SIGNING_KEY",
-        "YOOKASSA_WEBHOOK_SECRET",
-        "PAYMENT_WEBHOOK_SECRET",
-        "WEBHOOK_SECRET",
         "HEALTHCHECK_ENABLED",
         "HEALTHCHECK_HOST",
         "HEALTHCHECK_PORT",
+        "METRO_DB_ENGINE",
+        "DATABASE_URL",
         "METRO_DB_PATH",
         "LOG_PATH",
-    }
-    for key in keys:
+    }:
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -39,86 +32,83 @@ def _run(monkeypatch, **env):
     return mod.run()
 
 
-def _prod_base(tmp_path) -> dict[str, str]:
-    return {
-        "APP_ENV": "prod",
-        "BOT_TOKEN": "validation-bot-token",
-        "ADMIN_IDS": "1",
-        "YOOKASSA_SHOP_ID": "validation-shop",
-        "YOOKASSA_SECRET_KEY": "validation-key",
-        "PAYMENT_CHECKOUT_SIGNING_KEY": "validation-checkout-key",
-        "YOOKASSA_WEBHOOK_SECRET": "validation-webhook-key",
-        "PAYMENT_PUBLIC_BASE_URL": "https://metrotherapy.example",
-        "TELEGRAM_TRANSPORT": "polling",
-        "TELEGRAM_WEBHOOK_ENABLED": "0",
-        "HEALTHCHECK_ENABLED": "1",
-        "METRO_DB_PATH": str(tmp_path / "state" / "data.db"),
-        "LOG_PATH": str(tmp_path / "logs" / "app.log"),
-    }
-
-
-def test_runtime_contract_accepts_prod_polling_with_out_of_tree_state(monkeypatch, tmp_path):
-    errors, warnings = _run(monkeypatch, **_prod_base(tmp_path))
+def test_runtime_contract_accepts_dev_defaults(monkeypatch):
+    errors, warnings = _run(monkeypatch, APP_ENV="dev")
 
     assert errors == []
 
 
-def test_runtime_contract_rejects_missing_canonical_payment_env(monkeypatch, tmp_path):
-    env = _prod_base(tmp_path)
-    env.pop("YOOKASSA_SECRET_KEY")
-    env.pop("PAYMENT_PUBLIC_BASE_URL")
-
-    errors, warnings = _run(monkeypatch, **env)
-
-    assert any("YOOKASSA_SECRET_KEY" in error for error in errors)
-    assert any("PAYMENT_PUBLIC_BASE_URL" in error for error in errors)
-
-
-def test_runtime_contract_rejects_telegram_webhook(monkeypatch, tmp_path):
-    env = _prod_base(tmp_path)
-    env["TELEGRAM_WEBHOOK_ENABLED"] = "1"
-
-    errors, warnings = _run(monkeypatch, **env)
+def test_runtime_contract_rejects_telegram_webhook(monkeypatch):
+    errors, warnings = _run(
+        monkeypatch,
+        APP_ENV="prod",
+        TELEGRAM_TRANSPORT="polling",
+        TELEGRAM_WEBHOOK_ENABLED="1",
+        METRO_DB_ENGINE="postgres",
+        DATABASE_URL="postgresql:///metrotherapy_test",
+        LOG_PATH="/tmp/metrotherapy.log",
+        HEALTHCHECK_ENABLED="1",
+    )
 
     assert any("Telegram" in error or "TELEGRAM" in error for error in errors)
 
 
-def test_runtime_contract_rejects_repo_relative_state_paths(monkeypatch):
-    env = {
-        "APP_ENV": "prod",
-        "BOT_TOKEN": "validation-bot-token",
-        "ADMIN_IDS": "1",
-        "YOOKASSA_SHOP_ID": "validation-shop",
-        "YOOKASSA_SECRET_KEY": "validation-key",
-        "PAYMENT_CHECKOUT_SIGNING_KEY": "validation-checkout-key",
-        "YOOKASSA_WEBHOOK_SECRET": "validation-webhook-key",
-        "PAYMENT_PUBLIC_BASE_URL": "https://metrotherapy.example",
-        "TELEGRAM_TRANSPORT": "polling",
-        "TELEGRAM_WEBHOOK_ENABLED": "0",
-        "HEALTHCHECK_ENABLED": "1",
-        "METRO_DB_PATH": "data/data.db",
-        "LOG_PATH": "logs/app.log",
-    }
+def test_runtime_contract_rejects_sqlite_prod(monkeypatch, tmp_path):
+    errors, warnings = _run(
+        monkeypatch,
+        APP_ENV="prod",
+        TELEGRAM_TRANSPORT="polling",
+        TELEGRAM_WEBHOOK_ENABLED="0",
+        METRO_DB_ENGINE="sqlite",
+        METRO_DB_PATH=str(tmp_path / "state" / "data.db"),
+        LOG_PATH="/tmp/metrotherapy.log",
+        HEALTHCHECK_ENABLED="1",
+    )
 
-    errors, warnings = _run(monkeypatch, **env)
+    assert any("METRO_DB_ENGINE" in error for error in errors)
+    assert any("DATABASE_URL" in error for error in errors)
 
-    assert any("METRO_DB_PATH" in error for error in errors)
+
+def test_runtime_contract_rejects_bad_database_url_scheme(monkeypatch):
+    errors, warnings = _run(
+        monkeypatch,
+        APP_ENV="prod",
+        TELEGRAM_TRANSPORT="polling",
+        TELEGRAM_WEBHOOK_ENABLED="0",
+        METRO_DB_ENGINE="postgres",
+        DATABASE_URL="sqlite:///tmp.db",
+        LOG_PATH="/tmp/metrotherapy.log",
+        HEALTHCHECK_ENABLED="1",
+    )
+
+    assert any("DATABASE_URL" in error for error in errors)
+
+
+def test_runtime_contract_rejects_repo_relative_log_path(monkeypatch):
+    errors, warnings = _run(
+        monkeypatch,
+        APP_ENV="prod",
+        TELEGRAM_TRANSPORT="polling",
+        TELEGRAM_WEBHOOK_ENABLED="0",
+        METRO_DB_ENGINE="postgres",
+        DATABASE_URL="postgresql:///metrotherapy_test",
+        LOG_PATH="logs/app.log",
+        HEALTHCHECK_ENABLED="1",
+    )
+
     assert any("LOG_PATH" in error for error in errors)
 
 
-def test_runtime_contract_detects_messenger_health_port_collision(monkeypatch, tmp_path):
-    env = _prod_base(tmp_path)
-    env.update(
-        {
-            "MESSENGER_WEBHOOK_ENABLED": "1",
-            "MESSENGER_WEBHOOK_HOST": "127.0.0.1",
-            "MESSENGER_WEBHOOK_PORT": "8082",
-            "MESSENGER_PUBLIC_BASE_URL": "https://example.invalid",
-            "HEALTHCHECK_HOST": "127.0.0.1",
-            "HEALTHCHECK_PORT": "8082",
-        }
+def test_runtime_contract_detects_messenger_health_port_collision(monkeypatch):
+    errors, warnings = _run(
+        monkeypatch,
+        APP_ENV="dev",
+        MESSENGER_WEBHOOK_ENABLED="1",
+        MESSENGER_WEBHOOK_HOST="127.0.0.1",
+        MESSENGER_WEBHOOK_PORT="8082",
+        MESSENGER_PUBLIC_BASE_URL="https://example.invalid",
+        HEALTHCHECK_HOST="127.0.0.1",
+        HEALTHCHECK_PORT="8082",
     )
-
-    errors, warnings = _run(monkeypatch, **env)
 
     assert any("collide" in error for error in errors)

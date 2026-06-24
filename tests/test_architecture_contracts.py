@@ -21,6 +21,7 @@ def test_architecture_contract_validator_imports():
     mod = importlib.import_module('services.validators.architecture')
     assert callable(mod.validate_architecture_contracts)
 
+
 def test_engine_job_dispatch_contract_guardrail():
     from services.validators.architecture import validate_engine_job_dispatch_contract
 
@@ -34,6 +35,13 @@ def test_engine_demo_send_has_no_unreachable_demo_sent_log():
     assert 'return\n\n        await asyncio.to_thread(log_event, user_id, "demo_sent"' not in source
 
 
+def test_decision_core_job_policy_matches_engine_registry():
+    from core.ai.decision_core import allowed_engine_job_types
+    from core.engine import Engine
+
+    assert set(allowed_engine_job_types()) == set(Engine()._job_handlers())
+
+
 def test_decision_core_engine_job_policy_allows_registry_jobs_and_denies_unknown():
     from core.ai.decision_core import DecisionCore
 
@@ -45,4 +53,3 @@ def test_decision_core_engine_job_policy_allows_registry_jobs_and_denies_unknown
     assert allowed.meta["policy"] == "engine_job_registry_v1"
     assert denied.payload["type"] == "job_execution_denied"
     assert denied.payload["reason"] == "unknown_job_type"
-

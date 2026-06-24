@@ -27,6 +27,11 @@ ALLOWED_ENGINE_JOB_TYPES = frozenset({
 })
 
 
+def allowed_engine_job_types() -> frozenset[str]:
+    """Single exported policy surface for Engine/DecisionCore parity tests."""
+    return ALLOWED_ENGINE_JOB_TYPES
+
+
 class DecisionCore:
     """The only allowed decision authority."""
 
@@ -63,7 +68,14 @@ class DecisionCore:
             from services.events import log_runtime_event  # runtime layer
             user_id = int(world_state.get('user_id') or 0)
             if user_id:
-                log_runtime_event(user_id, event_type='decision_made', payload={'intent': world_state.get('intent'), 'meta': world_state.get('meta') or {}}, source=str(world_state.get('source') or 'telegram'), correlation_id=token.nonce, decision_id=decision_id)
+                log_runtime_event(
+                    user_id,
+                    event_type='decision_made',
+                    payload={'intent': world_state.get('intent'), 'meta': world_state.get('meta') or {}},
+                    source=str(world_state.get('source') or 'telegram'),
+                    correlation_id=token.nonce,
+                    decision_id=decision_id,
+                )
         except (sqlite3.Error, TypeError, ValueError):
             pass
 
@@ -75,7 +87,7 @@ class DecisionCore:
         intent = world_state.get("intent")
         if intent == "engine_job_execute":
             job_type = str(world_state.get("job_type") or "").strip()
-            if job_type not in ALLOWED_ENGINE_JOB_TYPES:
+            if job_type not in allowed_engine_job_types():
                 payload = {"type": "job_execution_denied", "reason": "unknown_job_type", "job_type": job_type}
                 return Decision(
                     decision_id=decision_id,

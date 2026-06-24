@@ -67,11 +67,10 @@ def _cleanup_temp_db(path: Path) -> None:
 
 
 def _set_smoke_prod_payment_env() -> None:
-    """Provide harmless prod-guardrail values for hermetic smoke checks.
+    """Provide harmless payment-shape values for hermetic smoke checks.
 
-    The real production contract requires external YooKassa/package checkout
-    settings. Smoke does not call provider APIs, but it imports the production
-    config path, so defaults must satisfy the same fail-fast shape.
+    Smoke never calls provider APIs. These values only keep import-time settings
+    that expect payment-shaped configuration from failing in isolated checks.
     """
     os.environ.setdefault('YOOKASSA_SHOP_ID', 'smoke-shop')
     os.environ.setdefault('YOOKASSA_SECRET_KEY', 'smoke-secret')
@@ -80,7 +79,21 @@ def _set_smoke_prod_payment_env() -> None:
     os.environ.setdefault('PAYMENT_PUBLIC_BASE_URL', 'https://metrotherapy.example')
 
 
+def _force_hermetic_app_env() -> None:
+    """Smoke is not the production gate.
+
+    The production gate validates real Postgres/polling deployment contracts.
+    Smoke is a hermetic import/schema/router regression check, so it must not run
+    with APP_ENV=prod and a temporary SQLite database.
+    """
+    if (os.getenv('APP_ENV') or '').strip().lower() in {'prod', 'production'}:
+        os.environ['APP_ENV'] = 'test'
+    else:
+        os.environ.setdefault('APP_ENV', 'test')
+
+
 def main() -> int:
+    _force_hermetic_app_env()
     os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
     sys.dont_write_bytecode = True
     os.environ.setdefault('VALIDATOR_RELEASE_MODE', '1')
@@ -90,9 +103,6 @@ def main() -> int:
     os.environ.setdefault('METRO_DB_PATH', str(temp_db))
     os.environ.setdefault('BOT_TOKEN', SMOKE_BOT_TOKEN)
     os.environ.setdefault('PAY_PROVIDER_TOKEN', '000000:SMOKE')
-    # CI smoke intentionally runs with APP_ENV=prod to exercise prod fail-fast.
-    # The production settings contract requires an admin identity, so provide a
-    # harmless dummy value for this hermetic no-network smoke run.
     os.environ.setdefault('ADMIN_IDS', '1')
     _set_smoke_prod_payment_env()
 

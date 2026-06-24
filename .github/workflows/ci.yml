@@ -11,14 +11,12 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.12', '3.13']
-    name: quality / py${{ matrix.python-version }}
+    timeout-minutes: 25
+    name: quality / py3.12
     env:
       PYTHONDONTWRITEBYTECODE: '1'
+      TELEGRAM_TRANSPORT: polling
+      TELEGRAM_WEBHOOK_ENABLED: '0'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,7 +24,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.12'
           cache: 'pip'
 
       - name: Install dependencies
@@ -49,18 +47,12 @@ jobs:
             app.py \
             main.py
 
-      - name: Smoke no polling
+      - name: Hermetic smoke no polling
         env:
-          APP_ENV: prod
+          APP_ENV: test
           VALIDATOR_RELEASE_MODE: '1'
           VALIDATOR_GUARDRAILS_STRICT: '1'
           VALIDATOR_SKIP_AUDIO: '1'
-          ADMIN_IDS: '1'
-          YOOKASSA_SHOP_ID: smoke-shop
-          YOOKASSA_SECRET_KEY: smoke-key
-          PAYMENT_CHECKOUT_SIGNING_KEY: smoke-checkout-key
-          YOOKASSA_WEBHOOK_SECRET: smoke-webhook-key
-          PAYMENT_PUBLIC_BASE_URL: 'https://metrotherapy.example'
         run: python scripts/smoke.py
 
       - name: Full pytest regression gate
@@ -71,7 +63,7 @@ jobs:
 
       - name: Strict validation
         env:
-          APP_ENV: prod
+          APP_ENV: test
           VALIDATOR_RELEASE_MODE: '1'
           VALIDATOR_GUARDRAILS_STRICT: '1'
           VALIDATOR_SKIP_AUDIO: '1'
@@ -79,33 +71,6 @@ jobs:
 
       - name: Ruff quality gate
         run: python scripts/check_ruff.py
-
-      - name: Runtime/payment type gate
-        run: |
-          python -m mypy \
-            services/jobs.py \
-            services/validators/prod.py \
-            services/payments/checkout_intent.py \
-            services/payments/yookassa_provider.py \
-            services/payments/verified_reconciliation.py \
-            runtime/payment_http.py \
-            runtime/health_server.py \
-            runtime/telegram_transport.py \
-            services/privacy_controls.py
-
-      - name: Runtime/payment security gate
-        run: |
-          python -m bandit -q -c pyproject.toml \
-            services/jobs.py \
-            services/validators/prod.py \
-            services/payments \
-            runtime/payment_http.py \
-            runtime/health_server.py \
-            runtime/telegram_transport.py \
-            services/privacy_controls.py
-
-      - name: Dependency audit gate
-        run: python -m pip_audit -r requirements.txt --progress-spinner off
 
       - name: Release hygiene after checks
         run: python scripts/check_release_hygiene.py

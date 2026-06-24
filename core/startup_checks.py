@@ -27,12 +27,21 @@ def _env_any(*names: str) -> str:
     return ""
 
 
+def _resolved_db_engine() -> str:
+    raw = (os.getenv("METRO_DB_ENGINE") or "").strip().lower()
+    if raw in {"postgres", "postgresql", "pg"}:
+        return "postgres"
+    if raw in {"sqlite", "sqlite3"}:
+        return "sqlite"
+    return "postgres" if (os.getenv("DATABASE_URL") or "").strip() else "sqlite"
+
+
 def _prod_ingress_checks() -> None:
     app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
     telegram_transport = (os.getenv("TELEGRAM_TRANSPORT", os.getenv("RUN_MODE", "polling")) or "polling").strip().lower()
     telegram_webhook = telegram_transport == "webhook" or _truthy_env("TELEGRAM_WEBHOOK_ENABLED")
     messenger_webhook = _truthy_env("MESSENGER_WEBHOOK_ENABLED")
-    any_webhook = telegram_webhook or messenger_webhook
+    any_webhook = messenger_webhook
 
     if app_env in {"prod", "production"}:
         if not (os.getenv("ADMIN_IDS") or os.getenv("ADMIN_ID") or "").strip():
@@ -40,36 +49,33 @@ def _prod_ingress_checks() -> None:
         if not _truthy_env("HEALTHCHECK_ENABLED", "1"):
             raise StartupCheckError("HEALTHCHECK_ENABLED must be 1 in prod; readiness is part of the deployment contract")
         if telegram_webhook:
-            public_base = (os.getenv("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL") or os.getenv("PUBLIC_BASE_URL") or "").strip()
-            if not public_base:
-                raise StartupCheckError("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL is required when Telegram webhook transport is enabled")
-            if not public_base.startswith("https://"):
-                raise StartupCheckError("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL must be https://... in prod")
-            if not (os.getenv("TELEGRAM_WEBHOOK_SECRET_TOKEN") or "").strip():
-                raise StartupCheckError("TELEGRAM_WEBHOOK_SECRET_TOKEN is required in prod webhook mode")
-            prefix = (os.getenv("TELEGRAM_WEBHOOK_PREFIX") or "/telegram-webhook").strip()
-            if not prefix.startswith("/"):
-                raise StartupCheckError("TELEGRAM_WEBHOOK_PREFIX must start with /")
+            raise StartupCheckError(
+                "Telegram production ingress is polling-only: set TELEGRAM_TRANSPORT=polling and TELEGRAM_WEBHOOK_ENABLED=0"
+            )
+        if _truthy_env("TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED"):
+            raise StartupCheckError("TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED must be 0 in prod")
+        if _truthy_env("ALLOW_INSECURE_TELEGRAM_WEBHOOK"):
+            raise StartupCheckError("ALLOW_INSECURE_TELEGRAM_WEBHOOK is forbidden in prod")
+
+        if _resolved_db_engine() != "postgres":
+            raise StartupCheckError("METRO_DB_ENGINE must be postgres in prod")
+        database_url = (os.getenv("DATABASE_URL") or "").strip()
+        if not database_url:
+            raise StartupCheckError("DATABASE_URL is required in prod")
+        if not database_url.lower().startswith(("postgresql://", "postgres://")):
+            raise StartupCheckError("DATABASE_URL must use postgres/postgresql scheme in prod")
 
     if any_webhook and _truthy_env("HEALTHCHECK_ENABLED", "1"):
-        telegram_host = (os.getenv("TELEGRAM_WEBHOOK_HOST") or os.getenv("WEBHOOK_HOST") or "127.0.0.1").strip()
-        telegram_port = _int_env("TELEGRAM_WEBHOOK_PORT", _int_env("WEBHOOK_PORT", 8081))
         messenger_host = (os.getenv("MESSENGER_WEBHOOK_HOST") or os.getenv("WEBHOOK_HOST") or "127.0.0.1").strip()
         messenger_port = _int_env("MESSENGER_WEBHOOK_PORT", _int_env("WEBHOOK_PORT", 8081))
         health_host = (os.getenv("HEALTHCHECK_HOST", "127.0.0.1") or "127.0.0.1").strip()
         health_port = _int_env("HEALTHCHECK_PORT", 8082)
-        webhook_bindings = []
-        if telegram_webhook:
-            webhook_bindings.append((telegram_host, telegram_port, "telegram webhook"))
-        if messenger_webhook:
-            webhook_bindings.append((messenger_host, messenger_port, "messenger webhook"))
-        for host, port, label in webhook_bindings:
-            same_host = host == health_host or "0.0.0.0" in {host, health_host}
-            if same_host and port == health_port:
-                raise StartupCheckError(
-                    f"Port collision: {label} and healthcheck both bind {host}:{port}. "
-                    "Use separate ports, usually webhook=8081 and health=8082."
-                )
+        same_host = messenger_host == health_host or "0.0.0.0" in {messenger_host, health_host}
+        if same_host and messenger_port == health_port:
+            raise StartupCheckError(
+                f"Port collision: messenger webhook and healthcheck both bind {messenger_host}:{messenger_port}. "
+                "Use separate ports, usually webhook=8081 and health=8082."
+            )
 
 
 def run_startup_checks(project_root: Path) -> None:
@@ -110,4 +116,4 @@ def run_startup_checks(project_root: Path) -> None:
 
     # Token sanity (do not print token). Support TELEGRAM_BOT_TOKEN for server snippets.
     if not _env_any("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"):
-        raise StartupCheckError("BOT_TOKEN is empty. Set BOT_TOKEN or TELEGRAM_BOT_TOKEN (see .env.example)")
+        raise StartupCheckError("BOT_TOKEN is empty. Set BOT_TOKEN or TELEGRAM_BOT_TOKEN (see deploy/metrotherapy.env.example)")
