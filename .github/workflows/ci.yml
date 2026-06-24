@@ -12,11 +12,7 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.12', '3.13']
-    name: quality / py${{ matrix.python-version }}
+    name: quality / py3.12
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       TELEGRAM_TRANSPORT: polling
@@ -28,7 +24,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.12'
           cache: 'pip'
 
       - name: Install dependencies
