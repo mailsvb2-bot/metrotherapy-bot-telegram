@@ -46,6 +46,18 @@ def _delivery_key(*parts: Any) -> str:
     return ":".join(cleaned)
 
 
+def _is_deferred_engine_job_marker(*parts: Any) -> bool:
+    """Engine job delivery markers are written only after mark_done().
+
+    Engine.tick used to call mark_delivery_once('job', job_type, job_key) before
+    executing the side effect. A crash between that marker and the effect could
+    make the next tick close the job as already delivered. Keep the public call
+    as a no-op compatibility guard; services.jobs.mark_done() writes the real
+    delivered marker only for successful job completion.
+    """
+    return len(parts) >= 3 and str(parts[0]).strip() == "job"
+
+
 def was_delivered(user_id: int, *key_parts: Any) -> bool:
     key = _delivery_key(*key_parts)
     with db() as conn:
@@ -58,6 +70,9 @@ def was_delivered(user_id: int, *key_parts: Any) -> bool:
 
 def mark_delivery_once(user_id: int, *key_parts: Any) -> bool:
     key = _delivery_key(*key_parts)
+    if _is_deferred_engine_job_marker(*key_parts):
+        return True
+
     created_at = int(time.time())
     with db() as conn:
         conn.execute(
