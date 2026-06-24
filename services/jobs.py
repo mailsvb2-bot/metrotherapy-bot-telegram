@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -72,6 +71,10 @@ def _claimed_jobs_from_rows(rows: list[Any], *, fallback_token: str) -> list[Cla
     return out
 
 
+def _idempotency_created_at_epoch() -> int:
+    return int(datetime.fromisoformat(utc_now_iso()).timestamp())
+
+
 def _job_delivery_key_from_row(row: Any) -> tuple[int, str] | None:
     try:
         user_id = int(_row_get(row, "user_id", 0))
@@ -91,7 +94,7 @@ def _mark_job_delivery_done(conn: Any, row: Any) -> None:
     user_id, delivery_key = marker
     conn.execute(
         "INSERT OR IGNORE INTO idempotency(user_id, key, created_at) VALUES(?,?,?)",
-        (user_id, delivery_key, int(time.time())),
+        (user_id, delivery_key, _idempotency_created_at_epoch()),
     )
 
 
