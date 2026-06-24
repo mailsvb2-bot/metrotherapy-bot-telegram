@@ -12,20 +12,6 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: metrotherapy_ci
-          POSTGRES_USER: metrotherapy
-          POSTGRES_PASSWORD: metrotherapy
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U metrotherapy -d metrotherapy_ci"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     strategy:
       fail-fast: false
       matrix:
@@ -33,12 +19,8 @@ jobs:
     name: quality / py${{ matrix.python-version }}
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-      METRO_DB_ENGINE: postgres
-      DATABASE_URL: postgresql://metrotherapy:metrotherapy@127.0.0.1:5432/metrotherapy_ci
       TELEGRAM_TRANSPORT: polling
       TELEGRAM_WEBHOOK_ENABLED: '0'
-      TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED: '0'
-      ALLOW_INSECURE_TELEGRAM_WEBHOOK: '0'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,9 +51,9 @@ jobs:
             app.py \
             main.py
 
-      - name: Smoke no polling
+      - name: Hermetic smoke no polling
         env:
-          APP_ENV: prod
+          APP_ENV: test
           VALIDATOR_RELEASE_MODE: '1'
           VALIDATOR_GUARDRAILS_STRICT: '1'
           VALIDATOR_SKIP_AUDIO: '1'
@@ -85,7 +67,7 @@ jobs:
 
       - name: Strict validation
         env:
-          APP_ENV: prod
+          APP_ENV: test
           VALIDATOR_RELEASE_MODE: '1'
           VALIDATOR_GUARDRAILS_STRICT: '1'
           VALIDATOR_SKIP_AUDIO: '1'
