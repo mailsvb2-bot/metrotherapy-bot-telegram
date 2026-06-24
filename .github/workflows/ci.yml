@@ -12,6 +12,20 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: metrotherapy_ci
+          POSTGRES_USER: metrotherapy
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U metrotherapy -d metrotherapy_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     strategy:
       fail-fast: false
       matrix:
@@ -56,11 +70,15 @@ jobs:
           VALIDATOR_GUARDRAILS_STRICT: '1'
           VALIDATOR_SKIP_AUDIO: '1'
           ADMIN_IDS: '1'
-          YOOKASSA_SHOP_ID: smoke-shop
-          YOOKASSA_SECRET_KEY: smoke-key
-          PAYMENT_CHECKOUT_SIGNING_KEY: smoke-checkout-key
-          YOOKASSA_WEBHOOK_SECRET: smoke-webhook-key
+          METRO_DB_ENGINE: postgres
+          DATABASE_URL: postgresql://metrotherapy@127.0.0.1:5432/metrotherapy_ci
+          YOOKASSA_SHOP_ID: x
+          YOOKASSA_SECRET_KEY: x
+          PAYMENT_CHECKOUT_SIGNING_KEY: x
+          YOOKASSA_WEBHOOK_SECRET: x
           PAYMENT_PUBLIC_BASE_URL: 'https://metrotherapy.example'
+          TELEGRAM_TRANSPORT: polling
+          TELEGRAM_WEBHOOK_ENABLED: '0'
         run: python scripts/smoke.py
 
       - name: Full pytest regression gate
@@ -75,6 +93,16 @@ jobs:
           VALIDATOR_RELEASE_MODE: '1'
           VALIDATOR_GUARDRAILS_STRICT: '1'
           VALIDATOR_SKIP_AUDIO: '1'
+          ADMIN_IDS: '1'
+          METRO_DB_ENGINE: postgres
+          DATABASE_URL: postgresql://metrotherapy@127.0.0.1:5432/metrotherapy_ci
+          YOOKASSA_SHOP_ID: x
+          YOOKASSA_SECRET_KEY: x
+          PAYMENT_CHECKOUT_SIGNING_KEY: x
+          YOOKASSA_WEBHOOK_SECRET: x
+          PAYMENT_PUBLIC_BASE_URL: 'https://metrotherapy.example'
+          TELEGRAM_TRANSPORT: polling
+          TELEGRAM_WEBHOOK_ENABLED: '0'
         run: python scripts/validate_project.py
 
       - name: Ruff quality gate
