@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +18,14 @@ class MessengerPreflightStatus:
 
 def _value(name: str, default: Any = "") -> Any:
     return getattr(settings, name, default)
+
+
+def _app_env() -> str:
+    return (os.getenv("APP_ENV") or getattr(settings, "APP_ENV", "") or "dev").strip().lower()
+
+
+def _deployed_env() -> bool:
+    return _app_env() in {"prod", "production", "stage", "staging"}
 
 
 def _public_webhook_url(path: str) -> str:
@@ -37,6 +46,12 @@ def _missing(*names: str) -> tuple[str, ...]:
         if not str(value or "").strip():
             out.append(name)
     return tuple(out)
+
+
+def _https_warning(name: str, value: str, warnings: list[str]) -> None:
+    clean = (value or "").strip()
+    if clean and not clean.startswith("https://"):
+        warnings.append(f"{name} should start with https:// in deployed environments")
 
 
 def check_telegram_preflight() -> MessengerPreflightStatus:
@@ -67,10 +82,14 @@ def check_vk_preflight() -> MessengerPreflightStatus:
     webhook_enabled = bool(_value("MESSENGER_WEBHOOK_ENABLED", False))
     if webhook_enabled:
         required.append("MESSENGER_PUBLIC_BASE_URL")
+        if _deployed_env():
+            required.append("VK_SECRET")
     missing = _missing(*required)
     warnings: list[str] = []
     if webhook_enabled and not str(_value("VK_SECRET", "") or "").strip():
         warnings.append("VK_SECRET is not configured; VK webhook secret verification is not enforced")
+    if _deployed_env():
+        _https_warning("MESSENGER_PUBLIC_BASE_URL", str(_value("MESSENGER_PUBLIC_BASE_URL", "") or ""), warnings)
     return MessengerPreflightStatus(
         channel="vk",
         ok=not missing,
@@ -85,11 +104,15 @@ def check_max_preflight() -> MessengerPreflightStatus:
     webhook_enabled = bool(_value("MESSENGER_WEBHOOK_ENABLED", False))
     if webhook_enabled:
         required.append("MESSENGER_PUBLIC_BASE_URL")
+        if _deployed_env():
+            required.append("MAX_WEBHOOK_SECRET")
     missing = _missing(*required)
     warnings: list[str] = []
     if webhook_enabled and not str(_value("MAX_WEBHOOK_SECRET", "") or "").strip():
         warnings.append("MAX_WEBHOOK_SECRET is not configured; MAX webhook secret verification is not enforced")
-    api_base = str(_value("MAX_API_BASE_URL", "") or "").strip()
+    if _deployed_env():
+        _https_warning("MESSENGER_PUBLIC_BASE_URL", str(_value("MESSENGER_PUBLIC_BASE_URL", "") or ""), warnings)
+    api_base = str(os.getenv("MAX_API_BASE_URL") or _value("MAX_API_BASE_URL", "") or "").strip()
     if "botapi.max.ru" in api_base:
         warnings.append("MAX_API_BASE_URL uses legacy botapi.max.ru domain")
     return MessengerPreflightStatus(
@@ -97,7 +120,7 @@ def check_max_preflight() -> MessengerPreflightStatus:
         ok=not missing,
         missing=missing,
         warnings=tuple(warnings),
-        details={"webhook_url": _public_webhook_url("/webhooks/max")},
+        details={"webhook_url": _public_webhook_url("/webhooks/max"), "api_base": api_base or "https://platform-api.max.ru"},
     )
 
 
