@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 25
     name: quality / py3.12
     env:

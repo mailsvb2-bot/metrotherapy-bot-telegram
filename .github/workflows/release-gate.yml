@@ -39,7 +39,10 @@ jobs:
       YOOKASSA_SECRET_KEY: ${{ secrets.YOOKASSA_SECRET_KEY }}
       PAYMENT_CHECKOUT_SIGNING_KEY: ${{ secrets.PAYMENT_CHECKOUT_SIGNING_KEY }}
       YOOKASSA_WEBHOOK_SECRET: ${{ secrets.YOOKASSA_WEBHOOK_SECRET }}
+      YOOKASSA_RECEIPT_EMAIL: ${{ secrets.YOOKASSA_RECEIPT_EMAIL }}
       PAYMENT_PUBLIC_BASE_URL: ${{ secrets.PAYMENT_PUBLIC_BASE_URL }}
+      TOKEN_ECONOMY_ENABLED: '1'
+      TOKEN_ENFORCEMENT_MODE: hard
     steps:
       - name: Checkout
         uses: actions/checkout@v4

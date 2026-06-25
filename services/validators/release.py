@@ -17,6 +17,7 @@ _SKIP_HYGIENE_PARTS = {
     "__pycache__",
     ".mypy_cache",
     ".pytest_cache",
+    ".ruff_cache",
     "build",
     "dist",
     ".tox",

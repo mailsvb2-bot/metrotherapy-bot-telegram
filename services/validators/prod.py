@@ -6,6 +6,8 @@ from services.validators.base import ValidationError
 
 _POLLING_ALIASES = {"polling", "telegram", "longpoll", "long-polling"}
 _TRUE_VALUES = {"1", "true", "yes", "on", "webhook"}
+_HARD_TOKEN_VALUES = {"hard", "1", "true", "yes", "on"}
+_DISABLED_VALUES = {"0", "false", "no", "off"}
 
 
 def _env(name: str, default: str = "") -> str:
@@ -19,6 +21,14 @@ def _truthy(name: str, default: str = "0") -> bool:
 
 def _prod() -> bool:
     return (_env("APP_ENV", "dev") or "dev").strip().lower() in {"prod", "production"}
+
+
+def _first_env(*names: str) -> str:
+    for name in names:
+        value = _env(name)
+        if value:
+            return value
+    return ""
 
 
 def _resolved_db_engine() -> str:
@@ -82,6 +92,32 @@ def validate_prod_postgres_contract(*, strict: bool = True) -> None:
         raise ValidationError("Production Postgres contract failed: " + "; ".join(errors))
 
 
+def validate_prod_monetization_contract(*, strict: bool = True) -> None:
+    """Production paid-practice monetization must fail closed.
+
+    Soft/off token modes are useful for local rollout and tests, but production
+    must never silently deliver paid practice audio without a hard token reserve.
+    Receipt contact must also be explicit so fiscalization does not depend on a
+    hidden support-email fallback.
+    """
+    if not _prod():
+        return
+
+    errors: list[str] = []
+    token_economy = (_env("TOKEN_ECONOMY_ENABLED", "1") or "1").strip().lower()
+    token_mode = (_env("TOKEN_ENFORCEMENT_MODE") or "").strip().lower()
+
+    if token_economy in _DISABLED_VALUES:
+        errors.append("TOKEN_ECONOMY_ENABLED must not be disabled in prod")
+    if token_mode not in _HARD_TOKEN_VALUES:
+        errors.append("TOKEN_ENFORCEMENT_MODE must be hard in prod")
+    if not _first_env("YOOKASSA_RECEIPT_EMAIL", "PAYMENT_RECEIPT_EMAIL", "ADMIN_EMAIL"):
+        errors.append("YOOKASSA_RECEIPT_EMAIL or PAYMENT_RECEIPT_EMAIL or ADMIN_EMAIL is required in prod")
+
+    if errors and strict:
+        raise ValidationError("Production monetization contract failed: " + "; ".join(errors))
+
+
 def validate_prod_guardrails(*, strict: bool = True) -> None:
     """Fail closed when production starts without release architecture guardrails.
 
@@ -95,6 +131,7 @@ def validate_prod_guardrails(*, strict: bool = True) -> None:
 
     validate_prod_telegram_polling_contract(strict=True)
     validate_prod_postgres_contract(strict=True)
+    validate_prod_monetization_contract(strict=True)
 
     if os.getenv("ALLOW_UNGUARDED_PROD", "").strip().lower() in {"1", "true", "yes", "on"}:
         raise ValidationError("ALLOW_UNGUARDED_PROD is forbidden in prod")

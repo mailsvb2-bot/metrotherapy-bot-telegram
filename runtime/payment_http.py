@@ -55,6 +55,7 @@ def _create_yookassa_payment(
     kind: str = "tokens",
     package_id: str | None = None,
     gift_token: str | None = None,
+    checkout_intent: str | None = None,
     **_: object,
 ) -> str:
     return create_yookassa_confirmation_url(
@@ -63,6 +64,7 @@ def _create_yookassa_payment(
         kind=kind,
         package_id=package_id,
         gift_token=gift_token,
+        checkout_intent=checkout_intent,
     )
 
 
@@ -88,10 +90,6 @@ def _provided_secret(request: web.Request) -> str:
     if header_secret:
         return header_secret
 
-    # Production rule: secrets must never travel through query strings because
-    # query parameters commonly land in nginx access logs, browser history,
-    # monitoring traces and support screenshots. The query fallback is kept only
-    # for local/dev compatibility tests.
     if _is_prod():
         return ""
     return (request.query.get("secret") or "").strip()
@@ -99,7 +97,6 @@ def _provided_secret(request: web.Request) -> str:
 
 def _webhook_secret_ok(request: web.Request) -> bool:
     expected = _webhook_secret()
-    # Prod must be explicit. In dev/test, an empty secret keeps local tests simple.
     if not expected:
         return not _is_prod()
     actual = _provided_secret(request)
@@ -201,6 +198,7 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
             kind=kind,
             package_id=package_id or None,
             gift_token=gift_token or None,
+            checkout_intent=intent or None,
         )
     except (YooKassaCheckoutError, ValueError, TypeError, OSError) as exc:
         log.exception("YooKassa web payment endpoint failed")
@@ -208,7 +206,7 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
             status=500,
             text=(
                 "Не удалось создать платёж YooKassa. "
-                "Проверьте YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, package_id и доступ сервера к api.yookassa.ru. "
+                "Проверьте платёжные настройки, package_id и доступ сервера к api.yookassa.ru. "
                 f"Ошибка: {type(exc).__name__}"
             ),
             content_type="text/plain",
@@ -218,12 +216,7 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
 
 
 async def yookassa_reconciliation_webhook(request: web.Request) -> web.Response:
-    """Provider reconciliation endpoint.
-
-    This is not a Telegram webhook and does not change Telegram polling mode.
-    It records external YooKassa payment facts and, for practice-token payments,
-    idempotently grants purchased practices.
-    """
+    """Provider reconciliation endpoint."""
     if not _webhook_secret_ok(request):
         return web.json_response({"ok": False, "error": "forbidden"}, status=403)
 

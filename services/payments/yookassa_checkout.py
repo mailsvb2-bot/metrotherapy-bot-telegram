@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -50,6 +51,25 @@ def _explicit_idempotence_key_allowed() -> bool:
     return _truthy_env("ALLOW_STATIC_PAYMENT_IDEMPOTENCE_KEY_IN_PROD")
 
 
+def _checkout_intent_id(checkout_intent: str | None) -> str | None:
+    """Return a stable provider-safe id derived from one signed checkout intent.
+
+    The public checkout URL can be retried by browsers, messengers, previews or
+    users. A retry of the exact same signed intent must map to the exact same
+    YooKassa Idempotence-Key, otherwise one URL can create multiple provider
+    payments. We hash only the signed body component: it is stable for the intent
+    and avoids storing the signature itself in provider metadata.
+    """
+    token = (checkout_intent or "").strip()
+    if not token:
+        return None
+    body = token.split(".", 1)[0].strip()
+    if not body:
+        return None
+    digest = hashlib.sha256(body.encode("ascii", errors="ignore")).hexdigest()[:40]
+    return f"ci_{digest}"
+
+
 def _idempotence_key(*, source: str, external_user_id: str, kind: str, amount_value: str, intent_id: str | None = None) -> str:
     explicit = _env_value("PAYMENT_IDEMPOTENCE_KEY") or _env_value("YOOKASSA_IDEMPOTENCE_KEY")
     if explicit:
@@ -64,13 +84,24 @@ def _idempotence_key(*, source: str, external_user_id: str, kind: str, amount_va
     return str(uuid.uuid4())
 
 
-def build_yookassa_receipt(*, amount_value: str, description: str) -> dict:
-    customer_email = (
+def _receipt_customer_email() -> str:
+    explicit = (
         os.environ.get("YOOKASSA_RECEIPT_EMAIL")
         or os.environ.get("PAYMENT_RECEIPT_EMAIL")
         or os.environ.get("ADMIN_EMAIL")
-        or "support@metrotherapy.ru"
+        or ""
     ).strip()
+    if explicit:
+        return explicit
+    if _is_prod():
+        raise YooKassaCheckoutError(
+            "YOOKASSA_RECEIPT_EMAIL or PAYMENT_RECEIPT_EMAIL or ADMIN_EMAIL is required in prod"
+        )
+    return "support@metrotherapy.ru"
+
+
+def build_yookassa_receipt(*, amount_value: str, description: str) -> dict:
+    customer_email = _receipt_customer_email()
     vat_code = int((os.environ.get("YOOKASSA_VAT_CODE") or "1").strip())
     payment_mode = (os.environ.get("YOOKASSA_PAYMENT_MODE") or "full_prepayment").strip()
     payment_subject = (os.environ.get("YOOKASSA_PAYMENT_SUBJECT") or "service").strip()
@@ -111,6 +142,7 @@ def create_yookassa_confirmation_url(
     kind: str = "subscription",
     package_id: str | None = None,
     gift_token: str | None = None,
+    checkout_intent: str | None = None,
 ) -> str:
     """Create a YooKassa payment and return the redirect confirmation URL."""
     shop_id = _env_value("YOOKASSA_SHOP_ID")
@@ -121,7 +153,7 @@ def create_yookassa_confirmation_url(
         raise YooKassaCheckoutError("YOOKASSA_SECRET_KEY is empty")
 
     kind = (kind or "subscription").strip().lower()
-    intent_id = f"pi_{uuid.uuid4().hex}"
+    intent_id = _checkout_intent_id(checkout_intent) or f"pi_{uuid.uuid4().hex}"
     package = None
     normalized_gift_token = normalize_gift_token(gift_token)
     if normalized_gift_token and not is_gift_token(normalized_gift_token):
