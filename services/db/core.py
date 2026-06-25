@@ -299,6 +299,7 @@ def translate_sql_for_postgres(sql: str) -> str:
     s = _translate_insert_or_replace(s)
     s = _translate_insert_or_ignore(s)
     s = s.replace("datetime('now')", 'CURRENT_TIMESTAMP')
+    s = s.replace("strftime('%s','now')", 'EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::BIGINT')
 
     # DDL compatibility
     # SQLite INTEGER PRIMARY KEY behaves like an auto-generated rowid, so in Postgres
@@ -478,7 +479,7 @@ def write(sql: str, params: tuple[Any, ...] = ()) -> int:
             return 0
 
 
-def execute(sql: str, params: tuple[Any, ...] = ()):
+def execute(sql: str, params: tuple[Any, ...] = ()): 
     with db() as conn:
         return conn.execute(sql, params)
 
@@ -508,8 +509,8 @@ def was_delivered(user_id: int, key: str) -> bool:
 def mark_delivery_once(user_id: int, key: str) -> bool:
     with db() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO idempotency(user_id, key, created_at) VALUES(?,?,strftime('%s','now'))",
-            (user_id, key),
+            "INSERT OR IGNORE INTO idempotency(user_id, key, created_at) VALUES(?,?,?)",
+            (user_id, key, int(time.time())),
         )
         row = conn.execute("SELECT changes() AS c").fetchone()
         return int(row["c"] if hasattr(row, "keys") else row[0]) == 1
