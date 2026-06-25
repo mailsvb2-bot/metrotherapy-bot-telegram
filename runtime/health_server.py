@@ -15,6 +15,7 @@ from services.ai.policy import ai_policy_snapshot
 from services.db import get_connection
 from services.db.runtime import CONFIG, redacted_db_target
 from services.db.schema.readiness import required_readiness_tables, schema_readiness
+from services.messenger.preflight import check_all_preflights
 from services.scheduler import scheduler_health_snapshot
 
 log = logging.getLogger(__name__)
@@ -178,12 +179,29 @@ def _storage_health_fields() -> dict[str, Any]:
     return fields
 
 
+def _messenger_preflight_readiness() -> tuple[bool, list[str], dict[str, Any]]:
+    statuses = check_all_preflights()
+    details: dict[str, Any] = {}
+    errors: list[str] = []
+    messenger_enabled = _messenger_webhook_configured()
+    for status in statuses:
+        details[f'{status.channel}_preflight_ok'] = bool(status.ok)
+        details[f'{status.channel}_preflight_missing'] = list(status.missing)
+        details[f'{status.channel}_preflight_warnings'] = list(status.warnings)
+        if status.details:
+            details[f'{status.channel}_preflight_details'] = status.details
+        if messenger_enabled and status.channel in {'max', 'vk'} and not status.ok:
+            errors.append(f"messenger:{status.channel}:missing:{','.join(status.missing)}")
+    return not errors, errors, details
+
+
 def build_health_payload() -> tuple[dict[str, Any], int]:
     scheduler = _scheduler_snapshot()
     telegram_transport_value = _telegram_transport()
     messenger_webhook_enabled = _messenger_webhook_configured()
     telegram_webhook_enabled = telegram_transport_value == 'webhook'
     webhook_runtime_enabled = bool(messenger_webhook_enabled or telegram_webhook_enabled)
+    _, _, messenger_preflight_fields = _messenger_preflight_readiness()
     details: dict[str, Any] = {
         'ok': True,
         'service': 'metrotherapy',
@@ -196,6 +214,7 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
         'webhook_runtime_enabled': webhook_runtime_enabled,
         'app_env': (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower(),
         **_storage_health_fields(),
+        **messenger_preflight_fields,
         **ai_policy_snapshot(),
         **scheduler,
     }
@@ -212,6 +231,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
     webhook_runtime_enabled = bool(messenger_webhook_enabled or telegram_webhook_enabled)
     app_env = (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower()
     scheduler_ok, scheduler_errors, scheduler_flags = _scheduler_readiness(scheduler)
+    messenger_ok, messenger_errors, messenger_fields = _messenger_preflight_readiness()
     webhook_ok = True
     if app_env in {'prod', 'production'} and telegram_webhook_enabled:
         webhook_ok = webhook_runtime_enabled
@@ -221,9 +241,10 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
     if schema_error is not None:
         errors.append(schema_error)
     errors.extend(scheduler_errors)
+    errors.extend(messenger_errors)
     if not webhook_ok:
         errors.append('webhook:not_ready')
-    ready = bool(db_ok and schema_ok and scheduler_ok and webhook_ok)
+    ready = bool(db_ok and schema_ok and scheduler_ok and messenger_ok and webhook_ok)
     details: dict[str, Any] = {
         'ok': ready,
         'service': 'metrotherapy',
@@ -231,6 +252,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         'db_ready': db_ok,
         'schema_ready': schema_ok,
         'scheduler_ready': scheduler_ok,
+        'messenger_ready': messenger_ok,
         'webhook_ready': webhook_ok,
         'required_tables': required_readiness_tables(),
         'db_engine': CONFIG.engine,
@@ -242,6 +264,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         'app_env': app_env,
         **scheduler_flags,
         **_storage_health_fields(),
+        **messenger_fields,
         **ai_policy_snapshot(),
         **scheduler,
     }
