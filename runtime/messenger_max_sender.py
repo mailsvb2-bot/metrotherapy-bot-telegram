@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ from services.messenger.provider_transport import json_request, multipart_upload
 @dataclass
 class MaxBotSender:
     token: str | None = None
+    api_base_url: str | None = None
 
     _main_menu_attachment = staticmethod(max_ui.main_menu_attachment)
     _demo_kind_attachment = staticmethod(max_ui.demo_kind_attachment)
@@ -26,6 +28,18 @@ class MaxBotSender:
         if not token:
             raise MessengerTransportError("MAX_BOT_TOKEN is empty")
         return token
+
+    def _api_base(self) -> str:
+        base = (
+            self.api_base_url
+            or os.getenv("MAX_API_BASE_URL")
+            or getattr(settings, "MAX_API_BASE_URL", "")
+            or "https://platform-api.max.ru"
+        )
+        clean = str(base or "").strip().rstrip("/")
+        if not clean.startswith("https://"):
+            raise MessengerTransportError("MAX_API_BASE_URL must start with https://")
+        return clean
 
     @staticmethod
     def _upload_payload(upload_meta: dict[str, Any], uploaded: Any, *, media_type: str) -> dict[str, Any]:
@@ -48,7 +62,7 @@ class MaxBotSender:
 
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         token = self._token()
-        url = f"https://platform-api.max.ru/messages?user_id={urllib.parse.quote(str(external_user_id))}"
+        url = f"{self._api_base()}/messages?user_id={urllib.parse.quote(str(external_user_id))}"
         attachments = list(kwargs.get("attachments") or max_ui.native_keyboard_attachments(str(text or "")))
         payload: dict[str, Any] = {"text": max_ui.prepare_text(text, has_native_keyboard=bool(attachments))}
         if attachments:
@@ -71,7 +85,7 @@ class MaxBotSender:
         token = self._token()
         upload_meta = await asyncio.to_thread(
             json_request,
-            f"https://platform-api.max.ru/uploads?type={urllib.parse.quote(media_type)}",
+            f"{self._api_base()}/uploads?type={urllib.parse.quote(media_type)}",
             method="POST",
             headers={"Authorization": token},
             payload=None,
@@ -96,7 +110,7 @@ class MaxBotSender:
         notify: bool | None = None,
     ) -> Any:
         token = self._token()
-        url = f"https://platform-api.max.ru/messages?user_id={urllib.parse.quote(str(external_user_id))}"
+        url = f"{self._api_base()}/messages?user_id={urllib.parse.quote(str(external_user_id))}"
         payload: dict[str, Any] = {"text": text, "attachments": [{"type": media_type, "payload": {"token": media_token}}]}
         if notify is not None:
             payload["notify"] = bool(notify)
