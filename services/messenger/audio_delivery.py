@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import json
 from typing import Any
@@ -182,6 +183,14 @@ def _replay_item_for_finished_queue(platform: str, snapshot: Any) -> AudioProgre
         return None
 
 
+async def _prepare_native_audio_path(platform: str, item: AudioProgressItem) -> Any:
+    if platform == MessengerPlatform.MAX.value:
+        # ffmpeg conversion can take seconds for long tracks. Keep the aiohttp
+        # webhook/event loop responsive while preparing the deterministic cache file.
+        return await asyncio.to_thread(ensure_max_opus_file, item.path)
+    return item.path
+
+
 async def _send_non_telegram_native(
     *,
     user_id: int,
@@ -195,7 +204,7 @@ async def _send_non_telegram_native(
     if platform not in {MessengerPlatform.MAX.value, MessengerPlatform.VK.value}:
         return None
     try:
-        audio_path = ensure_max_opus_file(item.path) if platform == MessengerPlatform.MAX.value else item.path
+        audio_path = await _prepare_native_audio_path(platform, item)
         await sender.send_audio_file(
             external_user_id,
             audio_path,
