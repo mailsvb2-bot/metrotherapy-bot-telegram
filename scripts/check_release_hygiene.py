@@ -25,7 +25,6 @@ FORBIDDEN_DB_GLOBS = ["*.sqlite", "*.db-wal", "*.db-shm", "*.db-journal"]
 
 FORBIDDEN_DIRS = {
     Path(".pytest_cache"),
-    Path(".ruff_cache"),
     Path(".mypy_cache"),
     Path(".idea"),
     Path(".vscode"),
@@ -37,6 +36,7 @@ IGNORED_ROOT_NAMES = {
     "venv",
     "env",
     ".envrc",
+    ".ruff_cache",
 }
 
 FORBIDDEN_LOG_DIR = Path("logs")
