@@ -78,6 +78,19 @@ def _vk_secret_ok(payload: dict) -> bool:
     return hmac.compare_digest(provided, expected)
 
 
+def _entry_start_text(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return raw
+    lowered = raw.casefold()
+    if lowered.startswith("/start ") or lowered.startswith("start "):
+        payload = raw.split(maxsplit=1)[1].strip()
+        return f"/start {payload}" if payload else "start"
+    if lowered.startswith(("bridge_", "ref_", "gift_")):
+        return f"/start {raw}"
+    return raw
+
+
 def _claim_replies_if_needed(*, platform: str, extracted: dict) -> tuple[int, list[MessengerReply]] | None:
     text = normalise_messenger_text(extracted["text"])
     token = normalize_gift_token(text)
@@ -159,7 +172,10 @@ async def vk_webhook(request: web.Request) -> web.Response:
     if not extracted:
         return web.Response(text="ok")
 
-    normalized_text = normalise_messenger_text(extracted["text"])
+    # Important: extract_vk_message already knows pending score context. Do not
+    # run the plain normalizer again here, because VK score buttons 1/2 would be
+    # converted back to demo_work/demo_home.
+    normalized_text = _entry_start_text(extracted["text"])
     log_payload_normalized(
         platform="vk",
         user_id=extracted["user_id"],
@@ -168,7 +184,7 @@ async def vk_webhook(request: web.Request) -> web.Response:
         event_key=event_key,
     )
 
-    claim_result = _claim_replies_if_needed(platform="vk", extracted=extracted)
+    claim_result = _claim_replies_if_needed(platform="vk", extracted={**extracted, "text": normalized_text})
     if claim_result is not None:
         canonical_user_id, replies = claim_result
         action = "gift_claim"
@@ -258,7 +274,7 @@ async def max_webhook(request: web.Request) -> web.Response:
         )
         return web.json_response({"ok": True})
 
-    normalized_text = _max_score_route_text(payload) or normalise_messenger_text(extracted["text"])
+    normalized_text = _entry_start_text(_max_score_route_text(payload) or extracted["text"])
     log_payload_normalized(
         platform="max",
         user_id=extracted["user_id"],
@@ -267,7 +283,7 @@ async def max_webhook(request: web.Request) -> web.Response:
         event_key=event_key,
     )
 
-    claim_result = _claim_replies_if_needed(platform="max", extracted=extracted)
+    claim_result = _claim_replies_if_needed(platform="max", extracted={**extracted, "text": normalized_text})
     if claim_result is not None:
         canonical_user_id, replies = claim_result
         action = "gift_claim"
