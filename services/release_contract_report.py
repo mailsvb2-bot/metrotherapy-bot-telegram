@@ -7,6 +7,8 @@ from services.disaster_recovery_status import disaster_recovery_status
 from services.storage_legacy_audit import storage_legacy_audit
 
 _TRUE_VALUES = {"1", "true", "yes", "on", "webhook"}
+_HARD_TOKEN_VALUES = {"hard", "1", "true", "yes", "on"}
+_DISABLED_VALUES = {"0", "false", "no", "off"}
 
 
 def _env(name: str, default: str = "") -> str:
@@ -18,6 +20,14 @@ def _truthy(name: str, default: str = "0") -> bool:
     return (_env(name, default) or default).strip().lower() in _TRUE_VALUES
 
 
+def _first_env(*names: str) -> str:
+    for name in names:
+        value = _env(name)
+        if value:
+            return value
+    return ""
+
+
 def _telegram_transport() -> str:
     return (_env("TELEGRAM_TRANSPORT") or _env("RUN_MODE") or "polling").strip().lower()
 
@@ -27,17 +37,28 @@ def format_runtime_contract_report() -> str:
 
     This is intentionally read-only: no probes, no network calls, no mutations.
     It surfaces the exact contracts that previously drifted silently: Postgres as
-    active storage, Telegram polling-only, backup freshness, and legacy SQLite.
+    active storage, Telegram polling-only, backup freshness, legacy SQLite and
+    production monetization fail-closed settings.
     """
     storage = storage_legacy_audit()
     disaster = disaster_recovery_status(include_hash=False)
     telegram_transport = _telegram_transport()
     telegram_webhook_enabled = _truthy("TELEGRAM_WEBHOOK_ENABLED")
+
+    token_economy_enabled = _env("TOKEN_ECONOMY_ENABLED", "1").strip().lower() not in _DISABLED_VALUES
+    token_enforcement_mode = _env("TOKEN_ENFORCEMENT_MODE")
+    receipt_contact_configured = bool(_first_env("YOOKASSA_RECEIPT_EMAIL", "PAYMENT_RECEIPT_EMAIL", "ADMIN_EMAIL"))
+
     postgres_ok = CONFIG.engine == "postgres" and bool(storage.database_url_configured)
     telegram_ok = telegram_transport == "polling" and not telegram_webhook_enabled
     legacy_ok = not bool(storage.legacy_sqlite_present) and not bool(storage.repo_local_sqlite_present)
     backup_ok = disaster.status == "GREEN"
-    marker = "✅" if postgres_ok and telegram_ok and legacy_ok and backup_ok else "⚠️"
+    monetization_ok = (
+        token_economy_enabled
+        and token_enforcement_mode.strip().lower() in _HARD_TOKEN_VALUES
+        and receipt_contact_configured
+    )
+    marker = "✅" if postgres_ok and telegram_ok and legacy_ok and backup_ok and monetization_ok else "⚠️"
 
     lines = [
         "🔒 Production runtime contract",
@@ -56,9 +77,12 @@ def format_runtime_contract_report() -> str:
         f"Backup age seconds: {disaster.latest_backup_age_seconds if disaster.latest_backup_age_seconds is not None else '-'}",
         f"Max backup age hours: {disaster.max_backup_age_hours:g}",
         f"Restore target configured: {disaster.restore_target_configured}",
+        f"Token economy enabled: {token_economy_enabled}",
+        f"Token enforcement mode: {token_enforcement_mode or '<missing>'}",
+        f"Receipt contact configured: {receipt_contact_configured}",
     ]
 
-    if postgres_ok and telegram_ok and legacy_ok and backup_ok:
+    if postgres_ok and telegram_ok and legacy_ok and backup_ok and monetization_ok:
         lines.append("\nИтог: production-контракт полностью зелёный.")
     else:
         lines.append("\nИтог: есть пункт для operator cleanup/check; production gate решает, блокер это или нет.")
