@@ -158,4 +158,4 @@ class VkBotSender:
 
     async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
         attachment = await self._ensure_doc_attachment(str(external_user_id), file_path)
-        return await self.send_text(external_user_id, caption or f"Audio: {file_path.stem}", attachment=attachment, **kwargs)
+        return await self.send_text(external_user_id, caption or f"🎧 Аудио: {file_path.stem}", attachment=attachment, **kwargs)
