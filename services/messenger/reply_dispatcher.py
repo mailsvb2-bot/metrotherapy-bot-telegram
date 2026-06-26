@@ -28,6 +28,17 @@ from services.weather import get_weather_text_async, set_city
 log = logging.getLogger(__name__)
 
 
+SCORE_SCALE_MARKERS = (
+    "шкала оценки",
+    "шкала состояния",
+    "оцените состояние",
+    "оцените своё состояние",
+    "оцените свое состояние",
+    "состояние после прослушивания",
+    "состояние до практики",
+)
+
+
 def _vk_kwargs(platform: str, kwargs: dict[str, Any], canonical_user_id: int, text: str = "") -> dict[str, Any]:
     enriched = dict(kwargs)
     if text:
@@ -37,12 +48,9 @@ def _vk_kwargs(platform: str, kwargs: dict[str, Any], canonical_user_id: int, te
 
 def _looks_like_score_scale(text: str) -> bool:
     raw = str(text or "").casefold().replace("−", "-").replace("ё", "е")
-    return "-10" in raw and "10" in raw and (
-        "шкал" in raw
-        or "оцен" in raw
-        or "состояни" in raw
-        or "после прослуш" in raw
-    )
+    if "-10" not in raw or "10" not in raw:
+        return False
+    return any(marker in raw for marker in SCORE_SCALE_MARKERS)
 
 
 def _canonical_payment_text(platform: str, canonical_user_id: int, external_user_id: str, text: str) -> str:
