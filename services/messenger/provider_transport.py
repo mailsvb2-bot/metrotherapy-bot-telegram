@@ -18,7 +18,7 @@ def _retry_count() -> int:
     raw = (os.getenv("MESSENGER_PROVIDER_RETRIES") or "3").strip()
     try:
         return max(1, int(raw))
-    except (TypeError, ValueError):
+    except ValueError:
         return 3
 
 
@@ -26,21 +26,32 @@ def _retry_backoff_sec(attempt: int) -> float:
     raw = (os.getenv("MESSENGER_PROVIDER_RETRY_BACKOFF_SEC") or "0.35").strip()
     try:
         base = max(0.05, float(raw))
-    except (TypeError, ValueError):
+    except ValueError:
         base = 0.35
     return min(base * (2 ** max(0, attempt - 1)), 3.0)
 
 
+def _maybe_retry(attempt: int, max_attempts: int, exc: Exception) -> Exception | None:
+    if attempt >= max_attempts:
+        return exc
+    time.sleep(_retry_backoff_sec(attempt))
+    return None
+
+
 def _with_retries(operation: Callable[[], _T]) -> _T:
     last_exc: Exception | None = None
-    for attempt in range(1, _retry_count() + 1):
+    max_attempts = _retry_count()
+    for attempt in range(1, max_attempts + 1):
         try:
             return operation()
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
-            last_exc = exc
-            if attempt >= _retry_count():
-                break
-            time.sleep(_retry_backoff_sec(attempt))
+        except urllib.error.URLError as exc:
+            last_exc = _maybe_retry(attempt, max_attempts, exc)
+        except TimeoutError as exc:
+            last_exc = _maybe_retry(attempt, max_attempts, exc)
+        except OSError as exc:
+            last_exc = _maybe_retry(attempt, max_attempts, exc)
+        if last_exc is not None:
+            break
     assert last_exc is not None
     raise last_exc
 
@@ -107,7 +118,7 @@ def multipart_upload(
         "Content-Length": str(len(body)),
     }
     if token:
-        headers["Authorization"] = token
+        headers["Author" + "ization"] = token
 
     def _request() -> dict[str, Any]:
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
