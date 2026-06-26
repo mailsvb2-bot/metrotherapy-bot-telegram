@@ -28,7 +28,9 @@ def test_telegram_preflight_requires_webhook_secret_for_webhook(monkeypatch):
     assert "TELEGRAM_WEBHOOK_SECRET_TOKEN" in status.missing
 
 
-def test_vk_preflight_warns_when_secret_missing_for_webhook(monkeypatch):
+def test_vk_preflight_warns_when_secret_missing_for_dev_webhook(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setattr(preflight.settings, "APP_ENV", "dev", raising=False)
     monkeypatch.setattr(preflight.settings, "MESSENGER_WEBHOOK_ENABLED", True, raising=False)
     monkeypatch.setattr(preflight.settings, "MESSENGER_PUBLIC_BASE_URL", "https://bot.example.test", raising=False)
     monkeypatch.setattr(preflight.settings, "VK_GROUP_TOKEN", "group-token", raising=False)
@@ -44,7 +46,25 @@ def test_vk_preflight_warns_when_secret_missing_for_webhook(monkeypatch):
     assert status.details == {"webhook_url": "https://bot.example.test/webhooks/vk"}
 
 
+def test_vk_preflight_requires_secret_for_prod_webhook(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setattr(preflight.settings, "APP_ENV", "prod", raising=False)
+    monkeypatch.setattr(preflight.settings, "MESSENGER_WEBHOOK_ENABLED", True, raising=False)
+    monkeypatch.setattr(preflight.settings, "MESSENGER_PUBLIC_BASE_URL", "https://bot.example.test", raising=False)
+    monkeypatch.setattr(preflight.settings, "VK_GROUP_TOKEN", "group-token", raising=False)
+    monkeypatch.setattr(preflight.settings, "VK_CONFIRMATION_TOKEN", "confirm", raising=False)
+    monkeypatch.setattr(preflight.settings, "VK_GROUP_ID", "123", raising=False)
+    monkeypatch.setattr(preflight.settings, "VK_SECRET", "", raising=False)
+
+    status = preflight.check_vk_preflight()
+
+    assert status.ok is False
+    assert "VK_SECRET" in status.missing
+
+
 def test_max_preflight_requires_public_base_when_webhook_enabled(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setattr(preflight.settings, "APP_ENV", "dev", raising=False)
     monkeypatch.setattr(preflight.settings, "MESSENGER_WEBHOOK_ENABLED", True, raising=False)
     monkeypatch.setattr(preflight.settings, "MESSENGER_PUBLIC_BASE_URL", "", raising=False)
     monkeypatch.setattr(preflight.settings, "MAX_BOT_TOKEN", "max-token", raising=False)
@@ -55,3 +75,19 @@ def test_max_preflight_requires_public_base_when_webhook_enabled(monkeypatch):
 
     assert status.ok is False
     assert "MESSENGER_PUBLIC_BASE_URL" in status.missing
+
+
+def test_max_preflight_requires_secret_for_prod_webhook(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setattr(preflight.settings, "APP_ENV", "prod", raising=False)
+    monkeypatch.setattr(preflight.settings, "MESSENGER_WEBHOOK_ENABLED", True, raising=False)
+    monkeypatch.setattr(preflight.settings, "MESSENGER_PUBLIC_BASE_URL", "https://bot.example.test", raising=False)
+    monkeypatch.setattr(preflight.settings, "MAX_BOT_TOKEN", "max-token", raising=False)
+    monkeypatch.setattr(preflight.settings, "MAX_BOT_LINK_BASE", "https://max.ru/bot", raising=False)
+    monkeypatch.setattr(preflight.settings, "MAX_API_BASE_URL", "https://platform-api.max.ru", raising=False)
+    monkeypatch.setattr(preflight.settings, "MAX_WEBHOOK_SECRET", "", raising=False)
+
+    status = preflight.check_max_preflight()
+
+    assert status.ok is False
+    assert "MAX_WEBHOOK_SECRET" in status.missing
