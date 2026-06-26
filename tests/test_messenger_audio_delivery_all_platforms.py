@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+import json
 
 import pytest
 
@@ -54,6 +55,16 @@ def _clear_user_state(user_id: int) -> None:
         conn.execute("DELETE FROM user_channel_identities WHERE user_id=?", (int(user_id),))
         if _table_exists(conn, "audio_timeline"):
             conn.execute("DELETE FROM audio_timeline WHERE user_id=?", (int(user_id),))
+
+
+def _commands_from_keyboard(keyboard_json: str) -> list[str]:
+    keyboard = json.loads(keyboard_json)
+    commands: list[str] = []
+    for row in keyboard["buttons"]:
+        for button in row:
+            payload = json.loads(button["action"]["payload"])
+            commands.append(str(payload["command"]))
+    return commands
 
 
 def test_telegram_audio_delivery_requires_bot_instance(monkeypatch):
@@ -125,8 +136,12 @@ def test_vk_audio_delivery_sends_native_attachment_text_controls_and_marks_pendi
     assert file_path == item.path
     assert "Аудио №13" in (caption or "")
     assert kwargs.get("keyboard_json")
+    assert _commands_from_keyboard(kwargs["keyboard_json"]) == ["done", "progress", "history", "start"]
     assert vk_sender.text_calls
     assert "✅ Аудио №13" in vk_sender.text_calls[0][1]
+    text_keyboard = vk_sender.text_calls[0][2].get("keyboard_json")
+    assert text_keyboard
+    assert _commands_from_keyboard(text_keyboard) == ["done", "progress", "history", "start"]
     snapshot = get_progress_snapshot(user_id)
     assert snapshot.pending_item is not None
     assert snapshot.pending_item.anchor == 13
