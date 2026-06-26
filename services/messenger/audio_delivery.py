@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-import json
 from typing import Any
 
+from runtime.messenger_vk_ui import vk_post_audio_keyboard_json
 from services.messenger.outbound import SenderRegistry, build_delivery_plan, UnsupportedMessengerDelivery
 from services.messenger.platforms import MessengerPlatform
 from services.messenger.max_audio import ensure_max_opus_file
@@ -56,14 +56,6 @@ def _platform_name(platform: str) -> str:
     return platform
 
 
-def _score_scale_text() -> str:
-    return (
-        'Шкала оценки после прослушивания:\n'
-        '−10 — стало сильно хуже, 0 — без изменений, +10 — стало сильно лучше.\n'
-        'Можно отправить любое число от −10 до +10, например: −2, 0, 4 или 8.'
-    )
-
-
 def _queue_finished_message(platform: str, snapshot: Any) -> str:
     last = ''
     if getattr(snapshot, 'last_anchor', None):
@@ -97,45 +89,9 @@ def _queue_finished_message(platform: str, snapshot: Any) -> str:
     )
 
 
-def _vk_post_audio_keyboard_json() -> str:
-    """VK after-audio controls aligned with Telegram kb_mood_done().
-
-    Canonical Telegram flow:
-      pre-score -> audio -> Done button -> post-score scale -> result.
-
-    This keyboard intentionally has no -10..+10 buttons. The score scale is
-    shown only after the user presses Done/Прослушал.
-    """
-
-    def button(label: str, command: str, color: str = 'secondary') -> dict[str, Any]:
-        return {
-            'action': {
-                'type': 'text',
-                'label': label,
-                'payload': json.dumps({'command': command}, ensure_ascii=False),
-            },
-            'color': color,
-        }
-
-    rows: list[list[dict[str, Any]]] = [
-        [button('✅ Прослушал', 'done', 'positive')],
-        [
-            button('📊 Прогресс', 'progress', 'primary'),
-            button('🧾 История', 'history', 'secondary'),
-        ],
-        [button('⬅️ Меню', 'start', 'secondary')],
-    ]
-
-    return json.dumps(
-        {'one_time': False, 'inline': False, 'buttons': rows},
-        ensure_ascii=False,
-        separators=(',', ':'),
-    )
-
-
 def _post_audio_control_kwargs(platform: str) -> dict[str, Any]:
     if platform == MessengerPlatform.VK.value:
-        return {'keyboard_json': _vk_post_audio_keyboard_json()}
+        return {'keyboard_json': vk_post_audio_keyboard_json()}
     return {}
 
 
