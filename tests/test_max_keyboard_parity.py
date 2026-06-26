@@ -111,8 +111,9 @@ def test_max_text_surfaces_are_not_vk_only() -> None:
         handle_incoming_text(951001, platform="max", external_user_id="951001", text="demo")[1][0].text,
         handle_incoming_text(951002, platform="max", external_user_id="951002", text="full")[1][0].text,
         handle_incoming_text(951003, platform="max", external_user_id="951003", text="weather")[1][0].text,
+        "✅ Принял: аудио уже было отмечено как доставленное во ВКонтакте.\n\nТеперь оцените состояние ПОСЛЕ прослушивания.",
     ]:
         prepared = max_ui.prepare_text(text, has_native_keyboard=True)
         assert "внутри ВКонтакте" not in prepared
         assert "во ВКонтакте" not in prepared
-        assert "в этот мессенджер" in prepared or "MAX и ВКонтакте" in prepared
+        assert "в этот мессенджер" in prepared or "в этом мессенджере" in prepared or "MAX и ВКонтакте" in prepared
