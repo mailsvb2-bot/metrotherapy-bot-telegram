@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,39 @@ from runtime.messenger_transport_errors import MessengerTransportError
 from runtime.messenger_vk_ui import prepare_vk_keyboard_json
 from services.messenger.media_assets import get_cached_media_token, store_media_token
 from services.messenger.provider_transport import form_request, multipart_upload
+
+
+def _callback_keyboard_json(keyboard_json: str) -> str:
+    try:
+        keyboard = json.loads(str(keyboard_json or ""))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return keyboard_json
+    if not isinstance(keyboard, dict):
+        return keyboard_json
+    rows = keyboard.get("buttons")
+    if not isinstance(rows, list):
+        return keyboard_json
+
+    normalized_rows: list[list[dict[str, Any]]] = []
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        normalized_row: list[dict[str, Any]] = []
+        for button in row:
+            if not isinstance(button, dict):
+                continue
+            normalized_button = dict(button)
+            action = dict(normalized_button.get("action") or {})
+            if action.get("type") == "text":
+                action["type"] = "callback"
+            normalized_button["action"] = action
+            normalized_row.append(normalized_button)
+        if normalized_row:
+            normalized_rows.append(normalized_row)
+    normalized = dict(keyboard)
+    normalized["inline"] = True
+    normalized["buttons"] = normalized_rows
+    return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
 
 
 @dataclass
@@ -41,11 +75,12 @@ class VkBotSender:
             random_id = int(time.time_ns() % 2147483647)
         params = {"user_id": str(external_user_id), "random_id": int(random_id), "message": text}
         if kwargs.get("keyboard_json"):
-            params["keyboard"] = prepare_vk_keyboard_json(
+            keyboard_json = prepare_vk_keyboard_json(
                 str(kwargs["keyboard_json"]),
                 external_user_id=str(external_user_id),
                 text=str(text or ""),
             )
+            params["keyboard"] = _callback_keyboard_json(keyboard_json)
         if kwargs.get("attachment"):
             params["attachment"] = kwargs["attachment"]
         data = await self._vk_method("messages.send", params)
@@ -109,4 +144,4 @@ class VkBotSender:
 
     async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
         attachment = await self._ensure_doc_attachment(str(external_user_id), file_path)
-        return await self.send_text(external_user_id, caption or f"🎧 Аудио: {file_path.stem}", attachment=attachment, **kwargs)
+        return await self.send_text(external_user_id, caption or f"Audio: {file_path.stem}", attachment=attachment, **kwargs)
