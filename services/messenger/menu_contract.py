@@ -56,7 +56,7 @@ MAIN_MENU_ACTIONS: tuple[MenuAction, ...] = (
         title="📈 Мой прогресс",
         telegram_callback="settings:state",
         vk_color="primary",
-        aliases=("мой прогресс", "прогресс", "анализ", "анализ моего состояния"),
+        aliases=("мой прогресс", "прогресс", "📈 прогресс", "📊 прогресс", "анализ", "анализ моего состояния"),
     ),
     MenuAction(
         command="settings",
