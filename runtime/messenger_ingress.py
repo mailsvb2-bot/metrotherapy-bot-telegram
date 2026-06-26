@@ -16,6 +16,7 @@ from runtime.messenger_payloads import (
     max_event_key,
     normalise_messenger_text,
     text_from_max_payload,
+    text_from_vk_payload,
     vk_event_key,
 )
 from services.events import log_event
@@ -112,6 +113,16 @@ def _claim_replies_if_needed(*, platform: str, extracted: dict) -> tuple[int, li
     return int(entry.user_id), [MessengerReply(text=result.message)]
 
 
+def _explicit_score_one_two_text(raw: str | None) -> str | None:
+    """Preserve callback scores 1/2 so they cannot collide with demo route aliases."""
+    compact = str(raw or "").strip().casefold().replace("−", "-")
+    if compact in {"score:1", "score=1"} or (compact.startswith("mood:") and compact.endswith(":1")):
+        return "+1"
+    if compact in {"score:2", "score=2"} or (compact.startswith("mood:") and compact.endswith(":2")):
+        return "+2"
+    return None
+
+
 def _max_score_route_text(payload: dict[str, Any]) -> str | None:
     """Preserve MAX score callbacks whose normalized values overlap demo aliases."""
     message = payload.get("message") or {}
@@ -134,12 +145,38 @@ def _max_score_route_text(payload: dict[str, Any]) -> str | None:
         payload.get("callback"),
     ]
     for candidate in candidates:
-        raw = text_from_max_payload(candidate)
-        compact = str(raw or "").strip().casefold().replace("−", "-")
-        if compact in {"score:1", "score=1"}:
-            return "+1"
-        if compact in {"score:2", "score=2"}:
-            return "+2"
+        score_text = _explicit_score_one_two_text(text_from_max_payload(candidate))
+        if score_text:
+            return score_text
+    return None
+
+
+def _vk_score_route_text(payload: dict[str, Any]) -> str | None:
+    """Preserve VK callback scores whose normalized values overlap demo aliases."""
+    obj = payload.get("object") or {}
+    if not isinstance(obj, dict):
+        obj = {}
+    message = obj.get("message") or {}
+    if not isinstance(message, dict):
+        message = {}
+
+    candidates = [
+        obj.get("payload"),
+        obj.get("button"),
+        obj.get("callback"),
+        message.get("payload"),
+        message.get("button"),
+        message.get("callback"),
+        payload.get("payload"),
+        payload.get("button"),
+        payload.get("callback"),
+        obj,
+        message,
+    ]
+    for candidate in candidates:
+        score_text = _explicit_score_one_two_text(text_from_vk_payload(candidate))
+        if score_text:
+            return score_text
     return None
 
 
@@ -206,7 +243,7 @@ async def vk_webhook(request: web.Request) -> web.Response:
     if not extracted:
         return web.Response(text="ok")
 
-    normalized_text = _entry_start_text(extracted["text"])
+    normalized_text = _entry_start_text(_vk_score_route_text(payload) or extracted["text"])
     log_payload_normalized(
         platform="vk",
         user_id=extracted["user_id"],
