@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import json
 from typing import Any
 
-from runtime.messenger_vk_ui import vk_post_audio_keyboard_json
 from services.messenger.outbound import SenderRegistry, build_delivery_plan, UnsupportedMessengerDelivery
 from services.messenger.platforms import MessengerPlatform
 from services.messenger.max_audio import ensure_max_opus_file
@@ -89,9 +89,38 @@ def _queue_finished_message(platform: str, snapshot: Any) -> str:
     )
 
 
+def _vk_post_audio_keyboard_json() -> str:
+    """VK-native after-audio controls.
+
+    VK users need the same completion path as Telegram plus quick local access to
+    progress/history, because this flow is intentionally self-contained inside VK.
+    The final sender normalizes these text buttons to callback buttons.
+    """
+
+    def button(label: str, command: str, color: str = 'secondary') -> dict[str, Any]:
+        return {
+            'action': {
+                'type': 'text',
+                'label': label,
+                'payload': json.dumps({'command': command}, ensure_ascii=False),
+            },
+            'color': color,
+        }
+
+    rows: list[list[dict[str, Any]]] = [
+        [button('✅ Прослушал', 'done', 'positive')],
+        [
+            button('📊 Прогресс', 'progress', 'primary'),
+            button('🧾 История', 'history', 'secondary'),
+        ],
+        [button('⬅️ Меню', 'start', 'secondary')],
+    ]
+    return json.dumps({'one_time': False, 'inline': False, 'buttons': rows}, ensure_ascii=False, separators=(',', ':'))
+
+
 def _post_audio_control_kwargs(platform: str) -> dict[str, Any]:
     if platform == MessengerPlatform.VK.value:
-        return {'keyboard_json': vk_post_audio_keyboard_json()}
+        return {'keyboard_json': _vk_post_audio_keyboard_json()}
     return {}
 
 
