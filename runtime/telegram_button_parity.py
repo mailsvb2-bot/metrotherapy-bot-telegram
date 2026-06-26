@@ -103,7 +103,7 @@ def max_attachment_from_telegram(markup: Any) -> dict[str, Any]:
     return {"type": "inline_keyboard", "payload": {"buttons": rows}}
 
 
-def vk_keyboard_from_telegram(markup: Any, *, inline: bool = False, color: str = "secondary") -> str:
+def vk_keyboard_from_telegram(markup: Any, *, inline: bool = True, color: str = "secondary") -> str:
     rows: list[list[dict[str, Any]]] = []
     for row in telegram_button_rows(markup):
         for chunk in _chunks(row, VK_MAX_BUTTONS_PER_ROW):
@@ -112,7 +112,7 @@ def vk_keyboard_from_telegram(markup: Any, *, inline: bool = False, color: str =
                 out_row.append(
                     {
                         "action": {
-                            "type": "text",
+                            "type": "callback",
                             "label": text,
                             "payload": json.dumps({"command": canonical_button_command(callback)}, ensure_ascii=False),
                         },
