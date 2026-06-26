@@ -29,6 +29,7 @@ HOME_LABEL = "🏠 Меню"
 MAIN_MENU_LABEL = "⬅️ Главное меню"
 MENU_COMMAND = "start"
 VK_MAX_BUTTONS_PER_ROW = 5
+VK_MAX_BUTTON_ROWS = 6
 
 
 def _button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
@@ -190,8 +191,12 @@ def vk_score_scale_keyboard_json(session_id: int = 0, *, stage: str = "pre") -> 
     for i in range(0, len(values), VK_MAX_BUTTONS_PER_ROW):
         chunk = values[i : i + VK_MAX_BUTTONS_PER_ROW]
         rows.append([_button(_score_label(value), str(value), "secondary") for value in chunk])
-    rows.append([_button("📈 Мой прогресс", "progress", "primary")])
-    rows.append([_button(BACK_LABEL, MENU_COMMAND, "secondary")])
+    # VK rejects inline keyboards with too many rows. Keep the 21-point score
+    # scale intact, but place non-score controls into the final short score row.
+    rows[-1].extend([
+        _button("📈 Прогресс", "progress", "primary"),
+        _button(BACK_LABEL, MENU_COMMAND, "secondary"),
+    ])
     return _keyboard(rows)
 
 
