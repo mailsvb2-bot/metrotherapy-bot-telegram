@@ -32,45 +32,5 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
-      - name: Release hygiene before checks
-        run: python scripts/check_release_hygiene.py
-
-      - name: Compile project surface
-        run: |
-          python -m compileall \
-            services \
-            scripts \
-            handlers \
-            core \
-            runtime \
-            config \
-            app.py \
-            main.py
-
-      - name: Hermetic smoke no polling
-        env:
-          APP_ENV: test
-          VALIDATOR_RELEASE_MODE: '1'
-          VALIDATOR_GUARDRAILS_STRICT: '1'
-          VALIDATOR_SKIP_AUDIO: '1'
-        run: python scripts/smoke.py
-
-      - name: Full pytest regression gate
-        env:
-          APP_ENV: test
-          LOAD_DOTENV: '0'
-        run: python -m pytest -q -p no:cacheprovider
-
-      - name: Strict validation
-        env:
-          APP_ENV: test
-          VALIDATOR_RELEASE_MODE: '1'
-          VALIDATOR_GUARDRAILS_STRICT: '1'
-          VALIDATOR_SKIP_AUDIO: '1'
-        run: python scripts/validate_project.py
-
-      - name: Ruff quality gate
-        run: python scripts/check_ruff.py
-
-      - name: Release hygiene after checks
-        run: python scripts/check_release_hygiene.py
+      - name: Regression contour
+        run: python scripts/regression_gate.py
