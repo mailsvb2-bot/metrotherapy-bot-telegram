@@ -13,6 +13,26 @@ from runtime.messenger_vk_ui import prepare_vk_keyboard_json
 from services.messenger.media_assets import get_cached_media_token, store_media_token
 from services.messenger.provider_transport import form_request, multipart_upload
 
+VK_MAX_BUTTONS_PER_ROW = 5
+VK_MAX_BUTTON_ROWS = 6
+
+
+def _chunks(items: list[Any], size: int) -> list[list[Any]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def _pack_keyboard_rows(rows: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:
+    normalized: list[list[dict[str, Any]]] = []
+    for row in rows:
+        for chunk in _chunks(row, VK_MAX_BUTTONS_PER_ROW):
+            if chunk:
+                normalized.append(chunk)
+    if len(normalized) <= VK_MAX_BUTTON_ROWS:
+        return normalized
+    flat = [button for row in normalized for button in row]
+    repacked = _chunks(flat, VK_MAX_BUTTONS_PER_ROW)
+    return repacked if len(repacked) <= VK_MAX_BUTTON_ROWS else normalized
+
 
 def _callback_keyboard_json(keyboard_json: str) -> str:
     try:
@@ -43,7 +63,7 @@ def _callback_keyboard_json(keyboard_json: str) -> str:
             normalized_rows.append(normalized_row)
     normalized = dict(keyboard)
     normalized["inline"] = True
-    normalized["buttons"] = normalized_rows
+    normalized["buttons"] = _pack_keyboard_rows(normalized_rows)
     return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
 
 
