@@ -128,6 +128,7 @@ def post_audio_attachment(session_id: int = 0) -> dict[str, Any]:
     _ = session_id
     return inline_keyboard_attachment([
         [max_message_button("✅ Прослушал", command="done")],
+        [max_message_button("📊 Прогресс", command="progress"), max_message_button("🧾 История", command="history")],
         [max_message_button(MAX_LEGACY_BACK_LABEL, command=MENU_COMMAND)],
     ])
 
