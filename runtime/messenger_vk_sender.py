@@ -69,6 +69,20 @@ class VkBotSender:
             raise MessengerTransportError(str(data["error"]))
         return data
 
+    async def answer_message_event(self, *, event_id: str, user_id: str, peer_id: str | None = None, text: str = "Открываю…") -> dict[str, Any]:
+        clean_event_id = str(event_id or "").strip()
+        clean_user_id = str(user_id or "").strip()
+        if not clean_event_id or not clean_user_id:
+            return {}
+        event_data = json.dumps({"type": "show_snackbar", "text": str(text or "Открываю…")[:90]}, ensure_ascii=False)
+        params = {
+            "event_id": clean_event_id,
+            "user_id": clean_user_id,
+            "peer_id": str(peer_id or clean_user_id),
+            "event_data": event_data,
+        }
+        return await self._vk_method("messages.sendMessageEventAnswer", params)
+
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         random_id = kwargs.get("random_id")
         if random_id is None:
