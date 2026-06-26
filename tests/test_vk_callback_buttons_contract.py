@@ -5,6 +5,7 @@ import json
 from keyboards.inline import kb_main
 from runtime.messenger_ingress import VK_PROCESSABLE_EVENT_TYPES, _vk_dedupe_key
 from runtime.messenger_payloads import extract_vk_message
+from runtime.messenger_vk_sender import _callback_keyboard_json
 from runtime.telegram_button_parity import vk_keyboard_from_telegram
 
 
@@ -14,6 +15,18 @@ def test_vk_parity_keyboard_uses_callback_buttons() -> None:
     actions = [button["action"] for row in keyboard["buttons"] for button in row]
     assert actions
     assert all(action["type"] == "callback" for action in actions)
+
+
+def test_vk_sender_normalizes_text_buttons_to_callback_buttons() -> None:
+    raw = {
+        "one_time": False,
+        "inline": False,
+        "buttons": [[{"action": {"type": "text", "label": "Settings", "payload": json.dumps({"command": "settings"})}}]],
+    }
+    keyboard = json.loads(_callback_keyboard_json(json.dumps(raw)))
+    assert keyboard["inline"] is True
+    assert keyboard["buttons"][0][0]["action"]["type"] == "callback"
+    assert json.loads(keyboard["buttons"][0][0]["action"]["payload"])["command"] == "settings"
 
 
 def test_vk_message_event_is_processable_and_extracts_payload_command() -> None:
