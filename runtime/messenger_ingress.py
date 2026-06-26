@@ -113,6 +113,7 @@ def _claim_replies_if_needed(*, platform: str, extracted: dict) -> tuple[int, li
 
 
 def _max_score_route_text(payload: dict[str, Any]) -> str | None:
+    """Preserve MAX score callbacks whose normalized values overlap demo aliases."""
     message = payload.get("message") or {}
     body = message.get("body") if isinstance(message, dict) else {}
     if not isinstance(body, dict):
@@ -329,11 +330,27 @@ async def max_webhook(request: web.Request) -> web.Response:
             first_name=extracted["first_name"],
         )
         action = normalized_text
+
+    log.info(
+        "MAX webhook processed: update_type=%r external_user_id=%s canonical_user_id=%s text=%r replies=%s",
+        update_type,
+        extracted["external_user_id"],
+        canonical_user_id,
+        extracted["text"][:120],
+        len(replies),
+    )
     try:
         await send_reply_bundle("max", extracted["external_user_id"], canonical_user_id, replies)
+        log.info(
+            "MAX replies sent: external_user_id=%s canonical_user_id=%s replies=%s",
+            extracted["external_user_id"],
+            canonical_user_id,
+            len(replies),
+        )
         log_action_completed(platform="max", user_id=canonical_user_id, action=action, replies=len(replies), status="ok")
     except MessengerTransportError:
         log.exception("MAX send failed")
+        log_event(canonical_user_id, "max_send_failed", {})
         log_action_completed(platform="max", user_id=canonical_user_id, action=action, replies=len(replies), status="send_failed")
     log_event(canonical_user_id, "max_webhook_inbound", {"text": extracted["text"][:120], "replies": len(replies)})
     return web.json_response({"ok": True})
