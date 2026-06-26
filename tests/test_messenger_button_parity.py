@@ -14,6 +14,7 @@ from runtime.messenger_vk_ui import (
     vk_settings_keyboard_json,
     vk_weather_keyboard_json,
 )
+from runtime.telegram_button_parity import canonical_button_command
 from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS, main_menu_commands, telegram_main_callbacks
 
 ADMIN_LABEL = "🛠 Панель"
