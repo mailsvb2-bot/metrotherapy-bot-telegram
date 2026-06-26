@@ -93,8 +93,6 @@ def build_setup_status() -> MessengerSetupStatus:
         warnings.append('VK_SECRET пустой; в dev webhook будет работать, но подпись входящих событий не усилена секретом.')
     if max_token_ready and not max_secret_ready and not deployed:
         warnings.append('MAX_WEBHOOK_SECRET пустой; в dev webhook будет работать, но подпись входящих событий не усилена секретом.')
-    if vk_ok:
-        warnings.append('Для VK callback-кнопок включите в Callback API тип события message_event / «Событие сообщения».')
     if public_base and not (public_base.startswith('https://') or public_base.startswith('http://')):
         warnings.append('MESSENGER_PUBLIC_BASE_URL должен быть полным URL, например https://your-domain.tld')
     telegram_public = _strip(getattr(settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', ''))
