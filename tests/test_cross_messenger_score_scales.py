@@ -8,6 +8,7 @@ from services.mood_text_flow import parse_score_text
 
 
 EXPECTED_SCORES = list(range(-10, 11))
+VK_MAX_BUTTONS_PER_ROW = 5
 
 
 def _max_score_values() -> list[int]:
@@ -23,8 +24,12 @@ def _max_score_values() -> list[int]:
     return values
 
 
+def _vk_score_keyboard() -> dict:
+    return json.loads(vk_score_scale_keyboard_json())
+
+
 def _vk_score_values() -> list[int]:
-    keyboard = json.loads(vk_score_scale_keyboard_json())
+    keyboard = _vk_score_keyboard()
     values: list[int] = []
     for row in keyboard["buttons"]:
         for button in row:
@@ -47,6 +52,11 @@ def test_score_parser_accepts_every_telegram_mood_value() -> None:
 
 def test_vk_score_scale_contains_every_value_once() -> None:
     assert _vk_score_values() == EXPECTED_SCORES
+
+
+def test_vk_score_scale_rows_fit_vk_keyboard_limits() -> None:
+    keyboard = _vk_score_keyboard()
+    assert all(len(row) <= VK_MAX_BUTTONS_PER_ROW for row in keyboard["buttons"])
 
 
 def test_max_score_scale_contains_every_value_once() -> None:
