@@ -237,6 +237,11 @@ def test_max_sender_delegates_main_keyboard_to_renderer():
     assert MaxBotSender._main_menu_attachment() == messenger_max_ui.main_menu_attachment()
 
 
+def test_delivery_slot_set_callback_maps_to_channel_command():
+    assert canonical_button_command("settings:delivery:slot:set:morning:vk") == "channel morning vk"
+    assert canonical_button_command("settings:delivery:slot:set:evening:max") == "channel evening max"
+
+
 def test_telegram_main_callbacks_are_tracked_by_contract():
     callbacks = [button.callback_data for row in kb_main().inline_keyboard for button in row]
     assert set(callbacks).issuperset(telegram_main_callbacks())
