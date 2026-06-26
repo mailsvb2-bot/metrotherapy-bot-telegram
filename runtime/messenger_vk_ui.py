@@ -28,6 +28,7 @@ MENU_LABEL = "⬅️ Меню"
 HOME_LABEL = "🏠 Меню"
 MAIN_MENU_LABEL = "⬅️ Главное меню"
 MENU_COMMAND = "start"
+VK_MAX_BUTTONS_PER_ROW = 5
 
 
 def _button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
@@ -186,8 +187,9 @@ def vk_score_scale_keyboard_json(session_id: int = 0, *, stage: str = "pre") -> 
     _ = session_id, stage
     values = list(range(-10, 11))
     rows: list[list[dict[str, Any]]] = []
-    for i in range(0, len(values), 7):
-        rows.append([_button(_score_label(value), str(value), "secondary") for value in values[i : i + 7]])
+    for i in range(0, len(values), VK_MAX_BUTTONS_PER_ROW):
+        chunk = values[i : i + VK_MAX_BUTTONS_PER_ROW]
+        rows.append([_button(_score_label(value), str(value), "secondary") for value in chunk])
     rows.append([_button("📈 Мой прогресс", "progress", "primary")])
     rows.append([_button(BACK_LABEL, MENU_COMMAND, "secondary")])
     return _keyboard(rows)
