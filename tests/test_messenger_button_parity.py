@@ -16,11 +16,13 @@ from runtime.messenger_vk_ui import (
 )
 from runtime.telegram_button_parity import canonical_button_command
 from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS, main_menu_commands, telegram_main_callbacks
+from services.messenger.reply_dispatcher import _looks_like_score_scale
 
 ADMIN_LABEL = "🛠 Панель"
 BACK_LABEL = "⬅️ Назад"
 MAX_LEGACY_BACK_LABEL = "⬅️ Меню"
 VK_MAX_BUTTONS_PER_ROW = 5
+VK_MAX_BUTTON_ROWS = 6
 
 
 def _telegram_public_main_labels() -> list[str]:
@@ -66,6 +68,11 @@ def _vk_labels(keyboard_json: str) -> list[str]:
 def _assert_vk_row_width(keyboard_json: str) -> None:
     keyboard = _vk_keyboard(keyboard_json)
     assert all(len(row) <= VK_MAX_BUTTONS_PER_ROW for row in keyboard["buttons"])
+
+
+def _assert_vk_row_count(keyboard_json: str) -> None:
+    keyboard = _vk_keyboard(keyboard_json)
+    assert len(keyboard["buttons"]) <= VK_MAX_BUTTON_ROWS
 
 
 def _max_button_texts(attachment: dict) -> list[str]:
@@ -116,7 +123,7 @@ def test_demo_kind_labels_match_telegram_demo_kind_surface():
 def test_score_scale_labels_match_platform_score_contracts():
     telegram_expected = _telegram_score_labels()
     numeric_expected = _numeric_score_labels()
-    assert _vk_labels(vk_score_scale_keyboard_json()) == telegram_expected[:-1] + ["📈 Мой прогресс", BACK_LABEL]
+    assert _vk_labels(vk_score_scale_keyboard_json()) == telegram_expected[:-1] + ["📈 Прогресс", BACK_LABEL]
     assert _max_button_texts(messenger_max_ui.score_scale_attachment()) == numeric_expected + ["📈 Мой прогресс", BACK_LABEL]
 
     vk_commands = _vk_commands(vk_score_scale_keyboard_json())
@@ -127,7 +134,7 @@ def test_score_scale_labels_match_platform_score_contracts():
     assert max_commands[-2:] == ["progress", "start"]
 
 
-def test_vk_public_keyboards_fit_vk_row_width_limit():
+def test_vk_public_keyboards_fit_vk_row_limits():
     keyboards = [
         vk_main_keyboard_json(),
         vk_demo_kind_keyboard_json(),
@@ -139,6 +146,16 @@ def test_vk_public_keyboards_fit_vk_row_width_limit():
     ]
     for keyboard_json in keyboards:
         _assert_vk_row_width(keyboard_json)
+        _assert_vk_row_count(keyboard_json)
+
+
+def test_progress_text_does_not_trigger_score_scale_keyboard_detection():
+    progress_text = (
+        "🎧 Общий прогресс аудио\n\n"
+        "📈 Мой прогресс и анализ состояния\n\n"
+        "Чтобы добавить новую оценку состояния, отправьте число от -10 до 10 после прослушивания аудио."
+    )
+    assert _looks_like_score_scale(progress_text) is False
 
 
 def test_weather_surface_matches_telegram_public_meaning():
