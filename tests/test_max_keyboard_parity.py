@@ -13,6 +13,14 @@ def _button_texts(attachment: dict) -> list[str]:
     ]
 
 
+def _button_commands(attachment: dict) -> list[str]:
+    out: list[str] = []
+    for row in attachment["payload"]["buttons"]:
+        for button in row:
+            out.append(str((button.get("payload") or {}).get("command") or ""))
+    return out
+
+
 def _button_types(attachment: dict) -> set[str]:
     return {
         button["type"]
@@ -66,6 +74,21 @@ def test_max_demo_full_weather_and_score_surfaces_have_native_buttons() -> None:
     assert "-10" in _button_texts(score[0])
     assert "10" in _button_texts(score[0])
     assert "📈 Мой прогресс" in _button_texts(score[0])
+
+
+def test_max_progress_text_does_not_trigger_score_scale_keyboard() -> None:
+    progress_text = (
+        "🎧 Общий прогресс аудио\n\n"
+        "📈 Мой прогресс и анализ состояния\n\n"
+        "Чтобы добавить новую оценку состояния, отправьте число от -10 до 10 после прослушивания аудио."
+    )
+
+    attachments = max_ui.native_keyboard_attachments(progress_text)
+
+    assert len(attachments) == 1
+    assert _button_commands(attachments[0]) == ["continue", "done", "repeat", "history", "start"]
+    assert "-10" not in _button_texts(attachments[0])
+    assert "10" not in _button_texts(attachments[0])
 
 
 def test_max_payment_and_gift_surfaces_use_link_buttons() -> None:
