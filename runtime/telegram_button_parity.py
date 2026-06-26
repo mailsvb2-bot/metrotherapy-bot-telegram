@@ -71,7 +71,7 @@ def canonical_button_command(callback: str) -> str:
     if raw.startswith("settings:delivery:slot:set:"):
         parts = raw.split(":")
         if len(parts) >= 6:
-            return f"channel {parts[3]} {parts[5]}"
+            return f"channel {parts[4]} {parts[5]}"
     if raw.startswith("settings:delivery:slot:"):
         parts = raw.split(":")
         if len(parts) >= 4:
