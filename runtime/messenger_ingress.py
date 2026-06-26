@@ -9,7 +9,7 @@ from typing import Any
 from aiohttp import web
 
 from config.settings import settings
-from runtime.messenger_senders import MessengerTransportError
+from runtime.messenger_senders import MessengerTransportError, VkBotSender
 from runtime.messenger_payloads import (
     extract_max_message,
     extract_vk_message,
@@ -154,6 +154,30 @@ def _vk_dedupe_key(payload: dict[str, Any]) -> str:
     return vk_event_key(payload)
 
 
+def _vk_event_context(payload: dict[str, Any]) -> tuple[str, str, str] | None:
+    obj = payload.get("object") or {}
+    if not isinstance(obj, dict):
+        return None
+    event_id = str(obj.get("event_id") or "").strip()
+    user_id = str(obj.get("user_id") or "").strip()
+    peer_id = str(obj.get("peer_id") or user_id).strip()
+    if not event_id or not user_id:
+        return None
+    return event_id, user_id, peer_id
+
+
+async def _ack_vk_message_event(payload: dict[str, Any]) -> None:
+    context = _vk_event_context(payload)
+    if context is None:
+        return
+    event_id, user_id, peer_id = context
+    try:
+        await VkBotSender().answer_message_event(event_id=event_id, user_id=user_id, peer_id=peer_id)
+        log.info("VK message_event acknowledged: user_id=%s event_id=%s", user_id, event_id)
+    except MessengerTransportError:
+        log.exception("VK message_event acknowledgement failed")
+
+
 async def vk_webhook(request: web.Request) -> web.Response:
     body = await request.text()
     try:
@@ -171,6 +195,8 @@ async def vk_webhook(request: web.Request) -> web.Response:
         return web.Response(text=(settings.VK_CONFIRMATION_TOKEN or "").strip())
     if event_type not in VK_PROCESSABLE_EVENT_TYPES:
         return web.Response(text="ok")
+    if event_type == "message_event":
+        await _ack_vk_message_event(payload)
     event_key = _vk_dedupe_key(payload)
     if not register_inbound_event("vk", event_key, payload):
         return web.Response(text="ok")
