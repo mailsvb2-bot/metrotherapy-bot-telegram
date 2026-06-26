@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from keyboards.inline import kb_main
-from runtime.messenger_ingress import VK_PROCESSABLE_EVENT_TYPES, _vk_dedupe_key
+from runtime.messenger_ingress import VK_PROCESSABLE_EVENT_TYPES, _vk_dedupe_key, _vk_event_context
 from runtime.messenger_payloads import extract_vk_message
 from runtime.messenger_vk_sender import _callback_keyboard_json
 from runtime.telegram_button_parity import vk_keyboard_from_telegram
@@ -41,6 +41,7 @@ def test_vk_message_event_is_processable_and_extracts_payload_command() -> None:
     }
     assert "message_event" in VK_PROCESSABLE_EVENT_TYPES
     assert _vk_dedupe_key(payload) == "evt-1:123"
+    assert _vk_event_context(payload) == ("evt-1", "123", "123")
     extracted = extract_vk_message(payload)
     assert extracted is not None
     assert extracted["external_user_id"] == "123"
