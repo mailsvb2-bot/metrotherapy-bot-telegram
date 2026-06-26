@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+"""One-command non-bypassable regression contour for CI and local release checks."""
+
+import os
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+PROJECT_SURFACE = (
+    "services",
+    "scripts",
+    "handlers",
+    "core",
+    "runtime",
+    "config",
+    "app.py",
+    "main.py",
+)
+
+
+@dataclass(frozen=True)
+class GateStep:
+    name: str
+    cmd: tuple[str, ...]
+    env: dict[str, str] | None = None
+
+
+BASE_ENV = {
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "LOAD_DOTENV": "0",
+    "TELEGRAM_TRANSPORT": "polling",
+    "TELEGRAM_WEBHOOK_ENABLED": "0",
+    "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
+}
+
+STRICT_VALIDATOR_ENV = {
+    "APP_ENV": "test",
+    "VALIDATOR_RELEASE_MODE": "1",
+    "VALIDATOR_GUARDRAILS_STRICT": "1",
+    "VALIDATOR_SKIP_AUDIO": "1",
+}
+
+PYTEST_ENV = {
+    "APP_ENV": "test",
+    "LOAD_DOTENV": "0",
+}
+
+STEPS = (
+    GateStep(
+        "release hygiene before checks",
+        (sys.executable, "scripts/check_release_hygiene.py"),
+    ),
+    GateStep(
+        "compile project surface",
+        (sys.executable, "-m", "compileall", *PROJECT_SURFACE),
+    ),
+    GateStep(
+        "hermetic smoke no polling",
+        (sys.executable, "scripts/smoke.py"),
+        STRICT_VALIDATOR_ENV,
+    ),
+    GateStep(
+        "full pytest regression gate",
+        (sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"),
+        PYTEST_ENV,
+    ),
+    GateStep(
+        "strict validation",
+        (sys.executable, "scripts/validate_project.py"),
+        STRICT_VALIDATOR_ENV,
+    ),
+    GateStep(
+        "ruff quality gate",
+        (sys.executable, "scripts/check_ruff.py"),
+    ),
+    GateStep(
+        "release hygiene after checks",
+        (sys.executable, "scripts/check_release_hygiene.py"),
+    ),
+)
+
+
+def _run(step: GateStep) -> int:
+    env = os.environ.copy()
+    env.update(BASE_ENV)
+    if step.env:
+        env.update(step.env)
+
+    print(f"==> {step.name}", flush=True)
+    print("cmd:", " ".join(step.cmd), flush=True)
+    completed = subprocess.run(step.cmd, cwd=ROOT, env=env, check=False)  # noqa: S603
+    if completed.returncode != 0:
+        print(f"REGRESSION_GATE_FAILED step={step.name!r} code={completed.returncode}", flush=True)
+        return int(completed.returncode)
+    return 0
+
+
+def main() -> int:
+    for step in STEPS:
+        code = _run(step)
+        if code:
+            return code
+    print("REGRESSION_GATE_OK", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
