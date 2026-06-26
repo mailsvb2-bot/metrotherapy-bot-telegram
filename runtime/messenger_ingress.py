@@ -29,6 +29,9 @@ from services.messenger.webhook_dedupe import register_inbound_event
 log = logging.getLogger(__name__)
 
 
+VK_PROCESSABLE_EVENT_TYPES = {"message_new", "message_event"}
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -110,14 +113,6 @@ def _claim_replies_if_needed(*, platform: str, extracted: dict) -> tuple[int, li
 
 
 def _max_score_route_text(payload: dict[str, Any]) -> str | None:
-    """Return +1/+2 for MAX score callbacks whose normalized value is a demo alias.
-
-    The canonical normalizer must keep ``score:1`` as ``1`` because legacy tests
-    and score maps rely on numeric keys. But before ``handle_incoming_text`` a
-    MAX score callback must not be indistinguishable from the demo route aliases
-    ``1``/``2``. Therefore only the ingress layer preserves the score intent with
-    explicit +1/+2 text.
-    """
     message = payload.get("message") or {}
     body = message.get("body") if isinstance(message, dict) else {}
     if not isinstance(body, dict):
@@ -147,6 +142,18 @@ def _max_score_route_text(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _vk_dedupe_key(payload: dict[str, Any]) -> str:
+    obj = payload.get("object") or {}
+    if isinstance(obj, dict):
+        event_id = str(obj.get("event_id") or "").strip()
+        user_id = str(obj.get("user_id") or obj.get("peer_id") or "").strip()
+        if event_id and user_id:
+            return f"{event_id}:{user_id}"
+        if event_id:
+            return event_id
+    return vk_event_key(payload)
+
+
 async def vk_webhook(request: web.Request) -> web.Response:
     body = await request.text()
     try:
@@ -162,9 +169,9 @@ async def vk_webhook(request: web.Request) -> web.Response:
     event_type = (payload.get("type") or "").strip()
     if event_type == "confirmation":
         return web.Response(text=(settings.VK_CONFIRMATION_TOKEN or "").strip())
-    if event_type != "message_new":
+    if event_type not in VK_PROCESSABLE_EVENT_TYPES:
         return web.Response(text="ok")
-    event_key = vk_event_key(payload)
+    event_key = _vk_dedupe_key(payload)
     if not register_inbound_event("vk", event_key, payload):
         return web.Response(text="ok")
 
@@ -172,9 +179,6 @@ async def vk_webhook(request: web.Request) -> web.Response:
     if not extracted:
         return web.Response(text="ok")
 
-    # Important: extract_vk_message already knows pending score context. Do not
-    # run the plain normalizer again here, because VK score buttons 1/2 would be
-    # converted back to demo_work/demo_home.
     normalized_text = _entry_start_text(extracted["text"])
     log_payload_normalized(
         platform="vk",
@@ -201,7 +205,8 @@ async def vk_webhook(request: web.Request) -> web.Response:
         action = normalized_text
 
     log.info(
-        "VK message_new processed: external_user_id=%s canonical_user_id=%s text=%r replies=%s",
+        "VK %s processed: external_user_id=%s canonical_user_id=%s text=%r replies=%s",
+        event_type,
         extracted["external_user_id"],
         canonical_user_id,
         extracted["text"][:120],
@@ -298,26 +303,11 @@ async def max_webhook(request: web.Request) -> web.Response:
             first_name=extracted["first_name"],
         )
         action = normalized_text
-    log.info(
-        "MAX webhook processed: update_type=%r external_user_id=%s canonical_user_id=%s text=%r replies=%s",
-        update_type,
-        extracted["external_user_id"],
-        canonical_user_id,
-        extracted["text"][:120],
-        len(replies),
-    )
     try:
         await send_reply_bundle("max", extracted["external_user_id"], canonical_user_id, replies)
-        log.info(
-            "MAX replies sent: external_user_id=%s canonical_user_id=%s replies=%s",
-            extracted["external_user_id"],
-            canonical_user_id,
-            len(replies),
-        )
         log_action_completed(platform="max", user_id=canonical_user_id, action=action, replies=len(replies), status="ok")
     except MessengerTransportError:
         log.exception("MAX send failed")
-        log_event(canonical_user_id, "max_send_failed", {})
         log_action_completed(platform="max", user_id=canonical_user_id, action=action, replies=len(replies), status="send_failed")
     log_event(canonical_user_id, "max_webhook_inbound", {"text": extracted["text"][:120], "replies": len(replies)})
     return web.json_response({"ok": True})
