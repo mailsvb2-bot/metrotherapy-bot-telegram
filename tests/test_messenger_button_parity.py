@@ -19,6 +19,7 @@ from services.messenger.menu_contract import CONTEXT_ACTIONS, MAIN_MENU_ACTIONS,
 ADMIN_LABEL = "🛠 Панель"
 BACK_LABEL = "⬅️ Назад"
 MAX_LEGACY_BACK_LABEL = "⬅️ Меню"
+VK_MAX_BUTTONS_PER_ROW = 5
 
 
 def _telegram_public_main_labels() -> list[str]:
@@ -59,6 +60,11 @@ def _vk_commands(keyboard_json: str) -> list[str]:
 def _vk_labels(keyboard_json: str) -> list[str]:
     keyboard = _vk_keyboard(keyboard_json)
     return [button["action"]["label"] for row in keyboard["buttons"] for button in row]
+
+
+def _assert_vk_row_width(keyboard_json: str) -> None:
+    keyboard = _vk_keyboard(keyboard_json)
+    assert all(len(row) <= VK_MAX_BUTTONS_PER_ROW for row in keyboard["buttons"])
 
 
 def _max_button_texts(attachment: dict) -> list[str]:
@@ -118,6 +124,20 @@ def test_score_scale_labels_match_platform_score_contracts():
     assert max_commands[:21] == [f"score:{value}" for value in range(-10, 11)]
     assert vk_commands[-2:] == ["progress", "start"]
     assert max_commands[-2:] == ["progress", "start"]
+
+
+def test_vk_public_keyboards_fit_vk_row_width_limit():
+    keyboards = [
+        vk_main_keyboard_json(),
+        vk_demo_kind_keyboard_json(),
+        vk_score_scale_keyboard_json(),
+        vk_weather_keyboard_json(),
+        vk_progress_keyboard_json(),
+        vk_settings_keyboard_json(),
+        full_route_keyboard_json(),
+    ]
+    for keyboard_json in keyboards:
+        _assert_vk_row_width(keyboard_json)
 
 
 def test_weather_surface_matches_telegram_public_meaning():
@@ -218,5 +238,5 @@ def test_max_sender_delegates_main_keyboard_to_renderer():
 
 def test_telegram_main_callbacks_are_tracked_by_contract():
     callbacks = [button.callback_data for row in kb_main().inline_keyboard for button in row]
-    for callback in telegram_main_callbacks():
-        assert callback in callbacks
+    assert set(callbacks).issuperset(telegram_main_callbacks())
+    assert all(canonical_button_command(callback) for callback in telegram_main_callbacks())
