@@ -23,6 +23,14 @@ MAX_LEGACY_BACK_LABEL = "⬅️ Меню"
 HOME_LABEL = "🏠 Меню"
 MAIN_MENU_LABEL = "⬅️ Главное меню"
 MENU_COMMAND = "start"
+SCORE_SCALE_MARKERS = (
+    "шкала оценки",
+    "шкала состояния",
+    "оцените состояние",
+    "оцените свое состояние",
+    "состояние после прослушивания",
+    "состояние до практики",
+)
 
 
 def max_message_button(text: str, *, command: str | None = None) -> dict[str, Any]:
@@ -190,8 +198,10 @@ def ref_bonus_actions_attachment() -> dict[str, Any]:
 
 
 def is_score_scale_text(text: str) -> bool:
-    raw = str(text or "").casefold().replace("−", "-")
-    return "-10" in raw and "10" in raw and ("шкал" in raw or "оцен" in raw or "состояни" in raw)
+    raw = str(text or "").casefold().replace("−", "-").replace("ё", "е")
+    if "-10" not in raw or "10" not in raw:
+        return False
+    return any(marker in raw for marker in SCORE_SCALE_MARKERS)
 
 
 def is_post_audio_controls_text(text: str) -> bool:
