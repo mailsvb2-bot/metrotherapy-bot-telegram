@@ -6,9 +6,10 @@ import json
 
 import pytest
 
+from config.settings import settings
 from services.db import db
 from services.messenger.audio_delivery import send_next_audio_to_user
-from services.messenger.audio_progress import AudioProgressItem, get_progress_snapshot
+from services.messenger.audio_progress import AudioProgressItem, get_pending_audio_token, get_progress_snapshot
 from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDelivery
 from services.messenger.preferences import record_channel_identity
 
@@ -182,20 +183,50 @@ def test_max_audio_delivery_converts_to_opus_sends_native_audio_text_controls_an
     assert snapshot.last_anchor is None
 
 
+
+def test_vk_audio_delivery_falls_back_to_access_link_when_native_upload_fails(monkeypatch):
+    user_id = 195006
+    _clear_user_state(user_id)
+    item = AudioProgressItem(ordinal=1, anchor=16, title="Track 16", path=Path("audio/full/t16.ogg"))
+    record_channel_identity(user_id, "vk", "vk-195006")
+    monkeypatch.setattr(settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test")
+    monkeypatch.setattr("services.messenger.audio_delivery.get_next_audio_item", lambda uid: item)
+
+    vk_sender = _FakeSender(fail_audio=True)
+    result = asyncio.run(
+        send_next_audio_to_user(
+            user_id,
+            senders=SenderRegistry(vk=vk_sender, max=_FakeSender()),
+            fallback="vk",
+            target_platform="vk",
+        )
+    )
+
+    assert result.transport == "vk_audio_access_link_pending"
+    assert vk_sender.audio_calls
+    assert vk_sender.text_calls
+    assert "https://example.test/media/audio/access/" in vk_sender.text_calls[0][1]
+    assert "✅ Прослушал" in vk_sender.text_calls[0][1]
+    snapshot = get_progress_snapshot(user_id)
+    assert snapshot.pending_item is not None
+    assert snapshot.pending_item.anchor == 16
+    assert get_pending_audio_token(user_id)
+
 def test_non_telegram_native_audio_failure_does_not_mark_pending(monkeypatch):
     user_id = 195005
     _clear_user_state(user_id)
     item = AudioProgressItem(ordinal=1, anchor=15, title="Track 15", path=Path("audio/full/t15.ogg"))
-    record_channel_identity(user_id, "vk", "vk-195005")
+    record_channel_identity(user_id, "max", "max-195005")
     monkeypatch.setattr("services.messenger.audio_delivery.get_next_audio_item", lambda uid: item)
+    monkeypatch.setattr("services.messenger.audio_delivery.ensure_max_opus_file", lambda path: path)
 
     with pytest.raises(UnsupportedMessengerDelivery):
         asyncio.run(
             send_next_audio_to_user(
                 user_id,
-                senders=SenderRegistry(vk=_FakeSender(fail_audio=True), max=_FakeSender()),
-                fallback="vk",
-                target_platform="vk",
+                senders=SenderRegistry(vk=_FakeSender(), max=_FakeSender(fail_audio=True)),
+                fallback="max",
+                target_platform="max",
             )
         )
 

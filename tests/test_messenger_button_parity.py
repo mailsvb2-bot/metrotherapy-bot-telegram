@@ -262,3 +262,20 @@ def test_max_sender_delegates_main_keyboard_to_renderer():
 def test_delivery_slot_set_callback_maps_to_channel_command():
     assert canonical_button_command("settings:delivery:slot:set:morning:vk") == "channel morning vk"
     assert canonical_button_command("settings:delivery:slot:set:evening:max") == "channel evening max"
+
+def test_vk_payment_open_link_payloads_fit_vk_provider_limit():
+    long_url = "https://metrotherapy-bot.metrotherapy.ru/pay/yookassa?" + ("x" * 900)
+    text = "💳 Тарифы\n\nПакет — 990 ₽\n" + long_url
+    keyboard = json.loads(prepare_vk_keyboard_json(vk_main_keyboard_json(), external_user_id="1", text=text))
+
+    open_link_actions = [
+        button["action"]
+        for row in keyboard["buttons"]
+        for button in row
+        if button["action"]["type"] == "open_link"
+    ]
+    assert open_link_actions
+    for action in open_link_actions:
+        assert action["link"] == long_url
+        assert len(action.get("payload", "")) <= 255
+

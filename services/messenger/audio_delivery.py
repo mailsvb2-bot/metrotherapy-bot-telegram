@@ -8,6 +8,10 @@ from typing import Any
 from services.messenger.outbound import SenderRegistry, build_delivery_plan, UnsupportedMessengerDelivery
 from services.messenger.platforms import MessengerPlatform
 from services.messenger.max_audio import ensure_max_opus_file
+from config.settings import settings
+from runtime.messenger_transport_errors import MessengerTransportError
+from services.messenger.audio_access import issue_or_reuse_audio_access_token
+from services.messenger.audio_links import build_audio_access_url
 from services.messenger.audio_progress import (
     get_progress_snapshot,
     get_next_audio_item,
@@ -176,6 +180,62 @@ async def _prepare_native_audio_path(platform: str, item: AudioProgressItem) -> 
     return item.path
 
 
+def _vk_audio_access_link_text(item: AudioProgressItem, url: str, *, replay: bool = False) -> str:
+    head = f'🎧 Повтор аудио №{item.anchor}: {item.title}' if replay else f'🎧 Аудио №{item.anchor}: {item.title}'
+    return (
+        f'{head}\n\n'
+        'ВКонтакте не принял этот аудиофайл как вложение, поэтому даю безопасную ссылку на прослушивание:\n'
+        f'{url}\n\n'
+        'Откройте ссылку, прослушайте аудио, затем вернитесь сюда и нажмите «✅ Прослушал» '
+        'или отправьте done / готово / прослушал.\n\n'
+        'После этого я покажу шкалу состояния от −10 до +10, как в Telegram.'
+    )
+
+
+async def _send_vk_audio_access_link(
+    *,
+    user_id: int,
+    external_user_id: str,
+    sender: Any,
+    item: AudioProgressItem,
+    replay: bool = False,
+) -> AudioDeliveryResult:
+    base = (getattr(settings, 'MESSENGER_PUBLIC_BASE_URL', '') or '').strip()
+    if not base:
+        raise UnsupportedMessengerDelivery('VK audio access URL cannot be built: MESSENGER_PUBLIC_BASE_URL is empty')
+
+    token = issue_or_reuse_audio_access_token(int(user_id), item=item, platform=MessengerPlatform.VK.value)
+    url = build_audio_access_url(token)
+    if not url:
+        raise UnsupportedMessengerDelivery('VK audio access URL cannot be built')
+
+    await sender.send_text(
+        external_user_id,
+        _vk_audio_access_link_text(item, url, replay=replay),
+        **_post_audio_control_kwargs(MessengerPlatform.VK.value),
+    )
+    log_audio_timeline_event(
+        int(user_id),
+        event_type='vk_audio_access_link_replayed' if replay else 'vk_audio_access_link_sent',
+        sequence_key='full_series',
+        anchor=int(item.anchor),
+        title=item.title,
+        platform=MessengerPlatform.VK.value,
+        token=token,
+    )
+    return AudioDeliveryResult(
+        user_id=int(user_id),
+        platform=MessengerPlatform.VK.value,
+        item=item,
+        transport='vk_audio_access_link_replay' if replay else 'vk_audio_access_link_pending',
+        message=(
+            f'🎧 Дал ссылку на повтор аудио во ВКонтакте: №{item.anchor} — {item.title}.\n\n'
+            if replay else
+            f'🎧 Дал ссылку на аудио во ВКонтакте: №{item.anchor} — {item.title}.\n\n'
+        ) + 'Когда дослушаете, напишите: done / готово / прослушал.',
+    )
+
+
 async def _send_non_telegram_native(
     *,
     user_id: int,
@@ -196,8 +256,16 @@ async def _send_non_telegram_native(
             caption=_pending_caption(platform, item, replay=replay),
             **_post_audio_control_kwargs(platform),
         )
-    except (AttributeError, RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery, MessengerTransportError) as exc:
         log_audio_timeline_event(int(user_id), event_type="native_audio_failed", sequence_key="full_series", anchor=int(item.anchor), title=item.title, platform=platform)
+        if platform == MessengerPlatform.VK.value:
+            return await _send_vk_audio_access_link(
+                user_id=int(user_id),
+                external_user_id=external_user_id,
+                sender=sender,
+                item=item,
+                replay=replay,
+            )
         raise UnsupportedMessengerDelivery(NATIVE_AUDIO_REQUIRED_MESSAGE) from exc
     if pending is None:
         mark_pending_audio_delivery(int(user_id), item=item, platform=platform, token=None)
