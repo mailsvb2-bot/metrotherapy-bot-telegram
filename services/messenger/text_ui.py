@@ -22,7 +22,7 @@ from services.messenger.platforms import normalize_platform, platform_title
 from services.messenger.menu_contract import normalize_menu_command
 from services.messenger.package_payment_ui import gift_package_text, package_payment_text
 from services.messenger.preferences import get_channel_snapshot, set_preferred_platform
-from services.messenger.audio_progress import get_progress_snapshot, SEQUENCE_FULL_SERIES, confirm_pending_audio_delivery
+from services.messenger.audio_progress import get_progress_snapshot, SEQUENCE_FULL_SERIES, confirm_pending_audio_delivery, get_audio_item_by_anchor
 from services.messenger.timeline import get_recent_audio_timeline
 from services.mood_text_flow import parse_score_text, find_pending_pre_session_id, find_pending_post_session_id
 from services.mood import create_session
@@ -645,12 +645,15 @@ def _continue_vk_audio_session(user_id: int) -> MessengerReply:
 
 
 def _repeat_last_vk_audio(user_id: int) -> MessengerReply:
-    """Repeat the last issued audio without advancing the queue."""
+    """Repeat the pending or last confirmed audio without advancing the queue."""
     snapshot = get_progress_snapshot(int(user_id))
-    item = snapshot.pending_item or snapshot.last_item
+    item = snapshot.pending_item
+    if item is None and snapshot.last_anchor is not None:
+        item = get_audio_item_by_anchor(int(snapshot.last_anchor))
     if item is None:
         return MessengerReply(text=_demo_text(), meta={"vk_keyboard": "demo_kind"})
     return MessengerReply(kind="next_audio", meta={"replay": "1"})
+
 
 def handle_incoming_text(
     user_id: int,

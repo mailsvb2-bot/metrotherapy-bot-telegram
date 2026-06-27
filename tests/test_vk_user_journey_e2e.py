@@ -137,6 +137,11 @@ def test_vk_full_user_journey_score_audio_done_pay_gift(monkeypatch, tmp_path):
     joined_texts = "\n".join(text for _, text, _ in sender.text_calls[-3:])
     assert "Оценку после прослушивания +3 сохранил" in joined_texts
 
+    asyncio.run(_dispatch_vk(user_id, "repeat"))
+    repeat_text = sender.text_calls[-1][1]
+    assert "https://example.test/media/audio/access/" in repeat_text
+    assert "✅ Прослушал" in repeat_text
+
     asyncio.run(_dispatch_vk(user_id, "pay"))
     pay_keyboard = _latest_keyboard(sender)
     pay_links = _open_link_actions(pay_keyboard)

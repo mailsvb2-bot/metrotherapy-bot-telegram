@@ -128,6 +128,10 @@ def _post_audio_control_kwargs(platform: str) -> dict[str, Any]:
     return {}
 
 
+def post_audio_control_kwargs(platform: str) -> dict[str, Any]:
+    return _post_audio_control_kwargs(platform)
+
+
 def _pending_caption(platform: str, item: AudioProgressItem, *, replay: bool = False) -> str:
     prefix = 'Повторно отправил файл' if replay else 'Отправил файл'
     return (
@@ -151,6 +155,10 @@ def _post_audio_controls_text(platform: str, item: AudioProgressItem, *, replay:
         'Для проверки результата можно нажать «📊 Прогресс» или «🧾 История». '
         'Telegram для этого не нужен — этот сценарий исполняется внутри текущего мессенджера.'
     )
+
+
+def post_audio_controls_text(platform: str, item: AudioProgressItem, *, replay: bool = False) -> str:
+    return _post_audio_controls_text(platform, item, replay=replay)
 
 
 def _replay_item_for_finished_queue(platform: str, snapshot: Any) -> AudioProgressItem | None:
@@ -233,6 +241,23 @@ async def _send_vk_audio_access_link(
             if replay else
             f'🎧 Дал ссылку на аудио во ВКонтакте: №{item.anchor} — {item.title}.\n\n'
         ) + 'Когда дослушаете, напишите: done / готово / прослушал.',
+    )
+
+
+async def send_vk_audio_access_link(
+    *,
+    user_id: int,
+    external_user_id: str,
+    sender: Any,
+    item: AudioProgressItem,
+    replay: bool = False,
+) -> AudioDeliveryResult:
+    return await _send_vk_audio_access_link(
+        user_id=int(user_id),
+        external_user_id=external_user_id,
+        sender=sender,
+        item=item,
+        replay=replay,
     )
 
 

@@ -20,8 +20,8 @@ from services.events import log_event
 
 NATIVE_AUDIO_REQUIRED_MESSAGE = (
     '⚠️ Не удалось отправить аудио прямо в этот мессенджер. '
-    'Ссылку на аудио я не отправляю: по эталону сценария здесь должно быть именно аудио-вложение. '
-    'Попробуйте ещё раз позже или сообщите администратору.'
+    'Для VK используется безопасная ссылка, если провайдер отклоняет аудио-вложение. '
+    'Для остальных каналов попробуйте ещё раз позже или сообщите администратору.'
 )
 
 
@@ -196,17 +196,17 @@ async def complete_pre_score_and_send(
         if sender is None:
             raise UnsupportedMessengerDelivery('No VK sender registered')
         try:
-            from services.messenger.audio_delivery import _post_audio_control_kwargs, _post_audio_controls_text
+            from services.messenger.audio_delivery import post_audio_control_kwargs, post_audio_controls_text
             await sender.send_audio_file(
                 plan.external_user_id,
                 item.path,
                 caption=f'🎧 Ваш аудиотранс: №{item.anchor} — {item.title}',
-                **_post_audio_control_kwargs(MessengerPlatform.VK.value),
+                **post_audio_control_kwargs(MessengerPlatform.VK.value),
             )
             await sender.send_text(
                 plan.external_user_id,
-                _post_audio_controls_text(MessengerPlatform.VK.value, item),
-                **_post_audio_control_kwargs(MessengerPlatform.VK.value),
+                post_audio_controls_text(MessengerPlatform.VK.value, item),
+                **post_audio_control_kwargs(MessengerPlatform.VK.value),
             )
             mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=None)
             log_audio_timeline_event(
@@ -229,8 +229,8 @@ async def complete_pre_score_and_send(
                 platform=plan.platform,
                 slot=str(session.slot) if session.slot else ('demo' if is_demo else ('morning' if session.kind == 'work' else 'evening')),
             )
-            from services.messenger.audio_delivery import _send_vk_audio_access_link
-            result = await _send_vk_audio_access_link(
+            from services.messenger.audio_delivery import send_vk_audio_access_link
+            result = await send_vk_audio_access_link(
                 user_id=int(user_id),
                 external_user_id=plan.external_user_id,
                 sender=sender,
