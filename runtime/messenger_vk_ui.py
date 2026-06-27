@@ -30,10 +30,11 @@ MAIN_MENU_LABEL = "⬅️ Главное меню"
 MENU_COMMAND = "start"
 VK_MAX_BUTTONS_PER_ROW = 5
 VK_MAX_BUTTON_ROWS = 6
-# VK rejects large inline keyboards for callback buttons. Keep the score UI compact
-# and let users type any exact value from -10 to +10 if they need a non-anchor score.
-VK_SCORE_BUTTON_VALUES = (-10, -5, -2, 0, 2, 5, 10)
+# VK rejects oversized inline callback keyboards, but regular text keyboards can
+# carry the full Telegram-like score surface. Keep every -10..+10 button visible.
+VK_SCORE_BUTTON_VALUES = tuple(range(-10, 11))
 VK_MAX_INLINE_SCORE_BUTTONS = 10
+VK_MAX_TEXT_SCORE_BUTTONS = len(VK_SCORE_BUTTON_VALUES) + 2
 
 
 def _button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
@@ -65,6 +66,10 @@ def _keyboard(rows: list[list[dict[str, Any]]], *, inline: bool = False) -> str:
 
 def _score_label(value: int) -> str:
     return f"{int(value):+d}" if int(value) != 0 else "0"
+
+
+def _chunks(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
 
 
 def button_command(button: Any) -> str:
@@ -195,12 +200,13 @@ def vk_score_scale_keyboard_json(session_id: int = 0, *, stage: str = "pre") -> 
     ]
     score_buttons = [_button(_score_label(value), str(value), "secondary") for value in VK_SCORE_BUTTON_VALUES]
     total_buttons = len(score_buttons) + len(controls)
-    if total_buttons > VK_MAX_INLINE_SCORE_BUTTONS:  # pragma: no cover - hard guard for future edits
-        raise ValueError("VK score keyboard exceeds inline callback button limit")
-    return _keyboard([
-        score_buttons[:4],
-        score_buttons[4:] + controls,
-    ])
+    if total_buttons != VK_MAX_TEXT_SCORE_BUTTONS:  # pragma: no cover - hard guard for future edits
+        raise ValueError("VK score keyboard lost its full -10..+10 score surface")
+    rows = _chunks(score_buttons, VK_MAX_BUTTONS_PER_ROW)
+    rows[-1].extend(controls)
+    if len(rows) > VK_MAX_BUTTON_ROWS or any(len(row) > VK_MAX_BUTTONS_PER_ROW for row in rows):  # pragma: no cover
+        raise ValueError("VK full score text keyboard exceeds provider row limits")
+    return _keyboard(rows, inline=False)
 
 
 def vk_progress_keyboard_json() -> str:
@@ -247,7 +253,7 @@ def vk_state_period_keyboard_json() -> str:
 
 
 def vk_state_rate_scale_keyboard_json() -> str:
-    return vk_keyboard_from_telegram(kb_state_rate_scale())
+    return vk_score_scale_keyboard_json()
 
 
 def vk_post_actions_keyboard_json() -> str:
@@ -338,7 +344,7 @@ def keyboard_for_reply_kind(kind: str | None, meta: dict[str, Any] | None = None
         return vk_delivery_channel_select_keyboard_json("evening")
     if kind == "state_period":
         return vk_state_period_keyboard_json()
-    if kind == "state_rate":
+    if kind == "state_rate_scale":
         return vk_state_rate_scale_keyboard_json()
     if kind == "post_actions":
         return vk_post_actions_keyboard_json()
