@@ -219,7 +219,7 @@ async def complete_pre_score_and_send(
                 slot=str(session.slot) if session.slot else ('demo' if is_demo else ('morning' if session.kind == 'work' else 'evening')),
             )
             transport = 'vk_native_audio_pending'
-        except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery, MessengerTransportError) as exc:
+        except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery, MessengerTransportError):
             log_audio_timeline_event(
                 int(user_id),
                 event_type='native_audio_failed',
