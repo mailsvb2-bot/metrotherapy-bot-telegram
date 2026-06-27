@@ -3,6 +3,7 @@ from __future__ import annotations
 """One-command non-bypassable regression contour for CI and local release checks."""
 
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -19,6 +20,9 @@ PROJECT_SURFACE = (
     "app.py",
     "main.py",
 )
+GENERATED_PYTHON_DIRS = {"__pycache__", ".pytest_cache"}
+GENERATED_FILE_SUFFIXES = {".pyc", ".pyo"}
+SKIP_CLEANUP_DIRS = {".git", ".venv", "venv", "env", ".mypy_cache", ".ruff_cache"}
 
 
 @dataclass(frozen=True)
@@ -83,7 +87,32 @@ STEPS = (
 )
 
 
+def _cleanup_generated_python_artifacts() -> None:
+    """Remove artifacts created by local focused tests, compileall and pytest.
+
+    The release hygiene gate must still catch real shippable garbage such as DBs,
+    logs or build fragments. Python bytecode and pytest caches are deterministic
+    local by-products of the gate itself, so the contour owns their cleanup.
+    """
+    for current, dirs, files in os.walk(ROOT):
+        current_path = Path(current)
+        dirs[:] = [name for name in dirs if name not in SKIP_CLEANUP_DIRS]
+        for dirname in list(dirs):
+            if dirname in GENERATED_PYTHON_DIRS:
+                shutil.rmtree(current_path / dirname, ignore_errors=True)
+                dirs.remove(dirname)
+        for filename in files:
+            if Path(filename).suffix in GENERATED_FILE_SUFFIXES:
+                try:
+                    (current_path / filename).unlink()
+                except FileNotFoundError:
+                    pass
+
+
 def _run(step: GateStep) -> int:
+    if step.name.startswith("release hygiene"):
+        _cleanup_generated_python_artifacts()
+
     env = os.environ.copy()
     env.update(BASE_ENV)
     if step.env:
