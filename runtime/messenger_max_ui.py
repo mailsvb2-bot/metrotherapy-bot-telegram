@@ -205,12 +205,25 @@ def is_score_scale_text(text: str) -> bool:
     return any(marker in raw for marker in SCORE_SCALE_MARKERS)
 
 
+def is_progress_text(text: str) -> bool:
+    stripped = str(text or "").lstrip()
+    return (
+        stripped.startswith("🎧 Общий прогресс")
+        or stripped.startswith("🎧 Вы ещё не запускали")
+        or "📈 Мой прогресс" in stripped
+        or "📈 Анализ состояния" in stripped
+    )
+
+
 def is_post_audio_controls_text(text: str) -> bool:
     raw = str(text or "").casefold().replace("ё", "е")
+    if is_progress_text(text):
+        return False
     listened_marker = "прослуш" in raw or "дослуш" in raw
     done_marker = "done" in raw or "готово" in raw or "прослушал" in raw or "дослушал"
     audio_marker = "аудио" in raw or "транс" in raw or "файл"
-    return listened_marker and done_marker and audio_marker
+    action_marker = "когда прослушаете" in raw or "нажмите кнопку" in raw or "отправлено прямо" in raw
+    return listened_marker and done_marker and audio_marker and action_marker
 
 
 def first_url(text: str) -> str:
@@ -257,12 +270,12 @@ def native_keyboard_attachments(text: str) -> list[dict[str, Any]]:
         return [weather_attachment()]
     if stripped.startswith("🏙 Напишите название города"):
         return [weather_city_attachment()]
+    if is_progress_text(raw):
+        return [progress_attachment()]
     if is_score_scale_text(raw):
         return [score_scale_attachment()]
     if is_post_audio_controls_text(raw):
         return [post_audio_attachment()]
-    if stripped.startswith("🎧 Общий прогресс") or stripped.startswith("🎧 Вы ещё не запускали") or "📈 Мой прогресс" in raw or "📈 Анализ состояния" in raw:
-        return [progress_attachment()]
     if stripped.startswith("⚙️ Настройки канала"):
         return [settings_attachment()]
     if stripped.startswith("🕒 Правила отправки") or "Каналы по времени дня" in raw:
