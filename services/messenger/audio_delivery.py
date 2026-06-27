@@ -7,7 +7,7 @@ from typing import Any
 
 from services.messenger.outbound import SenderRegistry, build_delivery_plan, UnsupportedMessengerDelivery
 from services.messenger.platforms import MessengerPlatform
-from services.messenger.max_audio import ensure_messenger_opus_file
+from services.messenger.max_audio import ensure_max_opus_file, ensure_vk_opus_file
 from config.settings import settings
 from runtime.messenger_transport_errors import MessengerTransportError
 from services.messenger.audio_access import issue_or_reuse_audio_access_token
@@ -179,11 +179,23 @@ def _replay_item_for_finished_queue(platform: str, snapshot: Any) -> AudioProgre
         return None
 
 
+def _vk_file_is_native_audio(file_path: Any) -> bool:
+    return getattr(file_path, 'suffix', '').lower() in {'.opus', '.ogg'}
+
+
 async def _prepare_native_audio_path(platform: str, item: AudioProgressItem) -> Any:
-    if platform in {MessengerPlatform.MAX.value, MessengerPlatform.VK.value}:
+    if platform == MessengerPlatform.MAX.value:
         # ffmpeg conversion can take seconds for long tracks. Keep the aiohttp
         # webhook/event loop responsive while preparing the deterministic cache file.
-        return await asyncio.to_thread(ensure_messenger_opus_file, item.path, platform=platform)
+        return await asyncio.to_thread(ensure_max_opus_file, item.path)
+    if platform == MessengerPlatform.VK.value:
+        # VK accepts Opus/Ogg through the audio_message upload path. Preserve the
+        # previous no-preflight behaviour for already-native files so fake-sender
+        # tests and replay flows do not require fixtures to exist on disk. Convert
+        # MP3/WAV/etc. to Opus before send so VK does not reject them as doc/music.
+        if _vk_file_is_native_audio(item.path):
+            return item.path
+        return await asyncio.to_thread(ensure_vk_opus_file, item.path)
     return item.path
 
 
