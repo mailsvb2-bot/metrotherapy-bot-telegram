@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 import json
 
+from runtime.messenger_transport_errors import MessengerTransportError
 from services.audio_anchor import get_by_anchor
 from services.audio_guard import pick_demo_file
 from services.mood import get_session, set_pre, set_post, mark_audio_sent, last_delta
@@ -218,7 +219,7 @@ async def complete_pre_score_and_send(
                 slot=str(session.slot) if session.slot else ('demo' if is_demo else ('morning' if session.kind == 'work' else 'evening')),
             )
             transport = 'vk_native_audio_pending'
-        except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery) as exc:
+        except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery, MessengerTransportError) as exc:
             log_audio_timeline_event(
                 int(user_id),
                 event_type='native_audio_failed',
@@ -228,13 +229,22 @@ async def complete_pre_score_and_send(
                 platform=plan.platform,
                 slot=str(session.slot) if session.slot else ('demo' if is_demo else ('morning' if session.kind == 'work' else 'evening')),
             )
-            raise UnsupportedMessengerDelivery(NATIVE_AUDIO_REQUIRED_MESSAGE) from exc
+            from services.messenger.audio_delivery import _send_vk_audio_access_link
+            result = await _send_vk_audio_access_link(
+                user_id=int(user_id),
+                external_user_id=plan.external_user_id,
+                sender=sender,
+                item=item,
+                replay=False,
+            )
+            transport = result.transport
 
     if not is_demo:
         register_touch(int(user_id), 'morning' if session.kind == 'work' else 'evening')
         advance(int(user_id), 'morning' if session.kind == 'work' else 'evening')
     mark_audio_sent(session_id)
-    record_audio_delivery(int(user_id), item=item, platform=plan.platform)
+    if transport != 'vk_audio_access_link_pending':
+        record_audio_delivery(int(user_id), item=item, platform=plan.platform)
     if transport == 'telegram_audio_pending':
         message = (
             f'✅ Оценку {score:+d} сохранил. Отправил аудио №{item.anchor} — {item.title}.\n\n'
