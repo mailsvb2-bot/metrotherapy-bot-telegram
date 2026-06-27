@@ -20,9 +20,9 @@ PROJECT_SURFACE = (
     "app.py",
     "main.py",
 )
-GENERATED_PYTHON_DIRS = {"__pycache__", ".pytest_cache"}
+GENERATED_PYTHON_DIRS = {"__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
 GENERATED_FILE_SUFFIXES = {".pyc", ".pyo"}
-SKIP_CLEANUP_DIRS = {".git", ".venv", "venv", "env", ".mypy_cache", ".ruff_cache"}
+SKIP_CLEANUP_DIRS = {".git", ".venv", "venv", "env"}
 
 
 @dataclass(frozen=True)
@@ -91,7 +91,7 @@ def _cleanup_generated_python_artifacts() -> None:
     """Remove artifacts created by local focused tests, compileall and pytest.
 
     The release hygiene gate must still catch real shippable garbage such as DBs,
-    logs or build fragments. Python bytecode and pytest caches are deterministic
+    logs or build fragments. Python bytecode and test/linter caches are deterministic
     local by-products of the gate itself, so the contour owns their cleanup.
     """
     for current, dirs, files in os.walk(ROOT):
