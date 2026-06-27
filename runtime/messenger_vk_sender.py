@@ -15,6 +15,7 @@ from services.messenger.provider_transport import form_request, multipart_upload
 
 VK_MAX_BUTTONS_PER_ROW = 5
 VK_MAX_BUTTON_ROWS = 6
+VK_MAX_INLINE_CALLBACK_BUTTONS = 10
 
 
 def _chunks(items: list[Any], size: int) -> list[list[Any]]:
@@ -32,6 +33,29 @@ def _pack_keyboard_rows(rows: list[list[dict[str, Any]]]) -> list[list[dict[str,
     flat = [button for row in normalized for button in row]
     repacked = _chunks(flat, VK_MAX_BUTTONS_PER_ROW)
     return repacked if len(repacked) <= VK_MAX_BUTTON_ROWS else normalized
+
+
+def _button_count(rows: list[list[dict[str, Any]]]) -> int:
+    return sum(len(row) for row in rows)
+
+
+def _as_text_keyboard_json(keyboard: dict[str, Any], rows: list[list[dict[str, Any]]]) -> str:
+    normalized_rows: list[list[dict[str, Any]]] = []
+    for row in rows:
+        normalized_row: list[dict[str, Any]] = []
+        for button in row:
+            normalized_button = dict(button)
+            action = dict(normalized_button.get("action") or {})
+            if action.get("type") == "callback":
+                action["type"] = "text"
+            normalized_button["action"] = action
+            normalized_row.append(normalized_button)
+        if normalized_row:
+            normalized_rows.append(normalized_row)
+    normalized = dict(keyboard)
+    normalized["inline"] = False
+    normalized["buttons"] = _pack_keyboard_rows(normalized_rows)
+    return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
 
 
 def _callback_keyboard_json(keyboard_json: str) -> str:
@@ -61,6 +85,13 @@ def _callback_keyboard_json(keyboard_json: str) -> str:
             normalized_row.append(normalized_button)
         if normalized_row:
             normalized_rows.append(normalized_row)
+
+    if _button_count(normalized_rows) > VK_MAX_INLINE_CALLBACK_BUTTONS:
+        # VK rejects oversized inline callback keyboards with error_code=911.
+        # Preserve full user functionality by sending the keyboard as regular
+        # text buttons; VK includes payload in message_new, so routing still works.
+        return _as_text_keyboard_json(keyboard, rows)
+
     normalized = dict(keyboard)
     normalized["inline"] = True
     normalized["buttons"] = _pack_keyboard_rows(normalized_rows)
@@ -153,9 +184,7 @@ class VkBotSender:
     def _vk_upload_type_for_audio(file_path: Path) -> str:
         return "audio_message" if file_path.suffix.lower() in {".opus", ".ogg"} else "doc"
 
-    async def _ensure_doc_attachment(self, external_user_id: str, file_path: Path, *, media_type: str | None = None) -> str:
-        upload_type = self._vk_upload_type_for_audio(file_path)
-        cache_media_type = media_type or f"audio:{upload_type}"
+    async def _upload_doc_attachment(self, external_user_id: str, file_path: Path, *, upload_type: str, cache_media_type: str) -> str:
         cached = get_cached_media_token("vk", file_path, media_type=cache_media_type)
         if cached is not None:
             return cached.remote_token
@@ -171,6 +200,31 @@ class VkBotSender:
         attachment = self._doc_attachment_from_save_response(saved)
         store_media_token("vk", file_path, attachment, media_type=cache_media_type)
         return attachment
+
+    async def _ensure_doc_attachment(self, external_user_id: str, file_path: Path, *, media_type: str | None = None) -> str:
+        preferred_upload_type = self._vk_upload_type_for_audio(file_path)
+        upload_types = [preferred_upload_type]
+        if preferred_upload_type != "doc":
+            upload_types.append("doc")
+
+        last_error: MessengerTransportError | None = None
+        for upload_type in upload_types:
+            cache_media_type = media_type or f"audio:{upload_type}"
+            try:
+                return await self._upload_doc_attachment(
+                    str(external_user_id),
+                    file_path,
+                    upload_type=upload_type,
+                    cache_media_type=cache_media_type,
+                )
+            except MessengerTransportError as exc:
+                last_error = exc
+                if upload_type == "doc":
+                    raise
+                continue
+        if last_error is not None:
+            raise last_error
+        raise MessengerTransportError("VK upload failed before any upload attempt")
 
     async def send_document_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
         attachment = await self._ensure_doc_attachment(str(external_user_id), file_path, media_type=f"doc:{file_path.suffix.lower() or 'file'}")
