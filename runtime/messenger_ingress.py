@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -216,6 +217,54 @@ async def _ack_vk_message_event(payload: dict[str, Any]) -> None:
         log.exception("VK message_event acknowledgement failed")
 
 
+async def _send_reply_bundle_logged(
+    platform: str,
+    external_user_id: str,
+    canonical_user_id: int,
+    replies: list[MessengerReply],
+    action: str,
+) -> None:
+    try:
+        await send_reply_bundle(platform, external_user_id, canonical_user_id, replies)
+        log.info(
+            "%s replies sent: external_user_id=%s canonical_user_id=%s replies=%s",
+            platform.upper(),
+            external_user_id,
+            canonical_user_id,
+            len(replies),
+        )
+        log_action_completed(platform=platform, user_id=canonical_user_id, action=action, replies=len(replies), status="ok")
+    except MessengerTransportError:
+        log.exception("%s send failed", platform.upper())
+        log_event(canonical_user_id, f"{platform}_send_failed", {})
+        log_action_completed(platform=platform, user_id=canonical_user_id, action=action, replies=len(replies), status="send_failed")
+    except Exception:  # pragma: no cover - final guard for detached webhook delivery tasks
+        log.exception("%s background reply dispatch crashed", platform.upper())
+        log_event(canonical_user_id, f"{platform}_send_failed", {"error": "background_dispatch_crashed"})
+        log_action_completed(platform=platform, user_id=canonical_user_id, action=action, replies=len(replies), status="send_failed")
+
+
+def _schedule_reply_bundle(
+    platform: str,
+    external_user_id: str,
+    canonical_user_id: int,
+    replies: list[MessengerReply],
+    action: str,
+) -> None:
+    task = asyncio.create_task(
+        _send_reply_bundle_logged(platform, external_user_id, canonical_user_id, replies, action),
+        name=f"{platform}_reply_dispatch:{canonical_user_id}",
+    )
+
+    def _log_unhandled_result(done: asyncio.Task[None]) -> None:
+        try:
+            done.result()
+        except Exception:  # pragma: no cover - _send_reply_bundle_logged already guards this
+            log.exception("%s reply dispatch task failed unexpectedly: user_id=%s", platform.upper(), canonical_user_id)
+
+    task.add_done_callback(_log_unhandled_result)
+
+
 async def vk_webhook(request: web.Request) -> web.Response:
     body = await request.text()
     try:
@@ -276,21 +325,8 @@ async def vk_webhook(request: web.Request) -> web.Response:
         extracted["text"][:120],
         len(replies),
     )
-
-    try:
-        await send_reply_bundle("vk", extracted["external_user_id"], canonical_user_id, replies)
-        log.info(
-            "VK replies sent: external_user_id=%s canonical_user_id=%s replies=%s",
-            extracted["external_user_id"],
-            canonical_user_id,
-            len(replies),
-        )
-        log_action_completed(platform="vk", user_id=canonical_user_id, action=action, replies=len(replies), status="ok")
-    except MessengerTransportError:
-        log.exception("VK send failed")
-        log_event(canonical_user_id, "vk_send_failed", {})
-        log_action_completed(platform="vk", user_id=canonical_user_id, action=action, replies=len(replies), status="send_failed")
     log_event(canonical_user_id, "vk_webhook_inbound", {"text": extracted["text"][:120], "replies": len(replies)})
+    _schedule_reply_bundle("vk", extracted["external_user_id"], canonical_user_id, replies, action)
     return web.Response(text="ok")
 
 
@@ -376,18 +412,6 @@ async def max_webhook(request: web.Request) -> web.Response:
         extracted["text"][:120],
         len(replies),
     )
-    try:
-        await send_reply_bundle("max", extracted["external_user_id"], canonical_user_id, replies)
-        log.info(
-            "MAX replies sent: external_user_id=%s canonical_user_id=%s replies=%s",
-            extracted["external_user_id"],
-            canonical_user_id,
-            len(replies),
-        )
-        log_action_completed(platform="max", user_id=canonical_user_id, action=action, replies=len(replies), status="ok")
-    except MessengerTransportError:
-        log.exception("MAX send failed")
-        log_event(canonical_user_id, "max_send_failed", {})
-        log_action_completed(platform="max", user_id=canonical_user_id, action=action, replies=len(replies), status="send_failed")
     log_event(canonical_user_id, "max_webhook_inbound", {"text": extracted["text"][:120], "replies": len(replies)})
+    _schedule_reply_bundle("max", extracted["external_user_id"], canonical_user_id, replies, action)
     return web.json_response({"ok": True})
