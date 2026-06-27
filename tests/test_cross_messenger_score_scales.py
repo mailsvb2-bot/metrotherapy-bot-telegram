@@ -5,7 +5,7 @@ import json
 from runtime.messenger_senders import MaxBotSender
 from runtime.messenger_vk_ui import (
     VK_MAX_BUTTONS_PER_ROW,
-    VK_MAX_INLINE_SCORE_BUTTONS,
+    VK_MAX_BUTTON_ROWS,
     VK_SCORE_BUTTON_VALUES,
     vk_score_scale_keyboard_json,
 )
@@ -55,15 +55,17 @@ def test_score_parser_accepts_every_telegram_mood_value() -> None:
             assert parse_score_text(f"+{score}") == score
 
 
-def test_vk_score_scale_contains_safe_anchor_values_once() -> None:
-    assert _vk_score_values() == EXPECTED_VK_BUTTON_SCORES
+def test_vk_score_scale_contains_every_value_once() -> None:
+    assert _vk_score_values() == EXPECTED_VK_BUTTON_SCORES == EXPECTED_SCORES
 
 
-def test_vk_score_scale_rows_fit_vk_keyboard_limits() -> None:
+def test_vk_score_scale_rows_fit_vk_text_keyboard_limits() -> None:
     keyboard = _vk_score_keyboard()
     rows = keyboard["buttons"]
+    assert keyboard["inline"] is False
     assert all(len(row) <= VK_MAX_BUTTONS_PER_ROW for row in rows)
-    assert sum(len(row) for row in rows) <= VK_MAX_INLINE_SCORE_BUTTONS
+    assert len(rows) <= VK_MAX_BUTTON_ROWS
+    assert sum(len(row) for row in rows) == len(EXPECTED_SCORES) + 2
 
 
 def test_max_score_scale_contains_every_value_once() -> None:
