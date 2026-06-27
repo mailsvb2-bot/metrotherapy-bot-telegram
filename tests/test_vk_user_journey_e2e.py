@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -88,7 +89,7 @@ async def _dispatch_vk(user_id: int, text: str) -> list[MessengerReply]:
 
 
 def test_vk_full_user_journey_score_audio_done_pay_gift(monkeypatch, tmp_path):
-    user_id = 918001
+    user_id = 918000000 + (os.getpid() % 100000)
 
     audio_path = tmp_path / "01_morning.ogg"
     audio_path.write_bytes(b"fake-vk-audio")
@@ -97,7 +98,9 @@ def test_vk_full_user_journey_score_audio_done_pay_gift(monkeypatch, tmp_path):
 
     sender = _FakeVkSender(fail_audio=True)
     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://example.test")
+    monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://example.test")
     monkeypatch.setattr(settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test")
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "https://example.test")
     monkeypatch.setattr("services.messenger.audio_progress.list_full_series", lambda: [item])
     monkeypatch.setattr("services.mood_text_flow.get_by_anchor", lambda anchor: anchored if int(anchor) == 1 else None)
     monkeypatch.setattr("services.messenger.reply_dispatcher.VkBotSender", lambda: sender)
