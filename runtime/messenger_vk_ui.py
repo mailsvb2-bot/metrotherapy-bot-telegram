@@ -30,6 +30,7 @@ MAIN_MENU_LABEL = "⬅️ Главное меню"
 MENU_COMMAND = "start"
 VK_MAX_BUTTONS_PER_ROW = 5
 VK_MAX_BUTTON_ROWS = 6
+VK_MAX_BUTTON_PAYLOAD_CHARS = 255
 # VK rejects oversized inline callback keyboards, but regular text keyboards can
 # carry the full Telegram-like score surface. Keep every -10..+10 button visible.
 VK_SCORE_BUTTON_VALUES = tuple(range(-10, 11))
@@ -49,12 +50,17 @@ def _button(label: str, command: str, color: str = "secondary") -> dict[str, Any
 
 
 def _open_link_button(label: str, url: str) -> dict[str, Any]:
+    # VK validates open_link payload length separately from the actual link.
+    # The long payment URL belongs in `link`; keep payload tiny and deterministic.
+    payload = json.dumps({"command": "open_link"}, ensure_ascii=False)
+    if len(payload) > VK_MAX_BUTTON_PAYLOAD_CHARS:  # pragma: no cover - constant guard
+        raise ValueError("VK open_link payload exceeds provider limit")
     return {
         "action": {
             "type": "open_link",
             "label": str(label or "Открыть")[:40],
             "link": str(url or ""),
-            "payload": json.dumps({"url": str(url or "")}, ensure_ascii=False),
+            "payload": payload,
         },
         "color": "primary",
     }
