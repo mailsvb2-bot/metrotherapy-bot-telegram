@@ -7,7 +7,7 @@ from typing import Any
 
 from services.messenger.outbound import SenderRegistry, build_delivery_plan, UnsupportedMessengerDelivery
 from services.messenger.platforms import MessengerPlatform
-from services.messenger.max_audio import ensure_max_opus_file
+from services.messenger.max_audio import ensure_messenger_opus_file
 from config.settings import settings
 from runtime.messenger_transport_errors import MessengerTransportError
 from services.messenger.audio_access import issue_or_reuse_audio_access_token
@@ -27,7 +27,6 @@ NATIVE_AUDIO_REQUIRED_MESSAGE = (
     'Ссылку на аудио я не отправляю: по эталону пользовательского сценария здесь должно быть именно аудио-вложение. '
     'Попробуйте ещё раз позже или сообщите администратору.'
 )
-
 
 async def _send_telegram_audio(bot: Any, external_user_id: str, item: AudioProgressItem) -> Any:
     from services.fast_send_audio import send_audio_cached
@@ -181,10 +180,10 @@ def _replay_item_for_finished_queue(platform: str, snapshot: Any) -> AudioProgre
 
 
 async def _prepare_native_audio_path(platform: str, item: AudioProgressItem) -> Any:
-    if platform == MessengerPlatform.MAX.value:
+    if platform in {MessengerPlatform.MAX.value, MessengerPlatform.VK.value}:
         # ffmpeg conversion can take seconds for long tracks. Keep the aiohttp
         # webhook/event loop responsive while preparing the deterministic cache file.
-        return await asyncio.to_thread(ensure_max_opus_file, item.path)
+        return await asyncio.to_thread(ensure_messenger_opus_file, item.path, platform=platform)
     return item.path
 
 
