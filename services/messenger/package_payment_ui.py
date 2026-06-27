@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import re
-import uuid
+import urllib.parse
 from dataclasses import dataclass
 
+from services.gift_claims import create_gift_checkout_token
 from services.payments.checkout_intent import add_checkout_intent_to_url
 from services.payments.public_url import payment_public_base_url
 from services.practice_token_contract import PracticePackage, public_practice_packages
-from services.practice_tokens import payment_url
 
 
 @dataclass(frozen=True)
@@ -28,8 +28,35 @@ def _price_label(price_rub: int) -> str:
     return f"{int(price_rub):,} ₽".replace(",", " ")
 
 
-def _new_gift_token() -> str:
-    return f"gift_{uuid.uuid4().hex}"
+def _canonical_payment_url(
+    base_url: str,
+    *,
+    user_id: int,
+    platform: str,
+    external_user_id: str | None,
+    package_id: str,
+    gift_token: str = "",
+) -> str:
+    """Build public checkout URL with canonical identity first.
+
+    VK/MAX may have transport-specific identifiers. Public checkout, signed
+    intent and YooKassa reconciliation must use the canonical profile user_id;
+    the messenger id is diagnostic metadata only.
+    """
+    canonical_user_id = str(int(user_id))
+    messenger_external_user_id = str(external_user_id or "").strip()
+    params = {
+        "source": platform or "messenger",
+        "user_id": canonical_user_id,
+        "kind": "tokens",
+        "package_id": package_id,
+    }
+    if messenger_external_user_id and messenger_external_user_id != canonical_user_id:
+        params["external_user_id"] = messenger_external_user_id
+    if str(gift_token or "").strip():
+        params["gift_token"] = str(gift_token).strip()
+        params["gift"] = "1"
+    return f"{base_url.rstrip('/')}/pay/yookassa?{urllib.parse.urlencode(params)}"
 
 
 def package_payment_links(
@@ -42,7 +69,15 @@ def package_payment_links(
     base_url = payment_public_base_url()
     items: list[PackagePaymentLink] = []
     for package in public_practice_packages():
-        gift_token = _new_gift_token() if as_gift else ""
+        gift_token = (
+            create_gift_checkout_token(
+                buyer_user_id=int(user_id),
+                package_id=package.package_id,
+                source_platform=platform,
+            )
+            if as_gift
+            else ""
+        )
         items.append(
             _package_link(
                 package,
@@ -65,13 +100,13 @@ def _package_link(
     external_user_id: str | None,
     gift_token: str = "",
 ) -> PackagePaymentLink:
-    raw_url = payment_url(
+    raw_url = _canonical_payment_url(
         base_url,
         user_id=int(user_id),
         platform=platform,
         external_user_id=external_user_id,
         package_id=package.package_id,
-        gift_token=gift_token or None,
+        gift_token=gift_token,
     )
     return PackagePaymentLink(
         package_id=package.package_id,
@@ -81,7 +116,7 @@ def _package_link(
         gift_token=gift_token,
         url=add_checkout_intent_to_url(
             raw_url,
-            user_id=(external_user_id or str(int(user_id))),
+            user_id=str(int(user_id)),
             package_id=package.package_id,
             kind="tokens",
             source=platform,

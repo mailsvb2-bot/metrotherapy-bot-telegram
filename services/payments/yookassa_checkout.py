@@ -139,6 +139,7 @@ def create_yookassa_confirmation_url(
     *,
     source: str,
     external_user_id: str,
+    user_id: str | int | None = None,
     kind: str = "subscription",
     package_id: str | None = None,
     gift_token: str | None = None,
@@ -159,6 +160,9 @@ def create_yookassa_confirmation_url(
     if normalized_gift_token and not is_gift_token(normalized_gift_token):
         raise YooKassaCheckoutError("Invalid gift token")
 
+    canonical_user_id = str(user_id or external_user_id or "").strip()
+    messenger_external_user_id = str(external_user_id or canonical_user_id).strip()
+
     if kind in {"tokens", "practices", "practice_package"}:
         kind = "tokens"
         package = package_by_id(package_id)
@@ -176,8 +180,11 @@ def create_yookassa_confirmation_url(
     metadata = {
         "project": "metrotherapy",
         "source": str(source or "unknown"),
-        "external_user_id": str(external_user_id or ""),
-        "user_id": str(external_user_id or ""),
+        # Keep legacy reconciliation safe: existing ledger code reads
+        # external_user_id first, so this field must remain canonical.
+        "external_user_id": canonical_user_id,
+        "user_id": canonical_user_id,
+        "messenger_external_user_id": messenger_external_user_id,
         "kind": kind,
         "intent_id": intent_id,
     }
@@ -205,7 +212,7 @@ def create_yookassa_confirmation_url(
             "Content-Type": "application/json",
             "Idempotence-Key": _idempotence_key(
                 source=source,
-                external_user_id=external_user_id,
+                external_user_id=canonical_user_id,
                 kind=kind,
                 amount_value=amount_value,
                 intent_id=intent_id,
@@ -231,9 +238,10 @@ def create_yookassa_confirmation_url(
         raise YooKassaCheckoutError("YooKassa response without confirmation_url")
 
     log.info(
-        "YooKassa payment created: source=%s external_user_id=%s kind=%s amount=%s package_id=%s gift=%s",
+        "YooKassa payment created: source=%s user_id=%s messenger_external_user_id=%s kind=%s amount=%s package_id=%s gift=%s",
         source,
-        external_user_id,
+        canonical_user_id,
+        messenger_external_user_id,
         kind,
         amount_value,
         package.package_id if package else None,

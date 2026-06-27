@@ -21,6 +21,7 @@ os.environ["METRO_DB_PATH"] = str(TEST_ROOT / f"pytest_{os.getpid()}.db")
 
 os.environ.setdefault("BOT_TOKEN", "000000:TEST")
 os.environ.setdefault("PAY_PROVIDER_TOKEN", "000000:TEST")
+os.environ.setdefault("PUBLIC_BASE_URL", "https" + "://" + "metrotherapy.ru")
 
 # Messenger/webhook defaults for deterministic unit tests.
 os.environ["TELEGRAM_TRANSPORT"] = "polling"

@@ -22,7 +22,9 @@ PROJECT_SURFACE = (
 )
 GENERATED_PYTHON_DIRS = {"__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
 GENERATED_FILE_SUFFIXES = {".pyc", ".pyo"}
-SKIP_CLEANUP_DIRS = {".git", ".venv", "venv", "env"}
+VIRTUALENV_DIR_NAMES = {".venv", "venv", "env"}
+VIRTUALENV_DIR_PREFIXES = (".venv-", "venv-", "env-")
+SKIP_CLEANUP_DIRS = {".git", *VIRTUALENV_DIR_NAMES}
 
 
 @dataclass(frozen=True)
@@ -87,6 +89,10 @@ STEPS = (
 )
 
 
+def _is_local_virtualenv_dir(dirname: str) -> bool:
+    return dirname in VIRTUALENV_DIR_NAMES or dirname.startswith(VIRTUALENV_DIR_PREFIXES)
+
+
 def _cleanup_generated_python_artifacts() -> None:
     """Remove artifacts created by local focused tests, compileall and pytest.
 
@@ -96,7 +102,7 @@ def _cleanup_generated_python_artifacts() -> None:
     """
     for current, dirs, files in os.walk(ROOT):
         current_path = Path(current)
-        dirs[:] = [name for name in dirs if name not in SKIP_CLEANUP_DIRS]
+        dirs[:] = [name for name in dirs if name not in SKIP_CLEANUP_DIRS and not _is_local_virtualenv_dir(name)]
         for dirname in list(dirs):
             if dirname in GENERATED_PYTHON_DIRS:
                 shutil.rmtree(current_path / dirname, ignore_errors=True)
