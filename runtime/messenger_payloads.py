@@ -164,6 +164,10 @@ def safe_int(value: Any) -> int | None:
         return None
 
 
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def stable_payload_key(platform: str, payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8", "ignore")
     return f"{platform}:sha256:" + hashlib.sha256(encoded).hexdigest()
@@ -233,8 +237,8 @@ def _first_int_from_dict(payload: dict[str, Any], *paths: tuple[str, ...]) -> in
 
 
 def vk_event_key(payload: dict[str, Any]) -> str:
-    obj = payload.get("object") or {}
-    message = obj.get("message") or obj
+    obj = _dict_or_empty(payload.get("object"))
+    message = _dict_or_empty(obj.get("message") or obj)
     parts = [
         str(payload.get("event_id") or ""),
         str(message.get("id") or message.get("conversation_message_id") or ""),
@@ -246,12 +250,10 @@ def vk_event_key(payload: dict[str, Any]) -> str:
 
 
 def max_event_key(payload: dict[str, Any]) -> str:
-    message = payload.get("message") or {}
-    body = message.get("body") or {}
-    callback = payload.get("callback") or payload.get("button") or payload.get("payload") or {}
-    if not isinstance(callback, dict):
-        callback = {}
-    sender = message.get("sender") or payload.get("sender") or callback.get("sender") or {}
+    message = _dict_or_empty(payload.get("message"))
+    body = _dict_or_empty(message.get("body"))
+    callback = _dict_or_empty(payload.get("callback") or payload.get("button") or payload.get("payload"))
+    sender = _dict_or_empty(message.get("sender") or payload.get("sender") or callback.get("sender"))
     parts = [
         str(payload.get("update_id") or payload.get("event_id") or payload.get("timestamp") or ""),
         str(message.get("message_id") or message.get("id") or body.get("mid") or callback.get("id") or ""),
@@ -276,8 +278,8 @@ def _has_pending_score_context(user_id: int | None) -> bool:
 
 
 def extract_vk_message(payload: dict[str, Any]) -> dict[str, Any] | None:
-    obj = payload.get("object") or {}
-    message = obj.get("message") or obj
+    obj = _dict_or_empty(payload.get("object"))
+    message = _dict_or_empty(obj.get("message") or obj)
     from_id = (
         message.get("from_id")
         or message.get("user_id")
@@ -303,15 +305,11 @@ def extract_vk_message(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
-    message = payload.get("message") or {}
-    body = message.get("body") or {}
-    callback = payload.get("callback") or payload.get("button") or payload.get("payload") or {}
-    if not isinstance(callback, dict):
-        callback = {}
+    message = _dict_or_empty(payload.get("message"))
+    body = _dict_or_empty(message.get("body"))
+    callback = _dict_or_empty(payload.get("callback") or payload.get("button") or payload.get("payload"))
 
-    sender = message.get("sender") or payload.get("sender") or callback.get("sender") or {}
-    if not isinstance(sender, dict):
-        sender = {}
+    sender = _dict_or_empty(message.get("sender") or payload.get("sender") or callback.get("sender"))
 
     user_id = _first_int_from_dict(
         {"message": message, "sender": sender, "payload": payload, "callback": callback, "body": body},
