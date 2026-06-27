@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 from scripts import production_gate
 from services import storage_legacy_audit
 
@@ -27,3 +31,19 @@ def test_production_gate_restore_target_reads_env_file(tmp_path, monkeypatch) ->
 
     assert production_gate._restore_target_configured(gate_env)
     assert not production_gate._restore_target_configured({})
+
+
+def test_payment_reconciliation_import_has_no_messenger_package_cycle() -> None:
+    env = os.environ.copy()
+    env.setdefault("LOAD_DOTENV", "0")
+    completed = subprocess.run(
+        [sys.executable, "-c", "import services.payments.reconciliation; print('ok')"],
+        cwd=os.getcwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert completed.stdout.strip() == "ok"
