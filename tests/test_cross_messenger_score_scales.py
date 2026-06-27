@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 
 from runtime.messenger_senders import MaxBotSender
-from runtime.messenger_vk_ui import VK_SCORE_BUTTON_VALUES, VK_MAX_BUTTONS_PER_ROW, VK_MAX_INLINE_SCORE_BUTTONS, vk_score_scale_keyboard_json
+from runtime.messenger_vk_ui import (
+    VK_MAX_BUTTONS_PER_ROW,
+    VK_MAX_INLINE_SCORE_BUTTONS,
+    VK_SCORE_BUTTON_VALUES,
+    vk_score_scale_keyboard_json,
+)
 from services.mood_text_flow import parse_score_text
 
 
