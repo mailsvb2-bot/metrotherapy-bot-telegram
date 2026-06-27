@@ -51,16 +51,20 @@ def _legacy_kind_error_response(kind: str) -> web.Response | None:
 def _create_yookassa_payment(
     *,
     source: str,
-    external_user_id: str,
+    external_user_id: str = "",
+    user_id: str | int | None = None,
     kind: str = "tokens",
     package_id: str | None = None,
     gift_token: str | None = None,
     checkout_intent: str | None = None,
     **_: object,
 ) -> str:
+    canonical_user_id = str(user_id or external_user_id or "").strip()
+    messenger_external_user_id = str(external_user_id or canonical_user_id).strip()
     return create_yookassa_confirmation_url(
         source=source,
-        external_user_id=external_user_id,
+        user_id=canonical_user_id,
+        external_user_id=messenger_external_user_id,
         kind=kind,
         package_id=package_id,
         gift_token=gift_token,
@@ -137,7 +141,7 @@ def _user_id_error_response(user_id: str) -> web.Response | None:
 def _checkout_intent_error_response(
     *,
     intent: str,
-    external_user_id: str,
+    user_id: str,
     package_id: str,
     kind: str,
     gift_token: str,
@@ -147,7 +151,7 @@ def _checkout_intent_error_response(
     try:
         verify_checkout_intent(
             intent,
-            expected_user_id=external_user_id,
+            expected_user_id=user_id,
             expected_package_id=package_id,
             expected_kind=kind,
             expected_gift_token=gift_token or None,
@@ -163,7 +167,8 @@ def _checkout_intent_error_response(
 
 async def pay_yookassa_web(request: web.Request) -> web.Response:
     source = (request.query.get("source") or "unknown").strip()[:32]
-    external_user_id = (request.query.get("user_id") or "").strip()[:64]
+    user_id = (request.query.get("user_id") or "").strip()[:64]
+    external_user_id = (request.query.get("external_user_id") or user_id).strip()[:64]
     package_id = (request.query.get("package_id") or "").strip()[:64]
     gift_token = (request.query.get("gift_token") or "").strip()[:80]
     intent = (request.query.get("intent") or "").strip()
@@ -174,7 +179,7 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
         return legacy_error
 
     if kind in _TOKEN_PAYMENT_KINDS:
-        user_error = _user_id_error_response(external_user_id)
+        user_error = _user_id_error_response(user_id)
         if user_error is not None:
             return user_error
         package_error = _package_error_response(package_id)
@@ -182,7 +187,7 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
             return package_error
         intent_error = _checkout_intent_error_response(
             intent=intent,
-            external_user_id=external_user_id,
+            user_id=user_id,
             package_id=package_id,
             kind=kind,
             gift_token=gift_token,
@@ -194,6 +199,7 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
         confirmation_url = await asyncio.to_thread(
             _create_yookassa_payment,
             source=source,
+            user_id=user_id,
             external_user_id=external_user_id,
             kind=kind,
             package_id=package_id or None,
