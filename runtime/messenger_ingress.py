@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hmac
 import json
 import logging
@@ -20,6 +19,7 @@ from runtime.messenger_payloads import (
     text_from_vk_payload,
     vk_event_key,
 )
+from services.bg import tm as task_manager
 from services.events import log_event
 from services.gift_claims import claim_gift_token, is_gift_token, normalize_gift_token
 from services.messenger.entrypoints import register_user_entry
@@ -226,22 +226,20 @@ async def _send_reply_bundle_logged(
 ) -> None:
     try:
         await send_reply_bundle(platform, external_user_id, canonical_user_id, replies)
-        log.info(
-            "%s replies sent: external_user_id=%s canonical_user_id=%s replies=%s",
-            platform.upper(),
-            external_user_id,
-            canonical_user_id,
-            len(replies),
-        )
-        log_action_completed(platform=platform, user_id=canonical_user_id, action=action, replies=len(replies), status="ok")
     except MessengerTransportError:
         log.exception("%s send failed", platform.upper())
         log_event(canonical_user_id, f"{platform}_send_failed", {})
         log_action_completed(platform=platform, user_id=canonical_user_id, action=action, replies=len(replies), status="send_failed")
-    except Exception:  # pragma: no cover - final guard for detached webhook delivery tasks
-        log.exception("%s background reply dispatch crashed", platform.upper())
-        log_event(canonical_user_id, f"{platform}_send_failed", {"error": "background_dispatch_crashed"})
-        log_action_completed(platform=platform, user_id=canonical_user_id, action=action, replies=len(replies), status="send_failed")
+        return
+
+    log.info(
+        "%s replies sent: external_user_id=%s canonical_user_id=%s replies=%s",
+        platform.upper(),
+        external_user_id,
+        canonical_user_id,
+        len(replies),
+    )
+    log_action_completed(platform=platform, user_id=canonical_user_id, action=action, replies=len(replies), status="ok")
 
 
 def _schedule_reply_bundle(
@@ -251,18 +249,10 @@ def _schedule_reply_bundle(
     replies: list[MessengerReply],
     action: str,
 ) -> None:
-    task = asyncio.create_task(
+    task_manager().create(
         _send_reply_bundle_logged(platform, external_user_id, canonical_user_id, replies, action),
         name=f"{platform}_reply_dispatch:{canonical_user_id}",
     )
-
-    def _log_unhandled_result(done: asyncio.Task[None]) -> None:
-        try:
-            done.result()
-        except Exception:  # pragma: no cover - _send_reply_bundle_logged already guards this
-            log.exception("%s reply dispatch task failed unexpectedly: user_id=%s", platform.upper(), canonical_user_id)
-
-    task.add_done_callback(_log_unhandled_result)
 
 
 async def vk_webhook(request: web.Request) -> web.Response:
