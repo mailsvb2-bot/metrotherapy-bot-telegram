@@ -30,6 +30,10 @@ MAIN_MENU_LABEL = "⬅️ Главное меню"
 MENU_COMMAND = "start"
 VK_MAX_BUTTONS_PER_ROW = 5
 VK_MAX_BUTTON_ROWS = 6
+# VK rejects large inline keyboards for callback buttons. Keep the score UI compact
+# and let users type any exact value from -10 to +10 if they need a non-anchor score.
+VK_SCORE_BUTTON_VALUES = (-10, -5, -2, 0, 2, 5, 10)
+VK_MAX_INLINE_SCORE_BUTTONS = 10
 
 
 def _button(label: str, command: str, color: str = "secondary") -> dict[str, Any]:
@@ -114,7 +118,6 @@ def telegram_main_parity_keyboard_json(keyboard_json: str) -> str:
         return keyboard_json
     if not {"continue", "done"}.intersection(all_commands):
         return keyboard_json
-
     normalized = dict(keyboard)
     normalized["buttons"] = [row for row, commands in row_commands if not commands or not commands.issubset({"continue", "done"})]
     return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
@@ -186,18 +189,18 @@ def vk_weather_city_keyboard_json() -> str:
 
 def vk_score_scale_keyboard_json(session_id: int = 0, *, stage: str = "pre") -> str:
     _ = session_id, stage
-    values = list(range(-10, 11))
-    rows: list[list[dict[str, Any]]] = []
-    for i in range(0, len(values), VK_MAX_BUTTONS_PER_ROW):
-        chunk = values[i : i + VK_MAX_BUTTONS_PER_ROW]
-        rows.append([_button(_score_label(value), str(value), "secondary") for value in chunk])
-    # VK rejects inline keyboards with too many rows. Keep the 21-point score
-    # scale intact, but place non-score controls into the final short score row.
-    rows[-1].extend([
+    controls = [
         _button("📈 Прогресс", "progress", "primary"),
         _button(BACK_LABEL, MENU_COMMAND, "secondary"),
+    ]
+    score_buttons = [_button(_score_label(value), str(value), "secondary") for value in VK_SCORE_BUTTON_VALUES]
+    total_buttons = len(score_buttons) + len(controls)
+    if total_buttons > VK_MAX_INLINE_SCORE_BUTTONS:  # pragma: no cover - hard guard for future edits
+        raise ValueError("VK score keyboard exceeds inline callback button limit")
+    return _keyboard([
+        score_buttons[:4],
+        score_buttons[4:] + controls,
     ])
-    return _keyboard(rows)
 
 
 def vk_progress_keyboard_json() -> str:
