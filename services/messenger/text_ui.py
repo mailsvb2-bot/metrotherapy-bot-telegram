@@ -470,7 +470,7 @@ def _parse_command(text: str) -> tuple[str, str | None]:
         return "switch", None
     if lowered in {"continue", "/continue", "next", "/next", "audio", "/audio", "следующее аудио", "🎧 получить аудио"}:
         return "continue", None
-    if lowered in {"repeat", "/repeat", "повторить", "🔁 повторить", "повторить аудио", "🔁 повторить аудио", "слушать снова"}:
+    if lowered in {"repeat", "repeat_audio", "/repeat", "повторить", "🔁 повторить", "повторить аудио", "🔁 повторить аудио", "слушать снова"}:
         return "repeat_audio", None
     if lowered in {"done", "/done", "готово", "прослушал", "дослушал", "listen done"}:
         return "done", None

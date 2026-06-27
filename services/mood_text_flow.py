@@ -10,7 +10,7 @@ from services.audio_guard import pick_demo_file
 from services.mood import get_session, set_pre, set_post, mark_audio_sent, last_delta
 from services.subscription import register_touch
 from services.progress import advance
-from services.messenger.audio_progress import AudioProgressItem, mark_pending_audio_delivery, record_audio_delivery
+from services.messenger.audio_progress import AudioProgressItem, mark_pending_audio_delivery
 from services.messenger.outbound import SenderRegistry, build_delivery_plan, UnsupportedMessengerDelivery
 from services.messenger.platforms import MessengerPlatform
 from services.messenger.timeline import log_audio_timeline_event
@@ -243,8 +243,6 @@ async def complete_pre_score_and_send(
         register_touch(int(user_id), 'morning' if session.kind == 'work' else 'evening')
         advance(int(user_id), 'morning' if session.kind == 'work' else 'evening')
     mark_audio_sent(session_id)
-    if transport != 'vk_audio_access_link_pending':
-        record_audio_delivery(int(user_id), item=item, platform=plan.platform)
     if transport == 'telegram_audio_pending':
         message = (
             f'✅ Оценку {score:+d} сохранил. Отправил аудио №{item.anchor} — {item.title}.\n\n'
