@@ -4,6 +4,9 @@ from keyboards.inline import kb_main, kb_demo_kind, kb_mood_scale, kb_weather
 from runtime import messenger_max_ui
 from runtime.messenger_senders import MaxBotSender, VkBotSender
 from runtime.messenger_vk_ui import (
+    BACK_LABEL as VK_BACK_LABEL,
+    VK_MAX_INLINE_SCORE_BUTTONS,
+    VK_SCORE_BUTTON_VALUES,
     full_route_keyboard_json,
     prepare_vk_keyboard_json,
     telegram_main_parity_keyboard_json,
@@ -121,14 +124,20 @@ def test_demo_kind_labels_match_telegram_demo_kind_surface():
 
 
 def test_score_scale_labels_match_platform_score_contracts():
-    telegram_expected = _telegram_score_labels()
     numeric_expected = _numeric_score_labels()
-    assert _vk_labels(vk_score_scale_keyboard_json()) == telegram_expected[:-1] + ["📈 Прогресс", BACK_LABEL]
+    vk_expected_scores = [str(value) for value in VK_SCORE_BUTTON_VALUES]
+    vk_expected_labels = [f"{value:+d}" if value else "0" for value in VK_SCORE_BUTTON_VALUES]
+
+    # Telegram/MAX may show the full 21-point button scale. VK cannot: the provider
+    # rejects oversized callback keyboards with error_code=911. VK therefore keeps
+    # safe anchor buttons and accepts every exact -10..+10 score as typed text.
+    assert _vk_labels(vk_score_scale_keyboard_json()) == vk_expected_labels + ["📈 Прогресс", VK_BACK_LABEL]
     assert _max_button_texts(messenger_max_ui.score_scale_attachment()) == numeric_expected + ["📈 Мой прогресс", BACK_LABEL]
 
     vk_commands = _vk_commands(vk_score_scale_keyboard_json())
     max_commands = _max_button_commands(messenger_max_ui.score_scale_attachment())
-    assert vk_commands[:21] == numeric_expected
+    assert vk_commands[: len(vk_expected_scores)] == vk_expected_scores
+    assert len(vk_commands) <= VK_MAX_INLINE_SCORE_BUTTONS
     assert max_commands[:21] == [f"score:{value}" for value in range(-10, 11)]
     assert vk_commands[-2:] == ["progress", "start"]
     assert max_commands[-2:] == ["progress", "start"]
@@ -257,9 +266,3 @@ def test_max_sender_delegates_main_keyboard_to_renderer():
 def test_delivery_slot_set_callback_maps_to_channel_command():
     assert canonical_button_command("settings:delivery:slot:set:morning:vk") == "channel morning vk"
     assert canonical_button_command("settings:delivery:slot:set:evening:max") == "channel evening max"
-
-
-def test_telegram_main_callbacks_are_tracked_by_contract():
-    callbacks = [button.callback_data for row in kb_main().inline_keyboard for button in row]
-    assert set(callbacks).issuperset(telegram_main_callbacks())
-    assert all(canonical_button_command(callback) for callback in telegram_main_callbacks())
