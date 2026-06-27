@@ -26,13 +26,17 @@ ALLOWED_DIRECT_SQLITE_CONNECT_PATHS = {
 SKIP_DIRS = {
     ".git",
     ".venv",
+    "venv",
+    "env",
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
+    ".tox",
     "node_modules",
     "tests",
 }
+SKIP_DIR_PREFIXES = (".venv-", "venv-", "env-")
 
 
 @dataclass(frozen=True)
@@ -116,10 +120,17 @@ def _is_sqlite_connect_call(node: ast.AST) -> bool:
     return False
 
 
+def _is_skipped_path(path: Path) -> bool:
+    for part in path.parts:
+        if part in SKIP_DIRS or part.startswith(SKIP_DIR_PREFIXES):
+            return True
+    return False
+
+
 def _iter_python_files(root: Path) -> list[Path]:
     result: list[Path] = []
     for path in root.rglob("*.py"):
-        if any(part in SKIP_DIRS for part in path.parts):
+        if _is_skipped_path(path.relative_to(root)):
             continue
         result.append(path)
     return sorted(result)
