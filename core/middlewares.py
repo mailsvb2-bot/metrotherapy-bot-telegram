@@ -20,19 +20,108 @@ from services.pending import peek_pending, clear_pending
 
 
 class SlowHandlerLogMiddleware(BaseMiddleware):
-    """Logs slow update handling to help diagnose "buttons feel slow" reports.
+    """Logs slow update handling with enough context to diagnose slow buttons.
 
-    This middleware does NOT change UX. It only emits a warning when a single
-    update takes longer than a configured threshold.
+    This middleware does NOT change UX. It only emits a warning/error when a
+    single Telegram update takes longer than the configured threshold.
 
     Configure via env:
-        SLOW_HANDLER_MS=700
+        SLOW_HANDLER_MS=1200
     """
 
     def __init__(self, threshold_ms: int = 1200):
         super().__init__()
         self.threshold_ms = max(0, int(threshold_ms))
         self._log = logging.getLogger("perf")
+
+    @staticmethod
+    def _clean(value: Any, *, limit: int = 90) -> str:
+        raw = str(value or "").replace("\n", " ").replace("\r", " ").strip()
+        if len(raw) > limit:
+            return raw[: limit - 1] + "…"
+        return raw
+
+    @staticmethod
+    def _handler_label(data: dict[str, Any]) -> str:
+        for key in ("handler", "event_handler"):
+            obj = data.get(key)
+            if obj is None:
+                continue
+            callback = getattr(obj, "callback", None)
+            if callback is None:
+                callback = obj
+            module = getattr(callback, "__module__", "") or ""
+            qualname = getattr(callback, "__qualname__", "") or getattr(callback, "__name__", "")
+            label = ".".join(part for part in (module, qualname) if part)
+            if label:
+                return SlowHandlerLogMiddleware._clean(label, limit=120)
+        return "-"
+
+    @staticmethod
+    def _event_details(event: TelegramObject) -> dict[str, Any]:
+        details: dict[str, Any] = {
+            "event": type(event).__name__,
+            "inner": "-",
+            "uid": None,
+            "update_id": getattr(event, "update_id", None),
+            "payload": "-",
+        }
+
+        inner = event
+        for attr in (
+            "callback_query",
+            "message",
+            "edited_message",
+            "channel_post",
+            "edited_channel_post",
+            "my_chat_member",
+            "chat_member",
+        ):
+            candidate = getattr(event, attr, None)
+            if candidate is not None:
+                inner = candidate
+                details["inner"] = type(candidate).__name__
+                break
+
+        if details["inner"] == "-":
+            details["inner"] = type(inner).__name__
+
+        try:
+            from_user = getattr(inner, "from_user", None) or getattr(inner, "event_from_user", None)
+            if from_user is not None:
+                details["uid"] = int(getattr(from_user, "id"))
+        except (AttributeError, TypeError, ValueError):
+            details["uid"] = None
+
+        try:
+            if type(inner).__name__ == "CallbackQuery":
+                details["payload"] = "callback=" + SlowHandlerLogMiddleware._clean(
+                    getattr(inner, "data", "") or "-", limit=100
+                )
+            elif type(inner).__name__ == "Message":
+                text = (getattr(inner, "text", None) or getattr(inner, "caption", None) or "").strip()
+                if text.startswith("/"):
+                    details["payload"] = "message_command=" + SlowHandlerLogMiddleware._clean(
+                        text.split(maxsplit=1)[0], limit=60
+                    )
+                elif text:
+                    details["payload"] = f"message_text_len={len(text)}"
+                elif getattr(inner, "audio", None) is not None:
+                    details["payload"] = "message_audio"
+                elif getattr(inner, "voice", None) is not None:
+                    details["payload"] = "message_voice"
+                elif getattr(inner, "document", None) is not None:
+                    details["payload"] = "message_document"
+                elif getattr(inner, "photo", None) is not None:
+                    details["payload"] = "message_photo"
+                else:
+                    details["payload"] = "message_other"
+            else:
+                details["payload"] = SlowHandlerLogMiddleware._clean(type(inner).__name__, limit=80)
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            details["payload"] = "-"
+
+        return details
 
     async def __call__(
         self,
@@ -46,27 +135,22 @@ class SlowHandlerLogMiddleware(BaseMiddleware):
         finally:
             dt_ms = int((time.monotonic() - t0) * 1000)
             if dt_ms >= self.threshold_ms:
-                uid = None
-                et = type(event).__name__
-                try:
-                    # aiogram may pass Update as event; try several known accessors
-                    if hasattr(event, "from_user") and getattr(event, "from_user"):
-                        uid = int(getattr(getattr(event, "from_user"), "id"))
-                    elif hasattr(event, "event_from_user") and getattr(event, "event_from_user"):
-                        uid = int(getattr(getattr(event, "event_from_user"), "id"))
-                    elif hasattr(event, "callback_query") and getattr(event, "callback_query"):
-                        fu = getattr(getattr(event, "callback_query"), "from_user", None)
-                        if fu:
-                            uid = int(getattr(fu, "id"))
-                except (AttributeError, TypeError, ValueError, KeyError, OSError, RuntimeError):  # validator: allow-wide-except
-                    uid = None
-
-                # router/handler name is not always available; we log what we have
-                event_label = f"{et} uid={uid}"
+                details = self._event_details(event)
+                handler_label = self._handler_label(data)
+                message = (
+                    "SLOW update "
+                    f"event={details['event']} "
+                    f"inner={details['inner']} "
+                    f"uid={details['uid']} "
+                    f"update_id={details['update_id']} "
+                    f"{details['payload']} "
+                    f"handler={handler_label} "
+                    f"duration_ms={dt_ms}"
+                )
                 if dt_ms > 3000:
-                    self._log.error(f"SLOW update={event_label} {dt_ms}ms")
+                    self._log.error(message)
                 elif dt_ms > 1500:
-                    self._log.warning(f"SLOW update={event_label} {dt_ms}ms")
+                    self._log.warning(message)
 
 
 class QuickAckCallbackMiddleware(BaseMiddleware):
