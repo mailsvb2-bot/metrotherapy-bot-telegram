@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from services.messenger import audio_replay, reply_dispatcher
+from services.messenger import audio_delivery, reply_dispatcher
 from services.messenger.audio_delivery import AudioDeliveryResult
 from services.messenger.audio_progress import AudioProgressItem
 from services.messenger.outbound import DeliveryPlan, SenderRegistry
@@ -77,16 +77,16 @@ def test_replay_helper_reuses_last_confirmed_item_without_pending_reset(monkeypa
         )
 
     monkeypatch.setattr(
-        audio_replay,
+        audio_delivery,
         "build_delivery_plan",
         lambda user_id, **kwargs: DeliveryPlan(user_id=int(user_id), platform="max", external_user_id="max-ext-42"),
     )
-    monkeypatch.setattr(audio_replay, "get_progress_snapshot", lambda user_id: _Snapshot(pending_item=None, last_anchor=1))
-    monkeypatch.setattr(audio_replay, "get_audio_item_by_anchor", fake_item_by_anchor)
-    monkeypatch.setattr(audio_replay, "_send_non_telegram_native", fake_send_non_telegram_native)
+    monkeypatch.setattr(audio_delivery, "get_progress_snapshot", lambda user_id: _Snapshot(pending_item=None, last_anchor=1))
+    monkeypatch.setattr(audio_delivery, "get_audio_item_by_anchor", fake_item_by_anchor)
+    monkeypatch.setattr(audio_delivery, "_send_non_telegram_native", fake_send_non_telegram_native)
 
     result = asyncio.run(
-        audio_replay.send_replay_audio_to_user(
+        audio_delivery.send_replay_audio_to_user(
             42,
             senders=SenderRegistry(max=_FakeSender()),
             target_platform="max",
