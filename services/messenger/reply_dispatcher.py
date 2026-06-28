@@ -171,12 +171,24 @@ async def _handle_pre_score_flow(
             score=int(score),
             senders=registry,
         )
-        if not result.ok:
-            await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))
-            return
-        # VK sends the post-audio controls inside complete_pre_score_and_send;
-        # MAX sends native audio there, then needs the same controls as a message.
-        if platform == "max":
+    except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
+        log.exception("%s pre-score audio delivery failed", platform.upper())
+        await sender.send_text(
+            external_user_id,
+            "⚠️ Оценку сохранил, но не смог отправить аудио. Напишите: continue",
+            **_vk_kwargs(platform, {}, canonical_user_id),
+        )
+        return
+
+    if not result.ok:
+        await sender.send_text(external_user_id, result.message, **_vk_kwargs(platform, {}, canonical_user_id))
+        return
+
+    # Audio delivery is complete at this point. The post-audio notice/keyboard is
+    # a separate UX surface and must never turn a successful native audio send
+    # into native_audio_failed or a VK link fallback.
+    if platform in {"vk", "max"}:
+        try:
             await _send_mood_flow_result_notice(
                 platform=platform,
                 sender=sender,
@@ -185,13 +197,8 @@ async def _handle_pre_score_flow(
                 message=result.message,
                 prompt_done=result.prompt_done,
             )
-    except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
-        log.exception("%s pre-score flow failed", platform.upper())
-        await sender.send_text(
-            external_user_id,
-            "⚠️ Оценку сохранил, но не смог отправить аудио. Напишите: continue",
-            **_vk_kwargs(platform, {}, canonical_user_id),
-        )
+        except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
+            log.exception("%s post-audio notice failed after successful audio delivery", platform.upper())
 
 
 async def _handle_post_score_flow(
