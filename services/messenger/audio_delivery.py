@@ -28,6 +28,17 @@ NATIVE_AUDIO_REQUIRED_MESSAGE = (
     'Попробуйте ещё раз позже или сообщите администратору.'
 )
 
+
+def _native_audio_failure_meta(exc: BaseException) -> str:
+    return json.dumps(
+        {
+            'error_type': type(exc).__name__,
+            'error': str(exc)[:700],
+        },
+        ensure_ascii=False,
+    )
+
+
 async def _send_telegram_audio(bot: Any, external_user_id: str, item: AudioProgressItem) -> Any:
     from services.fast_send_audio import send_audio_cached
 
@@ -290,10 +301,17 @@ async def _send_non_telegram_native(
             external_user_id,
             audio_path,
             caption=_pending_caption(platform, item, replay=replay),
-            **_post_audio_control_kwargs(platform),
         )
     except (AttributeError, RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery, MessengerTransportError) as exc:
-        log_audio_timeline_event(int(user_id), event_type="native_audio_failed", sequence_key="full_series", anchor=int(item.anchor), title=item.title, platform=platform)
+        log_audio_timeline_event(
+            int(user_id),
+            event_type='native_audio_failed',
+            sequence_key='full_series',
+            anchor=int(item.anchor),
+            title=item.title,
+            platform=platform,
+            meta_json=_native_audio_failure_meta(exc),
+        )
         if platform == MessengerPlatform.VK.value:
             return await _send_vk_audio_access_link(
                 user_id=int(user_id),
@@ -307,18 +325,29 @@ async def _send_non_telegram_native(
         mark_pending_audio_delivery(int(user_id), item=item, platform=platform, token=None)
     log_audio_timeline_event(
         int(user_id),
-        event_type="native_audio_replayed" if replay else "native_audio_sent",
-        sequence_key="full_series",
+        event_type='native_audio_replayed' if replay else 'native_audio_sent',
+        sequence_key='full_series',
         anchor=int(item.anchor),
         title=item.title,
         platform=platform,
     )
 
-    await sender.send_text(
-        external_user_id,
-        _post_audio_controls_text(platform, item, replay=replay),
-        **_post_audio_control_kwargs(platform),
-    )
+    try:
+        await sender.send_text(
+            external_user_id,
+            _post_audio_controls_text(platform, item, replay=replay),
+            **_post_audio_control_kwargs(platform),
+        )
+    except (AttributeError, RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery, MessengerTransportError) as exc:
+        log_audio_timeline_event(
+            int(user_id),
+            event_type='post_audio_notice_failed',
+            sequence_key='full_series',
+            anchor=int(item.anchor),
+            title=item.title,
+            platform=platform,
+            meta_json=_native_audio_failure_meta(exc),
+        )
 
     return AudioDeliveryResult(
         user_id=int(user_id),
@@ -369,7 +398,7 @@ async def send_next_audio_to_user(
         await _send_telegram_audio(telegram_bot, plan.external_user_id, item)
         if pending is None:
             mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=None)
-        log_audio_timeline_event(int(user_id), event_type="telegram_sent", sequence_key="full_series", anchor=int(item.anchor), title=item.title, platform=plan.platform)
+        log_audio_timeline_event(int(user_id), event_type='telegram_sent', sequence_key='full_series', anchor=int(item.anchor), title=item.title, platform=plan.platform)
         return AudioDeliveryResult(
             user_id=int(user_id),
             platform=plan.platform,
