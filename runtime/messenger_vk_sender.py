@@ -39,6 +39,20 @@ def _button_count(rows: list[list[dict[str, Any]]]) -> int:
     return sum(len(row) for row in rows)
 
 
+def _strip_unsupported_vk_button_color(button: dict[str, Any]) -> dict[str, Any]:
+    """Remove VK keyboard color from action types that do not support it.
+
+    VK rejects open_link buttons with `color` using error_code=911. This guard
+    keeps payment/audio fallback links deliverable even when upstream keyboard
+    builders accidentally attach a color.
+    """
+
+    action = button.get("action")
+    if isinstance(action, dict) and action.get("type") == "open_link":
+        button.pop("color", None)
+    return button
+
+
 def _as_text_keyboard_json(keyboard: dict[str, Any], rows: list[list[dict[str, Any]]]) -> str:
     normalized_rows: list[list[dict[str, Any]]] = []
     for row in rows:
@@ -49,7 +63,7 @@ def _as_text_keyboard_json(keyboard: dict[str, Any], rows: list[list[dict[str, A
             if action.get("type") == "callback":
                 action["type"] = "text"
             normalized_button["action"] = action
-            normalized_row.append(normalized_button)
+            normalized_row.append(_strip_unsupported_vk_button_color(normalized_button))
         if normalized_row:
             normalized_rows.append(normalized_row)
     normalized = dict(keyboard)
@@ -82,7 +96,7 @@ def _callback_keyboard_json(keyboard_json: str) -> str:
             if action.get("type") == "text":
                 action["type"] = "callback"
             normalized_button["action"] = action
-            normalized_row.append(normalized_button)
+            normalized_row.append(_strip_unsupported_vk_button_color(normalized_button))
         if normalized_row:
             normalized_rows.append(normalized_row)
 

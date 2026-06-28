@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from runtime import messenger_max_ui
+from runtime.messenger_vk_sender import _callback_keyboard_json
 from runtime.messenger_vk_ui import vk_main_keyboard_json, vk_payment_keyboard_json
 from services.gift_claims import is_gift_token, normalize_gift_token
 from services.messenger.menu_contract import main_menu_commands
@@ -46,7 +47,41 @@ https://bot.example/pay/yookassa?kind=tokens&package_id=practice_60
     buttons = keyboard["buttons"]
     assert buttons[0][0]["action"]["type"] == "open_link"
     assert buttons[0][0]["action"]["link"].startswith("https://bot.example/pay/yookassa")
+    assert "color" not in buttons[0][0]
     assert buttons[-1][0]["action"]["type"] == "text"
+
+
+def test_vk_callback_keyboard_strips_open_link_color_but_keeps_callback_colors():
+    raw = json.dumps({
+        "one_time": False,
+        "inline": True,
+        "buttons": [
+            [{
+                "action": {
+                    "type": "open_link",
+                    "label": "Открыть",
+                    "link": "https://metrotherapy-bot.metrotherapy.ru/media/audio/access/token",
+                    "payload": json.dumps({"command": "open_link"}, ensure_ascii=False),
+                },
+                "color": "primary",
+            }],
+            [{
+                "action": {
+                    "type": "callback",
+                    "label": "⬅️ Назад",
+                    "payload": json.dumps({"command": "start"}, ensure_ascii=False),
+                },
+                "color": "secondary",
+            }],
+        ],
+    }, ensure_ascii=False)
+
+    keyboard = json.loads(_callback_keyboard_json(raw))
+
+    assert keyboard["buttons"][0][0]["action"]["type"] == "open_link"
+    assert "color" not in keyboard["buttons"][0][0]
+    assert keyboard["buttons"][1][0]["action"]["type"] == "callback"
+    assert keyboard["buttons"][1][0]["color"] == "secondary"
 
 
 def _vk_commands(raw: str) -> set[str]:

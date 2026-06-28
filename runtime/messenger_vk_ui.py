@@ -55,6 +55,8 @@ def _open_link_button(label: str, url: str) -> dict[str, Any]:
     payload = json.dumps({"command": "open_link"}, ensure_ascii=False)
     if len(payload) > VK_MAX_BUTTON_PAYLOAD_CHARS:  # pragma: no cover - constant guard
         raise ValueError("VK open_link payload exceeds provider limit")
+    # VK rejects `color` on open_link buttons with error_code=911.
+    # Keep colors only on text/callback buttons; link buttons are action-only.
     return {
         "action": {
             "type": "open_link",
@@ -62,7 +64,6 @@ def _open_link_button(label: str, url: str) -> dict[str, Any]:
             "link": str(url or ""),
             "payload": payload,
         },
-        "color": "primary",
     }
 
 
