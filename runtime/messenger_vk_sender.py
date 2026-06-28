@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -87,6 +88,32 @@ def _cleanup_vk_upload_path(upload_path: Path, source_path: Path) -> None:
     except OSError:
         pass
 
+
+
+
+def _strip_raw_vk_payment_links(text: str) -> str:
+    raw = str(text or "")
+    head = raw.lstrip()
+    if not (
+        head.startswith("💳 Тарифы Метротерапии")
+        or head.startswith("🎁 Подарить Метротерапию")
+    ):
+        return raw
+
+    out: list[str] = []
+    blank_count = 0
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if re.match(r"^https?://", stripped):
+            continue
+        if not stripped:
+            blank_count += 1
+            if blank_count > 1:
+                continue
+        else:
+            blank_count = 0
+        out.append(line)
+    return "\n".join(out).strip()
 
 
 def _strip_unsupported_vk_button_color(button: dict[str, Any]) -> dict[str, Any]:
@@ -202,14 +229,25 @@ class VkBotSender:
         random_id = kwargs.get("random_id")
         if random_id is None:
             random_id = int(time.time_ns() % 2147483647)
-        params = {"user_id": str(external_user_id), "random_id": int(random_id), "message": text}
+
+        message_text = str(text or "")
+        params = {"user_id": str(external_user_id), "random_id": int(random_id), "message": message_text}
+
         if kwargs.get("keyboard_json"):
+            # Build VK buttons from the full original text first. Payment keyboards
+            # need raw URLs here so they can become open_link buttons.
             keyboard_json = prepare_vk_keyboard_json(
                 str(kwargs["keyboard_json"]),
                 external_user_id=str(external_user_id),
-                text=str(text or ""),
+                text=message_text,
             )
             params["keyboard"] = _callback_keyboard_json(keyboard_json)
+
+            # After keyboard construction, remove raw checkout links from the
+            # message body. The user sees clean tariff copy + VK buttons.
+            message_text = _strip_raw_vk_payment_links(message_text)
+            params["message"] = message_text
+
         if kwargs.get("attachment"):
             params["attachment"] = kwargs["attachment"]
         data = await self._vk_method("messages.send", params)

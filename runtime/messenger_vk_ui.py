@@ -67,8 +67,12 @@ def _open_link_button(label: str, url: str) -> dict[str, Any]:
     }
 
 
-def _keyboard(rows: list[list[dict[str, Any]]], *, inline: bool = False) -> str:
-    return json.dumps({"one_time": False, "inline": inline, "buttons": rows}, ensure_ascii=False, separators=(",", ":"))
+def _keyboard(rows: list[list[dict[str, Any]]], *, inline: bool = False, one_time: bool | None = None) -> str:
+    if one_time is None:
+        # VK regular keyboards live at the bottom of the chat. Keep them one-time
+        # so score/settings panels do not stick and hide fresh messages.
+        one_time = not inline
+    return json.dumps({"one_time": bool(one_time), "inline": bool(inline), "buttons": rows}, ensure_ascii=False, separators=(",", ":"))
 
 
 def _score_label(value: int) -> str:

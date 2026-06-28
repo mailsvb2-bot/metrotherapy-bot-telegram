@@ -14,7 +14,7 @@ from runtime.messenger_ingress import (
 )
 from runtime.messenger_payloads import extract_vk_message
 from runtime.messenger_transport_errors import MessengerTransportError
-from runtime.messenger_vk_sender import VkBotSender, _callback_keyboard_json
+from runtime.messenger_vk_sender import VkBotSender, _callback_keyboard_json, _strip_raw_vk_payment_links
 from runtime.messenger_vk_ui import vk_score_scale_keyboard_json
 from runtime.telegram_button_parity import vk_keyboard_from_telegram
 
@@ -45,6 +45,7 @@ def test_vk_sender_preserves_full_score_keyboard_as_text_keyboard() -> None:
     labels = [action["label"] for action in actions]
 
     assert keyboard["inline"] is False
+    assert keyboard["one_time"] is True
     assert len(actions) == 23
     assert labels[:21] == [f"{value:+d}" if value else "0" for value in range(-10, 11)]
     assert labels[-2:] == ["📈 Прогресс", "⬅️ Назад"]
@@ -129,3 +130,24 @@ def test_vk_audio_upload_does_not_fall_back_to_doc_when_audio_message_scope_deni
         asyncio.run(VkBotSender(token="token")._ensure_doc_attachment("123", audio_path))
 
     assert upload_types == ["audio_message"]
+
+
+def test_vk_payment_text_strips_raw_links_after_button_extraction() -> None:
+    text = """💳 Тарифы Метротерапии
+
+Стартовый пакет — 1 900 ₽
+7 практик. Мягкий вход и проверка формата.
+https://metrotherapy-bot.metrotherapy.ru/pay/yookassa?source=vk&package_id=practice_start_7&intent=very_long
+
+Полный маршрут — 7 900 ₽
+60 практик. Базовый месячный маршрут.
+https://metrotherapy-bot.metrotherapy.ru/pay/yookassa?source=vk&package_id=practice_60&intent=very_long
+
+После оплаты вернитесь сюда и нажмите «🎧 Получить аудио»."""
+
+    cleaned = _strip_raw_vk_payment_links(text)
+
+    assert "https://" not in cleaned
+    assert "Стартовый пакет — 1 900 ₽" in cleaned
+    assert "Полный маршрут — 7 900 ₽" in cleaned
+    assert "После оплаты вернитесь сюда" in cleaned
