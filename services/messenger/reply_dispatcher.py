@@ -16,7 +16,7 @@ from runtime.messenger_vk_ui import (
     keyboard_for_reply_kind,
 )
 from services.events import log_event
-from services.messenger.audio_delivery import send_next_audio_to_user
+from services.messenger.audio_delivery import send_next_audio_to_user, send_replay_audio_to_user
 from services.messenger.audio_progress import confirm_pending_audio_delivery
 from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDelivery
 from services.messenger.package_payment_ui import gift_package_text, package_payment_text
@@ -241,6 +241,19 @@ async def _handle_post_score_flow(
         )
 
 
+def _reply_requests_replay(reply: MessengerReply) -> tuple[bool, int | None]:
+    meta = reply.meta or {}
+    raw_replay = str(meta.get("replay") or "").strip().lower()
+    requested = raw_replay in {"1", "true", "yes", "on"} or meta.get("replay_anchor") is not None
+    anchor: int | None = None
+    if meta.get("replay_anchor") is not None:
+        try:
+            anchor = int(str(meta.get("replay_anchor") or "").strip())
+        except (TypeError, ValueError):
+            anchor = None
+    return requested, anchor
+
+
 async def send_reply_bundle(
     platform: str,
     external_user_id: str,
@@ -287,16 +300,27 @@ async def send_reply_bundle(
             continue
 
         if reply.kind == "next_audio":
+            replay_requested, replay_anchor = _reply_requests_replay(reply)
             try:
-                result = await send_next_audio_to_user(
-                    canonical_user_id,
-                    senders=registry,
-                    target_platform=platform,
-                    fallback=platform,
-                )
+                if replay_requested:
+                    result = await send_replay_audio_to_user(
+                        canonical_user_id,
+                        senders=registry,
+                        target_platform=platform,
+                        fallback=platform,
+                        anchor=replay_anchor,
+                    )
+                else:
+                    result = await send_next_audio_to_user(
+                        canonical_user_id,
+                        senders=registry,
+                        target_platform=platform,
+                        fallback=platform,
+                    )
                 log.info(
-                    "%s next_audio delivery result: user_id=%s transport=%s item=%s",
+                    "%s %s delivery result: user_id=%s transport=%s item=%s",
                     platform.upper(),
+                    "replay_audio" if replay_requested else "next_audio",
                     canonical_user_id,
                     result.transport,
                     getattr(getattr(result, "item", None), "anchor", None),
