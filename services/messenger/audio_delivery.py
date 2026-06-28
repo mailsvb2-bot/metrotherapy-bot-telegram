@@ -190,6 +190,29 @@ def _replay_item_for_finished_queue(platform: str, snapshot: Any) -> AudioProgre
         return None
 
 
+def _explicit_replay_item(snapshot: Any, *, anchor: int | None = None) -> AudioProgressItem | None:
+    """Return the exact item requested by repeat/replay without advancing the queue."""
+    if anchor is not None:
+        try:
+            explicit = get_audio_item_by_anchor(int(anchor))
+        except (TypeError, ValueError):
+            explicit = None
+        if explicit is not None:
+            return explicit
+
+    pending = getattr(snapshot, 'pending_item', None)
+    if pending is not None:
+        return pending
+
+    last_anchor = getattr(snapshot, 'last_anchor', None)
+    if last_anchor is None:
+        return None
+    try:
+        return get_audio_item_by_anchor(int(last_anchor))
+    except (TypeError, ValueError):
+        return None
+
+
 def _vk_file_is_native_audio(file_path: Any) -> bool:
     return getattr(file_path, 'suffix', '').lower() in {'.opus', '.ogg'}
 
@@ -398,7 +421,14 @@ async def send_next_audio_to_user(
         await _send_telegram_audio(telegram_bot, plan.external_user_id, item)
         if pending is None:
             mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=None)
-        log_audio_timeline_event(int(user_id), event_type='telegram_sent', sequence_key='full_series', anchor=int(item.anchor), title=item.title, platform=plan.platform)
+        log_audio_timeline_event(
+            int(user_id),
+            event_type='telegram_sent',
+            sequence_key='full_series',
+            anchor=int(item.anchor),
+            title=item.title,
+            platform=plan.platform,
+        )
         return AudioDeliveryResult(
             user_id=int(user_id),
             platform=plan.platform,
@@ -424,6 +454,78 @@ async def send_next_audio_to_user(
         item=item,
         pending=pending,
         replay=replay,
+    )
+    if native_result is not None:
+        return native_result
+
+    raise UnsupportedMessengerDelivery(NATIVE_AUDIO_REQUIRED_MESSAGE)
+
+
+async def send_replay_audio_to_user(
+    user_id: int,
+    *,
+    senders: SenderRegistry,
+    telegram_bot: Any | None = None,
+    fallback: str = MessengerPlatform.TELEGRAM.value,
+    target_platform: str | None = None,
+    anchor: int | None = None,
+) -> AudioDeliveryResult:
+    """Replay the already issued/confirmed audio without selecting the next item."""
+    uid = int(user_id)
+    plan = build_delivery_plan(uid, fallback=fallback, preferred_platform=target_platform)
+    snapshot = get_progress_snapshot(uid)
+    item = _explicit_replay_item(snapshot, anchor=anchor)
+
+    if item is None:
+        return AudioDeliveryResult(
+            user_id=uid,
+            platform=plan.platform,
+            item=None,
+            transport='none',
+            message=(
+                'Пока нет аудио для повтора. '
+                'Нажмите «🌿 Попробовать бесплатно» или отправьте continue, чтобы начать маршрут.'
+            ),
+        )
+
+    if plan.platform == MessengerPlatform.TELEGRAM.value:
+        if telegram_bot is None or not plan.external_user_id:
+            raise UnsupportedMessengerDelivery('Telegram replay requires bot instance and external Telegram id')
+        await _send_telegram_audio(telegram_bot, plan.external_user_id, item)
+        log_audio_timeline_event(
+            uid,
+            event_type='telegram_audio_replayed',
+            sequence_key='full_series',
+            anchor=int(item.anchor),
+            title=item.title,
+            platform=plan.platform,
+        )
+        return AudioDeliveryResult(
+            user_id=uid,
+            platform=plan.platform,
+            item=item,
+            transport='telegram_audio_replay',
+            message=f'🎧 Повторно отправил аудио: №{item.anchor} — {item.title}.',
+        )
+
+    sender = senders.get(plan.platform)
+    if sender is None:
+        raise UnsupportedMessengerDelivery(f'No sender registered for platform={plan.platform}')
+    if not plan.external_user_id:
+        raise UnsupportedMessengerDelivery(f'No external user id for user_id={uid}, platform={plan.platform}')
+
+    # Replays must not advance progress and must not restore an already confirmed
+    # track into the pending slot. Passing a marker keeps _send_non_telegram_native
+    # in send-only mode while preserving its provider-specific delivery code.
+    pending_marker = snapshot.pending_item or item
+    native_result = await _send_non_telegram_native(
+        user_id=uid,
+        platform=plan.platform,
+        external_user_id=plan.external_user_id,
+        sender=sender,
+        item=item,
+        pending=pending_marker,
+        replay=True,
     )
     if native_result is not None:
         return native_result
