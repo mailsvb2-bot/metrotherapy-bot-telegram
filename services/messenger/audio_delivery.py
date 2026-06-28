@@ -324,6 +324,7 @@ async def _send_non_telegram_native(
             external_user_id,
             audio_path,
             caption=_pending_caption(platform, item, replay=replay),
+            **_post_audio_control_kwargs(platform),
         )
     except (AttributeError, RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery, MessengerTransportError) as exc:
         log_audio_timeline_event(
