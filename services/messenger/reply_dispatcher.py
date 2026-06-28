@@ -16,9 +16,8 @@ from runtime.messenger_vk_ui import (
     keyboard_for_reply_kind,
 )
 from services.events import log_event
-from services.messenger.audio_delivery import send_next_audio_to_user
+from services.messenger.audio_delivery import send_next_audio_to_user, send_replay_audio_to_user
 from services.messenger.audio_progress import confirm_pending_audio_delivery
-from services.messenger.audio_replay import send_replay_audio_to_user
 from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDelivery
 from services.messenger.package_payment_ui import gift_package_text, package_payment_text
 from services.messenger.progress_charts import build_vk_mood_progress_chart_path
