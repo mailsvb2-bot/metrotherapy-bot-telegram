@@ -25,6 +25,7 @@ class _AnchoredAudio:
 class _FakeVkSender:
     def __init__(self, *, fail_audio: bool = True) -> None:
         self.fail_audio = fail_audio
+        self.fail_next_text = False
         self.audio_calls: list[tuple[str, Path, str | None, dict[str, Any]]] = []
         self.text_calls: list[tuple[str, str, dict[str, Any]]] = []
 
@@ -35,6 +36,9 @@ class _FakeVkSender:
         return {"ok": True}
 
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any) -> dict[str, Any]:
+        if self.fail_next_text:
+            self.fail_next_text = False
+            raise RuntimeError("VK rejected post-audio controls")
         stored = dict(kwargs)
         keyboard_json = stored.get("keyboard_json")
         if keyboard_json:
@@ -155,3 +159,36 @@ def test_vk_full_user_journey_score_audio_done_pay_gift(monkeypatch, tmp_path):
     assert gift_links
     assert all(len(action.get("payload") or "") <= 255 for action in gift_links)
     assert all(str(action.get("link") or "").startswith("https://example.test/") for action in gift_links)
+
+
+def test_vk_native_audio_success_is_not_rolled_back_when_notice_fails(monkeypatch, tmp_path):
+    user_id = 919000000 + (os.getpid() % 100000)
+
+    audio_path = tmp_path / "01_morning.ogg"
+    audio_path.write_bytes(b"fake-vk-audio")
+    item = AudioProgressItem(ordinal=1, anchor=1, title="Morning Route", path=audio_path)
+    anchored = _AnchoredAudio(anchor=1, clean_title="Morning Route", path=audio_path)
+
+    sender = _FakeVkSender(fail_audio=False)
+    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://example.test")
+    monkeypatch.setattr(settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test", raising=False)
+    monkeypatch.setattr("services.messenger.audio_progress.list_full_series", lambda: [item])
+    monkeypatch.setattr("services.mood_text_flow.get_by_anchor", lambda anchor: anchored if int(anchor) == 1 else None)
+    monkeypatch.setattr("services.messenger.reply_dispatcher.VkBotSender", lambda: sender)
+
+    asyncio.run(_dispatch_vk(user_id, "start"))
+    asyncio.run(_dispatch_vk(user_id, "demo"))
+    asyncio.run(_dispatch_vk(user_id, "demo_work"))
+
+    sender.fail_next_text = True
+    before_texts = len(sender.text_calls)
+    asyncio.run(_dispatch_vk(user_id, "-4"))
+
+    assert sender.audio_calls
+    assert get_pending_audio_token(user_id) is None
+    snapshot = get_progress_snapshot(user_id)
+    assert snapshot.pending_item is not None
+    assert snapshot.pending_item.anchor == 1
+    new_texts = "\n".join(text for _, text, _ in sender.text_calls[before_texts:])
+    assert "https://example.test/media/audio/access/" not in new_texts
+}
