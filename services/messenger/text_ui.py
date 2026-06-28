@@ -430,6 +430,32 @@ def _platform_changed_text(user_id: int, platform: str) -> str:
     return f"Сохранено: приоритетный канал — {platform_title(platform)}."
 
 
+def _pending_score_stage(user_id: int) -> str | None:
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT id, stage
+            FROM (
+                SELECT id, 'pre' AS stage
+                FROM mood_sessions
+                WHERE user_id=? AND pre_score IS NULL AND COALESCE(audio_sent,0)=0
+                  AND COALESCE(source,'') IN ('auto','settings','demo')
+                  AND COALESCE(kind,'') IN ('work','home')
+                UNION ALL
+                SELECT id, 'post' AS stage
+                FROM mood_sessions
+                WHERE user_id=? AND pre_score IS NOT NULL AND post_score IS NULL AND COALESCE(audio_sent,0)=1
+                  AND COALESCE(source,'') IN ('auto','settings','demo')
+                  AND COALESCE(kind,'') IN ('work','home')
+            ) pending_scores
+            ORDER BY id DESC
+            LIMIT 1
+            """.strip(),
+            (int(user_id), int(user_id)),
+        ).fetchone()
+    return str(row["stage"]) if row else None
+
+
 def _parse_command(text: str) -> tuple[str, str | None]:
     raw = (text or "").strip()
     if not raw:
@@ -735,14 +761,19 @@ def handle_incoming_text(
     canonical_user_id = int(entry.user_id)
 
     if score_value is not None and action == "menu":
-        # Stage routing must happen after canonical registration and must prefer
-        # a newly opened pre-score session over an older delivered-audio
-        # post-score session. Otherwise a fresh demo_work/demo_home cycle can
-        # incorrectly write the score into the previous audio session.
-        if find_pending_pre_session_id(canonical_user_id) is not None:
-            action, value = "pre_score", str(score_value)
-        elif find_pending_post_session_id(canonical_user_id) is not None:
+        # Telegram has explicit mood:post callbacks. VK regular keyboards may
+        # deliver only the visible label ("3"), so remember the post-score stage
+        # after "done" and give it priority over any stale pre-score sessions.
+        pending_score = peek_pending(canonical_user_id)
+        if pending_score and pending_score.kind == "mood_post_score":
+            pop_pending(canonical_user_id)
             action, value = "post_score", str(score_value)
+        else:
+            stage = _pending_score_stage(canonical_user_id)
+            if stage == "post":
+                action, value = "post_score", str(score_value)
+            elif stage == "pre":
+                action, value = "pre_score", str(score_value)
 
     command_text = (text or "").strip()
     command_norm = command_text.casefold().replace("ё", "е")
@@ -860,6 +891,7 @@ def handle_incoming_text(
             ]
 
         if confirmed is None:
+            set_pending(canonical_user_id, "mood_post_score", {"session_id": str(pending_post_session_id or 0)})
             return canonical_user_id, [
                 MessengerReply(
                     text=(
@@ -871,6 +903,7 @@ def handle_incoming_text(
                 ),
             ]
 
+        set_pending(canonical_user_id, "mood_post_score", {"session_id": str(pending_post_session_id or 0)})
         return canonical_user_id, [
             MessengerReply(
                 text=(

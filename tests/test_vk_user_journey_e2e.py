@@ -101,7 +101,9 @@ def test_vk_audio_rejection_uses_link_fallback(monkeypatch, tmp_path):
     asyncio.run(_dispatch_vk(user_id, "demo_work"))
     score_keyboard = _latest_keyboard(sender)
     assert json.loads(score_keyboard)["inline"] is False
-    assert _commands(score_keyboard)[:21] == [str(value) for value in range(-10, 11)]
+    score_commands = _commands(score_keyboard)[:21]
+    assert [cmd.rsplit(":", 1)[-1] if cmd.startswith("mood:") else cmd for cmd in score_commands] == [str(value) for value in range(-10, 11)]
+    assert all(":pre:" in cmd for cmd in score_commands)
 
     asyncio.run(_dispatch_vk(user_id, "-9"))
     assert sender.audio_calls
@@ -139,3 +141,35 @@ def test_vk_native_audio_success_is_not_rolled_back_when_notice_fails(monkeypatc
     assert snapshot.pending_item.anchor == 1
     new_texts = "\n".join(text for _, text, _ in sender.text_calls[before_texts:])
     assert "media/audio/access" not in new_texts
+
+
+def test_vk_post_score_does_not_start_new_audio(monkeypatch, tmp_path):
+    user_id = 920000000 + (os.getpid() % 100000)
+    audio_path = tmp_path / "01_morning.ogg"
+    audio_path.write_bytes(b"fake-vk-audio")
+    item = AudioProgressItem(ordinal=1, anchor=1, title="Morning Route", path=audio_path)
+    anchored = _AnchoredAudio(anchor=1, clean_title="Morning Route", path=audio_path)
+
+    sender = _FakeVkSender(fail_audio=False)
+    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://example.test")
+    monkeypatch.setattr(settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test", raising=False)
+    monkeypatch.setattr("services.messenger.audio_progress.list_full_series", lambda: [item])
+    monkeypatch.setattr("services.mood_text_flow.get_by_anchor", lambda anchor: anchored if int(anchor) == 1 else None)
+    monkeypatch.setattr("services.messenger.reply_dispatcher.VkBotSender", lambda: sender)
+
+    asyncio.run(_dispatch_vk(user_id, "start"))
+    asyncio.run(_dispatch_vk(user_id, "demo"))
+    asyncio.run(_dispatch_vk(user_id, "demo_work"))
+    asyncio.run(_dispatch_vk(user_id, "-4"))
+
+    assert len(sender.audio_calls) == 1
+
+    asyncio.run(_dispatch_vk(user_id, "done"))
+    post_keyboard = _latest_keyboard(sender)
+    post_commands = _commands(post_keyboard)[:21]
+    assert all(":post:" in cmd for cmd in post_commands)
+
+    asyncio.run(_dispatch_vk(user_id, "3"))
+
+    assert len(sender.audio_calls) == 1
+    assert any("Оценку после прослушивания +3 сохранил" in text for _, text, _ in sender.text_calls)

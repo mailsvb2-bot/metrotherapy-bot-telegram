@@ -114,12 +114,23 @@ def _claim_replies_if_needed(*, platform: str, extracted: dict) -> tuple[int, li
     return int(entry.user_id), [MessengerReply(text=result.message)]
 
 
-def _explicit_score_one_two_text(raw: str | None) -> str | None:
-    """Preserve callback scores 1/2 so they cannot collide with demo route aliases."""
+def _explicit_score_route_text(raw: str | None) -> str | None:
+    """Preserve score callback route, including Telegram-like mood pre/post stage."""
     compact = str(raw or "").strip().casefold().replace("−", "-")
-    if compact in {"score:1", "score=1"} or (compact.startswith("mood:") and compact.endswith(":1")):
+    if compact.startswith("mood:"):
+        parts = compact.split(":")
+        if len(parts) >= 4 and parts[1] in {"pre", "post"}:
+            stage = parts[1]
+            sid = parts[2] or "0"
+            try:
+                score = int(parts[-1])
+            except ValueError:
+                return None
+            if -10 <= score <= 10:
+                return f"mood:{stage}:{sid}:{score}"
+    if compact in {"score:1", "score=1"}:
         return "+1"
-    if compact in {"score:2", "score=2"} or (compact.startswith("mood:") and compact.endswith(":2")):
+    if compact in {"score:2", "score=2"}:
         return "+2"
     return None
 
@@ -146,7 +157,7 @@ def _max_score_route_text(payload: dict[str, Any]) -> str | None:
         payload.get("callback"),
     ]
     for candidate in candidates:
-        score_text = _explicit_score_one_two_text(text_from_max_payload(candidate))
+        score_text = _explicit_score_route_text(text_from_max_payload(candidate))
         if score_text:
             return score_text
     return None
@@ -175,7 +186,7 @@ def _vk_score_route_text(payload: dict[str, Any]) -> str | None:
         message,
     ]
     for candidate in candidates:
-        score_text = _explicit_score_one_two_text(text_from_vk_payload(candidate))
+        score_text = _explicit_score_route_text(text_from_vk_payload(candidate))
         if score_text:
             return score_text
     return None

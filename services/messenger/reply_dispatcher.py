@@ -85,11 +85,8 @@ async def _send_progress_chart_file(
         )
         return
 
-    await sender.send_audio_file(
-        external_user_id,
-        chart_path,
-        caption=caption,
-        **_vk_kwargs(platform, {}, canonical_user_id),
+    raise UnsupportedMessengerDelivery(
+        f"No document/image sender for progress chart on platform={platform}"
     )
 
 

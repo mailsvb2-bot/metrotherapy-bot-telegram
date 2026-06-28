@@ -200,12 +200,22 @@ def vk_weather_city_keyboard_json() -> str:
 
 
 def vk_score_scale_keyboard_json(session_id: int = 0, *, stage: str = "pre") -> str:
-    _ = session_id, stage
+    clean_stage = "post" if str(stage or "").strip().lower() == "post" else "pre"
+    try:
+        sid = int(session_id or 0)
+    except (TypeError, ValueError):
+        sid = 0
+
+    def score_command(value: int) -> str:
+        if sid > 0:
+            return f"mood:{clean_stage}:{sid}:{int(value)}"
+        return str(int(value))
+
     controls = [
         _button("📈 Прогресс", "progress", "primary"),
         _button(BACK_LABEL, MENU_COMMAND, "secondary"),
     ]
-    score_buttons = [_button(_score_label(value), str(value), "secondary") for value in VK_SCORE_BUTTON_VALUES]
+    score_buttons = [_button(_score_label(value), score_command(value), "secondary") for value in VK_SCORE_BUTTON_VALUES]
     total_buttons = len(score_buttons) + len(controls)
     if total_buttons != VK_MAX_TEXT_SCORE_BUTTONS:  # pragma: no cover - hard guard for future edits
         raise ValueError("VK score keyboard lost its full -10..+10 score surface")

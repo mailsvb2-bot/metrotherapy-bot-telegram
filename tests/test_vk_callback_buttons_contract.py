@@ -107,11 +107,10 @@ def test_vk_message_event_dedupe_key_uses_event_id_not_only_user_id() -> None:
     assert _vk_dedupe_key(first) != _vk_dedupe_key(second)
 
 
-def test_vk_audio_upload_falls_back_to_doc_when_audio_message_scope_denied(monkeypatch, tmp_path) -> None:
+def test_vk_audio_upload_does_not_fall_back_to_doc_when_audio_message_scope_denied(monkeypatch, tmp_path) -> None:
     audio_path = tmp_path / "audio.ogg"
     audio_path.write_bytes(b"fake-audio")
     upload_types: list[str] = []
-    stored: list[tuple] = []
 
     async def fake_vk_method(self, method: str, params: dict):
         if method == "docs.getMessagesUploadServer":
@@ -120,23 +119,13 @@ def test_vk_audio_upload_falls_back_to_doc_when_audio_message_scope_denied(monke
             if upload_type == "audio_message":
                 raise MessengerTransportError("audio_message scope denied")
             return {"response": {"upload_url": "https://upload.example"}}
-        if method == "docs.save":
-            return {"response": {"doc": {"owner_id": 1, "id": 2, "access_key": "key"}}}
         raise AssertionError(f"unexpected VK method: {method}")
 
-    def fake_multipart_upload(upload_url: str, *, field_name: str, path: Path):
-        assert upload_url == "https://upload.example"
-        assert field_name == "file"
-        assert path == audio_path
-        return {"file": "uploaded"}
-
     monkeypatch.setattr(VkBotSender, "_vk_method", fake_vk_method)
-    monkeypatch.setattr("runtime.messenger_vk_sender.multipart_upload", fake_multipart_upload)
     monkeypatch.setattr("runtime.messenger_vk_sender.get_cached_media_token", lambda *args, **kwargs: None)
-    monkeypatch.setattr("runtime.messenger_vk_sender.store_media_token", lambda *args, **kwargs: stored.append((args, kwargs)))
 
-    attachment = asyncio.run(VkBotSender(token="token")._ensure_doc_attachment("123", audio_path))
+    import pytest
+    with pytest.raises(MessengerTransportError, match="audio_message scope denied"):
+        asyncio.run(VkBotSender(token="token")._ensure_doc_attachment("123", audio_path))
 
-    assert upload_types == ["audio_message", "doc"]
-    assert attachment == "doc1_2_key"
-    assert stored
+    assert upload_types == ["audio_message"]
