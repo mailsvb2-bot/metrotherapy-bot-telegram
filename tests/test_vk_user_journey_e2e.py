@@ -173,3 +173,5 @@ def test_vk_post_score_does_not_start_new_audio(monkeypatch, tmp_path):
 
     assert len(sender.audio_calls) == 1
     assert any("Оценку после прослушивания +3 сохранил" in text for _, text, _ in sender.text_calls)
+    assert not any("График построен, но не удалось" in text for _, text, _ in sender.text_calls)
+    assert not any("График построен, но не удалось" in text for _, text, _ in sender.text_calls)

@@ -22,3 +22,10 @@ Relevant lock tests:
 - `tests/test_vk_callback_buttons_contract.py`
 - `tests/test_vk_keyboard_parity.py`
 - `tests/test_vk_native_audio_preparation.py`
+
+
+Performance/UX lock:
+
+7. Ordinary VK messages must clear the bottom keyboard instead of attaching the main menu.
+8. Post-score must not automatically build/upload the progress chart.
+   The chart is sent only by explicit progress/history action.

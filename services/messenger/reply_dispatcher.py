@@ -229,12 +229,9 @@ async def _handle_post_score_flow(
             result.message,
             **_vk_kwargs(platform, kwargs, canonical_user_id, text=result.message),
         )
-        await _send_progress_chart_or_notice(
-            platform=platform,
-            sender=sender,
-            external_user_id=external_user_id,
-            canonical_user_id=canonical_user_id,
-        )
+        # Do not auto-build/upload progress chart after every post-score.
+        # VK photo upload is intentionally available for explicit progress requests,
+        # but doing it automatically makes the chat feel slow.
     except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
         log.exception("%s post-score flow failed", platform.upper())
         await sender.send_text(

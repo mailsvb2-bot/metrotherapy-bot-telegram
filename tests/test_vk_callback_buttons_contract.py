@@ -15,7 +15,7 @@ from runtime.messenger_ingress import (
 from runtime.messenger_payloads import extract_vk_message
 from runtime.messenger_transport_errors import MessengerTransportError
 from runtime.messenger_vk_sender import VkBotSender, _callback_keyboard_json, _strip_raw_vk_payment_links
-from runtime.messenger_vk_ui import vk_score_scale_keyboard_json, vk_clear_keyboard_json, with_vk_keyboard
+from runtime.messenger_vk_ui import vk_score_scale_keyboard_json, vk_clear_keyboard_json, with_vk_keyboard, vk_clear_keyboard_json, with_vk_keyboard
 from runtime.telegram_button_parity import vk_keyboard_from_telegram
 
 
