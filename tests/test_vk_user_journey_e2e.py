@@ -27,12 +27,17 @@ class _FakeVkSender:
         self.fail_audio = fail_audio
         self.fail_next_text = False
         self.audio_calls: list[tuple[str, Path, str | None, dict[str, Any]]] = []
+        self.image_calls: list[tuple[str, Path, str | None, dict[str, Any]]] = []
         self.text_calls: list[tuple[str, str, dict[str, Any]]] = []
 
     async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any) -> dict[str, Any]:
         self.audio_calls.append((str(external_user_id), Path(file_path), caption, dict(kwargs)))
         if self.fail_audio:
             raise RuntimeError("VK rejected this audio attachment")
+        return {"ok": True}
+
+    async def send_image_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any) -> dict[str, Any]:
+        self.image_calls.append((str(external_user_id), Path(file_path), caption, dict(kwargs)))
         return {"ok": True}
 
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any) -> dict[str, Any]:
@@ -173,5 +178,5 @@ def test_vk_post_score_does_not_start_new_audio(monkeypatch, tmp_path):
 
     assert len(sender.audio_calls) == 1
     assert any("Оценку после прослушивания +3 сохранил" in text for _, text, _ in sender.text_calls)
-    assert not any("График построен, но не удалось" in text for _, text, _ in sender.text_calls)
+    assert not sender.image_calls
     assert not any("График построен, но не удалось" in text for _, text, _ in sender.text_calls)
