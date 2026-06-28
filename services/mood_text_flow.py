@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 import json
@@ -14,7 +15,7 @@ from services.messenger.audio_progress import AudioProgressItem, mark_pending_au
 from services.messenger.outbound import SenderRegistry, build_delivery_plan, UnsupportedMessengerDelivery
 from services.messenger.platforms import MessengerPlatform
 from services.messenger.timeline import log_audio_timeline_event
-from services.messenger.max_audio import ensure_max_opus_file
+from services.messenger.max_audio import ensure_max_opus_file, ensure_vk_opus_file
 from services.events import log_event
 
 
@@ -197,9 +198,10 @@ async def complete_pre_score_and_send(
             raise UnsupportedMessengerDelivery('No VK sender registered')
         try:
             from services.messenger.audio_delivery import post_audio_control_kwargs, post_audio_controls_text
+            vk_audio_path = await asyncio.to_thread(ensure_vk_opus_file, item.path)
             await sender.send_audio_file(
                 plan.external_user_id,
-                item.path,
+                vk_audio_path,
                 caption=f'🎧 Ваш аудиотранс: №{item.anchor} — {item.title}',
                 **post_audio_control_kwargs(MessengerPlatform.VK.value),
             )
@@ -257,60 +259,3 @@ async def complete_pre_score_and_send(
         prompt_done = False
     log_event(int(user_id), 'mood_score', {'stage': 'pre', 'value': int(score), 'kind': session.kind, 'source': session.source, 'platform': delivered_platform})
     return MoodTextFlowResult(True, message, prompt_done=prompt_done, delivered_platform=delivered_platform, transport=transport)
-
-
-async def complete_post_score_and_send_next(
-    user_id: int,
-    *,
-    platform: str,
-    score: int,
-    senders: SenderRegistry,
-    telegram_bot: Any | None = None,
-) -> MoodTextFlowResult:
-    session_id = find_pending_post_session_id(int(user_id))
-    if session_id is None:
-        return MoodTextFlowResult(False, 'Сейчас нет активного ожидания оценки после прослушивания.')
-    session = get_session(session_id)
-    if session is None:
-        return MoodTextFlowResult(False, 'Не нашёл сессию для оценки после прослушивания.')
-    if not set_post(session_id, int(score)):
-        return MoodTextFlowResult(False, 'Не удалось сохранить оценку после прослушивания. Попробуйте ещё раз.')
-
-    comp = last_delta(int(user_id), kind=session.kind or '')
-    delta = None
-    if session.pre_score is not None:
-        delta = int(score) - int(session.pre_score)
-    delta_text = f' Изменение: {delta:+d}.' if delta is not None else ''
-    avg = comp.get('avg_delta')
-    avg_text = f' Средняя динамика по последним дням: {int(avg):+d}.' if avg is not None else ''
-    is_demo = str(session.source or '') == 'demo'
-
-    if is_demo:
-        message = (
-            f'✅ Оценку после демо {int(score):+d} сохранил.{delta_text}{avg_text}\n\n'
-            'Демо-цикл завершён: шкала ДО → аудио → шкала ПОСЛЕ.\n\n'
-            'Сейчас можно посмотреть график прогресса или продолжить маршрут через главное меню.'
-        )
-        sequence_key = 'demo'
-    else:
-        message = (
-            f'✅ Оценку после прослушивания {int(score):+d} сохранил.{delta_text}{avg_text}\n\n'
-            'Цикл этого аудио завершён.\n\n'
-            'Сейчас построю график прогресса. Чтобы продолжить маршрут, нажмите «🎧 Получить аудио» или отправьте continue. '
-            'Следующее аудио начнётся правильно: сначала шкала состояния ДО прослушивания, потом аудио, потом шкала ПОСЛЕ.'
-        )
-        sequence_key = 'full_series'
-    transport = 'post_score_saved'
-    delivered_platform = platform
-    log_audio_timeline_event(
-        int(user_id),
-        event_type='post_score_received',
-        sequence_key=sequence_key,
-        anchor=int(session.anchor_id) if session.anchor_id is not None else None,
-        title=None,
-        platform=platform,
-        meta_json=json.dumps({'score': int(score), 'kind': session.kind, 'source': session.source, 'delta': int(delta) if delta is not None else None}, ensure_ascii=False),
-        slot=str(session.slot) if session.slot else ('demo' if is_demo else ('morning' if session.kind == 'work' else 'evening')),
-    )
-    log_event(int(user_id), 'mood_score', {'stage': 'post', 'value': int(score), 'kind': session.kind, 'source': session.source, 'platform': delivered_platform})
-    return MoodTextFlowResult(True, message, prompt_done=False, delivered_platform=delivered_platform, transport=transport)
