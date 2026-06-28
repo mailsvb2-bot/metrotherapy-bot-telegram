@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 import urllib.parse
 from dataclasses import dataclass
+from typing import Any
 
+from services.db import db
 from services.gift_claims import create_gift_checkout_token
+from services.messenger.platforms import normalize_platform
 from services.payments.checkout_intent import add_checkout_intent_to_url
 from services.payments.public_url import payment_public_base_url
 from services.practice_token_contract import PracticePackage, public_practice_packages
@@ -22,6 +26,63 @@ class PackagePaymentLink:
     @property
     def label(self) -> str:
         return f"{self.title} — {_price_label(self.price_rub)}"
+
+
+@dataclass(frozen=True)
+class PaymentIdentity:
+    user_id: int
+    platform: str
+    external_user_id: str | None
+
+
+def _row_get(row: Any, key: str, index: int = 0) -> Any:
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row.get(key)
+    try:
+        return row[key]
+    except (KeyError, TypeError, IndexError):
+        try:
+            return row[index]
+        except (TypeError, IndexError):
+            return None
+
+
+def resolve_payment_identity(*, user_id: int, platform: str, external_user_id: str | None = None) -> PaymentIdentity:
+    fallback_user_id = int(user_id)
+    norm_platform = normalize_platform(platform)
+    ext = str(external_user_id or "").strip() or None
+    canonical_user_id = fallback_user_id
+
+    if ext:
+        try:
+            with db() as conn:
+                row = conn.execute(
+                    """
+                    SELECT user_id
+                    FROM user_channel_identities
+                    WHERE platform=? AND external_user_id=?
+                    ORDER BY last_seen_at DESC
+                    LIMIT 1
+                    """.strip(),
+                    (norm_platform, ext),
+                ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "user_channel_identities" not in str(exc):
+                raise
+            row = None
+
+        value = _row_get(row, "user_id", 0)
+        if value is not None:
+            try:
+                resolved = int(str(value).strip())
+            except (TypeError, ValueError):
+                resolved = 0
+            if resolved > 0:
+                canonical_user_id = resolved
+
+    return PaymentIdentity(user_id=canonical_user_id, platform=norm_platform, external_user_id=ext)
 
 
 def _price_label(price_rub: int) -> str:
@@ -66,14 +127,15 @@ def package_payment_links(
     external_user_id: str | None = None,
     as_gift: bool = False,
 ) -> tuple[PackagePaymentLink, ...]:
+    identity = resolve_payment_identity(user_id=int(user_id), platform=platform, external_user_id=external_user_id)
     base_url = payment_public_base_url()
     items: list[PackagePaymentLink] = []
     for package in public_practice_packages():
         gift_token = (
             create_gift_checkout_token(
-                buyer_user_id=int(user_id),
+                buyer_user_id=identity.user_id,
                 package_id=package.package_id,
-                source_platform=platform,
+                source_platform=identity.platform,
             )
             if as_gift
             else ""
@@ -82,9 +144,9 @@ def package_payment_links(
             _package_link(
                 package,
                 base_url=base_url,
-                user_id=user_id,
-                platform=platform,
-                external_user_id=external_user_id,
+                user_id=identity.user_id,
+                platform=identity.platform,
+                external_user_id=identity.external_user_id,
                 gift_token=gift_token,
             )
         )
