@@ -217,9 +217,11 @@ class VkBotSender:
 
     async def _ensure_doc_attachment(self, external_user_id: str, file_path: Path, *, media_type: str | None = None) -> str:
         preferred_upload_type = self._vk_upload_type_for_audio(file_path)
+        # VK accepts .opus/.ogg as audio_message. Falling back to type=doc for
+        # these native audio files is both a UX regression and error masking: the
+        # current group token may reject docs scope or VK may answer
+        # wrong_music_file, hiding the real audio_message result from diagnostics.
         upload_types = [preferred_upload_type]
-        if preferred_upload_type != "doc":
-            upload_types.append("doc")
 
         last_error: MessengerTransportError | None = None
         for upload_type in upload_types:
@@ -233,9 +235,7 @@ class VkBotSender:
                 )
             except MessengerTransportError as exc:
                 last_error = exc
-                if upload_type == "doc":
-                    raise
-                continue
+                raise
         if last_error is not None:
             raise last_error
         raise MessengerTransportError("VK upload failed before any upload attempt")
