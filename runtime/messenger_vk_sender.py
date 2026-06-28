@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +40,53 @@ def _pack_keyboard_rows(rows: list[list[dict[str, Any]]]) -> list[list[dict[str,
 
 def _button_count(rows: list[list[dict[str, Any]]]) -> int:
     return sum(len(row) for row in rows)
+
+
+
+def _vk_upload_attempt_count() -> int:
+    raw = (os.getenv("VK_AUDIO_UPLOAD_RETRIES") or os.getenv("MESSENGER_PROVIDER_RETRIES") or "3").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 3
+
+
+def _vk_upload_retry_backoff_sec(attempt: int) -> float:
+    raw = (os.getenv("VK_AUDIO_UPLOAD_RETRY_BACKOFF_SEC") or os.getenv("MESSENGER_PROVIDER_RETRY_BACKOFF_SEC") or "0.5").strip()
+    try:
+        base = max(0.05, float(raw))
+    except ValueError:
+        base = 0.5
+    return min(base * (2 ** max(0, attempt - 1)), 3.0)
+
+
+def _vk_upload_response_is_retryable(data: dict[str, Any]) -> bool:
+    error = str(data.get("error") or "").strip().casefold()
+    error_descr = str(data.get("error_descr") or "").strip().casefold()
+    if not error and not error_descr:
+        return False
+    return any(token in error or token in error_descr for token in ("unknown", "temporary", "timeout", "try_again", "internal"))
+
+
+def _vk_audio_message_upload_path(file_path: Path) -> Path:
+    if file_path.suffix.lower() != ".opus":
+        return file_path
+    tmp_dir = Path(tempfile.mkdtemp(prefix="vk-audio-message-"))
+    upload_path = tmp_dir / f"{file_path.stem}.ogg"
+    shutil.copyfile(file_path, upload_path)
+    return upload_path
+
+
+def _cleanup_vk_upload_path(upload_path: Path, source_path: Path) -> None:
+    if upload_path == source_path:
+        return
+    try:
+        tmp_dir = upload_path.parent
+        upload_path.unlink(missing_ok=True)
+        tmp_dir.rmdir()
+    except OSError:
+        pass
+
 
 
 def _strip_unsupported_vk_button_color(button: dict[str, Any]) -> dict[str, Any]:
@@ -202,14 +252,35 @@ class VkBotSender:
         cached = get_cached_media_token("vk", file_path, media_type=cache_media_type)
         if cached is not None:
             return cached.remote_token
-        upload_meta = await self._vk_method("docs.getMessagesUploadServer", {"peer_id": str(external_user_id), "type": upload_type})
-        upload_url = str((upload_meta.get("response") or {}).get("upload_url") or "").strip()
-        if not upload_url:
-            raise MessengerTransportError(f"Unexpected VK docs.getMessagesUploadServer response: {upload_meta}")
-        uploaded = await asyncio.to_thread(multipart_upload, upload_url, field_name="file", path=file_path)
-        uploaded_file = str(uploaded.get("file") or "").strip()
-        if not uploaded_file:
+
+        attempts = _vk_upload_attempt_count() if upload_type == "audio_message" else 1
+        last_uploaded: dict[str, Any] | None = None
+
+        for attempt in range(1, attempts + 1):
+            upload_meta = await self._vk_method("docs.getMessagesUploadServer", {"peer_id": str(external_user_id), "type": upload_type})
+            upload_url = str((upload_meta.get("response") or {}).get("upload_url") or "").strip()
+            if not upload_url:
+                raise MessengerTransportError(f"Unexpected VK docs.getMessagesUploadServer response: {upload_meta}")
+
+            upload_path = _vk_audio_message_upload_path(file_path) if upload_type == "audio_message" else file_path
+            try:
+                uploaded = await asyncio.to_thread(multipart_upload, upload_url, field_name="file", path=upload_path)
+            finally:
+                _cleanup_vk_upload_path(upload_path, file_path)
+
+            uploaded_file = str(uploaded.get("file") or "").strip()
+            if uploaded_file:
+                break
+
+            last_uploaded = uploaded
+            if attempt < attempts and _vk_upload_response_is_retryable(uploaded):
+                await asyncio.sleep(_vk_upload_retry_backoff_sec(attempt))
+                continue
+
             raise MessengerTransportError(f"Unexpected VK upload response for type={upload_type}: {uploaded}")
+        else:
+            raise MessengerTransportError(f"Unexpected VK upload response for type={upload_type}: {last_uploaded}")
+
         saved = await self._vk_method("docs.save", {"file": uploaded_file, "title": file_path.stem[:128], "tags": "metrotherapy,audio"})
         attachment = self._doc_attachment_from_save_response(saved)
         store_media_token("vk", file_path, attachment, media_type=cache_media_type)
