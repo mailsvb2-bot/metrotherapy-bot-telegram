@@ -208,30 +208,12 @@ async def complete_pre_score_and_send(
         if sender is None:
             raise UnsupportedMessengerDelivery('No VK sender registered')
         try:
-            from services.messenger.audio_delivery import post_audio_control_kwargs, post_audio_controls_text
             vk_audio_path = await asyncio.to_thread(ensure_vk_opus_file, item.path)
             await sender.send_audio_file(
                 plan.external_user_id,
                 vk_audio_path,
                 caption=f'🎧 Ваш аудиотранс: №{item.anchor} — {item.title}',
-                **post_audio_control_kwargs(MessengerPlatform.VK.value),
             )
-            await sender.send_text(
-                plan.external_user_id,
-                post_audio_controls_text(MessengerPlatform.VK.value, item),
-                **post_audio_control_kwargs(MessengerPlatform.VK.value),
-            )
-            mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=None)
-            log_audio_timeline_event(
-                int(user_id),
-                event_type='native_audio_sent',
-                sequence_key='demo' if is_demo else 'full_series',
-                anchor=int(item.anchor),
-                title=item.title,
-                platform=plan.platform,
-                slot=str(session.slot) if session.slot else ('demo' if is_demo else ('morning' if session.kind == 'work' else 'evening')),
-            )
-            transport = 'vk_native_audio_pending'
         except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery, MessengerTransportError) as exc:
             log_audio_timeline_event(
                 int(user_id),
@@ -252,6 +234,18 @@ async def complete_pre_score_and_send(
                 replay=False,
             )
             transport = result.transport
+        else:
+            mark_pending_audio_delivery(int(user_id), item=item, platform=plan.platform, token=None)
+            log_audio_timeline_event(
+                int(user_id),
+                event_type='native_audio_sent',
+                sequence_key='demo' if is_demo else 'full_series',
+                anchor=int(item.anchor),
+                title=item.title,
+                platform=plan.platform,
+                slot=str(session.slot) if session.slot else ('demo' if is_demo else ('morning' if session.kind == 'work' else 'evening')),
+            )
+            transport = 'vk_native_audio_pending'
 
     if not is_demo:
         register_touch(int(user_id), 'morning' if session.kind == 'work' else 'evening')
