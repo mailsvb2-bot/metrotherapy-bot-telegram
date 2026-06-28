@@ -159,6 +159,12 @@ def _callback_keyboard_json(keyboard_json: str) -> str:
     rows = keyboard.get("buttons")
     if not isinstance(rows, list):
         return keyboard_json
+    if rows == []:
+        normalized = dict(keyboard)
+        normalized["inline"] = False
+        normalized["one_time"] = True
+        normalized["buttons"] = []
+        return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
 
     normalized_rows: list[list[dict[str, Any]]] = []
     for row in rows:

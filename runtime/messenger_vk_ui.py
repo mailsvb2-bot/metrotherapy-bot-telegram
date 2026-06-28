@@ -187,6 +187,11 @@ def vk_default_keyboard_json() -> str:
     return vk_main_keyboard_json()
 
 
+def vk_clear_keyboard_json() -> str:
+    """Hide VK regular bottom keyboard for ordinary non-menu messages."""
+    return _keyboard([], inline=False, one_time=True)
+
+
 def vk_demo_kind_keyboard_json() -> str:
     return vk_keyboard_from_telegram(kb_demo_kind())
 
@@ -309,7 +314,9 @@ def vk_text_send_kwargs(platform: str, text: str = "", *, user_id: int | None = 
     payment_keyboard = vk_payment_keyboard_json(text)
     if payment_keyboard is not None:
         return {"keyboard_json": payment_keyboard}
-    return {"keyboard_json": vk_main_keyboard_json(user_id)}
+    if _looks_like_main_menu_text(text):
+        return {"keyboard_json": vk_main_keyboard_json(user_id)}
+    return {"keyboard_json": vk_clear_keyboard_json()}
 
 
 def with_vk_keyboard(platform: str, kwargs: dict[str, Any], *, user_id: int | None = None) -> dict[str, Any]:
@@ -335,7 +342,9 @@ def with_vk_keyboard(platform: str, kwargs: dict[str, Any], *, user_id: int | No
     elif text.lstrip().startswith("🎁 Мои бонусы за приглашения"):
         enriched.setdefault("keyboard_json", vk_ref_bonus_actions_keyboard_json())
     else:
-        enriched.setdefault("keyboard_json", vk_main_keyboard_json(user_id))
+        # Do not attach the main menu to every ordinary message. It makes the
+        # VK bottom panel sticky ("🧠 Настройки") and slows down the chat UI.
+        enriched.setdefault("keyboard_json", vk_clear_keyboard_json())
     return enriched
 
 

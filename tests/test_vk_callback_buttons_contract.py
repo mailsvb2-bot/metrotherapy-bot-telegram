@@ -15,7 +15,7 @@ from runtime.messenger_ingress import (
 from runtime.messenger_payloads import extract_vk_message
 from runtime.messenger_transport_errors import MessengerTransportError
 from runtime.messenger_vk_sender import VkBotSender, _callback_keyboard_json, _strip_raw_vk_payment_links
-from runtime.messenger_vk_ui import vk_score_scale_keyboard_json
+from runtime.messenger_vk_ui import vk_score_scale_keyboard_json, vk_clear_keyboard_json, with_vk_keyboard
 from runtime.telegram_button_parity import vk_keyboard_from_telegram
 
 
@@ -195,3 +195,27 @@ def test_vk_image_upload_uses_photo_api_not_doc(monkeypatch, tmp_path) -> None:
     assert stored
     assert stored[0][0][0] == "vk"
     assert stored[0][0][2] == "photo1_2_photo_key"
+
+
+def test_vk_clear_keyboard_stays_regular_empty_keyboard() -> None:
+    keyboard = json.loads(_callback_keyboard_json(vk_clear_keyboard_json()))
+
+    assert keyboard["inline"] is False
+    assert keyboard["one_time"] is True
+    assert keyboard["buttons"] == []
+
+
+def test_vk_ordinary_message_does_not_attach_main_settings_keyboard() -> None:
+    kwargs = with_vk_keyboard(
+        "vk",
+        {"_text_for_keyboard": "✅ Оценку после прослушивания +3 сохранил."},
+        user_id=123,
+    )
+
+    keyboard = json.loads(kwargs["keyboard_json"])
+    dumped = json.dumps(keyboard, ensure_ascii=False)
+
+    assert keyboard["inline"] is False
+    assert keyboard["one_time"] is True
+    assert keyboard["buttons"] == []
+    assert "🧠 Настройки" not in dumped
