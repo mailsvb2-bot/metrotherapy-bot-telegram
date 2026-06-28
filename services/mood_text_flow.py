@@ -43,6 +43,16 @@ def parse_score_text(text: str | None) -> int | None:
     return None
 
 
+def _native_audio_failure_meta(exc: BaseException) -> str:
+    return json.dumps(
+        {
+            'error_type': type(exc).__name__,
+            'error': str(exc)[:700],
+        },
+        ensure_ascii=False,
+    )
+
+
 def find_pending_pre_session_id(user_id: int) -> int | None:
     from services.db import db
     with db() as conn:
@@ -189,6 +199,7 @@ async def complete_pre_score_and_send(
                 anchor=int(item.anchor),
                 title=item.title,
                 platform=plan.platform,
+                meta_json=_native_audio_failure_meta(exc),
                 slot=str(session.slot) if session.slot else ('demo' if is_demo else ('morning' if session.kind == 'work' else 'evening')),
             )
             raise UnsupportedMessengerDelivery(NATIVE_AUDIO_REQUIRED_MESSAGE) from exc
@@ -221,7 +232,7 @@ async def complete_pre_score_and_send(
                 slot=str(session.slot) if session.slot else ('demo' if is_demo else ('morning' if session.kind == 'work' else 'evening')),
             )
             transport = 'vk_native_audio_pending'
-        except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery, MessengerTransportError):
+        except (RuntimeError, ValueError, TypeError, OSError, UnsupportedMessengerDelivery, MessengerTransportError) as exc:
             log_audio_timeline_event(
                 int(user_id),
                 event_type='native_audio_failed',
@@ -229,6 +240,7 @@ async def complete_pre_score_and_send(
                 anchor=int(item.anchor),
                 title=item.title,
                 platform=plan.platform,
+                meta_json=_native_audio_failure_meta(exc),
                 slot=str(session.slot) if session.slot else ('demo' if is_demo else ('morning' if session.kind == 'work' else 'evening')),
             )
             from services.messenger.audio_delivery import send_vk_audio_access_link
