@@ -81,13 +81,22 @@ def _target_path(source: Path, *, platform: str) -> Path:
     return _cache_dir(platform) / f"{safe_stem}.{digest}.opus"
 
 
-def ensure_messenger_opus_file(file_path: Path | str, *, platform: str) -> Path:
-    """Return a .opus file ready for native messenger audio upload.
+def _native_ready_suffixes(platform: str) -> set[str]:
+    clean = _clean_platform(platform)
+    if clean == "vk":
+        # VK sender uploads both .opus and .ogg as `audio_message`; forcing every
+        # .ogg through ffmpeg breaks tests and can block already-native audio.
+        return {".opus", ".ogg"}
+    return {".opus"}
 
-    If the source is already .opus, it is used as-is. Otherwise ffmpeg converts
-    it into a deterministic cache path. The function fails loudly if conversion
-    is impossible, because native messenger audio must not silently degrade into
-    a broken document upload.
+
+def ensure_messenger_opus_file(file_path: Path | str, *, platform: str) -> Path:
+    """Return a file ready for native messenger audio upload.
+
+    If the source is already accepted by the target provider as native audio, it
+    is used as-is. Otherwise ffmpeg converts it into a deterministic .opus cache
+    path. The function fails loudly if conversion is impossible, because native
+    messenger audio must not silently degrade into a broken document upload.
     """
     clean_platform = _clean_platform(platform)
     error_cls = _error_cls(clean_platform)
@@ -95,7 +104,7 @@ def ensure_messenger_opus_file(file_path: Path | str, *, platform: str) -> Path:
     if not source.exists() or not source.is_file():
         raise error_cls(f"{clean_platform.upper()} audio source does not exist: {source}")
 
-    if source.suffix.lower() == ".opus":
+    if source.suffix.lower() in _native_ready_suffixes(clean_platform):
         return source
 
     target = _target_path(source, platform=clean_platform)
