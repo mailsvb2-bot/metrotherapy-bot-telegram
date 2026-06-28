@@ -197,7 +197,7 @@ async def _handle_pre_score_flow(
                 message=result.message,
                 prompt_done=result.prompt_done,
             )
-        except (MessengerTransportError, UnsupportedMessengerDelivery, OSError):
+        except (MessengerTransportError, UnsupportedMessengerDelivery, RuntimeError, ValueError, TypeError, OSError):
             log.exception("%s post-audio notice failed after successful audio delivery", platform.upper())
 
 
