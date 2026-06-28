@@ -14,7 +14,7 @@ Locked production contract:
    URLs are allowed only as `open_link` buttons.
 5. VK regular keyboards that are not inline must be `one_time=true`,
    so score/settings panels do not stick to the bottom of the screen.
-6. Progress charts must not be sent through `send_audio_file`.
+6. Progress charts must not be sent through `send_audio_file`; VK progress charts must use `send_image_file` / VK `photos.*` upload.
 
 Relevant lock tests:
 - `tests/test_vk_user_journey_e2e.py`

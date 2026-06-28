@@ -151,3 +151,47 @@ https://metrotherapy-bot.metrotherapy.ru/pay/yookassa?source=vk&package_id=pract
     assert "Стартовый пакет — 1 900 ₽" in cleaned
     assert "Полный маршрут — 7 900 ₽" in cleaned
     assert "После оплаты вернитесь сюда" in cleaned
+
+
+def test_vk_image_upload_uses_photo_api_not_doc(monkeypatch, tmp_path) -> None:
+    image_path = tmp_path / "chart.png"
+    image_path.write_bytes(b"fake-png")
+    methods: list[tuple[str, dict]] = []
+    stored: list[tuple] = []
+
+    async def fake_vk_method(self, method: str, params: dict):
+        methods.append((method, dict(params)))
+        if method == "photos.getMessagesUploadServer":
+            return {"response": {"upload_url": "https://upload.example/photo"}}
+        if method == "photos.saveMessagesPhoto":
+            assert params["server"] == "123"
+            assert params["photo"] == "[{}]"
+            assert params["hash"] == "hash"
+            return {"response": [{"owner_id": 1, "id": 2, "access_key": "photo_key"}]}
+        if method == "messages.send":
+            assert params["attachment"] == "photo1_2_photo_key"
+            return {"response": 99}
+        raise AssertionError(f"unexpected VK method: {method}")
+
+    def fake_multipart_upload(upload_url: str, *, field_name: str, path: Path):
+        assert upload_url == "https://upload.example/photo"
+        assert field_name == "photo"
+        assert path == image_path
+        return {"server": 123, "photo": "[{}]", "hash": "hash"}
+
+    monkeypatch.setattr(VkBotSender, "_vk_method", fake_vk_method)
+    monkeypatch.setattr("runtime.messenger_vk_sender.multipart_upload", fake_multipart_upload)
+    monkeypatch.setattr("runtime.messenger_vk_sender.get_cached_media_token", lambda *args, **kwargs: None)
+    monkeypatch.setattr("runtime.messenger_vk_sender.store_media_token", lambda *args, **kwargs: stored.append((args, kwargs)))
+
+    result = asyncio.run(VkBotSender(token="token").send_image_file("123", image_path, caption="chart"))
+
+    assert result == 99
+    assert [method for method, _ in methods] == [
+        "photos.getMessagesUploadServer",
+        "photos.saveMessagesPhoto",
+        "messages.send",
+    ]
+    assert stored
+    assert stored[0][0][0] == "vk"
+    assert stored[0][0][2] == "photo1_2_photo_key"

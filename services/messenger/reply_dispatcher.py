@@ -72,7 +72,7 @@ async def _send_progress_chart_file(
     caption: str,
     canonical_user_id: int,
 ) -> None:
-    if platform == "max" and hasattr(sender, "send_image_file"):
+    if platform in {"vk", "max"} and hasattr(sender, "send_image_file"):
         await sender.send_image_file(external_user_id, chart_path, caption=caption)
         return
 

@@ -283,6 +283,29 @@ class VkBotSender:
         return attachment
 
     @staticmethod
+    def _photo_attachment_from_save_response(data: dict[str, Any]) -> str:
+        response = data.get("response")
+        candidates = response if isinstance(response, list) else [response]
+        photo: dict[str, Any] | None = None
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if candidate.get("owner_id") is not None and candidate.get("id") is not None:
+                photo = candidate
+                break
+        if not photo:
+            raise MessengerTransportError(f"Unexpected VK photos.saveMessagesPhoto response: {data}")
+        owner_id = photo.get("owner_id")
+        photo_id = photo.get("id")
+        access_key = str(photo.get("access_key") or "").strip()
+        if owner_id is None or photo_id is None:
+            raise MessengerTransportError(f"VK saved photo has no owner_id/id: {data}")
+        attachment = f"photo{owner_id}_{photo_id}"
+        if access_key:
+            attachment += f"_{access_key}"
+        return attachment
+
+    @staticmethod
     def _vk_upload_type_for_audio(file_path: Path) -> str:
         return "audio_message" if file_path.suffix.lower() in {".opus", ".ogg"} else "doc"
 
@@ -324,6 +347,44 @@ class VkBotSender:
         store_media_token("vk", file_path, attachment, media_type=cache_media_type)
         return attachment
 
+    async def _upload_photo_attachment(self, external_user_id: str, file_path: Path, *, cache_media_type: str = "image:photo") -> str:
+        cached = get_cached_media_token("vk", file_path, media_type=cache_media_type)
+        if cached is not None:
+            return cached.remote_token
+
+        upload_meta = await self._vk_method(
+            "photos.getMessagesUploadServer",
+            {"peer_id": str(external_user_id)},
+        )
+        upload_url = str((upload_meta.get("response") or {}).get("upload_url") or "").strip()
+        if not upload_url:
+            raise MessengerTransportError(f"Unexpected VK photos.getMessagesUploadServer response: {upload_meta}")
+
+        uploaded = await asyncio.to_thread(
+            multipart_upload,
+            upload_url,
+            field_name="photo",
+            path=file_path,
+        )
+
+        server = uploaded.get("server")
+        photo = uploaded.get("photo")
+        upload_hash = uploaded.get("hash")
+        if server is None or photo is None or upload_hash is None:
+            raise MessengerTransportError(f"Unexpected VK photo upload response: {uploaded}")
+
+        saved = await self._vk_method(
+            "photos.saveMessagesPhoto",
+            {
+                "server": str(server),
+                "photo": str(photo),
+                "hash": str(upload_hash),
+            },
+        )
+        attachment = self._photo_attachment_from_save_response(saved)
+        store_media_token("vk", file_path, attachment, media_type=cache_media_type)
+        return attachment
+
     async def _ensure_doc_attachment(self, external_user_id: str, file_path: Path, *, media_type: str | None = None) -> str:
         preferred_upload_type = self._vk_upload_type_for_audio(file_path)
         # VK accepts .opus/.ogg as audio_message. Falling back to type=doc for
@@ -348,6 +409,10 @@ class VkBotSender:
         if last_error is not None:
             raise last_error
         raise MessengerTransportError("VK upload failed before any upload attempt")
+
+    async def send_image_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
+        attachment = await self._upload_photo_attachment(str(external_user_id), file_path)
+        return await self.send_text(external_user_id, caption or file_path.stem, attachment=attachment, **kwargs)
 
     async def send_document_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
         attachment = await self._ensure_doc_attachment(str(external_user_id), file_path, media_type=f"doc:{file_path.suffix.lower() or 'file'}")
