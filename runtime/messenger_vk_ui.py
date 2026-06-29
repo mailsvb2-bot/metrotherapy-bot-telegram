@@ -165,6 +165,8 @@ def prepare_vk_keyboard_json(keyboard_json: str, *, external_user_id: str, text:
     payment_keyboard = vk_payment_keyboard_json(text)
     if payment_keyboard is not None:
         return payment_keyboard
+    if str(text or "").lstrip().startswith("🎁 Кому подарить"):
+        return _keyboard([[_button(BACK_LABEL, MENU_COMMAND, "secondary")]])
     if str(text or "").lstrip().startswith("🔐 Полный маршрут"):
         return full_route_keyboard_json()
     return telegram_main_parity_keyboard_json(keyboard_json)
@@ -314,6 +316,8 @@ def vk_text_send_kwargs(platform: str, text: str = "", *, user_id: int | None = 
     payment_keyboard = vk_payment_keyboard_json(text)
     if payment_keyboard is not None:
         return {"keyboard_json": payment_keyboard}
+    if str(text or "").lstrip().startswith("🎁 Кому подарить"):
+        return {"keyboard_json": _keyboard([[_button(BACK_LABEL, MENU_COMMAND, "secondary")]])}
     if _looks_like_main_menu_text(text):
         return {"keyboard_json": vk_main_keyboard_json(user_id)}
     return {"keyboard_json": vk_clear_keyboard_json()}
@@ -327,6 +331,8 @@ def with_vk_keyboard(platform: str, kwargs: dict[str, Any], *, user_id: int | No
     payment_keyboard = vk_payment_keyboard_json(text)
     if payment_keyboard is not None:
         enriched["keyboard_json"] = payment_keyboard
+    elif str(text or "").lstrip().startswith("🎁 Кому подарить"):
+        enriched.setdefault("keyboard_json", _keyboard([[_button(BACK_LABEL, MENU_COMMAND, "secondary")]]))
     elif _looks_like_main_menu_text(text):
         enriched.setdefault("keyboard_json", vk_main_keyboard_json(user_id))
     elif text.lstrip().startswith("🎧 Общий прогресс") or text.lstrip().startswith("🎧 Вы ещё не запускали") or "📈 Мой прогресс" in text or "📈 Анализ состояния" in text:

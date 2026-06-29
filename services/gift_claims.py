@@ -27,7 +27,13 @@ def new_gift_token() -> str:
     return f"gift_{uuid.uuid4().hex}"
 
 
-def create_gift_checkout_token(*, buyer_user_id: int, package_id: str, source_platform: str = "telegram") -> str:
+def create_gift_checkout_token(
+    *,
+    buyer_user_id: int,
+    package_id: str,
+    source_platform: str = "telegram",
+    recipient_hint: str = "",
+) -> str:
     """Reserve a paid-gift claim row before the buyer leaves Telegram for checkout.
 
     YooKassa returns only metadata from the payment object. Therefore the public
@@ -41,6 +47,7 @@ def create_gift_checkout_token(*, buyer_user_id: int, package_id: str, source_pl
 
     package = package_by_id(package_id)
     platform = (source_platform or "telegram").strip()[:32] or "telegram"
+    recipient = str(recipient_hint or "").strip()[:300]
     last_exc: sqlite3.IntegrityError | None = None
 
     for _ in range(5):
@@ -51,10 +58,10 @@ def create_gift_checkout_token(*, buyer_user_id: int, package_id: str, source_pl
                     conn.execute(
                         """
                         INSERT INTO gift_claims(
-                            gift_token, buyer_user_id, package_id, source_platform, status
-                        ) VALUES(?,?,?,?, 'created')
+                            gift_token, buyer_user_id, package_id, source_platform, recipient_hint, status
+                        ) VALUES(?,?,?,?,?, 'created')
                         """.strip(),
-                        (token, buyer_id, package.package_id, platform),
+                        (token, buyer_id, package.package_id, platform, recipient),
                     )
             return token
         except sqlite3.IntegrityError as exc:
@@ -77,6 +84,7 @@ def normalize_gift_token(raw: str | None) -> str:
 
 def is_gift_token(raw: str | None) -> bool:
     return bool(_GIFT_TOKEN_RE.match(normalize_gift_token(raw)))
+
 
 
 def mark_gift_paid(

@@ -34,7 +34,7 @@ def test_gift_package_links_include_claim_tokens(monkeypatch):
 def test_gift_text_contains_claim_commands(monkeypatch):
     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://bot.example")
 
-    text = gift_package_text(user_id=202, platform="max", external_user_id="202")
+    text = gift_package_text(user_id=202, platform="max", external_user_id="202", recipient_hint="Мария")
 
     assert "claim gift_" in text
     assert "Получатель может отправить" in text

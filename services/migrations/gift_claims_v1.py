@@ -22,6 +22,7 @@ def apply(conn: sqlite3.Connection) -> None:
             gift_token TEXT NOT NULL UNIQUE,
             buyer_user_id INTEGER NOT NULL DEFAULT 0,
             recipient_user_id INTEGER,
+            recipient_hint TEXT NOT NULL DEFAULT '',
             package_id TEXT NOT NULL,
             provider TEXT NOT NULL DEFAULT '',
             provider_payment_id TEXT NOT NULL DEFAULT '',

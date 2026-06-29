@@ -27,7 +27,7 @@ def test_package_payment_text_uses_canonical_packages(monkeypatch):
 def test_gift_package_text_uses_same_public_ladder(monkeypatch):
     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://bot.example")
 
-    text = gift_package_text(user_id=505, platform="max", external_user_id="max505")
+    text = gift_package_text(user_id=505, platform="max", external_user_id="max505", recipient_hint="Мария")
 
     assert "🎁 Подарить Метротерапию" in text
     assert "Стартовый пакет — 1 900 ₽" in text

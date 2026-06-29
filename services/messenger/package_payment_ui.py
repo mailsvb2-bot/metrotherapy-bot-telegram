@@ -126,6 +126,7 @@ def package_payment_links(
     platform: str,
     external_user_id: str | None = None,
     as_gift: bool = False,
+    gift_recipient_hint: str = "",
 ) -> tuple[PackagePaymentLink, ...]:
     identity = resolve_payment_identity(user_id=int(user_id), platform=platform, external_user_id=external_user_id)
     base_url = payment_public_base_url()
@@ -136,6 +137,7 @@ def package_payment_links(
                 buyer_user_id=identity.user_id,
                 package_id=package.package_id,
                 source_platform=identity.platform,
+                recipient_hint=gift_recipient_hint,
             )
             if as_gift
             else ""
@@ -208,14 +210,40 @@ def package_payment_text(*, user_id: int, platform: str, external_user_id: str |
     return "\n".join(lines).strip()
 
 
-def gift_package_text(*, user_id: int, platform: str, external_user_id: str | None = None) -> str:
+def gift_recipient_prompt_text() -> str:
+    return (
+        "🎁 Кому подарить Метротерапию?\n\n"
+        "Сначала нужно указать получателя. Напишите одним сообщением имя, @id, ссылку VK/Telegram/MAX или телефон человека.\n\n"
+        "Только после этого я покажу пакеты и ссылку на оплату. Так подарок будет оформлен не вслепую."
+    )
+
+
+def gift_package_text(
+    *,
+    user_id: int,
+    platform: str,
+    external_user_id: str | None = None,
+    recipient_hint: str = "",
+) -> str:
+    recipient = str(recipient_hint or "").strip()
+    if not recipient:
+        return gift_recipient_prompt_text()
+
     lines = [
         "🎁 Подарить Метротерапию",
         "",
-        "Выберите пакет ниже. После успешной оплаты будет активна подарочная claim-ссылка вида claim gift_... — отправьте её человеку, которому дарите практики.",
+        f"Получатель: {recipient}",
+        "",
+        "Теперь выберите пакет ниже. После успешной оплаты будет активна подарочная claim-ссылка вида claim gift_... — отправьте её этому человеку.",
         "",
     ]
-    for item in package_payment_links(user_id=int(user_id), platform=platform, external_user_id=external_user_id, as_gift=True):
+    for item in package_payment_links(
+        user_id=int(user_id),
+        platform=platform,
+        external_user_id=external_user_id,
+        as_gift=True,
+        gift_recipient_hint=recipient,
+    ):
         claim_text = f"claim {item.gift_token}" if item.gift_token else "claim-ссылка будет создана после оплаты"
         lines.extend([
             item.label,
