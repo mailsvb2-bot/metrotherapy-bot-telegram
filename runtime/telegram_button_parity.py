@@ -136,4 +136,7 @@ def vk_keyboard_from_telegram(markup: Any, *, inline: bool = True, color: str = 
                 )
             rows.append(out_row)
     rows = _pack_vk_rows(rows)
-    return json.dumps({"one_time": False, "inline": inline, "buttons": rows}, ensure_ascii=False, separators=(",", ":"))
+    payload = {"inline": bool(inline), "buttons": rows}
+    if not inline:
+        payload["one_time"] = False
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
