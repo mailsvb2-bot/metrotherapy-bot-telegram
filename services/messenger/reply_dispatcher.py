@@ -19,7 +19,7 @@ from services.events import log_event
 from services.messenger.audio_delivery import send_next_audio_to_user, send_replay_audio_to_user
 from services.messenger.audio_progress import confirm_pending_audio_delivery
 from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDelivery
-from services.messenger.package_payment_ui import gift_package_text, package_payment_text
+from services.messenger.package_payment_ui import package_payment_text
 from services.messenger.progress_charts import build_vk_mood_progress_chart_path
 from services.messenger.text_ui import MessengerReply
 from services.mood_text_flow import complete_pre_score_and_send, complete_post_score_and_send_next
@@ -54,12 +54,14 @@ def _looks_like_score_scale(text: str) -> bool:
 
 
 def _canonical_payment_text(platform: str, canonical_user_id: int, external_user_id: str, text: str) -> str:
-    """Upgrade legacy VK/MAX payment texts to the canonical 4-package surface."""
+    """Upgrade legacy pay texts without rebuilding stateful gift-recipient flows."""
     stripped = str(text or "").lstrip()
     if stripped.startswith("💳"):
         return package_payment_text(user_id=canonical_user_id, platform=platform, external_user_id=external_user_id)
     if stripped.startswith("🎁"):
-        return gift_package_text(user_id=canonical_user_id, platform=platform, external_user_id=external_user_id)
+        # Gift text is now stateful: command -> recipient prompt -> recipient-bound checkout links.
+        # Rebuilding it here would lose recipient_hint and turn a ready checkout back into the prompt.
+        return text
     return text
 
 
