@@ -98,12 +98,19 @@ def test_payment_links_bind_vk_checkout_to_existing_canonical_profile(monkeypatc
 def test_gift_links_reserve_token_for_canonical_max_buyer(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
-    def fake_create_gift_checkout_token(*, buyer_user_id: int, package_id: str, source_platform: str = "telegram") -> str:
+    def fake_create_gift_checkout_token(
+        *,
+        buyer_user_id: int,
+        package_id: str,
+        source_platform: str = "telegram",
+        recipient_hint: str = "",
+    ) -> str:
         captured.update(
             {
                 "buyer_user_id": int(buyer_user_id),
                 "package_id": package_id,
                 "source_platform": source_platform,
+                "recipient_hint": recipient_hint,
             }
         )
         return "gift_" + "a" * 32
@@ -117,13 +124,19 @@ def test_gift_links_reserve_token_for_canonical_max_buyer(monkeypatch, tmp_path)
     monkeypatch.setattr(payment_ui, "public_practice_packages", lambda: (_Package(),))
     monkeypatch.setattr(payment_ui, "create_gift_checkout_token", fake_create_gift_checkout_token)
 
-    text = payment_ui.gift_package_text(user_id=910, platform="max", external_user_id="910")
+    text = payment_ui.gift_package_text(
+        user_id=910,
+        platform="max",
+        external_user_id="910",
+        recipient_hint="Мария из MAX",
+    )
     params = parse_qs(urlsplit(_first_url(text)).query)
 
     assert captured == {
         "buyer_user_id": 222,
         "package_id": "practice_test",
         "source_platform": "max",
+        "recipient_hint": "Мария из MAX",
     }
     assert params["source"] == ["max"]
     assert params["user_id"] == ["222"]

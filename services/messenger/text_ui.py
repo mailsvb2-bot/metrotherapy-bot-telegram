@@ -20,7 +20,7 @@ from services.messenger.entrypoints import register_user_entry
 from services.messenger.links import build_messenger_targets, build_switch_targets
 from services.messenger.platforms import normalize_platform, platform_title
 from services.messenger.menu_contract import normalize_menu_command
-from services.messenger.package_payment_ui import gift_package_text, package_payment_text
+from services.messenger.package_payment_ui import gift_package_text, gift_recipient_prompt_text, package_payment_text
 from services.messenger.preferences import get_channel_snapshot, set_preferred_platform
 from services.messenger.audio_progress import get_progress_snapshot, SEQUENCE_FULL_SERIES, confirm_pending_audio_delivery, get_audio_item_by_anchor
 from services.messenger.timeline import get_recent_audio_timeline
@@ -122,12 +122,29 @@ def _payment_text(user_id: int, *, platform: str, external_user_id: str | None) 
     )
 
 
-def _gift_text(user_id: int, *, platform: str, external_user_id: str | None) -> str:
+def _gift_text(user_id: int, *, platform: str, external_user_id: str | None, recipient_hint: str = "") -> str:
     """Canonical public gift/payment surface for Telegram/VK/MAX text UI."""
     return gift_package_text(
         user_id=int(user_id),
         platform=normalize_platform(platform),
         external_user_id=external_user_id,
+        recipient_hint=recipient_hint,
+    )
+
+
+def _start_gift_recipient_flow(user_id: int) -> MessengerReply:
+    set_pending(int(user_id), "gift_recipient", {})
+    return MessengerReply(text=gift_recipient_prompt_text())
+
+
+def _gift_payment_after_recipient(user_id: int, *, platform: str, external_user_id: str | None, recipient_hint: str) -> MessengerReply:
+    return MessengerReply(
+        text=_gift_text(
+            int(user_id),
+            platform=platform,
+            external_user_id=external_user_id,
+            recipient_hint=recipient_hint,
+        )
     )
 
 
@@ -707,17 +724,6 @@ def handle_incoming_text(
             )
         ]
 
-    if raw_lower in {"gift", "/gift", "подарок", "подарить", "🎁 подарить"}:
-        return int(user_id), [
-            MessengerReply(
-                text=_gift_text(
-                    int(user_id),
-                    platform=norm_platform,
-                    external_user_id=external_user_id,
-                )
-            )
-        ]
-
     if action == "continue" and norm_platform == "telegram":
         return int(user_id), [MessengerReply(kind="next_audio")]
 
@@ -795,6 +801,19 @@ def handle_incoming_text(
             ]
         pop_pending(canonical_user_id)
 
+    if pending and pending.kind == "gift_recipient":
+        if command_norm not in {"start", "menu", "/start", "/menu", "отмена", "cancel", "⬅️ меню", "⬅️ назад"}:
+            pop_pending(canonical_user_id)
+            return canonical_user_id, [
+                _gift_payment_after_recipient(
+                    canonical_user_id,
+                    platform=platform,
+                    external_user_id=external_user_id,
+                    recipient_hint=command_text,
+                )
+            ]
+        pop_pending(canonical_user_id)
+
     payment_aliases = {
         "pay",
         "payment",
@@ -825,15 +844,7 @@ def handle_incoming_text(
         ]
 
     if command_norm in gift_aliases:
-        return canonical_user_id, [
-            MessengerReply(
-                text=_gift_text(
-                    canonical_user_id,
-                    platform=platform,
-                    external_user_id=external_user_id,
-                )
-            )
-        ]
+        return canonical_user_id, [_start_gift_recipient_flow(canonical_user_id)]
 
     norm_platform = normalize_platform(platform)
 
@@ -841,7 +852,7 @@ def handle_incoming_text(
         return int(user_id), [MessengerReply(text=_payment_text(int(user_id), platform=norm_platform, external_user_id=external_user_id))]
 
     if action == "gift":
-        return int(user_id), [MessengerReply(text=_gift_text(int(user_id), platform=norm_platform, external_user_id=external_user_id))]
+        return canonical_user_id, [_start_gift_recipient_flow(canonical_user_id)]
 
     if action in {"start", "menu"}:
         replies: list[MessengerReply] = []
