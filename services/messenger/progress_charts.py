@@ -123,6 +123,15 @@ def build_vk_mood_progress_chart_path(user_id: int) -> Path | None:
         post_values.append(post_f)
         delta_values.append((post_f - pre_f) if pre_f is not None and post_f is not None else None)
 
+    uid = int(user_id)
+    latest_session_id = max(int(row.get("id") or 0) for row in records)
+    out_dir = Path("/tmp/metrotherapy_vk_charts")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"progress_{uid}_{latest_session_id}_{len(records)}.png"
+    if out_path.exists() and out_path.is_file() and out_path.stat().st_size > 0:
+        log.info("VK progress chart cache hit: user_id=%s path=%s", user_id, out_path)
+        return out_path
+
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -130,10 +139,6 @@ def build_vk_mood_progress_chart_path(user_id: int) -> Path | None:
     except ImportError:
         log.exception("VK progress chart: matplotlib unavailable")
         return None
-
-    out_dir = Path("/tmp/metrotherapy_vk_charts")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"progress_{int(user_id)}.png"
 
     x = list(range(1, len(labels) + 1))
     fig, ax = plt.subplots(figsize=(10, 5.5))
@@ -158,6 +163,17 @@ def build_vk_mood_progress_chart_path(user_id: int) -> Path | None:
     fig.tight_layout()
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
+
+    legacy_path = out_dir / f"progress_{uid}.png"
+    stale_paths = [legacy_path, *out_dir.glob(f"progress_{uid}_*.png")]
+    for stale_path in stale_paths:
+        if stale_path == out_path:
+            continue
+        try:
+            if stale_path.exists() and stale_path.is_file():
+                stale_path.unlink()
+        except OSError:
+            log.warning("VK progress chart stale cache cleanup failed: path=%s", stale_path, exc_info=True)
 
     log.info("VK progress chart built: user_id=%s path=%s", user_id, out_path)
     return out_path
