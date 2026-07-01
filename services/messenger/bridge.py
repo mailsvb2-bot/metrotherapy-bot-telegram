@@ -7,7 +7,9 @@ from datetime import datetime, timedelta
 
 from config.settings import settings
 from core.time_utils import utc_now
+from services.accounts.identity import ensure_account
 from services.db import db, tx
+from services.messenger.platforms import parse_platform
 
 
 @dataclass(frozen=True)
@@ -15,22 +17,49 @@ class BridgeResolution:
     canonical_user_id: int
     token: str
     consumed: bool
+    target_platform: str | None = None
 
 
 PURPOSE_SWITCH = 'switch_messenger'
 
 
-def issue_bridge_token(user_id: int, *, purpose: str = PURPOSE_SWITCH) -> str:
+def issue_bridge_token(
+    user_id: int,
+    *,
+    purpose: str = PURPOSE_SWITCH,
+    target_platform: str | None = None,
+    created_from_platform: str | None = None,
+    created_from_external_user_id: str | None = None,
+) -> str:
+    account_id = ensure_account(int(user_id))
     token = secrets.token_urlsafe(18)
-    now = utc_now().replace(microsecond=0).isoformat()
+    now_dt = utc_now().replace(microsecond=0)
+    now = now_dt.isoformat()
+    ttl_hours = int(getattr(settings, 'MESSENGER_BRIDGE_TOKEN_TTL_HOURS', 72) or 72)
+    expires_at = (now_dt + timedelta(hours=ttl_hours)).isoformat()
+    target = parse_platform(target_platform or '') if target_platform else None
+    source = parse_platform(created_from_platform or '') if created_from_platform else None
     with db() as conn:
         with tx(conn):
             conn.execute(
                 '''
-                INSERT INTO user_channel_bridge_tokens(token, user_id, purpose, created_at)
-                VALUES(?,?,?,?)
+                INSERT INTO user_channel_bridge_tokens(
+                    token, user_id, purpose, created_at,
+                    account_id, target_platform, created_from_platform,
+                    created_from_external_user_id, expires_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)
                 '''.strip(),
-                (token, int(user_id), str(purpose), now),
+                (
+                    token,
+                    int(user_id),
+                    str(purpose),
+                    now,
+                    int(account_id),
+                    target,
+                    source,
+                    (created_from_external_user_id or '').strip() or None,
+                    expires_at,
+                ),
             )
     return token
 
@@ -42,7 +71,7 @@ def resolve_bridge_token(token: str) -> BridgeResolution | None:
     with db() as conn:
         row = conn.execute(
             '''
-            SELECT token, user_id, used_at, created_at
+            SELECT token, user_id, used_at, created_at, account_id, target_platform, expires_at
             FROM user_channel_bridge_tokens
             WHERE token=? AND purpose=?
             '''.strip(),
@@ -50,25 +79,39 @@ def resolve_bridge_token(token: str) -> BridgeResolution | None:
         ).fetchone()
     if not row:
         return None
+    expires_at = row['expires_at'] if 'expires_at' in row else None
     created_at = row['created_at']
-    ttl_hours = int(getattr(settings, 'MESSENGER_BRIDGE_TOKEN_TTL_HOURS', 72) or 72)
-    if created_at:
+    if expires_at:
+        try:
+            if datetime.fromisoformat(str(expires_at)) < utc_now():
+                return None
+        except (ValueError, TypeError):
+            pass
+    elif created_at:
         try:
             created = datetime.fromisoformat(str(created_at))
+            ttl_hours = int(getattr(settings, 'MESSENGER_BRIDGE_TOKEN_TTL_HOURS', 72) or 72)
             if created + timedelta(hours=ttl_hours) < utc_now():
                 return None
         except (ValueError, TypeError):
             pass
+    account_id = row['account_id'] if 'account_id' in row and row['account_id'] is not None else row['user_id']
     return BridgeResolution(
-        canonical_user_id=int(row['user_id']),
+        canonical_user_id=int(account_id),
         token=str(row['token']),
         consumed=bool(row['used_at']),
+        target_platform=(str(row['target_platform']) if 'target_platform' in row and row['target_platform'] else None),
     )
 
 
 def consume_bridge_token(token: str, *, platform: str, external_user_id: str | None) -> BridgeResolution | None:
     resolved = resolve_bridge_token(token)
     if resolved is None:
+        return None
+    norm = parse_platform(platform)
+    if norm is None:
+        return None
+    if resolved.target_platform and resolved.target_platform != norm:
         return None
     now = utc_now().replace(microsecond=0).isoformat()
     with db() as conn:
@@ -78,9 +121,15 @@ def consume_bridge_token(token: str, *, platform: str, external_user_id: str | N
                 UPDATE user_channel_bridge_tokens
                 SET used_at=COALESCE(used_at, ?),
                     used_platform=COALESCE(used_platform, ?),
-                    used_external_user_id=COALESCE(used_external_user_id, ?)
+                    used_external_user_id=COALESCE(used_external_user_id, ?),
+                    consumed_account_id=COALESCE(consumed_account_id, ?)
                 WHERE token=?
                 '''.strip(),
-                (now, str(platform), (external_user_id or '').strip() or None, token),
+                (now, norm, (external_user_id or '').strip() or None, int(resolved.canonical_user_id), token),
             )
-    return BridgeResolution(canonical_user_id=resolved.canonical_user_id, token=resolved.token, consumed=True)
+    return BridgeResolution(
+        canonical_user_id=resolved.canonical_user_id,
+        token=resolved.token,
+        consumed=True,
+        target_platform=resolved.target_platform,
+    )
