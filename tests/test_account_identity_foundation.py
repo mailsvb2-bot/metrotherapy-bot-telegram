@@ -149,6 +149,24 @@ def test_identity_conflict_blocks_unconfirmed_account_merge(tmp_path, monkeypatc
     assert identity.get_account_snapshot(30003)["identities"] == []
 
 
+def test_legacy_channel_identity_writes_through_to_account_layer(tmp_path, monkeypatch):
+    modules = _fresh_modules(tmp_path, monkeypatch)
+    identity = modules["services.accounts.identity"]
+    prefs = modules["services.messenger.preferences"]
+
+    prefs.record_channel_identity(10001, "telegram", "tg-10001", username="test-user")
+    prefs.record_channel_identity(10001, "vk", "vk-20002")
+
+    snapshot = identity.get_account_snapshot(10001)
+    assert {row["platform"] for row in snapshot["identities"]} == {"telegram", "vk"}
+
+    with pytest.raises(identity.AccountIdentityConflict):
+        prefs.record_channel_identity(30003, "vk", "vk-20002")
+
+    assert {row["platform"] for row in prefs.get_channel_snapshot(10001)["identities"]} == {"telegram", "vk"}
+    assert prefs.get_channel_snapshot(30003)["identities"] == []
+
+
 def test_account_audio_progress_is_channel_independent(tmp_path, monkeypatch):
     modules = _fresh_modules(tmp_path, monkeypatch)
     audio = modules["services.accounts.audio_progress"]
