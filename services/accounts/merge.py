@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.time_utils import utc_now
-from services.accounts.audio_progress import get_audio_state, mark_audio_completed, mark_audio_sent
-from services.accounts.identity import ensure_account, link_channel_to_account
 from services.db import db, tx
 from services.messenger.platforms import normalize_platform
 
@@ -69,6 +67,70 @@ def build_account_merge_plan(target_account_id: int, source_account_ids: list[in
         )
 
 
+def _ensure_account_conn(conn, account_id: int, *, status: str = "active") -> None:
+    now = _iso_now()
+    conn.execute(
+        """
+        INSERT INTO accounts(account_id, primary_user_id, status, created_at, updated_at)
+        VALUES(?,?,?,?,?)
+        ON CONFLICT(account_id) DO UPDATE SET
+            primary_user_id=COALESCE(accounts.primary_user_id, excluded.primary_user_id),
+            status=COALESCE(accounts.status, excluded.status),
+            updated_at=excluded.updated_at
+        """.strip(),
+        (int(account_id), int(account_id), str(status or "active"), now, now),
+    )
+
+
+def _link_channel_to_account_conn(
+    conn,
+    *,
+    account_id: int,
+    platform: str,
+    external_user_id: str | None,
+    username: str | None = None,
+    display_name: str | None = None,
+    link_source: str = "account_merge",
+) -> None:
+    ext = (external_user_id or "").strip()
+    if not ext:
+        _ensure_account_conn(conn, int(account_id))
+        return
+    norm = normalize_platform(platform)
+    now = _iso_now()
+    _ensure_account_conn(conn, int(account_id))
+    conn.execute(
+        "DELETE FROM account_channel_identities WHERE platform=? AND external_user_id=? AND account_id<>?",
+        (norm, ext, int(account_id)),
+    )
+    conn.execute(
+        """
+        INSERT INTO account_channel_identities(
+            account_id, platform, external_user_id, username, display_name,
+            linked_at, last_seen_at, verified_at, link_source
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(account_id, platform) DO UPDATE SET
+            external_user_id=excluded.external_user_id,
+            username=COALESCE(excluded.username, account_channel_identities.username),
+            display_name=COALESCE(excluded.display_name, account_channel_identities.display_name),
+            last_seen_at=excluded.last_seen_at,
+            verified_at=COALESCE(account_channel_identities.verified_at, excluded.verified_at),
+            link_source=excluded.link_source
+        """.strip(),
+        (
+            int(account_id),
+            norm,
+            ext,
+            (username or "").strip() or None,
+            (display_name or "").strip() or None,
+            now,
+            now,
+            now,
+            (link_source or "account_merge").strip() or "account_merge",
+        ),
+    )
+
+
 def _merge_legacy_identities(conn, *, target: int, source: int) -> None:
     rows = conn.execute(
         """
@@ -84,16 +146,19 @@ def _merge_legacy_identities(conn, *, target: int, source: int) -> None:
         external_user_id = (row["external_user_id"] or "").strip() or None
         username = (row["username"] or "").strip() or None
         display_name = (row["display_name"] or "").strip() or None
-        link_channel_to_account(
-            int(target),
-            platform,
-            external_user_id,
+        _link_channel_to_account_conn(
+            conn,
+            account_id=int(target),
+            platform=platform,
+            external_user_id=external_user_id,
             username=username,
             display_name=display_name,
-            verified=True,
-            link_source="account_merge",
-            replace_existing=True,
         )
+        if external_user_id:
+            conn.execute(
+                "DELETE FROM user_channel_identities WHERE platform=? AND external_user_id=? AND user_id<>?",
+                (platform, external_user_id, int(target)),
+            )
         conn.execute(
             "DELETE FROM user_channel_identities WHERE user_id=? AND platform=?",
             (int(target), platform),
@@ -153,17 +218,40 @@ def _merge_account_identities(conn, *, target: int, source: int) -> None:
         (int(source),),
     ).fetchall()
     for row in rows:
-        link_channel_to_account(
-            int(target),
-            normalize_platform(row["platform"]),
-            row["external_user_id"],
+        _link_channel_to_account_conn(
+            conn,
+            account_id=int(target),
+            platform=normalize_platform(row["platform"]),
+            external_user_id=row["external_user_id"],
             username=row["username"],
             display_name=row["display_name"],
-            verified=True,
-            link_source="account_merge",
-            replace_existing=True,
         )
     conn.execute("DELETE FROM account_channel_identities WHERE account_id=?", (int(source),))
+
+
+def _ensure_audio_progress_conn(conn, *, account_id: int, product_id: str, program_id: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO account_audio_progress(
+            account_id, product_id, program_id,
+            last_sent_audio_no, last_completed_audio_no, pending_audio_no, updated_at
+        ) VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(account_id, product_id, program_id) DO NOTHING
+        """.strip(),
+        (int(account_id), product_id, program_id, 0, 0, None, _iso_now()),
+    )
+
+
+def _audio_progress_row(conn, *, account_id: int, product_id: str, program_id: str):
+    _ensure_audio_progress_conn(conn, account_id=int(account_id), product_id=product_id, program_id=program_id)
+    return conn.execute(
+        """
+        SELECT last_sent_audio_no, last_completed_audio_no, pending_audio_no
+        FROM account_audio_progress
+        WHERE account_id=? AND product_id=? AND program_id=?
+        """.strip(),
+        (int(account_id), product_id, program_id),
+    ).fetchone()
 
 
 def _merge_audio_progress(conn, *, target: int, source: int) -> None:
@@ -178,25 +266,31 @@ def _merge_audio_progress(conn, *, target: int, source: int) -> None:
     for row in rows:
         product_id = str(row["product_id"])
         program_id = str(row["program_id"])
-        state = get_audio_state(int(target), product_id=product_id, program_id=program_id)
-        last_sent = int(row["last_sent_audio_no"] or 0)
-        last_completed = int(row["last_completed_audio_no"] or 0)
-        pending = row["pending_audio_no"]
-        if last_sent > state.last_sent_audio_no:
-            mark_audio_sent(int(target), last_sent, platform="merge", product_id=product_id, program_id=program_id)
-        if last_completed > get_audio_state(int(target), product_id=product_id, program_id=program_id).last_completed_audio_no:
-            mark_audio_completed(
-                int(target),
-                last_completed,
-                platform="merge",
-                product_id=product_id,
-                program_id=program_id,
-                confirmation_type="account_merge",
-            )
-        if pending is not None:
-            current = get_audio_state(int(target), product_id=product_id, program_id=program_id)
-            if int(pending) > current.last_completed_audio_no:
-                mark_audio_sent(int(target), int(pending), platform="merge", product_id=product_id, program_id=program_id)
+        target_row = _audio_progress_row(conn, account_id=int(target), product_id=product_id, program_id=program_id)
+        target_pending = target_row["pending_audio_no"]
+        source_pending = row["pending_audio_no"]
+        new_completed = max(int(target_row["last_completed_audio_no"] or 0), int(row["last_completed_audio_no"] or 0))
+        new_sent = max(
+            int(target_row["last_sent_audio_no"] or 0),
+            int(row["last_sent_audio_no"] or 0),
+            new_completed,
+            int(target_pending or 0),
+            int(source_pending or 0),
+        )
+        pending_candidates = [int(value) for value in [target_pending, source_pending] if value is not None]
+        pending_candidates = [value for value in pending_candidates if value > new_completed]
+        new_pending = max(pending_candidates) if pending_candidates else None
+        conn.execute(
+            """
+            UPDATE account_audio_progress
+            SET last_sent_audio_no=?,
+                last_completed_audio_no=?,
+                pending_audio_no=?,
+                updated_at=?
+            WHERE account_id=? AND product_id=? AND program_id=?
+            """.strip(),
+            (new_sent, new_completed, new_pending, _iso_now(), int(target), product_id, program_id),
+        )
     conn.execute("DELETE FROM account_audio_progress WHERE account_id=?", (int(source),))
 
 
@@ -244,10 +338,11 @@ def _merge_account_completions(conn, *, target: int, source: int) -> None:
 def apply_account_merge(target_account_id: int, source_account_ids: list[int], *, reason: str = "manual") -> AccountMergePlan:
     plan = build_account_merge_plan(int(target_account_id), source_account_ids)
     now = _iso_now()
-    ensure_account(plan.target_account_id)
     with db() as conn:
         with tx(conn):
+            _ensure_account_conn(conn, plan.target_account_id)
             for source in plan.source_account_ids:
+                _ensure_account_conn(conn, int(source))
                 _merge_legacy_identities(conn, target=plan.target_account_id, source=int(source))
                 _merge_legacy_preferences(conn, target=plan.target_account_id, source=int(source))
                 _merge_account_identities(conn, target=plan.target_account_id, source=int(source))
