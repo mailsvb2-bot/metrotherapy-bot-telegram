@@ -4,6 +4,7 @@ import secrets
 from dataclasses import dataclass
 
 from datetime import datetime, timedelta
+from typing import Any
 
 from config.settings import settings
 from core.time_utils import utc_now
@@ -21,6 +22,13 @@ class BridgeResolution:
 
 
 PURPOSE_SWITCH = 'switch_messenger'
+
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
 
 
 def issue_bridge_token(
@@ -79,8 +87,8 @@ def resolve_bridge_token(token: str) -> BridgeResolution | None:
         ).fetchone()
     if not row:
         return None
-    expires_at = row['expires_at'] if 'expires_at' in row else None
-    created_at = row['created_at']
+    expires_at = _row_value(row, 'expires_at')
+    created_at = _row_value(row, 'created_at')
     if expires_at:
         try:
             if datetime.fromisoformat(str(expires_at)) < utc_now():
@@ -95,12 +103,13 @@ def resolve_bridge_token(token: str) -> BridgeResolution | None:
                 return None
         except (ValueError, TypeError):
             pass
-    account_id = row['account_id'] if 'account_id' in row and row['account_id'] is not None else row['user_id']
+    account_id = _row_value(row, 'account_id') or _row_value(row, 'user_id')
+    target_platform = _row_value(row, 'target_platform')
     return BridgeResolution(
         canonical_user_id=int(account_id),
-        token=str(row['token']),
-        consumed=bool(row['used_at']),
-        target_platform=(str(row['target_platform']) if 'target_platform' in row and row['target_platform'] else None),
+        token=str(_row_value(row, 'token')),
+        consumed=bool(_row_value(row, 'used_at')),
+        target_platform=(str(target_platform) if target_platform else None),
     )
 
 
