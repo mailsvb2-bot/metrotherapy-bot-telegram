@@ -41,6 +41,15 @@ def _vk_provider_keyboard_json(keyboard_json: str, *, external_user_id: str, tex
     return _strip_one_time_from_vk_inline_keyboard(_callback_keyboard_json(prepared))
 
 
+def _clean_vk_outgoing_text(text: str) -> str:
+    raw = str(text or "")
+    if "Главное меню" not in raw or "Кнопки ВКонтакте соответствуют" not in raw:
+        return raw
+    preface, _, _ = raw.partition("Главное меню")
+    cleaned = f"{preface}Главное меню\n\nВыберите действие кнопками ниже."
+    return cleaned.strip()
+
+
 class VkBotSender(_VkBotSender):
     """Stable VK sender facade after provider/UI decomposition.
 
@@ -63,7 +72,7 @@ class VkBotSender(_VkBotSender):
         if random_id is None:
             random_id = int(time.time_ns() % 2147483647)
 
-        message_text = str(text or "")
+        message_text = _clean_vk_outgoing_text(str(text or ""))
         params = {"user_id": str(external_user_id), "random_id": int(random_id), "message": message_text}
 
         if kwargs.get("keyboard_json"):
