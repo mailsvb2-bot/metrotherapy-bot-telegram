@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from services.accounts.identity import link_channel_to_account, resolve_account_for_identity
 from services.store import store
 from services.referrals import set_referral
 from services.events import log_event
@@ -56,12 +57,36 @@ def register_user_entry(
     parsed = parse_start_payload(start_payload)
     canonical_user_id = int(user_id)
     linked_via_bridge = False
+
     if parsed.kind == 'bridge' and parsed.value:
         resolved = consume_bridge_token(parsed.value, platform=norm, external_user_id=external_user_id)
         if resolved is not None:
             canonical_user_id = int(resolved.canonical_user_id)
+            link_channel_to_account(
+                canonical_user_id,
+                norm,
+                external_user_id,
+                username=username,
+                display_name=display_name,
+                verified=True,
+                link_source='bridge',
+            )
             linked_via_bridge = True
+    else:
+        resolved_account_id = resolve_account_for_identity(
+            norm,
+            external_user_id,
+            proposed_user_id=int(user_id),
+            username=username,
+            display_name=display_name,
+        )
+        if resolved_account_id is not None:
+            canonical_user_id = int(resolved_account_id)
+
     store.ensure_user(int(canonical_user_id), username, first_name)
+    # Backward-compatible mirror: existing delivery/progress services still read
+    # user_channel_* tables by canonical user_id while the new account layer is
+    # adopted service-by-service.
     record_channel_identity(
         int(canonical_user_id),
         norm,
