@@ -10,6 +10,7 @@ from services.migrations.events_decision_tracking_v1 import apply as _apply_even
 from services.migrations.payments_decision_attribution_v1 import apply as _apply_pay_decision
 from services.migrations.user_channel_routing_v1 import apply as _apply_channel_routing
 from services.migrations.user_channel_bridge_and_audio_progress_v1 import apply as _apply_channel_bridge_audio
+from services.migrations.account_identity_v1 import apply as _apply_account_identity_v1
 from services.migrations.user_audio_access_tokens_v1 import apply as _apply_audio_access_tokens
 from services.migrations.user_audio_progress_state_v2 import apply as _apply_audio_progress_state_v2
 from services.migrations.user_messenger_runtime_v3 import apply as _apply_messenger_runtime_v3
@@ -42,6 +43,7 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_pay_decision(conn)
     _apply_channel_routing(conn)
     _apply_channel_bridge_audio(conn)
+    _apply_account_identity_v1(conn)
     _apply_audio_access_tokens(conn)
     _apply_audio_progress_state_v2(conn)
     _apply_messenger_runtime_v3(conn)

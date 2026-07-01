@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.time_utils import utc_now
+from services.accounts.identity import link_channel_to_account
 from services.db import db, tx
 
 from services.messenger.platforms import MessengerPlatform, normalize_platform, parse_platform
@@ -26,6 +27,20 @@ def record_channel_identity(
     ext = (external_user_id or '').strip() or None
     uname = (username or '').strip() or None
     dname = (display_name or '').strip() or None
+
+    # Account identity is the canonical layer. The legacy user_channel_* tables
+    # below are kept as a compatibility mirror while older delivery services are
+    # migrated. Do this first so an identity conflict cannot silently mutate the
+    # legacy mirror into a different account.
+    link_channel_to_account(
+        int(user_id),
+        norm,
+        ext,
+        username=uname,
+        display_name=dname,
+        link_source='legacy_mirror',
+    )
+
     now = _iso_now()
     with db() as conn:
         with tx(conn):
