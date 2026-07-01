@@ -217,6 +217,11 @@ def _vk_event_context(payload: dict[str, Any]) -> tuple[str, str, str] | None:
 
 
 async def _ack_vk_message_event(payload: dict[str, Any]) -> None:
+    # VK snackbar acknowledgements show a visible black "Открываю..." toast and
+    # add an extra provider roundtrip before the real bot answer. They are now
+    # disabled by default to keep VK clicks clean and fast.
+    if not _env_bool("VK_CALLBACK_SNACKBAR_ENABLED", False):
+        return
     context = _vk_event_context(payload)
     if context is None:
         return
