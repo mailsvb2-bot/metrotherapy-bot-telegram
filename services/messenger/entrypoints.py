@@ -43,6 +43,24 @@ def parse_start_payload(raw_payload: str | None) -> StartPayload:
     return StartPayload(raw=payload, kind='plain', value=payload)
 
 
+def _resolve_or_create_entry_account(
+    *,
+    user_id: int,
+    platform: str,
+    external_user_id: str | None,
+    username: str | None,
+    display_name: str | None,
+) -> int:
+    resolved_account_id = resolve_account_for_identity(
+        platform,
+        external_user_id,
+        proposed_user_id=int(user_id),
+        username=username,
+        display_name=display_name,
+    )
+    return int(resolved_account_id if resolved_account_id is not None else int(user_id))
+
+
 def register_user_entry(
     user_id: int,
     *,
@@ -72,16 +90,22 @@ def register_user_entry(
                 link_source='bridge',
             )
             linked_via_bridge = True
+        else:
+            canonical_user_id = _resolve_or_create_entry_account(
+                user_id=int(user_id),
+                platform=norm,
+                external_user_id=external_user_id,
+                username=username,
+                display_name=display_name,
+            )
     else:
-        resolved_account_id = resolve_account_for_identity(
-            norm,
-            external_user_id,
-            proposed_user_id=int(user_id),
+        canonical_user_id = _resolve_or_create_entry_account(
+            user_id=int(user_id),
+            platform=norm,
+            external_user_id=external_user_id,
             username=username,
             display_name=display_name,
         )
-        if resolved_account_id is not None:
-            canonical_user_id = int(resolved_account_id)
 
     store.ensure_user(int(canonical_user_id), username, first_name)
     # Backward-compatible mirror: existing delivery/progress services still read
