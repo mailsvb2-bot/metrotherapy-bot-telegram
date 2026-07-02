@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from services.messenger.bridge import issue_bridge_token
+from services.messenger.entrypoints import register_user_entry
 from services.practice_tokens import (
     check_and_reserve_for_audio,
     consume_reservation,
@@ -191,3 +193,85 @@ def test_payment_url_uses_external_user_id():
         package_id="practice_personal_month",
     )
     assert url == "https://bot.example/pay/yookassa?source=vk&user_id=777&kind=tokens&package_id=practice_personal_month"
+
+def test_practice_wallet_is_account_native_across_linked_messengers():
+    token = issue_bridge_token(910010, target_platform="vk")
+    linked = register_user_entry(
+        920020,
+        platform="vk",
+        external_user_id="920020",
+        start_payload=f"bridge_{token}",
+    )
+    assert linked.user_id == 910010
+
+    inserted, wallet, _ = grant_tokens(
+        910010,
+        package_id="practice_start_7",
+        amount=3,
+        provider="test",
+        provider_payment_id="account-wallet-cross-channel",
+        idempotency_key="grant:test:account-wallet-cross-channel",
+    )
+    assert inserted is True
+    assert wallet.available_tokens == 3
+
+    vk_wallet = get_wallet(920020)
+    assert vk_wallet.user_id == 910010
+    assert vk_wallet.available_tokens == 3
+
+    ok, wallet_after_reserve, reservation_id = reserve_practice(920020, session_id=1, audio_anchor=1)
+    assert ok is True
+    assert reservation_id
+    assert wallet_after_reserve.user_id == 910010
+    assert wallet_after_reserve.available_tokens == 2
+    assert wallet_after_reserve.reserved_tokens == 1
+
+    finalize_audio_access(
+        check_and_reserve_for_audio(920020, is_demo=False, session_id=2, audio_anchor=2),
+        delivered=False,
+    )
+
+    wallet_after_release = get_wallet(910010)
+    assert wallet_after_release.user_id == 910010
+    assert wallet_after_release.available_tokens == 2
+    assert wallet_after_release.reserved_tokens == 1
+
+
+def test_payment_grant_to_linked_external_identity_credits_account_wallet():
+    token = issue_bridge_token(910011, target_platform="max")
+    linked = register_user_entry(
+        930030,
+        platform="max",
+        external_user_id="930030",
+        start_payload=f"bridge_{token}",
+    )
+    assert linked.user_id == 910011
+
+    inserted, wallet, _ = grant_tokens_for_payment(
+        provider="yookassa",
+        provider_payment_id="pay-account-wallet-cross-channel",
+        user_id=930030,
+        package_id="practice_start_7",
+    )
+
+    assert inserted is True
+    assert wallet.user_id == 910011
+    assert wallet.available_tokens == 7
+    assert get_wallet(910011).available_tokens == 7
+    assert get_wallet(930030).available_tokens == 7
+
+
+def test_delivery_mode_is_account_native_across_linked_messengers():
+    token = issue_bridge_token(910012, target_platform="vk")
+    linked = register_user_entry(
+        940040,
+        platform="vk",
+        external_user_id="940040",
+        start_payload=f"bridge_{token}",
+    )
+    assert linked.user_id == 910012
+
+    assert set_delivery_mode(940040, "both") == "both"
+    assert get_delivery_mode(910012) == "both"
+    assert get_delivery_mode(940040) == "both"
+
