@@ -95,3 +95,35 @@ def test_account_merge_writes_evidence_log(tmp_path, monkeypatch):
     assert row["mode"] == "test"
     assert row["status"] == "applied"
     assert '"source_account_ids": [20002]' in row["evidence_json"]
+
+def test_account_merge_backfills_target_legacy_identity(tmp_path, monkeypatch):
+    modules = _fresh_modules(tmp_path, monkeypatch)
+    identity = modules["services.accounts.identity"]
+    merge = modules["services.accounts.merge"]
+    db_core = importlib.import_module("services.db")
+
+    with db_core.db() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_channel_identities(
+                user_id, platform, external_user_id, username, display_name, first_seen_at, last_seen_at
+            ) VALUES(?,?,?,?,?,?,?)
+            """.strip(),
+            (
+                10001,
+                "telegram",
+                "tg-10001",
+                "target-user",
+                "Target User",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-02T00:00:00+00:00",
+            ),
+        )
+
+    identity.link_channel_to_account(20002, "vk", "vk-20002")
+
+    merge.apply_account_merge(10001, [20002], reason="test")
+
+    snapshot = identity.get_account_snapshot(10001)
+    assert {row["platform"] for row in snapshot["identities"]} == {"telegram", "vk"}
+

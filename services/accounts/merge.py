@@ -131,6 +131,28 @@ def _link_channel_to_account_conn(
     )
 
 
+def _backfill_target_legacy_identities(conn, *, target: int) -> None:
+    rows = conn.execute(
+        """
+        SELECT platform, external_user_id, username, display_name
+        FROM user_channel_identities
+        WHERE user_id=?
+        ORDER BY last_seen_at ASC
+        """.strip(),
+        (int(target),),
+    ).fetchall()
+    for row in rows:
+        _link_channel_to_account_conn(
+            conn,
+            account_id=int(target),
+            platform=normalize_platform(row["platform"]),
+            external_user_id=(row["external_user_id"] or "").strip() or None,
+            username=(row["username"] or "").strip() or None,
+            display_name=(row["display_name"] or "").strip() or None,
+            link_source="target_legacy_backfill",
+        )
+
+
 def _merge_legacy_identities(conn, *, target: int, source: int) -> None:
     rows = conn.execute(
         """
@@ -341,6 +363,7 @@ def apply_account_merge(target_account_id: int, source_account_ids: list[int], *
     with db() as conn:
         with tx(conn):
             _ensure_account_conn(conn, plan.target_account_id)
+            _backfill_target_legacy_identities(conn, target=plan.target_account_id)
             for source in plan.source_account_ids:
                 _ensure_account_conn(conn, int(source))
                 _merge_legacy_identities(conn, target=plan.target_account_id, source=int(source))
