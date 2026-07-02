@@ -9,14 +9,18 @@ NAME = "account_identity_v1"
 log = logging.getLogger(__name__)
 
 
+def _is_duplicate_column_error(exc: sqlite3.OperationalError) -> bool:
+    text = str(exc).lower()
+    return "duplicate column" in text or "already exists" in text
+
+
 def _try_add_column(conn: sqlite3.Connection, table: str, ddl: str) -> None:
     try:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
-    except Exception:
-        # SQLite raises when the column already exists; Postgres may do the same
-        # through the compatibility adapter. The migration is intentionally
-        # idempotent and guarded by the schema_migrations ledger.
-        return
+    except sqlite3.OperationalError as exc:
+        if _is_duplicate_column_error(exc):
+            return
+        raise
 
 
 def apply(conn: sqlite3.Connection) -> None:
