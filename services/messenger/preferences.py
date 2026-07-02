@@ -31,7 +31,9 @@ def record_channel_identity(
     # Account identity is the canonical layer. The legacy user_channel_* tables
     # below are kept as a compatibility mirror while older delivery services are
     # migrated. Do this first so an identity conflict cannot silently mutate the
-    # legacy mirror into a different account.
+    # legacy mirror into a different account: re-linking an already-claimed
+    # external identity to another account must raise AccountIdentityConflict
+    # (paid entitlements must never migrate between accounts implicitly).
     link_channel_to_account(
         int(user_id),
         norm,

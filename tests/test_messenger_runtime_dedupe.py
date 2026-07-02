@@ -40,14 +40,25 @@ def test_bridge_entry_makes_current_platform_preferred(monkeypatch, tmp_path):
     assert prefs.get_preferred_platform(501) == 'vk'
 
 
-def test_identity_conflict_collapses_to_latest_canonical_user(monkeypatch, tmp_path):
+def test_identity_conflict_raises_and_keeps_original_owner(monkeypatch, tmp_path):
+    """Canonical contract (account foundation layer): an external identity that is
+    already claimed by one account must NOT silently migrate to another account.
+    Re-recording it under a different user raises AccountIdentityConflict and the
+    original owner keeps the identity. This protects paid entitlements from
+    implicit account takeover. See tests/test_account_identity_foundation.py.
+    """
+    import pytest as _pytest
+
+    from services.accounts.identity import AccountIdentityConflict
+
     _, prefs, *_ = _reload_modules(monkeypatch, tmp_path)
     prefs.record_channel_identity(701, 'vk', 'same-ext')
-    prefs.record_channel_identity(702, 'vk', 'same-ext')
+    with _pytest.raises(AccountIdentityConflict):
+        prefs.record_channel_identity(702, 'vk', 'same-ext')
     snap_701 = prefs.get_channel_snapshot(701)
     snap_702 = prefs.get_channel_snapshot(702)
-    assert snap_701['identities'] == []
-    assert snap_702['identities'][0]['external_user_id'] == 'same-ext'
+    assert snap_701['identities'][0]['external_user_id'] == 'same-ext'
+    assert snap_702['identities'] == []
 
 
 import pytest
