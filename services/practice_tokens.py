@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from services.accounts.identity import ensure_account
 from services.db import db, tx
 from services.practice_token_contract import (
     PracticePackage,
@@ -81,6 +82,33 @@ def get_package(package_id: str | None) -> PracticePackage:
     return package_by_id(package_id)
 
 
+def _canonical_practice_user_id(user_id: int) -> int:
+    uid = int(user_id)
+    external = str(uid)
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT account_id
+            FROM account_channel_identities
+            WHERE external_user_id=?
+            ORDER BY account_id
+            """.strip(),
+            (external,),
+        ).fetchall()
+        account_ids = [int(row["account_id"]) for row in rows]
+        if len(account_ids) == 1:
+            return account_ids[0]
+
+        row = conn.execute(
+            "SELECT account_id FROM accounts WHERE account_id=? LIMIT 1",
+            (uid,),
+        ).fetchone()
+        if row is not None:
+            return int(row["account_id"])
+
+    return ensure_account(uid)
+
+
 def _wallet_from_row(row: Any, user_id: int) -> PracticeWallet:
     if not row:
         return PracticeWallet(int(user_id), 0, 0, 0)
@@ -109,9 +137,10 @@ def _get_wallet_in_conn(conn: Any, user_id: int) -> PracticeWallet:
 
 
 def get_wallet(user_id: int) -> PracticeWallet:
+    uid = _canonical_practice_user_id(int(user_id))
     with db() as conn:
-        _ensure_wallet(conn, int(user_id))
-        return _get_wallet_in_conn(conn, int(user_id))
+        _ensure_wallet(conn, uid)
+        return _get_wallet_in_conn(conn, uid)
 
 
 def _insert_ledger(
@@ -154,25 +183,26 @@ def grant_tokens(
     source: str = "",
     idempotency_key: str | None = None,
 ) -> tuple[bool, PracticeWallet, int | None]:
-    idempotency_key = idempotency_key or f"grant:{provider}:{provider_payment_id}:{user_id}:{package_id}:{amount}"
+    uid = _canonical_practice_user_id(int(user_id))
+    idempotency_key = idempotency_key or f"grant:{provider}:{provider_payment_id}:{uid}:{package_id}:{amount}"
     with db() as conn:
         with tx(conn):
-            _ensure_wallet(conn, int(user_id))
+            _ensure_wallet(conn, uid)
             existing = conn.execute(
                 "SELECT id FROM practice_ledger WHERE idempotency_key=?",
                 (idempotency_key,),
             ).fetchone()
             if existing:
-                return False, _get_wallet_in_conn(conn, int(user_id)), int(existing["id"])
-            wallet = _get_wallet_in_conn(conn, int(user_id))
+                return False, _get_wallet_in_conn(conn, uid), int(existing["id"])
+            wallet = _get_wallet_in_conn(conn, uid)
             balance = int(wallet.available_tokens) + int(amount)
             conn.execute(
                 "UPDATE practice_wallets SET available_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
-                (balance, int(user_id)),
+                (balance, uid),
             )
             ledger_id = _insert_ledger(
                 conn,
-                user_id=int(user_id),
+                user_id=uid,
                 event_type="grant",
                 amount=int(amount),
                 balance_after=balance,
@@ -183,7 +213,7 @@ def grant_tokens(
                 provider_payment_id=provider_payment_id,
                 idempotency_key=idempotency_key,
             )
-            wallet_after = _get_wallet_in_conn(conn, int(user_id))
+            wallet_after = _get_wallet_in_conn(conn, uid)
     return True, wallet_after, ledger_id
 
 
@@ -194,18 +224,19 @@ def reserve_practice(
     audio_anchor: int | None = None,
     reason: str = "audio_delivery",
 ) -> tuple[bool, PracticeWallet, str | None]:
+    uid = _canonical_practice_user_id(int(user_id))
     reservation_id = f"practice_res_{uuid.uuid4().hex}"
     with db() as conn:
         with tx(conn):
-            _ensure_wallet(conn, int(user_id))
-            wallet = _get_wallet_in_conn(conn, int(user_id))
+            _ensure_wallet(conn, uid)
+            wallet = _get_wallet_in_conn(conn, uid)
             if wallet.available_tokens <= 0:
                 return False, wallet, None
             available_after = int(wallet.available_tokens) - 1
             reserved_after = int(wallet.reserved_tokens) + 1
             conn.execute(
                 "UPDATE practice_wallets SET available_tokens=?, reserved_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
-                (available_after, reserved_after, int(user_id)),
+                (available_after, reserved_after, uid),
             )
             conn.execute(
                 """
@@ -214,7 +245,7 @@ def reserve_practice(
                 ) VALUES(?,?,?,?,?,?,?)
                 """.strip(),
                 (
-                    reservation_id, int(user_id), 1, "reserved",
+                    reservation_id, uid, 1, "reserved",
                     int(session_id) if session_id is not None else None,
                     int(audio_anchor) if audio_anchor is not None else None,
                     reason,
@@ -222,14 +253,14 @@ def reserve_practice(
             )
             _insert_ledger(
                 conn,
-                user_id=int(user_id),
+                user_id=uid,
                 event_type="reserve",
                 amount=-1,
                 balance_after=available_after,
                 reason=reason,
                 idempotency_key=f"reserve:{reservation_id}",
             )
-            wallet_after = _get_wallet_in_conn(conn, int(user_id))
+            wallet_after = _get_wallet_in_conn(conn, uid)
     return True, wallet_after, reservation_id
 
 
@@ -316,14 +347,15 @@ def check_and_reserve_for_audio(
     mode = enforcement_mode()
     if is_demo or not token_economy_enabled() or mode == "off":
         return PracticeAccessDecision(True, mode, "free_demo_or_disabled")
-    wallet = get_wallet(int(user_id))
+    uid = _canonical_practice_user_id(int(user_id))
+    wallet = get_wallet(uid)
     if wallet.available_tokens <= 0:
         message = "Practice balance is empty. Open practice packages to continue."
         if mode == "soft":
             return PracticeAccessDecision(True, mode, "soft_insufficient_balance", warning=message)
         return PracticeAccessDecision(False, mode, "insufficient_balance", message=message)
     ok, _wallet_after, reservation_id = reserve_practice(
-        int(user_id), session_id=session_id, audio_anchor=audio_anchor
+        uid, session_id=session_id, audio_anchor=audio_anchor
     )
     if not ok:
         message = "A practice token is required to continue."
@@ -350,18 +382,19 @@ def grant_tokens_for_payment(
     package_id: str,
     source: str = "webhook",
 ) -> tuple[bool, PracticeWallet, int | None]:
+    uid = _canonical_practice_user_id(int(user_id))
     package = get_package(package_id)
     with db() as conn:
         with tx(conn):
-            _ensure_wallet(conn, int(user_id))
+            _ensure_wallet(conn, uid)
             existing = conn.execute(
                 "SELECT ledger_id FROM payment_token_grants WHERE provider=? AND provider_payment_id=?",
                 (provider, provider_payment_id),
             ).fetchone()
             if existing:
-                return False, _get_wallet_in_conn(conn, int(user_id)), int(existing["ledger_id"] or 0)
+                return False, _get_wallet_in_conn(conn, uid), int(existing["ledger_id"] or 0)
     inserted, wallet, ledger_id = grant_tokens(
-        int(user_id),
+        uid,
         package_id=package.package_id,
         amount=package.tokens,
         provider=provider,
@@ -378,22 +411,24 @@ def grant_tokens_for_payment(
                     provider, provider_payment_id, user_id, package_id, tokens_granted, ledger_id
                 ) VALUES(?,?,?,?,?,?)
                 """.strip(),
-                (provider, provider_payment_id, int(user_id), package.package_id, package.tokens, ledger_id),
+                (provider, provider_payment_id, uid, package.package_id, package.tokens, ledger_id),
             )
     return inserted, wallet, ledger_id
 
 
 def get_delivery_mode(user_id: int) -> str:
+    uid = _canonical_practice_user_id(int(user_id))
     with db() as conn:
         ensure_schema(conn)
         row = conn.execute(
             "SELECT delivery_mode FROM user_practice_preferences WHERE user_id=?",
-            (int(user_id),),
+            (uid,),
         ).fetchone()
     return str(row["delivery_mode"] if row else "single_daily")
 
 
 def set_delivery_mode(user_id: int, mode: str) -> str:
+    uid = _canonical_practice_user_id(int(user_id))
     mode = normalize_delivery_mode(mode)
     with db() as conn:
         with tx(conn):
@@ -406,7 +441,7 @@ def set_delivery_mode(user_id: int, mode: str) -> str:
                     delivery_mode=excluded.delivery_mode,
                     updated_at=CURRENT_TIMESTAMP
                 """.strip(),
-                (int(user_id), mode),
+                (uid, mode),
             )
     return mode
 
