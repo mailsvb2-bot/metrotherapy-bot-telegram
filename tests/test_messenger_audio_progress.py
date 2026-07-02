@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from services.accounts.audio_progress import get_audio_state
 from services.schema import init_db
 from services.messenger.audio_progress import get_next_audio_item, record_audio_delivery, get_progress_snapshot, AudioProgressItem
 from services.messenger.bridge import issue_bridge_token
@@ -37,3 +38,35 @@ def test_progress_snapshot_shows_pending_item_before_confirmation():
     assert snap.last_anchor is None
     assert snap.pending_item is not None
     assert snap.pending_item.anchor == 20
+
+def test_record_audio_delivery_writes_account_audio_progress():
+    item = AudioProgressItem(ordinal=1, anchor=7, title='A7', path=Path('audio/full/a7.opus'))
+
+    record_audio_delivery(101001, item=item, platform='telegram')
+
+    state = get_audio_state(101001)
+    assert state.last_completed_audio_no == 7
+    assert state.pending_audio_no is None
+
+
+def test_legacy_source_delivery_updates_canonical_account_progress():
+    token = issue_bridge_token(101010)
+    linked = register_user_entry(
+        202020,
+        platform='vk',
+        external_user_id='202020',
+        start_payload=f'bridge_{token}',
+    )
+    assert linked.user_id == 101010
+
+    item = AudioProgressItem(ordinal=1, anchor=8, title='A8', path=Path('audio/full/a8.opus'))
+
+    record_audio_delivery(202020, item=item, platform='vk')
+
+    state = get_audio_state(101010)
+    assert state.last_completed_audio_no == 8
+
+    snap = get_progress_snapshot(101010)
+    assert snap.last_anchor == 8
+    assert snap.last_platform == 'vk'
+

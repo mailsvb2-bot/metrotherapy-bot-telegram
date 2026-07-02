@@ -5,6 +5,12 @@ from pathlib import Path
 
 from config.settings import settings
 from core.time_utils import utc_now
+from services.accounts.audio_progress import (
+    DEFAULT_PRODUCT_ID,
+    get_audio_state as get_account_audio_state,
+    mark_audio_completed as mark_account_audio_completed,
+    mark_audio_sent as mark_account_audio_sent,
+)
 from services.audio_anchor import scan_full_anchored
 from services.db import db, tx
 from services.messenger.timeline import log_audio_timeline_event
@@ -53,33 +59,138 @@ def get_audio_item_by_anchor(anchor: int) -> AudioProgressItem | None:
     return None
 
 
+def _empty_progress() -> dict[str, object | None]:
+    return {
+        'last_anchor': None,
+        'last_title': None,
+        'last_platform': None,
+        'delivered_at': None,
+        'updated_at': None,
+        'last_confirmed_at': None,
+        'pending_anchor': None,
+        'pending_title': None,
+        'pending_path': None,
+        'pending_platform': None,
+        'pending_token': None,
+        'pending_delivered_at': None,
+    }
+
+
+def _program_id(sequence_key: str) -> str:
+    return str(sequence_key or SEQUENCE_FULL_SERIES)
+
+
+def _canonical_account_id(user_id: int) -> int:
+    uid = int(user_id)
+    external = str(uid)
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT account_id
+            FROM account_channel_identities
+            WHERE external_user_id=?
+            ORDER BY account_id
+            """.strip(),
+            (external,),
+        ).fetchall()
+        account_ids = [int(row["account_id"]) for row in rows]
+        if len(account_ids) == 1:
+            return account_ids[0]
+
+        row = conn.execute(
+            "SELECT account_id FROM accounts WHERE account_id=? LIMIT 1",
+            (uid,),
+        ).fetchone()
+        if row is not None:
+            return int(row["account_id"])
+    return uid
+
+
+def _account_completion_platform(account_id: int, program_id: str, audio_no: int) -> str | None:
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT source_platform AS platform
+            FROM account_audio_completions
+            WHERE account_id=? AND product_id=? AND program_id=? AND audio_no=?
+            LIMIT 1
+            """.strip(),
+            (int(account_id), DEFAULT_PRODUCT_ID, str(program_id), int(audio_no)),
+        ).fetchone()
+    return str(row["platform"]) if row and row["platform"] is not None else None
+
+
+def _account_delivery_platform(account_id: int, program_id: str, audio_no: int) -> str | None:
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT platform
+            FROM account_audio_deliveries
+            WHERE account_id=? AND product_id=? AND program_id=? AND audio_no=?
+            ORDER BY id DESC
+            LIMIT 1
+            """.strip(),
+            (int(account_id), DEFAULT_PRODUCT_ID, str(program_id), int(audio_no)),
+        ).fetchone()
+    return str(row["platform"]) if row and row["platform"] is not None else None
+
+
+def _overlay_account_progress(
+    user_id: int,
+    *,
+    sequence_key: str,
+    progress: dict[str, object | None],
+) -> dict[str, object | None]:
+    account_id = _canonical_account_id(int(user_id))
+    program_id = _program_id(sequence_key)
+    state = get_account_audio_state(account_id, program_id=program_id)
+    out = dict(progress)
+
+    try:
+        legacy_last = int(out.get("last_anchor") or 0)
+    except (TypeError, ValueError):
+        legacy_last = 0
+
+    if state.last_completed_audio_no > legacy_last:
+        item = get_audio_item_by_anchor(state.last_completed_audio_no)
+        platform = _account_completion_platform(account_id, program_id, state.last_completed_audio_no)
+        out["last_anchor"] = state.last_completed_audio_no
+        out["last_title"] = item.title if item is not None else out.get("last_title")
+        out["last_platform"] = platform or out.get("last_platform")
+        out["last_confirmed_at"] = state.updated_at
+        out["updated_at"] = state.updated_at
+
+    if state.pending_audio_no is not None and state.pending_audio_no > state.last_completed_audio_no:
+        try:
+            legacy_pending = int(out.get("pending_anchor") or 0)
+        except (TypeError, ValueError):
+            legacy_pending = 0
+        if legacy_pending != state.pending_audio_no:
+            item = get_audio_item_by_anchor(state.pending_audio_no)
+            platform = _account_delivery_platform(account_id, program_id, state.pending_audio_no)
+            out["pending_anchor"] = state.pending_audio_no
+            out["pending_title"] = item.title if item is not None else out.get("pending_title")
+            out["pending_path"] = str(item.path) if item is not None else out.get("pending_path")
+            out["pending_platform"] = platform or out.get("pending_platform")
+            out["pending_token"] = None
+            out["pending_delivered_at"] = state.updated_at
+
+    return out
+
+
 def get_last_progress(user_id: int, *, sequence_key: str = SEQUENCE_FULL_SERIES) -> dict[str, object | None]:
     with db() as conn:
         row = conn.execute(
-            '''
+            """
             SELECT last_anchor, last_title, last_platform, delivered_at, updated_at, last_confirmed_at,
                    pending_anchor, pending_title, pending_path, pending_platform, pending_token, pending_delivered_at
             FROM user_audio_progress
             WHERE user_id=? AND sequence_key=?
-            '''.strip(),
+            """.strip(),
             (int(user_id), sequence_key),
         ).fetchone()
-    if not row:
-        return {
-            'last_anchor': None,
-            'last_title': None,
-            'last_platform': None,
-            'delivered_at': None,
-            'updated_at': None,
-            'last_confirmed_at': None,
-            'pending_anchor': None,
-            'pending_title': None,
-            'pending_path': None,
-            'pending_platform': None,
-            'pending_token': None,
-            'pending_delivered_at': None,
-        }
-    return dict(row)
+    progress = dict(row) if row else _empty_progress()
+    return _overlay_account_progress(int(user_id), sequence_key=sequence_key, progress=progress)
 
 
 def get_next_audio_item(user_id: int, *, sequence_key: str = SEQUENCE_FULL_SERIES) -> AudioProgressItem | None:
@@ -150,6 +261,13 @@ def record_audio_delivery(
                     None,
                 ),
             )
+    account_id = _canonical_account_id(int(user_id))
+    mark_account_audio_completed(
+        account_id,
+        int(item.anchor),
+        platform=str(platform),
+        program_id=_program_id(sequence_key),
+    )
     log_audio_timeline_event(int(user_id), event_type="confirmed_delivery", sequence_key=sequence_key, anchor=int(item.anchor), title=item.title, platform=str(platform))
 
 
@@ -198,6 +316,15 @@ def mark_pending_audio_delivery(
                     now,
                 ),
             )
+    account_id = _canonical_account_id(int(user_id))
+    mark_account_audio_sent(
+        account_id,
+        int(item.anchor),
+        platform=str(platform),
+        external_user_id=str(user_id),
+        program_id=_program_id(sequence_key),
+    )
+
 
 
 def get_pending_audio_item(user_id: int, *, sequence_key: str = SEQUENCE_FULL_SERIES) -> AudioProgressItem | None:
