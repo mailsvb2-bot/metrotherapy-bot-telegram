@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from services.accounts.identity import ensure_account
 from services.db import db, tx
 from services.messenger.platforms import MessengerPlatform, normalize_platform
 from services.messenger.preferences import get_channel_snapshot
@@ -51,6 +52,33 @@ def package_entitlement_types(package_id: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _canonical_premium_user_id(user_id: int) -> int:
+    uid = int(user_id)
+    external = str(uid)
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT account_id
+            FROM account_channel_identities
+            WHERE external_user_id=?
+            ORDER BY account_id
+            """.strip(),
+            (external,),
+        ).fetchall()
+        account_ids = [int(row["account_id"]) for row in rows]
+        if len(account_ids) == 1:
+            return account_ids[0]
+
+        row = conn.execute(
+            "SELECT account_id FROM accounts WHERE account_id=? LIMIT 1",
+            (uid,),
+        ).fetchone()
+        if row is not None:
+            return int(row["account_id"])
+
+    return ensure_account(uid)
+
+
 def video_course_url() -> str:
     return (
         os.getenv("STRESS_VIDEO_COURSE_URL")
@@ -91,18 +119,44 @@ def consultation_user_message(*, package_title: str) -> str:
 
 
 def delivery_targets(user_id: int, *, fallback_platform: str = MessengerPlatform.TELEGRAM.value) -> list[tuple[str, str | None]]:
-    snapshot = get_channel_snapshot(int(user_id))
+    uid = _canonical_premium_user_id(int(user_id))
     targets: list[tuple[str, str | None]] = []
+
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT platform, external_user_id
+            FROM account_channel_identities
+            WHERE account_id=?
+            ORDER BY platform
+            """.strip(),
+            (uid,),
+        ).fetchall()
+
+    for identity in rows:
+        platform = normalize_platform(str(identity["platform"] or fallback_platform))
+        external_user_id = (identity["external_user_id"] or "").strip() or None
+        if platform == MessengerPlatform.TELEGRAM.value and not external_user_id:
+            external_user_id = str(uid)
+        item = (platform, external_user_id)
+        if item not in targets:
+            targets.append(item)
+
+    if targets:
+        return targets
+
+    snapshot = get_channel_snapshot(uid)
     for identity in snapshot.get("identities", []):
         platform = normalize_platform(str(identity.get("platform") or fallback_platform))
         external_user_id = (identity.get("external_user_id") or "").strip() or None
         if platform == MessengerPlatform.TELEGRAM.value and not external_user_id:
-            external_user_id = str(int(user_id))
+            external_user_id = str(uid)
         item = (platform, external_user_id)
         if item not in targets:
             targets.append(item)
+
     if not targets:
-        targets.append((normalize_platform(fallback_platform), str(int(user_id))))
+        targets.append((normalize_platform(fallback_platform), str(uid)))
     return targets
 
 
@@ -187,12 +241,13 @@ def grant_premium_entitlements_for_payment(
     source: str = "webhook",
     fallback_platform: str = MessengerPlatform.TELEGRAM.value,
 ) -> PremiumGrantResult:
+    uid = _canonical_premium_user_id(int(user_id))
     package = package_by_id(package_id)
     entitlement_types = package_entitlement_types(package.package_id)
     if not entitlement_types:
         return PremiumGrantResult()
 
-    targets = delivery_targets(int(user_id), fallback_platform=fallback_platform)
+    targets = delivery_targets(uid, fallback_platform=fallback_platform)
     video_granted = False
     consultation_granted = False
     outbox_created = 0
@@ -204,7 +259,7 @@ def grant_premium_entitlements_for_payment(
             if VIDEO_ENTITLEMENT in entitlement_types:
                 video_granted = _insert_entitlement(
                     conn,
-                    user_id=int(user_id),
+                    user_id=uid,
                     package_id=package.package_id,
                     entitlement_type=VIDEO_ENTITLEMENT,
                     provider=provider,
@@ -214,7 +269,7 @@ def grant_premium_entitlements_for_payment(
                 for platform, external_user_id in targets:
                     if _insert_outbox(
                         conn,
-                        user_id=int(user_id),
+                        user_id=uid,
                         platform=platform,
                         external_user_id=external_user_id,
                         delivery_kind="video_course_access",
@@ -227,7 +282,7 @@ def grant_premium_entitlements_for_payment(
             if CONSULTATION_ENTITLEMENT in entitlement_types:
                 consultation_granted = _insert_entitlement(
                     conn,
-                    user_id=int(user_id),
+                    user_id=uid,
                     package_id=package.package_id,
                     entitlement_type=CONSULTATION_ENTITLEMENT,
                     provider=provider,
@@ -237,7 +292,7 @@ def grant_premium_entitlements_for_payment(
                 primary_platform, primary_external_user_id = targets[0]
                 if _insert_outbox(
                     conn,
-                    user_id=int(user_id),
+                    user_id=uid,
                     platform=primary_platform,
                     external_user_id=primary_external_user_id,
                     delivery_kind="consultation_user_notice",
@@ -250,7 +305,7 @@ def grant_premium_entitlements_for_payment(
                 ):
                     outbox_created += 1
                 note = consultation_admin_note(
-                    user_id=int(user_id),
+                    user_id=uid,
                     platform=primary_platform,
                     external_user_id=primary_external_user_id,
                     package_title=package.title,
@@ -258,7 +313,7 @@ def grant_premium_entitlements_for_payment(
                 )
                 consultation_request_created = _insert_consultation_request(
                     conn,
-                    user_id=int(user_id),
+                    user_id=uid,
                     platform=primary_platform,
                     external_user_id=primary_external_user_id,
                     package_id=package.package_id,
