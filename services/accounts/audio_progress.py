@@ -75,6 +75,23 @@ def get_audio_state(
     return _row_to_state(row)
 
 
+def _resolve_delivery_external_user_id(conn, *, account_id: int, platform: str, external_user_id: str | None) -> str | None:
+    explicit = (external_user_id or "").strip()
+    row = conn.execute(
+        """
+        SELECT external_user_id
+        FROM account_channel_identities
+        WHERE account_id=? AND platform=?
+        LIMIT 1
+        """.strip(),
+        (int(account_id), str(platform)),
+    ).fetchone()
+    linked = (row["external_user_id"] or "").strip() if row else ""
+    if linked and (not explicit or explicit == str(int(account_id))):
+        return linked
+    return explicit or linked or None
+
+
 def mark_audio_sent(
     account_id: int,
     audio_no: int,
@@ -110,6 +127,12 @@ def mark_audio_sent(
                 """.strip(),
                 (aid, product_id, program_id, no, 0, no, now),
             )
+            delivery_external_user_id = _resolve_delivery_external_user_id(
+                conn,
+                account_id=aid,
+                platform=str(platform),
+                external_user_id=external_user_id,
+            )
             conn.execute(
                 """
                 INSERT INTO account_audio_deliveries(
@@ -117,7 +140,7 @@ def mark_audio_sent(
                     platform, external_user_id, status, sent_at, updated_at
                 ) VALUES(?,?,?,?,?,?,?,?,?)
                 """.strip(),
-                (aid, product_id, program_id, no, str(platform), (external_user_id or None), "sent", now, now),
+                (aid, product_id, program_id, no, str(platform), delivery_external_user_id, "sent", now, now),
             )
     return get_audio_state(aid, product_id=product_id, program_id=program_id)
 
