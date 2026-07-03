@@ -126,6 +126,41 @@ def build_account_diagnostics(account_id: int) -> dict[str, Any]:
             tuple(linked_ids),
         ) if linked_ids else []
 
+        premium_entitlements = _rows(
+            conn,
+            f"""
+            SELECT *
+            FROM premium_entitlements
+            WHERE user_id IN ({placeholders})
+            ORDER BY user_id, id DESC
+            """,
+            tuple(linked_ids),
+        ) if linked_ids else []
+
+        premium_delivery_outbox = _rows(
+            conn,
+            f"""
+            SELECT *
+            FROM premium_delivery_outbox
+            WHERE user_id IN ({placeholders})
+            ORDER BY user_id, id DESC
+            LIMIT 50
+            """,
+            tuple(linked_ids),
+        ) if linked_ids else []
+
+        consultation_requests = _rows(
+            conn,
+            f"""
+            SELECT *
+            FROM consultation_requests
+            WHERE user_id IN ({placeholders})
+            ORDER BY user_id, id DESC
+            LIMIT 50
+            """,
+            tuple(linked_ids),
+        ) if linked_ids else []
+
         target_wallet = _one(
             conn,
             """
@@ -209,6 +244,9 @@ def build_account_diagnostics(account_id: int) -> dict[str, Any]:
         "raw_practice_wallets": raw_wallets,
         "raw_practice_preferences": raw_preferences,
         "legacy_channel_identities": legacy_identities,
+        "premium_entitlements": premium_entitlements,
+        "premium_delivery_outbox_tail": premium_delivery_outbox,
+        "consultation_requests": consultation_requests,
         "practice_wallet_backfill_ledger_tail": backfill_ledger,
         "warnings": warnings,
         "ok": not warnings,
