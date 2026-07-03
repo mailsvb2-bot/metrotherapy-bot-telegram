@@ -33,16 +33,6 @@ select = [
     "F822",  # undefined name in __all__
     "F823",  # local variable referenced before assignment
 ]
-
-[tool.ruff.lint.per-file-ignores]
-# Tests intentionally keep local bootstrap/import patterns; the production gate
-# should not be blocked by test style debt.
-"tests/**/*.py" = [
-    "F821",
-    "F822",
-    "F823",
-]
-
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true

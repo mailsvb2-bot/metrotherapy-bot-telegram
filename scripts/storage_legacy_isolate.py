@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.paths import DB_PATH  # noqa: E402
-from services.storage_legacy_audit import storage_legacy_audit  # noqa: E402
+from core.paths import DB_PATH
+from services.storage_legacy_audit import storage_legacy_audit
 
 
 def _sha256(path: Path) -> str:

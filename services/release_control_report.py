@@ -136,7 +136,7 @@ def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
 
 
 def _read_health_payload(url: str) -> dict[str, Any]:
-    with urllib.request.urlopen(url, timeout=1.5) as response:  # noqa: S310 - local operator health URL
+    with urllib.request.urlopen(url, timeout=1.5) as response:
         if int(getattr(response, "status", 0) or 0) != 200:
             return {}
         payload = json.loads(response.read().decode("utf-8"))

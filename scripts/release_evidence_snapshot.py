@@ -12,10 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from services.disaster_recovery_status import disaster_recovery_status  # noqa: E402
-from services.probe_ledger import get_recent_probe_runs  # noqa: E402
-from services.release_control_report import format_release_control_report  # noqa: E402
-from services.storage_legacy_audit import storage_legacy_audit  # noqa: E402
+from services.disaster_recovery_status import disaster_recovery_status
+from services.probe_ledger import get_recent_probe_runs
+from services.release_control_report import format_release_control_report
+from services.storage_legacy_audit import storage_legacy_audit
 
 DEFAULT_EVIDENCE_DIR = Path(os.getenv("RELEASE_EVIDENCE_DIR", "/var/lib/metrotherapy/release_evidence"))
 

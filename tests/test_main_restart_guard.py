@@ -24,7 +24,7 @@ def _load_restart_limit():
         "TypeError": TypeError,
         "ValueError": ValueError,
     }
-    exec(compile(module, "main.py", "exec"), namespace)  # noqa: S102
+    exec(compile(module, "main.py", "exec"), namespace)
     return namespace["_restart_limit"]
 
 

@@ -20,11 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from services.db import db  # noqa: E402
-from services.payments.reconciliation import record_yookassa_webhook  # noqa: E402
-from services.practice_token_contract import package_by_id  # noqa: E402
-from services.probe_ledger import assert_synthetic_user_id, finish_probe_run, start_probe_run  # noqa: E402
-from services.schema import init_db  # noqa: E402
+from services.db import db
+from services.payments.reconciliation import record_yookassa_webhook
+from services.practice_token_contract import package_by_id
+from services.probe_ledger import assert_synthetic_user_id, finish_probe_run, start_probe_run
+from services.schema import init_db
 
 DEFAULT_SYNTHETIC_USER_ID = -910_000_301
 DEFAULT_PACKAGE_ID = "practice_personal_month"

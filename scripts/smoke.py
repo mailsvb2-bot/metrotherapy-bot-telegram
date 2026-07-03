@@ -115,14 +115,14 @@ def main() -> int:
     _cleanup_release_artifacts()
 
     try:
-        import aiogram  # noqa: F401
+        import aiogram
     except ImportError:
         print('❌ aiogram is not installed. Install requirements.txt before running smoke.')
         _cleanup_temp_db(temp_db)
         return 2
 
     # Import app (and thus routers) to catch ImportError early.
-    import app  # noqa: F401
+    import app
 
     # Run DB init + strict validations (no polling)
     from services.schema import init_db

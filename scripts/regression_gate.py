@@ -126,7 +126,7 @@ def _run(step: GateStep) -> int:
 
     print(f"==> {step.name}", flush=True)
     print("cmd:", " ".join(step.cmd), flush=True)
-    completed = subprocess.run(step.cmd, cwd=ROOT, env=env, check=False)  # noqa: S603
+    completed = subprocess.run(step.cmd, cwd=ROOT, env=env, check=False)
     if completed.returncode != 0:
         print(f"REGRESSION_GATE_FAILED step={step.name!r} code={completed.returncode}", flush=True)
         return int(completed.returncode)

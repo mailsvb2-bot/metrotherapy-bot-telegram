@@ -16,7 +16,7 @@ from typing import Any
 
 
 # Re-export the public DB helpers expected across the codebase.
-from services.db.core import (  # noqa: F401
+from services.db.core import (
     DB_PATH,
     PROJECT_ROOT,
     db,
@@ -90,7 +90,7 @@ def unmark_delivery(user_id: int, *key_parts: Any) -> None:
 
 
 # Schema split package (DDL-only)
-from services.db import schema  # noqa: F401,E402
+from services.db import schema
 
 # Make the package itself callable for legacy ``from services import db``
 # compatibility without shadowing the ``services.db`` package namespace.

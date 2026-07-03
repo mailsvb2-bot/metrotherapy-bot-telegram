@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from services.practice_token_contract import PracticePackage, public_practice_packages  # noqa: E402
+from services.practice_token_contract import PracticePackage, public_practice_packages
 
 
 @dataclass(frozen=True)

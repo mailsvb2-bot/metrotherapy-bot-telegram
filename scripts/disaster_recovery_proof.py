@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from services.disaster_recovery_status import disaster_recovery_status  # noqa: E402
-from scripts.postgres_restore_drill import latest_backup  # noqa: E402
+from services.disaster_recovery_status import disaster_recovery_status
+from scripts.postgres_restore_drill import latest_backup
 
 
 def _run_restore_drill() -> str:
