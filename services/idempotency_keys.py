@@ -23,7 +23,7 @@ def job_key(kind: str, ref_id: str) -> str:
 
 def _stable_int_from_str(s: str) -> int:
     # Deterministic 31-bit int from string
-    h = hashlib.sha1(s.encode("utf-8")).hexdigest()
+    h = hashlib.sha1(s.encode("utf-8"), usedforsecurity=False).hexdigest()
     return int(h[:8], 16)
 
 

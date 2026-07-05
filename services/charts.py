@@ -30,7 +30,7 @@ _CHART_CACHE_TTL = 10 * 60  # 10 минут
 def _chart_cache_key(prefix: str, kind_title: str, rows: list[dict[str, Any]]) -> str:
     tail = rows[-20:] if rows else []
     payload = repr((kind_title, len(rows), [(_rget(r, 'ts') or _rget(r, 'date'), _rget(r, 'pre'), _rget(r, 'post')) for r in tail]))
-    h = hashlib.sha1(payload.encode('utf-8', errors='ignore')).hexdigest()
+    h = hashlib.sha256(payload.encode('utf-8', errors='ignore')).hexdigest()
     return f"{prefix}:{h}"
 
 
@@ -266,7 +266,7 @@ def plot_tariffs_dynamics(title: str, price_events: list[dict[str, Any]], paymen
     plt = _plt()
 
     payload = repr((len(price_events), price_events[-20:], len(payments_daily), payments_daily[-20:]))
-    key = f"tariffs_dyn:{hashlib.sha1(payload.encode('utf-8', errors='ignore')).hexdigest()}"
+    key = f"tariffs_dyn:{hashlib.sha256(payload.encode('utf-8', errors='ignore')).hexdigest()}"
     cached = _CHART_CACHE.get(key)
     if cached and (time.time() - cached[0] < _CHART_CACHE_TTL):
         return cached[1]
