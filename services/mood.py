@@ -35,9 +35,9 @@ def _write_changed_count(conn, cursor=None, *, table: str = "", id_column: str =
     except (TypeError, ValueError):
         pass
 
-    if table and row_id is not None:
+    if table == "mood_sessions" and id_column == "id" and row_id is not None:
         try:
-            row = conn.execute(f"SELECT 1 FROM {table} WHERE {id_column}=? LIMIT 1", (row_id,)).fetchone()
+            row = conn.execute("SELECT 1 FROM mood_sessions WHERE id=? LIMIT 1", (row_id,)).fetchone()
             return 1 if row else 0
         except Exception:
             return 0
@@ -160,18 +160,20 @@ def series(user_id: int, *, kind: str | None = None, limit: int = 120) -> list[d
         limit = 120
     limit = max(10, min(limit, 3650))
 
-    where = "user_id=?"
-    params: list[Any] = [int(user_id)]
     if kind:
-        where += " AND kind=?"
-        params.append((kind or "").strip())
-
-    q = (
-        "SELECT day, pre_score, post_score, created_at_utc "
-        "FROM mood_sessions WHERE " + where + " "
-        "ORDER BY id ASC LIMIT ?"
-    )
-    params.append(int(limit))
+        q = (
+            "SELECT day, pre_score, post_score, created_at_utc "
+            "FROM mood_sessions WHERE user_id=? AND kind=? "
+            "ORDER BY id ASC LIMIT ?"
+        )
+        params: list[Any] = [int(user_id), (kind or "").strip(), int(limit)]
+    else:
+        q = (
+            "SELECT day, pre_score, post_score, created_at_utc "
+            "FROM mood_sessions WHERE user_id=? "
+            "ORDER BY id ASC LIMIT ?"
+        )
+        params = [int(user_id), int(limit)]
 
     try:
         with db() as conn:

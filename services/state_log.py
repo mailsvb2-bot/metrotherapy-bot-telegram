@@ -83,6 +83,58 @@ def fetch_last(user_id: int, limit: int = 10) -> list[dict[str, Any]]:
     return out
 
 
+def _activity_span_sql(start_ts: str | None, end_ts: str | None) -> tuple[str, str]:
+    if start_ts and end_ts:
+        return (
+            """
+            SELECT user_id, MIN(ts) AS a, MAX(ts) AS b, COUNT(*) AS c
+            FROM user_state_log
+            WHERE user_id=? AND ts >= ? AND ts < ?
+            GROUP BY user_id
+            """.strip(),
+            "both",
+        )
+    if start_ts:
+        return (
+            """
+            SELECT user_id, MIN(ts) AS a, MAX(ts) AS b, COUNT(*) AS c
+            FROM user_state_log
+            WHERE user_id=? AND ts >= ?
+            GROUP BY user_id
+            """.strip(),
+            "start",
+        )
+    if end_ts:
+        return (
+            """
+            SELECT user_id, MIN(ts) AS a, MAX(ts) AS b, COUNT(*) AS c
+            FROM user_state_log
+            WHERE user_id=? AND ts < ?
+            GROUP BY user_id
+            """.strip(),
+            "end",
+        )
+    return (
+        """
+        SELECT user_id, MIN(ts) AS a, MAX(ts) AS b, COUNT(*) AS c
+        FROM user_state_log
+        WHERE user_id=?
+        GROUP BY user_id
+        """.strip(),
+        "none",
+    )
+
+
+def _activity_span_params(mode: str, user_id: int, start_ts: str | None, end_ts: str | None) -> tuple[Any, ...]:
+    if mode == "both":
+        return (int(user_id), start_ts, end_ts)
+    if mode == "start":
+        return (int(user_id), start_ts)
+    if mode == "end":
+        return (int(user_id), end_ts)
+    return (int(user_id),)
+
+
 def activity_spans(user_ids: list[int], start_ts: str | None = None, end_ts: str | None = None) -> dict[int, dict[str, Any]]:
     """Возвращает активность по user_state_log для набора пользователей.
 
@@ -100,21 +152,13 @@ def activity_spans(user_ids: list[int], start_ts: str | None = None, end_ts: str
     if not ids:
         return {}
 
-    where = "user_id IN (%s)" % ",".join(["?"] * len(ids))
-    params: list[Any] = list(ids)
-
-    if start_ts:
-        where += " AND ts >= ?"
-        params.append(start_ts)
-    if end_ts:
-        where += " AND ts < ?"
-        params.append(end_ts)
-
-    q = f"SELECT user_id, MIN(ts) AS a, MAX(ts) AS b, COUNT(*) AS c FROM user_state_log WHERE {where} GROUP BY user_id"
+    sql, mode = _activity_span_sql(start_ts, end_ts)
 
     try:
         with db() as conn:
-            rows = conn.execute(q, params).fetchall()
+            rows = []
+            for user_id in ids:
+                rows.extend(conn.execute(sql, _activity_span_params(mode, user_id, start_ts, end_ts)).fetchall())
     except sqlite3.Error:
         logging.getLogger(__name__).exception("DB error while aggregating user_state_log")
         return {}

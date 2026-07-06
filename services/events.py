@@ -44,22 +44,15 @@ def funnel_counts(names: list[str]) -> dict[str, int]:
         return {}
 
     res: dict[str, int] = {n: 0 for n in names}
-    q = (
-        "SELECT name, COUNT(DISTINCT user_id) AS cnt "
-        "FROM events "
-        f"WHERE name IN ({','.join('?' for _ in names)}) "
-        "GROUP BY name"
-    )
+    sql = "SELECT COUNT(DISTINCT user_id) AS cnt FROM events WHERE name=?"
     with db() as c:
-        for row in c.execute(q, tuple(names)).fetchall():
+        for name in names:
+            row = c.execute(sql, (name,)).fetchone()
             try:
-                n = row[0]
-                cnt = int(row[1] or 0)
+                res[name] = int((row[0] if row else 0) or 0)
             except (IndexError, TypeError, ValueError):
                 logging.getLogger(__name__).exception("Bad row in events counts")
-                continue
-            if n in res:
-                res[n] = cnt
+                res[name] = 0
     return res
 
 
@@ -122,31 +115,48 @@ def log_runtime_event(
 
     def _write(c):
         cols = _events_cols(c)
-        insert_cols = ["user_id", "name", "meta", "created_at"]
-        values = [int(user_id), name, payload_json, ts]
+        base_values = (int(user_id), name, payload_json, ts)
 
-        # Extended v2 columns if present
-        if "event_type" in cols:
-            insert_cols.append("event_type")
-            values.append(name)
-        if "source" in cols:
-            insert_cols.append("source")
-            values.append(str(source))
-        if "payload" in cols:
-            insert_cols.append("payload")
-            values.append(payload_json)
-        if "timestamp_utc" in cols:
-            insert_cols.append("timestamp_utc")
-            values.append(ts)
-        if "decision_id" in cols:
-            insert_cols.append("decision_id")
-            values.append(did)
-        if "correlation_id" in cols:
-            insert_cols.append("correlation_id")
-            values.append(corr)
+        # Full v2 schema.
+        if {
+            "event_type",
+            "source",
+            "payload",
+            "timestamp_utc",
+            "decision_id",
+            "correlation_id",
+        }.issubset(cols):
+            c.execute(
+                """
+                INSERT INTO events(
+                    user_id, name, meta, created_at,
+                    event_type, source, payload, timestamp_utc, decision_id, correlation_id
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                (*base_values, name, str(source), payload_json, ts, did, corr),
+            )
+            return
 
-        q = f"INSERT INTO events({','.join(insert_cols)}) VALUES({','.join('?' for _ in insert_cols)})"
-        c.execute(q, tuple(values))
+        # Common v2-lite schema without decision/correlation columns.
+        if {"event_type", "source", "payload", "timestamp_utc"}.issubset(cols):
+            c.execute(
+                """
+                INSERT INTO events(
+                    user_id, name, meta, created_at,
+                    event_type, source, payload, timestamp_utc
+                )
+                VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (*base_values, name, str(source), payload_json, ts),
+            )
+            return
+
+        # Legacy schema.
+        c.execute(
+            "INSERT INTO events(user_id, name, meta, created_at) VALUES(?,?,?,?)",
+            base_values,
+        )
 
     try:
         if conn is not None:
