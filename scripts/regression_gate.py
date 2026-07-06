@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from services.command_runner import run_command
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_SURFACE = (
@@ -126,7 +127,7 @@ def _run(step: GateStep) -> int:
 
     print(f"==> {step.name}", flush=True)
     print("cmd:", " ".join(step.cmd), flush=True)
-    completed = subprocess.run(step.cmd, cwd=ROOT, env=env, check=False)
+    completed = run_command(step.cmd, cwd=ROOT, env=env, check=False)
     if completed.returncode != 0:
         print(f"REGRESSION_GATE_FAILED step={step.name!r} code={completed.returncode}", flush=True)
         return int(completed.returncode)
