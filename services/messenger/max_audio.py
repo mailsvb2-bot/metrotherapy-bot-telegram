@@ -11,6 +11,7 @@ caller only when the product flow explicitly allows it.
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -75,6 +76,27 @@ def _timeout_sec(platform: str) -> int:
         return 300
 
 
+def _ffmpeg_bin(platform: str) -> str:
+    raw = (os.getenv("FFMPEG_BIN") or "ffmpeg").strip()
+    if not raw:
+        raw = "ffmpeg"
+
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        if candidate.exists() and candidate.is_file():
+            return str(candidate)
+        raise _error_cls(platform)(f"{platform.upper()} ffmpeg executable is not found: {candidate}")
+
+    resolved = shutil.which(raw)
+    if resolved:
+        return resolved
+
+    raise _error_cls(platform)(
+        f"{platform.upper()} native .opus delivery requires ffmpeg. "
+        "Install ffmpeg or set FFMPEG_BIN to an absolute executable path."
+    )
+
+
 def _target_path(source: Path, *, platform: str) -> Path:
     digest = hashlib.sha256(str(source.resolve()).encode("utf-8")).hexdigest()[:16]
     safe_stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", source.stem).strip("._") or "audio"
@@ -114,7 +136,7 @@ def ensure_messenger_opus_file(file_path: Path | str, *, platform: str) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(".opus.tmp")
     cmd = [
-        os.getenv("FFMPEG_BIN", "ffmpeg"),
+        _ffmpeg_bin(clean_platform),
         "-y",
         "-i",
         str(source),
@@ -142,7 +164,7 @@ def ensure_messenger_opus_file(file_path: Path | str, *, platform: str) -> Path:
     except FileNotFoundError as exc:
         raise error_cls(
             f"{clean_platform.upper()} native .opus delivery requires ffmpeg. "
-            "Install ffmpeg or provide .opus source files."
+            "Install ffmpeg or set FFMPEG_BIN to an absolute executable path."
         ) from exc
     except subprocess.TimeoutExpired as exc:
         raise error_cls(f"{clean_platform.upper()} .opus conversion timed out for {source}") from exc
