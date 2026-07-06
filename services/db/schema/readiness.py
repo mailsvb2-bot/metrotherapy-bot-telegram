@@ -25,19 +25,16 @@ def required_readiness_tables() -> list[str]:
 
 def schema_readiness() -> tuple[bool, str | None]:
     required_tables = set(READY_TABLES)
-    placeholders = ','.join('?' for _ in sorted(required_tables))
     try:
         with get_connection() as conn:
             if CONFIG.uses_postgres:
                 rows = conn.execute(
-                    f"SELECT table_name AS name FROM information_schema.tables "
-                    f"WHERE table_schema=current_schema() AND table_name IN ({placeholders})",
-                    tuple(sorted(required_tables)),
+                    "SELECT table_name AS name FROM information_schema.tables "
+                    "WHERE table_schema=current_schema()",
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
-                    tuple(sorted(required_tables)),
+                    "SELECT name FROM sqlite_master WHERE type='table'",
                 ).fetchall()
         names: set[str] = set()
         for row in rows:

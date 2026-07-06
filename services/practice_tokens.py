@@ -63,10 +63,8 @@ def enforcement_mode() -> str:
 
 
 def ensure_schema(conn: Any) -> None:
-    placeholders = ",".join("?" for _ in _REQUIRED_SCHEMA_TABLES)
     rows = conn.execute(
-        f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
-        tuple(sorted(_REQUIRED_SCHEMA_TABLES)),
+        "SELECT name FROM sqlite_master WHERE type='table'",
     ).fetchall()
     existing = {str(row["name"] if hasattr(row, "keys") else row[0]) for row in rows}
     missing = sorted(_REQUIRED_SCHEMA_TABLES - existing)
