@@ -26,39 +26,69 @@ DEFAULT_STEPS: list[str] = [
 ]
 
 
+def _event_count_sql(start_utc: str | None, end_utc: str | None) -> tuple[str, str]:
+    if start_utc and end_utc:
+        return (
+            "SELECT COUNT(DISTINCT user_id) AS cnt FROM events WHERE name=? AND created_at >= ? AND created_at < ?",
+            "both",
+        )
+    if start_utc:
+        return (
+            "SELECT COUNT(DISTINCT user_id) AS cnt FROM events WHERE name=? AND created_at >= ?",
+            "start",
+        )
+    if end_utc:
+        return (
+            "SELECT COUNT(DISTINCT user_id) AS cnt FROM events WHERE name=? AND created_at < ?",
+            "end",
+        )
+    return ("SELECT COUNT(DISTINCT user_id) AS cnt FROM events WHERE name=?", "none")
+
+
+def _event_rows_sql(start_utc: str | None, end_utc: str | None) -> tuple[str, str]:
+    if start_utc and end_utc:
+        return (
+            "SELECT user_id, name, meta, created_at FROM events WHERE name=? AND created_at >= ? AND created_at < ? ORDER BY created_at ASC",
+            "both",
+        )
+    if start_utc:
+        return (
+            "SELECT user_id, name, meta, created_at FROM events WHERE name=? AND created_at >= ? ORDER BY created_at ASC",
+            "start",
+        )
+    if end_utc:
+        return (
+            "SELECT user_id, name, meta, created_at FROM events WHERE name=? AND created_at < ? ORDER BY created_at ASC",
+            "end",
+        )
+    return ("SELECT user_id, name, meta, created_at FROM events WHERE name=? ORDER BY created_at ASC", "none")
+
+
+def _date_params(mode: str, name: str, start_utc: str | None, end_utc: str | None) -> tuple[Any, ...]:
+    if mode == "both":
+        return (name, start_utc, end_utc)
+    if mode == "start":
+        return (name, start_utc)
+    if mode == "end":
+        return (name, end_utc)
+    return (name,)
+
+
 def _counts(names: list[str], start_utc: str | None = None, end_utc: str | None = None) -> dict[str, int]:
     if not names:
         return {}
 
     res: dict[str, int] = {n: 0 for n in names}
-
-    where = f"name IN ({','.join('?' for _ in names)})"
-    params: list[Any] = list(names)
-
-    if start_utc:
-        where += " AND created_at >= ?"
-        params.append(start_utc)
-    if end_utc:
-        where += " AND created_at < ?"
-        params.append(end_utc)
-
-    q = (
-        "SELECT name, COUNT(DISTINCT user_id) AS cnt "
-        "FROM events "
-        f"WHERE {where} "
-        "GROUP BY name"
-    )
+    sql, mode = _event_count_sql(start_utc, end_utc)
 
     with db() as c:
-        for row in c.execute(q, tuple(params)).fetchall():
+        for name in names:
+            row = c.execute(sql, _date_params(mode, name, start_utc, end_utc)).fetchone()
             try:
-                n = row[0]
-                cnt = int(row[1] or 0)
+                res[name] = int((row[0] if row else 0) or 0)
             except (IndexError, TypeError, ValueError):
                 logging.getLogger(__name__).exception("Bad row in funnel counts")
-                continue
-            if n in res:
-                res[n] = cnt
+                res[name] = 0
     return res
 
 
@@ -119,27 +149,15 @@ def conversion_breakdown(start_utc: str | None = None, end_utc: str | None = Non
 
     steps = ["demo_sent", "demo_ack", "view_tariffs", "sub_paid"]
 
-    where_parts = [f"name IN ({','.join('?' for _ in steps)})"]
-    params: list[Any] = list(steps)
-    if start_utc:
-        where_parts.append("created_at >= ?")
-        params.append(start_utc)
-    if end_utc:
-        where_parts.append("created_at < ?")
-        params.append(end_utc)
-    where = " AND ".join(where_parts)
-
-    q = (
-        "SELECT user_id, name, meta, created_at "
-        "FROM events "
-        f"WHERE {where} "
-        "ORDER BY created_at ASC"
-    )
+    sql, mode = _event_rows_sql(start_utc, end_utc)
 
     # События по пользователям
     per_user: dict[int, dict[str, Any]] = {}
     with db() as c:
-        rows = c.execute(q, tuple(params)).fetchall()
+        rows = []
+        for step in steps:
+            rows.extend(c.execute(sql, _date_params(mode, step, start_utc, end_utc)).fetchall())
+        rows.sort(key=lambda row: str(row[3] or ""))
         for r in rows:
             uid = int(r[0])
             name = (r[1] or "").strip()

@@ -24,35 +24,49 @@ STEPS = [
 ]
 
 
+def _event_count_sql(start_utc: str | None, end_utc: str | None) -> tuple[str, str]:
+    if start_utc and end_utc:
+        return (
+            "SELECT COUNT(DISTINCT user_id) AS cnt FROM events WHERE name=? AND created_at >= ? AND created_at < ?",
+            "both",
+        )
+    if start_utc:
+        return (
+            "SELECT COUNT(DISTINCT user_id) AS cnt FROM events WHERE name=? AND created_at >= ?",
+            "start",
+        )
+    if end_utc:
+        return (
+            "SELECT COUNT(DISTINCT user_id) AS cnt FROM events WHERE name=? AND created_at < ?",
+            "end",
+        )
+    return ("SELECT COUNT(DISTINCT user_id) AS cnt FROM events WHERE name=?", "none")
+
+
+def _date_params(mode: str, name: str, start_utc: str | None, end_utc: str | None) -> tuple[Any, ...]:
+    if mode == "both":
+        return (name, start_utc, end_utc)
+    if mode == "start":
+        return (name, start_utc)
+    if mode == "end":
+        return (name, end_utc)
+    return (name,)
+
+
 def _counts(names: list[str], start_utc: str | None = None, end_utc: str | None = None) -> dict[str, int]:
     if not names:
         return {}
     res: dict[str, int] = {n: 0 for n in names}
-    where = f"name IN ({','.join('?' for _ in names)})"
-    params: list[Any] = list(names)
-    if start_utc:
-        where += " AND created_at >= ?"
-        params.append(start_utc)
-    if end_utc:
-        where += " AND created_at < ?"
-        params.append(end_utc)
+    sql, mode = _event_count_sql(start_utc, end_utc)
 
-    q = (
-        "SELECT name, COUNT(DISTINCT user_id) AS cnt "
-        "FROM events "
-        f"WHERE {where} "
-        "GROUP BY name"
-    )
     with db() as c:
-        for row in c.execute(q, tuple(params)).fetchall():
+        for name in names:
+            row = c.execute(sql, _date_params(mode, name, start_utc, end_utc)).fetchone()
             try:
-                n = row[0]
-                cnt = int(row[1] or 0)
+                res[name] = int((row[0] if row else 0) or 0)
             except (IndexError, TypeError, ValueError):
                 logging.getLogger(__name__).exception("Bad row in gift-share counts")
-                continue
-            if n in res:
-                res[n] = cnt
+                res[name] = 0
     return res
 
 
