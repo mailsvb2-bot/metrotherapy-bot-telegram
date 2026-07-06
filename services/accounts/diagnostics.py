@@ -57,8 +57,6 @@ def build_account_diagnostics(account_id: int) -> dict[str, Any]:
     target = int(account_id)
     snapshot = get_account_snapshot(target)
     linked_ids = _linked_external_ids(snapshot)
-    placeholders = ",".join("?" for _ in linked_ids)
-
     with db() as conn:
         account_audio_progress = _rows(
             conn,
@@ -93,73 +91,80 @@ def build_account_diagnostics(account_id: int) -> dict[str, Any]:
             (target,),
         )
 
-        raw_wallets = _rows(
-            conn,
-            f"""
-            SELECT *
-            FROM practice_wallets
-            WHERE user_id IN ({placeholders})
-            ORDER BY user_id
-            """,
-            tuple(linked_ids),
-        ) if linked_ids else []
+        raw_wallets: list[dict[str, Any]] = []
+        raw_preferences: list[dict[str, Any]] = []
+        legacy_identities: list[dict[str, Any]] = []
+        premium_entitlements: list[dict[str, Any]] = []
+        premium_delivery_outbox: list[dict[str, Any]] = []
+        consultation_requests: list[dict[str, Any]] = []
 
-        raw_preferences = _rows(
-            conn,
-            f"""
-            SELECT *
-            FROM user_practice_preferences
-            WHERE user_id IN ({placeholders})
-            ORDER BY user_id
-            """,
-            tuple(linked_ids),
-        ) if linked_ids else []
+        for linked_id in linked_ids:
+            params = (int(linked_id),)
+            raw_wallets.extend(_rows(
+                conn,
+                """
+                SELECT *
+                FROM practice_wallets
+                WHERE user_id=?
+                ORDER BY user_id
+                """,
+                params,
+            ))
+            raw_preferences.extend(_rows(
+                conn,
+                """
+                SELECT *
+                FROM user_practice_preferences
+                WHERE user_id=?
+                ORDER BY user_id
+                """,
+                params,
+            ))
+            legacy_identities.extend(_rows(
+                conn,
+                """
+                SELECT *
+                FROM user_channel_identities
+                WHERE user_id=?
+                ORDER BY user_id, platform
+                """,
+                params,
+            ))
+            premium_entitlements.extend(_rows(
+                conn,
+                """
+                SELECT *
+                FROM premium_entitlements
+                WHERE user_id=?
+                ORDER BY user_id, id DESC
+                """,
+                params,
+            ))
+            premium_delivery_outbox.extend(_rows(
+                conn,
+                """
+                SELECT *
+                FROM premium_delivery_outbox
+                WHERE user_id=?
+                ORDER BY user_id, id DESC
+                """,
+                params,
+            ))
+            consultation_requests.extend(_rows(
+                conn,
+                """
+                SELECT *
+                FROM consultation_requests
+                WHERE user_id=?
+                ORDER BY user_id, id DESC
+                """,
+                params,
+            ))
 
-        legacy_identities = _rows(
-            conn,
-            f"""
-            SELECT *
-            FROM user_channel_identities
-            WHERE user_id IN ({placeholders})
-            ORDER BY user_id, platform
-            """,
-            tuple(linked_ids),
-        ) if linked_ids else []
-
-        premium_entitlements = _rows(
-            conn,
-            f"""
-            SELECT *
-            FROM premium_entitlements
-            WHERE user_id IN ({placeholders})
-            ORDER BY user_id, id DESC
-            """,
-            tuple(linked_ids),
-        ) if linked_ids else []
-
-        premium_delivery_outbox = _rows(
-            conn,
-            f"""
-            SELECT *
-            FROM premium_delivery_outbox
-            WHERE user_id IN ({placeholders})
-            ORDER BY user_id, id DESC
-            LIMIT 50
-            """,
-            tuple(linked_ids),
-        ) if linked_ids else []
-
-        consultation_requests = _rows(
-            conn,
-            f"""
-            SELECT *
-            FROM consultation_requests
-            WHERE user_id IN ({placeholders})
-            ORDER BY user_id, id DESC
-            LIMIT 50
-            """,
-            tuple(linked_ids),
-        ) if linked_ids else []
+        premium_delivery_outbox.sort(key=lambda row: (int(row.get("user_id") or 0), -int(row.get("id") or 0)))
+        premium_delivery_outbox = premium_delivery_outbox[:50]
+        consultation_requests.sort(key=lambda row: (int(row.get("user_id") or 0), -int(row.get("id") or 0)))
+        consultation_requests = consultation_requests[:50]
 
         target_wallet = _one(
             conn,

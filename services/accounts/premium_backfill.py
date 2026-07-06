@@ -13,6 +13,36 @@ _PREMIUM_TABLES = (
     "consultation_requests",
 )
 
+_PREMIUM_SELECT_SQL = {
+    "premium_entitlements": """
+        SELECT *
+        FROM premium_entitlements
+        WHERE user_id=?
+          AND user_id<>?
+        ORDER BY user_id, id
+    """.strip(),
+    "premium_delivery_outbox": """
+        SELECT *
+        FROM premium_delivery_outbox
+        WHERE user_id=?
+          AND user_id<>?
+        ORDER BY user_id, id
+    """.strip(),
+    "consultation_requests": """
+        SELECT *
+        FROM consultation_requests
+        WHERE user_id=?
+          AND user_id<>?
+        ORDER BY user_id, id
+    """.strip(),
+}
+
+_PREMIUM_UPDATE_SQL = {
+    "premium_entitlements": "UPDATE premium_entitlements SET user_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
+    "premium_delivery_outbox": "UPDATE premium_delivery_outbox SET user_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
+    "consultation_requests": "UPDATE consultation_requests SET user_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
+}
+
 
 @dataclass(frozen=True)
 class AccountPremiumBackfillPlan:
@@ -55,18 +85,17 @@ def _linked_numeric_user_ids(conn: Any, target_account_id: int) -> list[int]:
 def _table_rows(conn: Any, table: str, *, target: int, source_ids: list[int]) -> list[dict[str, Any]]:
     if not source_ids:
         return []
-    placeholders = ",".join("?" for _ in source_ids)
-    rows = conn.execute(
-        f"""
-        SELECT *
-        FROM {table}
-        WHERE user_id IN ({placeholders})
-          AND user_id<>?
-        ORDER BY user_id, id
-        """.strip(),
-        tuple(source_ids + [int(target)]),
-    ).fetchall()
-    return [dict(row) for row in rows]
+    try:
+        sql = _PREMIUM_SELECT_SQL[table]
+    except KeyError as exc:
+        raise ValueError(f"unsupported premium table: {table}") from exc
+
+    rows: list[dict[str, Any]] = []
+    for source_id in source_ids:
+        fetched = conn.execute(sql, (int(source_id), int(target))).fetchall()
+        rows.extend(dict(row) for row in fetched)
+    rows.sort(key=lambda row: (int(row["user_id"]), int(row["id"])))
+    return rows
 
 
 def build_account_premium_backfill_plan(
@@ -108,8 +137,12 @@ def apply_account_premium_backfill(
             ensure_premium_schema(conn)
             for table, rows in plan.rows_by_table.items():
                 for row in rows:
+                    try:
+                        update_sql = _PREMIUM_UPDATE_SQL[table]
+                    except KeyError as exc:
+                        raise ValueError(f"unsupported premium table: {table}") from exc
                     conn.execute(
-                        f"UPDATE {table} SET user_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
+                        update_sql,
                         (target, int(row["id"]), int(row["user_id"])),
                     )
 

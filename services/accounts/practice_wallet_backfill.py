@@ -50,23 +50,26 @@ def _raw_wallet_rows(conn: Any, user_ids: list[int]) -> list[dict[str, Any]]:
     ids = [int(value) for value in user_ids]
     if not ids:
         return []
-    placeholders = ",".join("?" for _ in ids)
-    rows = conn.execute(
-        f"""
-        SELECT
-            user_id,
-            available_tokens,
-            reserved_tokens,
-            used_tokens,
-            COALESCE(refunded_tokens, 0) AS refunded_tokens,
-            updated_at
-        FROM practice_wallets
-        WHERE user_id IN ({placeholders})
-        ORDER BY user_id
-        """.strip(),
-        tuple(ids),
-    ).fetchall()
-    return [dict(row) for row in rows]
+    rows: list[dict[str, Any]] = []
+    for user_id in ids:
+        fetched = conn.execute(
+            """
+            SELECT
+                user_id,
+                available_tokens,
+                reserved_tokens,
+                used_tokens,
+                COALESCE(refunded_tokens, 0) AS refunded_tokens,
+                updated_at
+            FROM practice_wallets
+            WHERE user_id=?
+            ORDER BY user_id
+            """.strip(),
+            (int(user_id),),
+        ).fetchall()
+        rows.extend(dict(row) for row in fetched)
+    rows.sort(key=lambda row: int(row["user_id"]))
+    return rows
 
 
 def _raw_available_for_user(conn: Any, user_id: int) -> int:
