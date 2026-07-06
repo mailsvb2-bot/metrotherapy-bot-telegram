@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any
-
-from services.command_runner import CommandTimeoutError, run_command
 
 
 @dataclass(frozen=True)
@@ -19,21 +17,10 @@ class CheckResult:
     detail: str
 
 
-def _required_bin(name: str, *, env_name: str | None = None) -> str:
-    raw = (os.getenv(env_name or "") or name).strip()
-    resolved = shutil.which(raw) if raw else None
-    if resolved:
-        return resolved
-    raise RuntimeError(f"required executable not found: {raw or name}")
-
-
 def _run(cmd: list[str], *, timeout: float = 10) -> tuple[int, str]:
     try:
-        if not cmd:
-            raise RuntimeError("empty command")
-        safe_cmd = [_required_bin(cmd[0]), *cmd[1:]]
-        proc = run_command(safe_cmd, check=False, capture_output=True, text=True, timeout=timeout)
-    except (OSError, RuntimeError, CommandTimeoutError) as exc:
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
         return 124, f"{type(exc).__name__}: {exc}"
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 

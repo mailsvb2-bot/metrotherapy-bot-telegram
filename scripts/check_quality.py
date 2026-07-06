@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import compileall
 import os
+import subprocess
 import sys
 from pathlib import Path
-
-from services.command_runner import run_command
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,7 +35,7 @@ def _env() -> dict[str, str]:
 def _run(title: str, cmd: list[str]) -> int:
     print(f"\n== {title} ==")
     print("cmd:", " ".join(cmd))
-    completed = run_command(cmd, cwd=ROOT, env=_env(), check=False)
+    completed = subprocess.run(cmd, cwd=ROOT, env=_env(), check=False)
     return int(completed.returncode)
 
 

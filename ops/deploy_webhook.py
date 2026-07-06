@@ -3,14 +3,8 @@ import hashlib
 import hmac
 import json
 import os
-import sys
+import subprocess
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from services.command_runner import DEVNULL, spawn_command
 
 HOST = "127.0.0.1"
 PORT = 9001
@@ -33,10 +27,10 @@ echo "=== deploy queued started: $(date -Is) ===" >> {LOG_FILE}
 {DEPLOY_SH} >> {LOG_FILE} 2>&1
 echo "=== deploy queued finished: $(date -Is) ===" >> {LOG_FILE}
 """
-    spawn_command(
+    subprocess.Popen(
         ["/usr/bin/bash", "-lc", script],
-        stdout=DEVNULL,
-        stderr=DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
 

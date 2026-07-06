@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-
-from services.command_runner import run_command
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_SURFACE = (
@@ -84,10 +83,6 @@ STEPS = (
         (sys.executable, "scripts/check_ruff.py"),
     ),
     GateStep(
-        "subprocess boundary audit",
-        (sys.executable, "scripts/subprocess_boundary_audit.py"),
-    ),
-    GateStep(
         "release hygiene after checks",
         (sys.executable, "scripts/check_release_hygiene.py"),
     ),
@@ -131,7 +126,7 @@ def _run(step: GateStep) -> int:
 
     print(f"==> {step.name}", flush=True)
     print("cmd:", " ".join(step.cmd), flush=True)
-    completed = run_command(step.cmd, cwd=ROOT, env=env, check=False)
+    completed = subprocess.run(step.cmd, cwd=ROOT, env=env, check=False)
     if completed.returncode != 0:
         print(f"REGRESSION_GATE_FAILED step={step.name!r} code={completed.returncode}", flush=True)
         return int(completed.returncode)

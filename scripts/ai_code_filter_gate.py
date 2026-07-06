@@ -3,12 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
-
-from services.command_runner import CommandTimeoutError, run_command
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -47,7 +46,7 @@ def _run_command(
     cmd_path.write_text(" ".join(command) + "\n", encoding="utf-8")
 
     try:
-        proc = run_command(
+        proc = subprocess.run(
             list(command),
             cwd=str(cwd),
             text=True,
@@ -64,7 +63,7 @@ def _run_command(
             "stdout": str(stdout_path),
             "stderr": str(stderr_path),
         }
-    except CommandTimeoutError as exc:
+    except subprocess.TimeoutExpired as exc:
         stdout_path.write_text(_process_output_text(exc.stdout), encoding="utf-8")
         stderr_path.write_text(_process_output_text(exc.stderr), encoding="utf-8")
         return {

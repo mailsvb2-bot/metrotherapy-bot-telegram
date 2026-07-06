@@ -12,9 +12,8 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
-
-from services.command_runner import CommandTimeoutError, run_command
 
 
 class MessengerOpusPreparationError(RuntimeError):
@@ -154,10 +153,11 @@ def ensure_messenger_opus_file(file_path: Path | str, *, platform: str) -> Path:
     ]
 
     try:
-        completed = run_command(
+        completed = subprocess.run(
             cmd,
             check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             timeout=_timeout_sec(clean_platform),
         )
@@ -166,7 +166,7 @@ def ensure_messenger_opus_file(file_path: Path | str, *, platform: str) -> Path:
             f"{clean_platform.upper()} native .opus delivery requires ffmpeg. "
             "Install ffmpeg or set FFMPEG_BIN to an absolute executable path."
         ) from exc
-    except CommandTimeoutError as exc:
+    except subprocess.TimeoutExpired as exc:
         raise error_cls(f"{clean_platform.upper()} .opus conversion timed out for {source}") from exc
 
     if completed.returncode != 0 or not tmp.exists() or tmp.stat().st_size <= 0:

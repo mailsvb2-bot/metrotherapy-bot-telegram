@@ -31,7 +31,7 @@ def test_ensure_max_opus_file_converts_non_opus(monkeypatch, tmp_path: Path) -> 
     cache = tmp_path / "cache"
     monkeypatch.setenv("MAX_OPUS_CACHE_DIR", str(cache))
 
-    def fake_run(cmd, check, capture_output, text, timeout):
+    def fake_run(cmd, check, stdout, stderr, text, timeout):
         out = Path(cmd[-1])
         out.write_bytes(b"converted-opus")
 
@@ -42,7 +42,7 @@ def test_ensure_max_opus_file_converts_non_opus(monkeypatch, tmp_path: Path) -> 
 
         return Result()
 
-    monkeypatch.setattr("services.messenger.max_audio.run_command", fake_run)
+    monkeypatch.setattr("services.messenger.max_audio.subprocess.run", fake_run)
 
     prepared = ensure_max_opus_file(source)
 
@@ -62,7 +62,7 @@ def test_ensure_vk_opus_file_converts_non_opus_with_vk_cache(monkeypatch, tmp_pa
     vk_cache = tmp_path / "vk-cache"
     monkeypatch.setenv("VK_OPUS_CACHE_DIR", str(vk_cache))
 
-    def fake_run(cmd, check, capture_output, text, timeout):
+    def fake_run(cmd, check, stdout, stderr, text, timeout):
         out = Path(cmd[-1])
         out.write_bytes(b"vk-converted-opus")
 
@@ -73,7 +73,7 @@ def test_ensure_vk_opus_file_converts_non_opus_with_vk_cache(monkeypatch, tmp_pa
 
         return Result()
 
-    monkeypatch.setattr("services.messenger.max_audio.run_command", fake_run)
+    monkeypatch.setattr("services.messenger.max_audio.subprocess.run", fake_run)
 
     prepared = ensure_vk_opus_file(source)
 
@@ -91,7 +91,7 @@ def test_ensure_messenger_opus_file_separates_provider_caches(monkeypatch, tmp_p
     monkeypatch.setenv("MAX_OPUS_CACHE_DIR", str(max_cache))
     monkeypatch.setenv("VK_OPUS_CACHE_DIR", str(vk_cache))
 
-    def fake_run(cmd, check, capture_output, text, timeout):
+    def fake_run(cmd, check, stdout, stderr, text, timeout):
         out = Path(cmd[-1])
         out.write_bytes(b"converted")
 
@@ -102,7 +102,7 @@ def test_ensure_messenger_opus_file_separates_provider_caches(monkeypatch, tmp_p
 
         return Result()
 
-    monkeypatch.setattr("services.messenger.max_audio.run_command", fake_run)
+    monkeypatch.setattr("services.messenger.max_audio.subprocess.run", fake_run)
 
     max_prepared = ensure_messenger_opus_file(source, platform="max")
     vk_prepared = ensure_messenger_opus_file(source, platform="vk")

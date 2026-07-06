@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -10,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from services.auto_audio_recovery import auto_audio_lock_summary
-from services.command_runner import run_command
 from services.disaster_recovery_status import disaster_recovery_status
 from services.payments.reconciliation import payment_problem_summary
 from services.probe_ledger import ProbeRun, get_recent_probe_runs
@@ -82,7 +82,7 @@ def _git_value(*args: str) -> str:
     if not git:
         return "unknown"
     try:
-        proc = run_command(
+        proc = subprocess.run(
             [git, *args],
             cwd=str(ROOT),
             text=True,
@@ -92,7 +92,7 @@ def _git_value(*args: str) -> str:
         )
     except OSError:
         return "unknown"
-    except RuntimeError:
+    except subprocess.SubprocessError:
         return "unknown"
     if proc.returncode != 0:
         return "unknown"
