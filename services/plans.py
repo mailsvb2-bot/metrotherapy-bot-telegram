@@ -92,13 +92,20 @@ def get_plans(*, include_inactive: bool = True) -> list[dict]:
     include_inactive=True → все планы (для админки)
     include_inactive=False → только активные
     """
-    with db() as conn:
-        where = "" if include_inactive else "WHERE is_active=1"
-        rows = conn.execute(
+    if include_inactive:
+        sql = (
             "SELECT id, code, title, COALESCE(NULLIF(plan_type,''), scope) AS plan_type, "
             "COALESCE(touches, CASE WHEN days >= 20 THEN 20 ELSE 5 END) AS touches, "
-            f"price, is_active FROM plans {where} ORDER BY is_active DESC, plan_type, touches"
-        ).fetchall()
+            "price, is_active FROM plans ORDER BY is_active DESC, plan_type, touches"
+        )
+    else:
+        sql = (
+            "SELECT id, code, title, COALESCE(NULLIF(plan_type,''), scope) AS plan_type, "
+            "COALESCE(touches, CASE WHEN days >= 20 THEN 20 ELSE 5 END) AS touches, "
+            "price, is_active FROM plans WHERE is_active=1 ORDER BY is_active DESC, plan_type, touches"
+        )
+    with db() as conn:
+        rows = conn.execute(sql).fetchall()
         return [_row_to_plan(r) for r in rows]
 
 

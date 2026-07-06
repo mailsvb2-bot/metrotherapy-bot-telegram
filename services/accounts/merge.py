@@ -35,8 +35,21 @@ class AccountMergePlan:
         }
 
 
+_COUNT_SQL = {
+    ("user_channel_identities", "user_id"): "SELECT COUNT(*) AS c FROM user_channel_identities WHERE user_id=?",
+    ("account_channel_identities", "account_id"): "SELECT COUNT(*) AS c FROM account_channel_identities WHERE account_id=?",
+    ("account_audio_progress", "account_id"): "SELECT COUNT(*) AS c FROM account_audio_progress WHERE account_id=?",
+    ("account_audio_deliveries", "account_id"): "SELECT COUNT(*) AS c FROM account_audio_deliveries WHERE account_id=?",
+    ("account_audio_completions", "account_id"): "SELECT COUNT(*) AS c FROM account_audio_completions WHERE account_id=?",
+}
+
+
 def _count(conn, table: str, column: str, value: int) -> int:
-    row = conn.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE {column}=?", (int(value),)).fetchone()
+    try:
+        sql = _COUNT_SQL[(str(table), str(column))]
+    except KeyError as exc:
+        raise ValueError(f"unsupported merge count target: {table}.{column}") from exc
+    row = conn.execute(sql, (int(value),)).fetchone()
     return int(row["c"] if row else 0)
 
 
