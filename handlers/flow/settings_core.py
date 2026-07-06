@@ -333,9 +333,11 @@ def _parse_hhmm(s: str) -> str | None:
 
 
 def _persist_user_time(uid: int, slot: str, hhmm: str) -> None:
-    columns = {"work": "work_time", "home": "home_time"}
-    col = columns.get(str(slot))
-    if col is None:
+    if slot == "work":
+        update_sql = "UPDATE users SET work_time=? WHERE user_id=?"
+    elif slot == "home":
+        update_sql = "UPDATE users SET home_time=? WHERE user_id=?"
+    else:
         raise ValueError(f"unsupported time slot: {slot}")
     with db() as conn:
         conn.execute(
@@ -343,7 +345,7 @@ def _persist_user_time(uid: int, slot: str, hhmm: str) -> None:
             "ON CONFLICT(user_id) DO NOTHING",
             (int(uid), int(uid)),
         )
-        conn.execute(f"UPDATE users SET {col}=? WHERE user_id=?", (str(hhmm), int(uid)))
+        conn.execute(update_sql, (str(hhmm), int(uid)))
 
 
 def _load_user_times(uid: int):

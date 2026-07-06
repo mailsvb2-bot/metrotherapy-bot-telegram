@@ -70,31 +70,47 @@ class Store:
                     )
 
     def set_time(self, user_id: int, kind: str, hhmm: str):
-        col = "work_time" if kind == "work" else "home_time"
+        sql = (
+            "UPDATE users SET work_time=? WHERE user_id=?"
+            if kind == "work"
+            else "UPDATE users SET home_time=? WHERE user_id=?"
+        )
         with db() as conn:
             with tx(conn):
-                conn.execute(f"UPDATE users SET {col}=? WHERE user_id=?", (hhmm, int(user_id)))
+                conn.execute(sql, (hhmm, int(user_id)))
         log_event(user_id, "time_set", {"kind": kind, "time": hhmm})
         _log(f"time_set {user_id} {kind} {hhmm}")
 
     def get_index(self, user_id: int, kind: str) -> int:
-        col = "work_index" if kind == "work" else "home_index"
+        sql = (
+            "SELECT work_index v FROM users WHERE user_id=?"
+            if kind == "work"
+            else "SELECT home_index v FROM users WHERE user_id=?"
+        )
         with db() as conn:
-            row = conn.execute(f"SELECT {col} v FROM users WHERE user_id=?", (int(user_id),)).fetchone()
+            row = conn.execute(sql, (int(user_id),)).fetchone()
         return int(row["v"]) if row and row["v"] is not None else (1 if kind == "work" else 2)
 
     def increment_index(self, user_id: int, kind: str):
-        col = "work_index" if kind == "work" else "home_index"
+        sql = (
+            "UPDATE users SET work_index=work_index+2 WHERE user_id=?"
+            if kind == "work"
+            else "UPDATE users SET home_index=home_index+2 WHERE user_id=?"
+        )
         with db() as conn:
             with tx(conn):
-                conn.execute(f"UPDATE users SET {col}={col}+2 WHERE user_id=?", (int(user_id),))
+                conn.execute(sql, (int(user_id),))
         _log(f"index_inc {user_id} {kind}")
 
     def mark_sent_today(self, user_id: int, kind: str, day_iso: str):
-        col = "last_work_date" if kind == "work" else "last_home_date"
+        sql = (
+            "UPDATE users SET last_work_date=? WHERE user_id=?"
+            if kind == "work"
+            else "UPDATE users SET last_home_date=? WHERE user_id=?"
+        )
         with db() as conn:
             with tx(conn):
-                conn.execute(f"UPDATE users SET {col}=? WHERE user_id=?", (day_iso, int(user_id)))
+                conn.execute(sql, (day_iso, int(user_id)))
         log_event(user_id, "audio_sent", {"kind": kind, "day": day_iso})
         _log(f"audio_sent {user_id} {kind} {day_iso}")
 

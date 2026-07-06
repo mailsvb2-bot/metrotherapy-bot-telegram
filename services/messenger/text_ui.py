@@ -376,7 +376,14 @@ def _save_text_time(user_id: int, slot: str, raw_value: str) -> str:
     if hhmm is None:
         return "Пожалуйста, время в формате HH:MM, например 08:30."
     h, m = hhmm
-    col = "work_time" if slot == "work" else "home_time"
+    if slot == "work":
+        update_sql = "UPDATE users SET work_time=? WHERE user_id=?"
+        title = "Дорога на работу"
+    elif slot == "home":
+        update_sql = "UPDATE users SET home_time=? WHERE user_id=?"
+        title = "Дорога домой"
+    else:
+        return "Не понял, для какой дороги сохранить время."
     value = f"{h:02d}:{m:02d}"
     uid = int(user_id)
     with db() as conn:
@@ -385,8 +392,7 @@ def _save_text_time(user_id: int, slot: str, raw_value: str) -> str:
             "ON CONFLICT(user_id) DO NOTHING",
             (uid, uid),
         )
-        conn.execute(f"UPDATE users SET {col}=? WHERE user_id=?", (value, uid))
-    title = "Дорога на работу" if slot == "work" else "Дорога домой"
+        conn.execute(update_sql, (value, uid))
     return f"✅ Сохранил время «{title}»: {value}"
 
 
