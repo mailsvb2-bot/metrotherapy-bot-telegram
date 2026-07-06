@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -20,8 +21,16 @@ from services.storage_legacy_audit import storage_legacy_audit
 DEFAULT_EVIDENCE_DIR = Path(os.getenv("RELEASE_EVIDENCE_DIR", "/var/lib/metrotherapy/release_evidence"))
 
 
+def _optional_bin(name: str, *, env_name: str | None = None) -> str | None:
+    raw = (os.getenv(env_name or "") or name).strip()
+    return shutil.which(raw) if raw else None
+
+
 def _git(*args: str) -> str:
-    proc = subprocess.run(["git", *args], cwd=str(ROOT), text=True, capture_output=True, check=False)
+    git = _optional_bin("git", env_name="GIT_BIN")
+    if not git:
+        return "unknown"
+    proc = subprocess.run([git, *args], cwd=str(ROOT), text=True, capture_output=True, check=False)
     return (proc.stdout or "").strip() if proc.returncode == 0 else "unknown"
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,6 +14,14 @@ ENV_FILE = ROOT / ".env"
 
 def _write(path: str, content: str) -> None:
     Path(path).write_text(content, encoding="utf-8")
+
+
+def _required_bin(name: str, *, env_name: str | None = None) -> str:
+    raw = (os.getenv(env_name or "") or name).strip()
+    resolved = shutil.which(raw) if raw else None
+    if resolved:
+        return resolved
+    raise SystemExit(f"required executable not found: {raw or name}")
 
 
 def install() -> None:
@@ -40,8 +49,9 @@ WantedBy=timers.target
 """
     _write(SERVICE, service)
     _write(TIMER, timer)
-    subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "enable", "--now", "metrotherapy-postgres-backup.timer"], check=True)
+    systemctl = _required_bin("systemctl", env_name="SYSTEMCTL_BIN")
+    subprocess.run([systemctl, "daemon-reload"], check=True)
+    subprocess.run([systemctl, "enable", "--now", "metrotherapy-postgres-backup.timer"], check=True)
     print("POSTGRES_BACKUP_TIMER_INSTALLED metrotherapy-postgres-backup.timer")
 
 

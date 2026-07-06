@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,14 @@ from urllib.parse import urlparse
 DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
 DEFAULT_BACKUP_DIR = Path(os.getenv("METRO_POSTGRES_BACKUP_DIR", "/var/backups/metrotherapy/postgres"))
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _required_bin(name: str, *, env_name: str | None = None) -> str:
+    raw = (os.getenv(env_name or "") or name).strip()
+    resolved = shutil.which(raw) if raw else None
+    if resolved:
+        return resolved
+    raise SystemExit(f"required executable not found: {raw or name}")
 
 
 def _load_env_file(path: str | Path | None) -> dict[str, str]:
@@ -82,9 +91,10 @@ def create_backup(*, backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path:
     backup_dir = _safe_backup_dir(backup_dir)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = backup_dir / f"{_db_name(url)}_{stamp}.dump"
+    pg_dump = _required_bin("pg_dump", env_name="PG_DUMP_BIN")
     proc = subprocess.run(
         [
-            "pg_dump",
+            pg_dump,
             "--format=custom",
             "--no-owner",
             "--no-privileges",

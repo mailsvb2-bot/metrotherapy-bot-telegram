@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import urllib.error
 import urllib.request
@@ -71,10 +72,18 @@ class ReleaseControlSnapshot:
 
 
 
+def _optional_bin(name: str, *, env_name: str | None = None) -> str | None:
+    raw = (os.getenv(env_name or "") or name).strip()
+    return shutil.which(raw) if raw else None
+
+
 def _git_value(*args: str) -> str:
+    git = _optional_bin("git", env_name="GIT_BIN")
+    if not git:
+        return "unknown"
     try:
         proc = subprocess.run(
-            ["git", *args],
+            [git, *args],
             cwd=str(ROOT),
             text=True,
             capture_output=True,
