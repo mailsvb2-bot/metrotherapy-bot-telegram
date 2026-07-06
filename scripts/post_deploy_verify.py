@@ -27,13 +27,14 @@ import argparse
 import json
 import os
 import shlex
-import subprocess
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlsplit, urlunsplit
+
+from services.command_runner import run_command
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
@@ -71,7 +72,7 @@ def _run(cmd: list[str], *, env: Mapping[str, str] | None = None) -> str:
     merged_env = os.environ.copy()
     if env:
         merged_env.update({str(k): str(v) for k, v in env.items()})
-    proc = subprocess.run(cmd, cwd=str(ROOT), env=merged_env, text=True, capture_output=True, check=False)
+    proc = run_command(cmd, cwd=str(ROOT), env=merged_env, text=True, capture_output=True, check=False)
     output = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
         raise SystemExit(

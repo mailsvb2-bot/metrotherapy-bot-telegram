@@ -6,10 +6,11 @@ import argparse
 import json
 import os
 import shlex
-import subprocess
 import sys
 from pathlib import Path
 from typing import Mapping
+
+from services.command_runner import run_command
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -102,7 +103,7 @@ def _print_clean_output(output: str) -> None:
 
 
 def _run(cmd: list[str], *, env: Mapping[str, str] | None = None) -> None:
-    proc = subprocess.run(cmd, cwd=str(ROOT), env=dict(env or os.environ), text=True, capture_output=True, check=False)
+    proc = run_command(cmd, cwd=str(ROOT), env=dict(env or os.environ), text=True, capture_output=True, check=False)
     output = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
         if output.strip():

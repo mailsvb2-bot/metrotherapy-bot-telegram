@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from services.command_runner import run_command
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -16,7 +17,7 @@ from scripts.postgres_restore_drill import latest_backup
 
 def _run_restore_drill() -> str:
     dump = latest_backup()
-    proc = subprocess.run(
+    proc = run_command(
         [sys.executable, "scripts/postgres_restore_drill.py", str(dump)],
         cwd=str(ROOT),
         text=True,

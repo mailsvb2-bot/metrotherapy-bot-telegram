@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
+import shutil
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+
+from services.command_runner import run_command, run_pipeline
 
 
 REQUIRED_TABLES = (
@@ -17,6 +19,14 @@ REQUIRED_TABLES = (
 DEFAULT_BACKUP_DIR = Path(os.getenv("METRO_POSTGRES_BACKUP_DIR", "/var/backups/metrotherapy/postgres"))
 SUPPORTED_SUFFIXES = (".dump", ".sql", ".sql.gz")
 FORBIDDEN_DRILL_DB_NAMES = {"postgres", "template0", "template1"}
+
+
+def _required_bin(name: str, *, env_name: str | None = None) -> str:
+    raw = (os.getenv(env_name or "") or name).strip()
+    resolved = shutil.which(raw) if raw else None
+    if resolved:
+        return resolved
+    raise SystemExit(f"required executable not found: {raw or name}")
 
 
 def _database_name_from_url(value: str) -> str:
@@ -73,27 +83,28 @@ def _format_failure(cmd: list[str], output: str, returncode: int) -> str:
 
 
 def _run(cmd: list[str], *, input_text: str | None = None) -> str:
-    proc = subprocess.run(cmd, check=False, capture_output=True, text=True, input=input_text)
+    if not cmd:
+        raise SystemExit("empty command")
+    resolved = _required_bin(cmd[0])
+    safe_cmd = [resolved, *cmd[1:]]
+    proc = run_command(safe_cmd, check=False, capture_output=True, text=True, input=input_text)
     out = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
-        raise SystemExit(_format_failure(cmd, out, proc.returncode))
+        raise SystemExit(_format_failure(safe_cmd, out, proc.returncode))
     return out.strip()
 
 
 def _run_pipeline(producer_cmd: list[str], consumer_cmd: list[str]) -> str:
-    producer = subprocess.Popen(producer_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    assert producer.stdout is not None
-    consumer = subprocess.Popen(consumer_cmd, stdin=producer.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
-    producer.stdout.close()
-    consumer_stdout, consumer_stderr = consumer.communicate()
-    producer_stderr = producer.stderr.read() if producer.stderr else b""
-    producer_returncode = producer.wait()
-    output = b"".join(part for part in (consumer_stdout, consumer_stderr, producer_stderr) if part).decode("utf-8", errors="replace")
-    if producer_returncode != 0:
-        raise SystemExit(_format_failure(producer_cmd, output, producer_returncode))
-    if consumer.returncode != 0:
-        raise SystemExit(_format_failure(consumer_cmd, output, consumer.returncode))
-    return output.strip()
+    if not producer_cmd or not consumer_cmd:
+        raise SystemExit("empty pipeline command")
+    safe_producer = [_required_bin(producer_cmd[0]), *producer_cmd[1:]]
+    safe_consumer = [_required_bin(consumer_cmd[0]), *consumer_cmd[1:]]
+    result = run_pipeline(safe_producer, safe_consumer)
+    if result.producer_returncode != 0:
+        raise SystemExit(_format_failure(safe_producer, result.output, result.producer_returncode))
+    if result.consumer_returncode != 0:
+        raise SystemExit(_format_failure(safe_consumer, result.output, result.consumer_returncode))
+    return result.output.strip()
 
 
 def _reset_target_database(target: str) -> None:

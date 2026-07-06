@@ -9,12 +9,13 @@ before traffic or ad spend is increased.
 
 import json
 import os
-import subprocess
 import sys
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any
+
+from services.command_runner import CommandTimeoutError, run_command
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,7 @@ def _merged_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 
 def _run(name: str, cmd: list[str], *, timeout: int = 120, extra_env: dict[str, str] | None = None) -> AcceptanceResult:
     try:
-        proc = subprocess.run(
+        proc = run_command(
             cmd,
             check=False,
             capture_output=True,
@@ -43,7 +44,7 @@ def _run(name: str, cmd: list[str], *, timeout: int = 120, extra_env: dict[str, 
             timeout=timeout,
             env=_merged_env(extra_env),
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (OSError, CommandTimeoutError) as exc:
         return AcceptanceResult(name=name, ok=False, detail=f"{type(exc).__name__}: {exc}")
 
     output = (proc.stdout + proc.stderr).strip()
