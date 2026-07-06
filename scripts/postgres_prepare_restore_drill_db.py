@@ -20,14 +20,24 @@ import json
 import os
 import re
 import shlex
-import subprocess
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
+from services.command_runner import run_command
+
 DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
 FORBIDDEN_DB_NAMES = {"postgres", "template0", "template1", "metrotherapy"}
 SAFE_DB_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _required_bin(name: str, *, env_name: str | None = None) -> str:
+    raw = (os.getenv(env_name or "") or name).strip()
+    resolved = shutil.which(raw) if raw else None
+    if resolved:
+        return resolved
+    raise SystemExit(f"required executable not found: {raw or name}")
 
 
 @dataclass(frozen=True)
@@ -128,7 +138,10 @@ def _owner_from_url(prod_url: str) -> str:
 
 
 def _run(cmd: list[str]) -> str:
-    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if not cmd:
+        raise RuntimeError("empty command")
+    resolved = _required_bin(cmd[0])
+    proc = run_command([resolved, *cmd[1:]], text=True, capture_output=True, check=False)
     output = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
         raise RuntimeError(output.strip() or str(proc.returncode))

@@ -4,10 +4,11 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+
+from services.command_runner import run_command
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -30,7 +31,7 @@ def _git(*args: str) -> str:
     git = _optional_bin("git", env_name="GIT_BIN")
     if not git:
         return "unknown"
-    proc = subprocess.run([git, *args], cwd=str(ROOT), text=True, capture_output=True, check=False)
+    proc = run_command([git, *args], cwd=str(ROOT), text=True, capture_output=True, check=False)
     return (proc.stdout or "").strip() if proc.returncode == 0 else "unknown"
 
 

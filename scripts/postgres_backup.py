@@ -4,10 +4,11 @@ import argparse
 import os
 import shlex
 import shutil
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+
+from services.command_runner import run_command
 
 
 DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
@@ -92,7 +93,7 @@ def create_backup(*, backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = backup_dir / f"{_db_name(url)}_{stamp}.dump"
     pg_dump = _required_bin("pg_dump", env_name="PG_DUMP_BIN")
-    proc = subprocess.run(
+    proc = run_command(
         [
             pg_dump,
             "--format=custom",

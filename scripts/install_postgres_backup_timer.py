@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 from pathlib import Path
+
+from services.command_runner import run_command
 
 SERVICE = "/etc/systemd/system/metrotherapy-postgres-backup.service"
 TIMER = "/etc/systemd/system/metrotherapy-postgres-backup.timer"
@@ -50,8 +51,8 @@ WantedBy=timers.target
     _write(SERVICE, service)
     _write(TIMER, timer)
     systemctl = _required_bin("systemctl", env_name="SYSTEMCTL_BIN")
-    subprocess.run([systemctl, "daemon-reload"], check=True)
-    subprocess.run([systemctl, "enable", "--now", "metrotherapy-postgres-backup.timer"], check=True)
+    run_command([systemctl, "daemon-reload"], check=True)
+    run_command([systemctl, "enable", "--now", "metrotherapy-postgres-backup.timer"], check=True)
     print("POSTGRES_BACKUP_TIMER_INSTALLED metrotherapy-postgres-backup.timer")
 
 
