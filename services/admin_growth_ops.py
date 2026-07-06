@@ -163,22 +163,34 @@ def money_csv(period: str = "today", *, limit: int = 500) -> str:
     period = (period or "today").strip().lower()
     if period not in _PERIOD_DAYS:
         period = "today"
-    where, params = _where_period(period, "p")
-    with db() as conn:
-        rows = _rows(conn.execute(
-            f"""
+    start = _period_start(period)
+    if start:
+        sql = """
             SELECT p.id, p.user_id, p.amount, p.currency, p.created_at, p.provider_status,
                    u.username, u.first_name,
                    s.scope, s.plan_type, s.status AS subscription_status
             FROM payments p
             LEFT JOIN users u ON u.user_id = p.user_id
             LEFT JOIN subscriptions s ON s.user_id = p.user_id
-            {where}
+            WHERE COALESCE(p.created_at, '') >= ?
             ORDER BY p.id DESC
             LIMIT ?
-            """.strip(),
-            tuple(params + [int(limit)]),
-        ).fetchall())
+        """.strip()
+        params = (start, int(limit))
+    else:
+        sql = """
+            SELECT p.id, p.user_id, p.amount, p.currency, p.created_at, p.provider_status,
+                   u.username, u.first_name,
+                   s.scope, s.plan_type, s.status AS subscription_status
+            FROM payments p
+            LEFT JOIN users u ON u.user_id = p.user_id
+            LEFT JOIN subscriptions s ON s.user_id = p.user_id
+            ORDER BY p.id DESC
+            LIMIT ?
+        """.strip()
+        params = (int(limit),)
+    with db() as conn:
+        rows = _rows(conn.execute(sql, params).fetchall())
     out = io.StringIO()
     writer = csv.DictWriter(out, fieldnames=[
         "payment_id", "user_id", "client", "amount", "currency", "paid_at", "payment_status", "subscription_status", "scope", "plan_type",

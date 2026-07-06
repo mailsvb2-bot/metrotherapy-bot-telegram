@@ -176,24 +176,40 @@ def payment_path_report(period: str = "today", *, limit: int = 10) -> dict[str, 
     period = (period or "today").strip().lower()
     if period not in _PERIOD_DAYS:
         period = "today"
-    where, params = _payment_where(period)
-    with db() as conn:
-        total = _rowdict(conn.execute(
-            f"SELECT COUNT(1) AS n, COALESCE(SUM(amount), 0) AS amount FROM payments p {where}",
-            tuple(params),
-        ).fetchone()) or {}
-        payments = _rows(conn.execute(
-            f"""
+    start = _period_start(period)
+
+    if start:
+        total_sql = (
+            "SELECT COUNT(1) AS n, COALESCE(SUM(amount), 0) AS amount "
+            "FROM payments p WHERE COALESCE(p.created_at, '') >= ?"
+        )
+        payments_sql = """
             SELECT p.id, p.user_id, p.amount, p.currency, p.created_at, p.provider_status,
                    u.username, u.first_name, u.joined_at
             FROM payments p
             LEFT JOIN users u ON u.user_id = p.user_id
-            {where}
+            WHERE COALESCE(p.created_at, '') >= ?
             ORDER BY p.id DESC
             LIMIT ?
-            """.strip(),
-            tuple(params + [int(limit)]),
-        ).fetchall())
+        """.strip()
+        total_params: tuple[Any, ...] = (start,)
+        payments_params: tuple[Any, ...] = (start, int(limit))
+    else:
+        total_sql = "SELECT COUNT(1) AS n, COALESCE(SUM(amount), 0) AS amount FROM payments p"
+        payments_sql = """
+            SELECT p.id, p.user_id, p.amount, p.currency, p.created_at, p.provider_status,
+                   u.username, u.first_name, u.joined_at
+            FROM payments p
+            LEFT JOIN users u ON u.user_id = p.user_id
+            ORDER BY p.id DESC
+            LIMIT ?
+        """.strip()
+        total_params = ()
+        payments_params = (int(limit),)
+
+    with db() as conn:
+        total = _rowdict(conn.execute(total_sql, total_params).fetchone()) or {}
+        payments = _rows(conn.execute(payments_sql, payments_params).fetchall())
         rows: list[dict[str, Any]] = []
         for payment in payments:
             user_id = _safe_int(payment.get("user_id"))

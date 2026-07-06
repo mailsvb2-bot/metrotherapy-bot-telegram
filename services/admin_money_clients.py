@@ -132,29 +132,27 @@ def money_period_summary(period: str = "today", *, limit: int = 20) -> dict[str,
     period = (period or "today").strip().lower()
     if period not in _PERIOD_DAYS:
         period = "today"
-    where, params = _payment_where(period)
-    with db() as conn:
-        total = conn.execute(
-            f"SELECT COUNT(1) AS n, COALESCE(SUM(amount), 0) AS amount FROM payments p {where}",
-            tuple(params),
-        ).fetchone()
-        problems = conn.execute(
-            f"""
+    start = _period_start(period)
+
+    if start:
+        total_sql = (
+            "SELECT COUNT(1) AS n, COALESCE(SUM(amount), 0) AS amount "
+            "FROM payments p WHERE COALESCE(p.created_at, '') >= ?"
+        )
+        problems_sql = """
             SELECT COUNT(1) AS n
             FROM payments p
-            {where + (' AND' if where else 'WHERE')} (
+            WHERE COALESCE(p.created_at, '') >= ?
+              AND (
                 COALESCE(p.problem, '') <> ''
                 OR p.provider_status IN ('canceled', 'waiting_for_capture')
-            )
-            """.strip(),
-            tuple(params),
-        ).fetchone()
-        paid_users = conn.execute(
-            f"SELECT COUNT(DISTINCT user_id) AS n FROM payments p {where}",
-            tuple(params),
-        ).fetchone()
-        payment_rows = conn.execute(
-            f"""
+              )
+        """.strip()
+        paid_users_sql = (
+            "SELECT COUNT(DISTINCT user_id) AS n "
+            "FROM payments p WHERE COALESCE(p.created_at, '') >= ?"
+        )
+        rows_sql = """
             SELECT
                 p.id, p.user_id, p.amount, p.currency, p.created_at,
                 p.provider_status, p.problem, p.payload,
@@ -164,12 +162,48 @@ def money_period_summary(period: str = "today", *, limit: int = 20) -> dict[str,
             FROM payments p
             LEFT JOIN users u ON u.user_id = p.user_id
             LEFT JOIN subscriptions s ON s.user_id = p.user_id
-            {where}
+            WHERE COALESCE(p.created_at, '') >= ?
             ORDER BY p.id DESC
             LIMIT ?
-            """.strip(),
-            tuple(params + [int(limit)]),
-        ).fetchall()
+        """.strip()
+        total_params: tuple[Any, ...] = (start,)
+        problems_params: tuple[Any, ...] = (start,)
+        paid_users_params: tuple[Any, ...] = (start,)
+        rows_params: tuple[Any, ...] = (start, int(limit))
+    else:
+        total_sql = "SELECT COUNT(1) AS n, COALESCE(SUM(amount), 0) AS amount FROM payments p"
+        problems_sql = """
+            SELECT COUNT(1) AS n
+            FROM payments p
+            WHERE (
+                COALESCE(p.problem, '') <> ''
+                OR p.provider_status IN ('canceled', 'waiting_for_capture')
+            )
+        """.strip()
+        paid_users_sql = "SELECT COUNT(DISTINCT user_id) AS n FROM payments p"
+        rows_sql = """
+            SELECT
+                p.id, p.user_id, p.amount, p.currency, p.created_at,
+                p.provider_status, p.problem, p.payload,
+                u.username, u.first_name,
+                s.scope, s.plan_type, s.used_morning, s.used_evening,
+                s.total_morning, s.total_evening, s.status AS subscription_status
+            FROM payments p
+            LEFT JOIN users u ON u.user_id = p.user_id
+            LEFT JOIN subscriptions s ON s.user_id = p.user_id
+            ORDER BY p.id DESC
+            LIMIT ?
+        """.strip()
+        total_params = ()
+        problems_params = ()
+        paid_users_params = ()
+        rows_params = (int(limit),)
+
+    with db() as conn:
+        total = conn.execute(total_sql, total_params).fetchone()
+        problems = conn.execute(problems_sql, problems_params).fetchone()
+        paid_users = conn.execute(paid_users_sql, paid_users_params).fetchone()
+        payment_rows = conn.execute(rows_sql, rows_params).fetchall()
 
     total_d = _rowdict(total) or {}
     problems_d = _rowdict(problems) or {}
