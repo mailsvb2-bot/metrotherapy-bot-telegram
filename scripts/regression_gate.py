@@ -84,6 +84,10 @@ STEPS = (
         (sys.executable, "scripts/check_ruff.py"),
     ),
     GateStep(
+        "subprocess boundary audit",
+        (sys.executable, "scripts/subprocess_boundary_audit.py"),
+    ),
+    GateStep(
         "release hygiene after checks",
         (sys.executable, "scripts/check_release_hygiene.py"),
     ),

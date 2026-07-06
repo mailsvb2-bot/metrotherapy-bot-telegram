@@ -2,14 +2,14 @@ from __future__ import annotations
 
 """Small audited subprocess boundary.
 
-The project still needs subprocess for operator/CI commands. Keep the raw
-standard-library call here instead of scattering it through runtime and scripts.
-Callers must pass an absolute executable path, usually ``sys.executable`` or a
-path resolved by ``shutil.which``.
+The project still needs subprocess for operator/CI/runtime commands. Keep the
+raw standard-library calls here instead of scattering them through runtime and
+scripts. Callers must pass an absolute executable path, usually ``sys.executable``
+or a path resolved by ``shutil.which``.
 """
 
 import os
-import subprocess
+import subprocess  # nosec B404 - single audited subprocess boundary; scripts/subprocess_boundary_audit.py forbids all other use
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,7 +61,7 @@ def run_command(
 ) -> subprocess.CompletedProcess[Any]:
     safe_cmd = _normalize_cmd(cmd)
     try:
-        return subprocess.run(
+        return subprocess.run(  # nosec B603 - executable must be absolute via _normalize_cmd
             safe_cmd,
             cwd=os.fspath(cwd) if cwd is not None else None,
             env=dict(env) if env is not None else None,
@@ -84,7 +84,7 @@ def spawn_command(
     **kwargs: Any,
 ) -> subprocess.Popen[Any]:
     safe_cmd = _normalize_cmd(cmd)
-    return subprocess.Popen(safe_cmd, **kwargs)
+    return subprocess.Popen(safe_cmd, **kwargs)  # nosec B603 - executable must be absolute via _normalize_cmd
 
 
 def run_pipeline(
@@ -94,9 +94,13 @@ def run_pipeline(
     safe_producer = _normalize_cmd(producer_cmd)
     safe_consumer = _normalize_cmd(consumer_cmd)
 
-    producer = subprocess.Popen(safe_producer, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    producer = subprocess.Popen(  # nosec B603 - executable must be absolute via _normalize_cmd
+        safe_producer,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     assert producer.stdout is not None
-    consumer = subprocess.Popen(
+    consumer = subprocess.Popen(  # nosec B603 - executable must be absolute via _normalize_cmd
         safe_consumer,
         stdin=producer.stdout,
         stdout=subprocess.PIPE,
