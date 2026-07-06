@@ -137,7 +137,7 @@ def _run(cmd: list[str]) -> str:
 
 def _db_exists(target_db: str) -> bool:
     target_db = _safe_db_name(target_db)
-    sql = f"SELECT 1 FROM pg_database WHERE datname = '{target_db}'"
+    sql = "SELECT 1 FROM pg_database WHERE datname = :'target_db'"
     output = _run(
         [
             "runuser",
@@ -149,6 +149,8 @@ def _db_exists(target_db: str) -> bool:
             "postgres",
             "--tuples-only",
             "--no-align",
+            "--set",
+            f"target_db={target_db}",
             "--command",
             sql,
         ]
