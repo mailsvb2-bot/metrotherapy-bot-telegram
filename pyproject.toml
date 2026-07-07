@@ -45,6 +45,8 @@ check_untyped_defs = false
 exclude_dirs = ["tests", ".venv", "venv", "build", "dist", "data", "audio", "logs"]
 skips = [
     "B101",  # assert is allowed in internal runtime guards/tests
+    "B105",  # reviewed false positives: TTL/env flags/schema names, no hardcoded secrets
+    "B311",  # reviewed non-security randomness in load tests and quote rotation
     "B110",  # try/except/pass is used by best-effort diagnostics and is separately reviewed
     "B310",  # controlled urllib calls are already constrained to known provider/local URLs
 ]
