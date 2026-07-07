@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from services.db import db
-from services.ai.client import OpenAIClient
 
 from core.time_utils import utcnow_iso
 
@@ -67,33 +66,14 @@ def save_body_feedback(user_id: int, session_id: int, kind: str, area: str) -> N
 
 
 def quick_technique(area: str) -> str:
-    """Генерирует короткую технику саморегуляции (60–90 секунд).
+    """Возвращает локальную безопасную технику саморегуляции (60–90 секунд).
 
-    Используем AI при наличии ключа. Если AI недоступен — отдаём безопасный шаблон.
+    Пользовательский Telegram-флоу не должен зависеть от внешнего AI-провайдера:
+    ответ обязан быть быстрым, предсказуемым и совместимым с ai_user_therapy_allowed=false.
     """
     area = (area or '').strip()
-    client = OpenAIClient.from_settings()
 
-    if client:
-        sys = (
-            "Ты — помощник в проекте Метротерапия. Дай простую безопасную технику саморегуляции на 60–90 секунд. "
-            "Без медицинских диагнозов, без обещаний лечения. Формат: 4–6 коротких шагов, очень понятно. "
-            "Тон: спокойный, заботливый, без мистики."
-        )
-        user = (
-            f"Запрос: напряжение в зоне '{area}'.\n"
-            "Сделай технику, которую можно выполнить прямо сейчас в дороге: дыхание/микро-движение/внимание. "
-            "Не предлагай закрывать глаза. Укажи, что делаем мягко и безопасно."
-        )
-        txt = client.chat(
-            [{"role": "system", "content": sys}, {"role": "user", "content": user}],
-            temperature=0.4,
-            max_tokens=260,
-        )
-        if txt:
-            return txt.strip()
-
-    # Fallback (безопасный, универсальный)
+    # Локальный безопасный ответ: без внешнего AI, без сетевого вызова, без задержки провайдера.
     area_low = area.lower()
     lead = f"Мини‑техника на 60 секунд для зоны: {area}." if area else "Мини‑техника на 60 секунд."
     if "ше" in area_low or "плеч" in area_low:
