@@ -92,7 +92,7 @@ class Settings:
     VK_GROUP_ID: str = _env("VK_GROUP_ID", "")
     VK_API_VERSION: str = _env("VK_API_VERSION", "5.199")
     MESSENGER_WEBHOOK_ENABLED: bool = _env_bool("MESSENGER_WEBHOOK_ENABLED")
-    MESSENGER_WEBHOOK_HOST: str = _env("MESSENGER_WEBHOOK_HOST", _env("WEBHOOK_HOST", "0.0.0.0"))
+    MESSENGER_WEBHOOK_HOST: str = _env("MESSENGER_WEBHOOK_HOST", _env("WEBHOOK_HOST", "127.0.0.1"))
     MESSENGER_WEBHOOK_PORT: int = int(_env("MESSENGER_WEBHOOK_PORT", _env("WEBHOOK_PORT", "8081")))
     TELEGRAM_TRANSPORT: str = (_env("TELEGRAM_TRANSPORT", _env("RUN_MODE", "polling")) or "polling").strip().lower()
     TELEGRAM_WEBHOOK_ENABLED: bool = _env_bool("TELEGRAM_WEBHOOK_ENABLED")

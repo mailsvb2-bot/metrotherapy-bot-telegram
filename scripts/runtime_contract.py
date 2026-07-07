@@ -118,7 +118,7 @@ def run() -> tuple[list[str], list[str]]:
         messenger_port = int(_value("MESSENGER_WEBHOOK_PORT") or _value("WEBHOOK_PORT") or "8081")
         health_host = _value("HEALTHCHECK_HOST") or "127.0.0.1"
         health_port = int(_value("HEALTHCHECK_PORT") or "8082")
-        same_host = messenger_host == health_host or "0.0.0.0" in {messenger_host, health_host}
+        same_host = messenger_host == health_host or "0.0.0.0" in {messenger_host, health_host}  # nosec B104 - sentinel comparison, not a bind
         if same_host and messenger_port == health_port:
             errors.append(f"Messenger webhook port and health port collide on {messenger_host}:{messenger_port}")
 

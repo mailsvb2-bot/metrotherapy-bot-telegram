@@ -70,7 +70,7 @@ def _prod_ingress_checks() -> None:
         messenger_port = _int_env("MESSENGER_WEBHOOK_PORT", _int_env("WEBHOOK_PORT", 8081))
         health_host = (os.getenv("HEALTHCHECK_HOST", "127.0.0.1") or "127.0.0.1").strip()
         health_port = _int_env("HEALTHCHECK_PORT", 8082)
-        same_host = messenger_host == health_host or "0.0.0.0" in {messenger_host, health_host}
+        same_host = messenger_host == health_host or "0.0.0.0" in {messenger_host, health_host}  # nosec B104 - sentinel comparison, not a bind
         if same_host and messenger_port == health_port:
             raise StartupCheckError(
                 f"Port collision: messenger webhook and healthcheck both bind {messenger_host}:{messenger_port}. "

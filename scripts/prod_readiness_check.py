@@ -280,7 +280,7 @@ def run() -> tuple[list[str], list[str]]:
         wh_port = _int("TELEGRAM_WEBHOOK_PORT", _int("WEBHOOK_PORT", 8081, errors), errors)
         health_host = (os.getenv("HEALTHCHECK_HOST", "127.0.0.1") or "127.0.0.1").strip()
         health_port = _int("HEALTHCHECK_PORT", 8082, errors)
-        same_host = wh_host == health_host or "0.0.0.0" in {wh_host, health_host}
+        same_host = wh_host == health_host or "0.0.0.0" in {wh_host, health_host}  # nosec B104 - sentinel comparison, not a bind
         if same_host and wh_port == health_port:
             errors.append(f"Webhook port and health port collide on {wh_host}:{wh_port}")
 
