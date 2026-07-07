@@ -3,6 +3,7 @@ from __future__ import annotations
 """One-command non-bypassable regression contour for CI and local release checks."""
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,7 @@ GENERATED_FILE_SUFFIXES = {".pyc", ".pyo"}
 VIRTUALENV_DIR_NAMES = {".venv", "venv", "env"}
 VIRTUALENV_DIR_PREFIXES = (".venv-", "venv-", "env-")
 SKIP_CLEANUP_DIRS = {".git", *VIRTUALENV_DIR_NAMES}
+PROD_ENV_FILE = Path(os.environ.get("METROTHERAPY_PROD_ENV_FILE", "/etc/metrotherapy/metrotherapy.env"))
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,8 @@ class GateStep:
     name: str
     cmd: tuple[str, ...]
     env: dict[str, str] | None = None
+    env_file: Path | None = None
+    skip_if_missing_env_file: bool = False
 
 
 BASE_ENV = {
@@ -52,6 +56,13 @@ STRICT_VALIDATOR_ENV = {
 PYTEST_ENV = {
     "APP_ENV": "test",
     "LOAD_DOTENV": "0",
+}
+
+PROD_LIKE_VALIDATOR_ENV = {
+    "LOAD_DOTENV": "0",
+    "VALIDATOR_RELEASE_MODE": "1",
+    "VALIDATOR_GUARDRAILS_STRICT": "1",
+    "VALIDATOR_SKIP_AUDIO": "1",
 }
 
 STEPS = (
@@ -77,6 +88,13 @@ STEPS = (
         "strict validation",
         (sys.executable, "scripts/validate_project.py"),
         STRICT_VALIDATOR_ENV,
+    ),
+    GateStep(
+        "prod-like validation",
+        (sys.executable, "scripts/validate_project.py"),
+        PROD_LIKE_VALIDATOR_ENV,
+        env_file=PROD_ENV_FILE,
+        skip_if_missing_env_file=True,
     ),
     GateStep(
         "ruff quality gate",
@@ -115,17 +133,49 @@ def _cleanup_generated_python_artifacts() -> None:
                     pass
 
 
+def _load_env_file(path: Path) -> dict[str, str]:
+    loaded: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        tokens = shlex.split(line, comments=True, posix=True)
+        if not tokens:
+            continue
+        if tokens[0] == "export":
+            tokens = tokens[1:]
+        for token in tokens:
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            key = key.strip()
+            if key:
+                loaded[key] = value
+    return loaded
+
+
 def _run(step: GateStep) -> int:
     if step.name.startswith("release hygiene"):
         _cleanup_generated_python_artifacts()
 
     env = os.environ.copy()
     env.update(BASE_ENV)
+    if step.env_file is not None:
+        if not step.env_file.exists():
+            if step.skip_if_missing_env_file:
+                print(f"==> {step.name}", flush=True)
+                print(f"skipped: env file not found: {step.env_file}", flush=True)
+                return 0
+            print(f"REGRESSION_GATE_FAILED step={step.name!r} missing_env_file={step.env_file}", flush=True)
+            return 2
+        env.update(_load_env_file(step.env_file))
     if step.env:
         env.update(step.env)
 
     print(f"==> {step.name}", flush=True)
     print("cmd:", " ".join(step.cmd), flush=True)
+    if step.env_file is not None:
+        print(f"env-file: {step.env_file}", flush=True)
     completed = subprocess.run(step.cmd, cwd=ROOT, env=env, check=False)
     if completed.returncode != 0:
         print(f"REGRESSION_GATE_FAILED step={step.name!r} code={completed.returncode}", flush=True)
