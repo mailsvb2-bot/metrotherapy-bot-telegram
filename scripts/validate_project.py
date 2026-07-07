@@ -15,11 +15,11 @@ if str(ROOT) not in sys.path:
 # Use a temporary DB outside the project tree so release hygiene checks stay stable.
 if os.getenv("VALIDATOR_RELEASE_MODE") == "1":
     import tempfile
-    _tmp_dir = Path(tempfile.gettempdir())
+    _tmp_dir = Path(tempfile.mkdtemp(prefix="metro_validator_"))
     if not os.getenv("METRO_DB_PATH"):
-        os.environ["METRO_DB_PATH"] = str(_tmp_dir / "metro_validator_data.db")
-    os.environ.setdefault("LOG_PATH", str(_tmp_dir / "metro_validator_app.log"))
-    os.environ.setdefault("STORE_LOG_PATH", str(_tmp_dir / "metro_validator_store.log"))
+        os.environ["METRO_DB_PATH"] = str(_tmp_dir / "validator.db")
+    os.environ.setdefault("LOG_PATH", str(_tmp_dir / "validator_app.log"))
+    os.environ.setdefault("STORE_LOG_PATH", str(_tmp_dir / "validator_store.log"))
 
 
 # In release validation mode, use dummy identity/payment contract values for

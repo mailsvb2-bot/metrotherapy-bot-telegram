@@ -99,7 +99,8 @@ def main() -> int:
     os.environ.setdefault('VALIDATOR_RELEASE_MODE', '1')
     os.environ.setdefault('VALIDATOR_GUARDRAILS_STRICT', '1')
     os.environ.setdefault('VALIDATOR_SKIP_AUDIO', '1')
-    temp_db = Path(tempfile.gettempdir()) / f"metro_smoke_{os.getpid()}.db"
+    temp_dir = Path(tempfile.mkdtemp(prefix="metro_smoke_"))
+    temp_db = temp_dir / "smoke.db"
     os.environ.setdefault('METRO_DB_PATH', str(temp_db))
     os.environ.setdefault('BOT_TOKEN', SMOKE_BOT_TOKEN)
     os.environ.setdefault('PAY_PROVIDER_TOKEN', '000000:SMOKE')
@@ -119,6 +120,7 @@ def main() -> int:
     except ImportError:
         print('❌ aiogram is not installed. Install requirements.txt before running smoke.')
         _cleanup_temp_db(temp_db)
+        shutil.rmtree(temp_dir, ignore_errors=True)
         return 2
 
     # Import app (and thus routers) to catch ImportError early.
@@ -188,6 +190,7 @@ def main() -> int:
 
     _cleanup_release_artifacts()
     _cleanup_temp_db(temp_db)
+    shutil.rmtree(temp_dir, ignore_errors=True)
     print('OK')
     return 0
 
