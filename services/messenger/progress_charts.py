@@ -125,7 +125,7 @@ def build_vk_mood_progress_chart_path(user_id: int) -> Path | None:
 
     uid = int(user_id)
     latest_session_id = max(int(row.get("id") or 0) for row in records)
-    out_dir = Path("/tmp/metrotherapy_vk_charts")
+    out_dir = Path("data/cache/metrotherapy_vk_charts")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"progress_{uid}_{latest_session_id}_{len(records)}.png"
     if out_path.exists() and out_path.is_file() and out_path.stat().st_size > 0:

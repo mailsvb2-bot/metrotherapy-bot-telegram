@@ -35,7 +35,7 @@ def _fake_db():
 
 def test_vk_progress_chart_reuses_existing_stable_cache(monkeypatch):
     user_id = 987654321
-    out_dir = Path("/tmp/metrotherapy_vk_charts")
+    out_dir = Path("data/cache/metrotherapy_vk_charts")
     out_dir.mkdir(parents=True, exist_ok=True)
     cached_path = out_dir / f"progress_{user_id}_42_1.png"
     cached_path.write_bytes(b"cached-png")

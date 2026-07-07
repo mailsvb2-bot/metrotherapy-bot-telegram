@@ -10,13 +10,14 @@ HOST = "127.0.0.1"
 PORT = 9001
 SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 DEPLOY_SH = "/root/metrotherapy/deploy.sh"
-LOCK_FILE = Path("/tmp/metrotherapy_deploy.lock")
+LOCK_FILE = Path("/root/metrotherapy/data/deploy/metrotherapy_deploy.lock")
 LOG_FILE = "/var/log/metrotherapy_deploy.log"
 
 
 def _run_deploy_background():
     script = f"""
 set -Eeuo pipefail
+mkdir -p {LOCK_FILE.parent}
 if [ -e {LOCK_FILE} ]; then
   echo "=== deploy skipped: lock exists $(date -Is) ===" >> {LOG_FILE}
   exit 0
