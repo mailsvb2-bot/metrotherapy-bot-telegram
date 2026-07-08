@@ -80,6 +80,11 @@ STEPS = (
         STRICT_VALIDATOR_ENV,
     ),
     GateStep(
+        "user scenario acceptance gate",
+        (sys.executable, "scripts/user_scenario_gate.py"),
+        STRICT_VALIDATOR_ENV,
+    ),
+    GateStep(
         "full pytest regression gate",
         (sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"),
         PYTEST_ENV,
