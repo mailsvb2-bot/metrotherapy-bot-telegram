@@ -4,7 +4,8 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
+# Reviewed: release evidence snapshot invokes local git binary only.
+import subprocess  # nosec B404
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,7 +31,8 @@ def _git(*args: str) -> str:
     git = _optional_bin("git", env_name="GIT_BIN")
     if not git:
         return "unknown"
-    proc = subprocess.run([git, *args], cwd=str(ROOT), text=True, capture_output=True, check=False)
+    # Reviewed: local git binary path is resolved by shutil.which and args are fixed call sites.
+    proc = subprocess.run([git, *args], cwd=str(ROOT), text=True, capture_output=True, check=False)  # nosec B603
     return (proc.stdout or "").strip() if proc.returncode == 0 else "unknown"
 
 
@@ -90,7 +92,7 @@ def main() -> int:
         print(json.dumps(build_snapshot(), ensure_ascii=False, sort_keys=True))
         return 0
     path = write_snapshot(evidence_dir=Path(args.dir))
-    print(json.dumps({"ok": True, "evidence_path": str(path)}, ensure_ascii=False, sort_keys=True))
+    print(f"RELEASE_EVIDENCE_SNAPSHOT_OK path={path}")
     return 0
 
 
