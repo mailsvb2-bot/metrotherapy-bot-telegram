@@ -11,7 +11,8 @@ globally.
 import argparse
 import json
 import re
-import subprocess  # nosec B404 - this script invokes Bandit itself as an operator audit command
+# Reviewed: operator audit helper invokes local Bandit module with fixed arguments and no shell.
+import subprocess  # nosec B404
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -52,7 +53,8 @@ def _run_bandit() -> BanditRun:
         "-f",
         "json",
     ]
-    proc = subprocess.run(  # nosec B603 - fixed Bandit command, no shell, operator-only audit helper
+    # Reviewed: fixed Bandit inventory command, no shell, operator-only audit helper.
+    proc = subprocess.run(  # nosec B603
         cmd,
         cwd=ROOT,
         check=False,
