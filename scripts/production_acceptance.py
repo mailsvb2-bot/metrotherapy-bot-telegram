@@ -52,7 +52,7 @@ def _run(name: str, cmd: list[str], *, timeout: int = 120, extra_env: dict[str, 
     return AcceptanceResult(name=name, ok=proc.returncode == 0, detail=tail)
 
 
-def _http_json(name: str, url: str, *, readiness: bool = False) -> AcceptanceResult:
+def _http_json(name: str, url: str, *, readiness: bool = False, require_telegram_polling: bool = False) -> AcceptanceResult:
     try:
         request = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(request, timeout=10) as response:
@@ -77,6 +77,15 @@ def _http_json(name: str, url: str, *, readiness: bool = False) -> AcceptanceRes
         missing = [key for key in required_true if payload.get(key) is not True]
         if missing:
             return AcceptanceResult(name=name, ok=False, detail=f"missing_true={missing} payload={payload}")
+    if require_telegram_polling:
+        telegram_transport = str(payload.get("telegram_transport") or "").strip().lower()
+        telegram_webhook_enabled = payload.get("telegram_webhook_enabled")
+        if telegram_transport != "polling" or telegram_webhook_enabled is True:
+            return AcceptanceResult(
+                name=name,
+                ok=False,
+                detail=f"telegram_polling_contract_failed transport={telegram_transport} webhook_enabled={telegram_webhook_enabled}",
+            )
     return AcceptanceResult(
         name=name,
         ok=True,
@@ -110,7 +119,7 @@ def collect_results() -> list[AcceptanceResult]:
     results.append(_run("prod_readiness", [sys.executable, "scripts/prod_readiness_check.py"], timeout=120))
     results.append(_run("runtime_observability", [sys.executable, "scripts/runtime_observability_check.py"], timeout=60))
     results.append(_run("user_scenario_gate:prod", [sys.executable, "scripts/user_scenario_gate.py", "--mode", "prod"], timeout=120))
-    results.append(_http_json("http:local_health", "http://127.0.0.1:8082/healthz"))
+    results.append(_http_json("http:local_health", "http://127.0.0.1:8082/healthz", require_telegram_polling=True))
     results.append(_http_json("http:local_ready", "http://127.0.0.1:8082/readyz", readiness=True))
     results.append(_http_json("http:local_webhook_health", "http://127.0.0.1:8081/healthz"))
     if public_base:
