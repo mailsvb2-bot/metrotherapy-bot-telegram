@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
+# Reviewed: operator restore-drill script invokes fixed Postgres tools against validated non-production target.
+import subprocess  # nosec B404
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -73,7 +74,8 @@ def _format_failure(cmd: list[str], output: str, returncode: int) -> str:
 
 
 def _run(cmd: list[str], *, input_text: str | None = None) -> str:
-    proc = subprocess.run(cmd, check=False, capture_output=True, text=True, input=input_text)
+    # Reviewed: fixed Postgres tooling command lists, no shell; target URL is guarded non-production.
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True, input=input_text)  # nosec B603
     out = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
         raise SystemExit(_format_failure(cmd, out, proc.returncode))
@@ -81,9 +83,16 @@ def _run(cmd: list[str], *, input_text: str | None = None) -> str:
 
 
 def _run_pipeline(producer_cmd: list[str], consumer_cmd: list[str]) -> str:
-    producer = subprocess.Popen(producer_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # Reviewed: fixed gzip/psql restore-drill pipeline, no shell; target URL is guarded non-production.
+    producer = subprocess.Popen(producer_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # nosec B603
     assert producer.stdout is not None
-    consumer = subprocess.Popen(consumer_cmd, stdin=producer.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+    consumer = subprocess.Popen(  # nosec B603
+        consumer_cmd,
+        stdin=producer.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=False,
+    )
     producer.stdout.close()
     consumer_stdout, consumer_stderr = consumer.communicate()
     producer_stderr = producer.stderr.read() if producer.stderr else b""
