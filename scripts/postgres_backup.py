@@ -4,7 +4,8 @@ import argparse
 import os
 import shlex
 import shutil
-import subprocess
+# Reviewed: operator backup script invokes pg_dump with a resolved local binary and no shell.
+import subprocess  # nosec B404
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -92,7 +93,8 @@ def create_backup(*, backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = backup_dir / f"{_db_name(url)}_{stamp}.dump"
     pg_dump = _required_bin("pg_dump", env_name="PG_DUMP_BIN")
-    proc = subprocess.run(
+    # Reviewed: pg_dump path is resolved by shutil.which, arguments are fixed, and shell is disabled.
+    proc = subprocess.run(  # nosec B603
         [
             pg_dump,
             "--format=custom",
