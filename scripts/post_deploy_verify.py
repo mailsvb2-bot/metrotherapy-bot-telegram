@@ -229,7 +229,9 @@ def _verify_telegram_live_smoke(payload: dict) -> dict:
         raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED telegram_live_smoke missing_bot_id payload={payload}")
     if not str(payload.get("bot_username") or "").strip():
         raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED telegram_live_smoke missing_username payload={payload}")
-    if payload.get("transport") == "polling" and payload.get("webhook_url_present") is True:
+    if payload.get("transport") != "polling":
+        raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED telegram_live_smoke transport_must_be_polling payload={payload}")
+    if payload.get("webhook_url_present") is True:
         raise SystemExit(f"POST_DEPLOY_VERIFY_FAILED telegram_live_smoke webhook_conflict payload={payload}")
     return {
         "ok": True,
