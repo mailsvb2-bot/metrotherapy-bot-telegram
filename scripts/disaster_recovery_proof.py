@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
+# Reviewed: operator disaster-recovery proof invokes fixed local restore-drill command without shell.
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
@@ -16,7 +17,8 @@ from scripts.postgres_restore_drill import latest_backup
 
 def _run_restore_drill() -> str:
     dump = latest_backup()
-    proc = subprocess.run(
+    # Reviewed: local Python restore drill command with a discovered backup path, no shell.
+    proc = subprocess.run(  # nosec B603
         [sys.executable, "scripts/postgres_restore_drill.py", str(dump)],
         cwd=str(ROOT),
         text=True,
