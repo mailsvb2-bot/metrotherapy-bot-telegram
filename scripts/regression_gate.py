@@ -27,6 +27,7 @@ VIRTUALENV_DIR_NAMES = {".venv", "venv", "env"}
 VIRTUALENV_DIR_PREFIXES = (".venv-", "venv-", "env-")
 SKIP_CLEANUP_DIRS = {".git", *VIRTUALENV_DIR_NAMES}
 PROD_ENV_FILE = Path(os.environ.get("METROTHERAPY_PROD_ENV_FILE", "/etc/metrotherapy/metrotherapy.env"))
+FULL_GATE_PROD_OVERRIDE = "ALLOW_FULL_REGRESSION_ON_PROD"
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,39 @@ STEPS = (
 )
 
 
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_live_prod_host() -> bool:
+    """Detect the real production VPS and refuse heavy checks by default.
+
+    The full regression contour owns compileall + smoke + full pytest + validator.
+    It is correct for CI/local release proof, but too heavy for the live VPS.
+    Operators can still override deliberately with ALLOW_FULL_REGRESSION_ON_PROD=1.
+    """
+    if _truthy(os.getenv("CI")):
+        return False
+    if _truthy(os.getenv(FULL_GATE_PROD_OVERRIDE)):
+        return False
+    if ROOT == Path("/root/metrotherapy") and PROD_ENV_FILE.exists():
+        return True
+    return False
+
+
+def _guard_live_prod_host() -> int:
+    if not _is_live_prod_host():
+        return 0
+    print(
+        "REGRESSION_GATE_REFUSED_ON_LIVE_PROD: full pytest/regression is disabled on the live VPS.\n"
+        "Use lightweight production checks instead: scripts/user_scenario_gate.py, healthz, readyz, "
+        "and scripts/post_deploy_verify.py --skip-pytest.\n"
+        f"Emergency override, only with an approved maintenance window: {FULL_GATE_PROD_OVERRIDE}=1",
+        flush=True,
+    )
+    return 2
+
+
 def _is_local_virtualenv_dir(dirname: str) -> bool:
     return dirname in VIRTUALENV_DIR_NAMES or dirname.startswith(VIRTUALENV_DIR_PREFIXES)
 
@@ -189,6 +223,9 @@ def _run(step: GateStep) -> int:
 
 
 def main() -> int:
+    guard_code = _guard_live_prod_host()
+    if guard_code:
+        return guard_code
     for step in STEPS:
         code = _run(step)
         if code:
