@@ -25,7 +25,7 @@ fi
 touch {LOCK_FILE}
 trap 'rm -f {LOCK_FILE}' EXIT
 echo "=== deploy queued started: $(date -Is) ===" >> {LOG_FILE}
-{DEPLOY_SH} >> {LOG_FILE} 2>&1
+/usr/bin/bash {DEPLOY_SH} >> {LOG_FILE} 2>&1
 echo "=== deploy queued finished: $(date -Is) ===" >> {LOG_FILE}
 """
     subprocess.Popen(
