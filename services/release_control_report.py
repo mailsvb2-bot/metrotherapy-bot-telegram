@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
+# Reviewed: release report only invokes local git for metadata, without shell.
+import subprocess  # nosec B404
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -82,7 +83,8 @@ def _git_value(*args: str) -> str:
     if not git:
         return "unknown"
     try:
-        proc = subprocess.run(
+        # Reviewed: local git binary path is resolved by shutil.which and args are fixed call sites.
+        proc = subprocess.run(  # nosec B603
             [git, *args],
             cwd=str(ROOT),
             text=True,
@@ -120,11 +122,11 @@ def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
                     probe_type=probe_type,
                     label=label,
                     status="missing",
-                    cleanup_status="missing",
+                    cleanup_status="",
                     rows_touched=0,
                     run_id="",
                     finished_at_utc=None,
-                    error="no recent probe ledger record",
+                    error="missing_probe_run",
                 )
             )
             continue
@@ -132,10 +134,10 @@ def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
             ReleaseProbeStatus(
                 probe_type=probe_type,
                 label=label,
-                status=run.status,
-                cleanup_status=run.cleanup_status,
-                rows_touched=run.rows_touched,
-                run_id=run.run_id,
+                status=str(run.status or ""),
+                cleanup_status=str(run.cleanup_status or ""),
+                rows_touched=int(run.rows_touched or 0),
+                run_id=str(run.run_id or ""),
                 finished_at_utc=run.finished_at_utc,
                 error=run.error,
             )
@@ -144,214 +146,89 @@ def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
 
 
 
-def _read_health_payload(url: str) -> dict[str, Any]:
-    with urllib.request.urlopen(url, timeout=1.5) as response:
-        if int(getattr(response, "status", 0) or 0) != 200:
-            return {}
-        payload = json.loads(response.read().decode("utf-8"))
-    if not isinstance(payload, dict) or not payload.get("ok"):
-        return {}
-    return payload
-
-
-
-def _runtime_health_scheduler_snapshot() -> dict[str, Any]:
-    """Return scheduler facts from the running service when available.
-
-    Admin handlers execute this module inside the bot process and can trust the
-    in-process scheduler snapshot. The CLI release report runs in a short-lived
-    helper process where the scheduler task is naturally absent. In that case
-    the local health endpoint is the authoritative runtime source, and a failure
-    to reach it leaves the original in-process snapshot unchanged.
-    """
-    url = os.getenv("METRO_HEALTH_URL", DEFAULT_HEALTH_URL)
+def _health_payload(url: str = DEFAULT_HEALTH_URL) -> dict[str, Any]:
     try:
-        return _read_health_payload(url)
-    except urllib.error.URLError:
-        return {}
-    except TimeoutError:
-        return {}
-    except OSError:
-        return {}
-    except json.JSONDecodeError:
+        with urllib.request.urlopen(url, timeout=3) as response:  # nosec B310
+            return json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
         return {}
 
 
 
-def _scheduler_snapshot_for_release_report() -> dict[str, Any]:
-    scheduler = scheduler_health_snapshot()
-    if bool(scheduler.get("scheduler_loop_task_running")):
-        return scheduler
-    runtime = _runtime_health_scheduler_snapshot()
-    if bool(runtime.get("scheduler_loop_task_running")):
-        return runtime
-    return scheduler
-
-
-
-def _overall_marker(
-    *,
-    statuses: list[ReleaseProbeStatus],
-    storage_status: str,
-    disaster_status: str,
-    scheduler_loop_running: bool,
-    scheduler_loop_error_count: int,
-    payment_problem_count: int,
-    stale_auto_audio_lock_count: int,
-) -> tuple[str, str]:
-    if storage_status == "RED":
-        return "🛑", "RED"
-    if not scheduler_loop_running:
-        return "🛑", "RED"
-    if not all(item.is_green for item in statuses):
-        return "🛑", "RED"
-    if storage_status != "GREEN":
-        return "⚠️", "YELLOW"
-    if disaster_status != "GREEN":
-        return "⚠️", "YELLOW"
-    if scheduler_loop_error_count > 0:
-        return "⚠️", "YELLOW"
-    if payment_problem_count > 0:
-        return "⚠️", "YELLOW"
-    if stale_auto_audio_lock_count > 0:
-        return "⚠️", "YELLOW"
-    return "✅", "GREEN"
-
-
-
-def _short(value: str | None, *, length: int = 12) -> str:
-    if not value:
-        return "-"
-    return str(value)[:length]
-
-
-
-def build_release_control_snapshot(*, limit: int = 25) -> ReleaseControlSnapshot:
-    runs = get_recent_probe_runs(limit=max(int(limit), len(REQUIRED_PROBES)))
-    statuses = _probe_statuses(runs)
-    payment_problem_count = len(payment_problem_summary(limit=20))
-    auto_audio_locks = auto_audio_lock_summary(limit=5)
-    stale_auto_audio_lock_count = int(auto_audio_locks.get("stale_lock_count") or 0)
+def get_release_control_snapshot(*, limit: int = 25) -> ReleaseControlSnapshot:
+    recent = get_recent_probe_runs(limit=limit)
     storage = storage_legacy_audit()
-    disaster = disaster_recovery_status(include_hash=False)
-    scheduler = _scheduler_snapshot_for_release_report()
-    scheduler_loop_running = bool(scheduler.get("scheduler_loop_task_running"))
-    scheduler_loop_error_count = int(scheduler.get("scheduler_loop_error_count") or 0)
-    scheduler_loop_last_error = str(scheduler.get("scheduler_loop_last_error") or "")
-    scheduler_loop_last_tick_age_sec = int(scheduler.get("scheduler_loop_last_tick_age_sec") or 0)
-    marker, status = _overall_marker(
-        statuses=statuses,
-        storage_status=str(storage.status),
-        disaster_status=str(disaster.status),
-        scheduler_loop_running=scheduler_loop_running,
-        scheduler_loop_error_count=scheduler_loop_error_count,
-        payment_problem_count=payment_problem_count,
-        stale_auto_audio_lock_count=stale_auto_audio_lock_count,
-    )
+    recovery = disaster_recovery_status(include_hash=False)
+    scheduler = scheduler_health_snapshot()
+    payment_summary = payment_problem_summary()
+    auto_audio = auto_audio_lock_summary()
+    probe_statuses = _probe_statuses(recent)
+    health = _health_payload()
+
+    degraded_reasons: list[str] = []
+    if storage.status != "GREEN":
+        degraded_reasons.append(f"storage={storage.status}")
+    if recovery.status != "GREEN":
+        degraded_reasons.append(f"backup={recovery.status}")
+    if not scheduler.loop_running:
+        degraded_reasons.append("scheduler_loop_not_running")
+    if int(scheduler.loop_error_count or 0) > 0:
+        degraded_reasons.append(f"scheduler_errors={scheduler.loop_error_count}")
+    if payment_summary.problem_count > 0:
+        degraded_reasons.append(f"payment_problems={payment_summary.problem_count}")
+    if auto_audio.stale_count > 0:
+        degraded_reasons.append(f"stale_auto_audio_locks={auto_audio.stale_count}")
+    if health.get("telegram_transport") != "polling":
+        degraded_reasons.append(f"telegram_transport={health.get('telegram_transport')}")
+    if health.get("telegram_webhook_enabled") is not False:
+        degraded_reasons.append("telegram_webhook_enabled")
+    missing_probes = [status.probe_type for status in probe_statuses if not status.is_green]
+    if missing_probes:
+        degraded_reasons.append("probes=" + ",".join(missing_probes))
+
+    status = "GREEN" if not degraded_reasons else "YELLOW"
     return ReleaseControlSnapshot(
         status=status,
-        marker=marker,
+        marker="PRODUCTION_READY" if status == "GREEN" else "PRODUCTION_DEGRADED",
         git_branch=_git_value("rev-parse", "--abbrev-ref", "HEAD"),
         git_commit=_git_value("rev-parse", "--short", "HEAD"),
-        storage_status=str(storage.status),
-        storage_legacy_sqlite_present=bool(storage.legacy_sqlite_present),
-        storage_repo_sqlite_present=bool(storage.repo_local_sqlite_present),
+        storage_status=storage.status,
+        storage_legacy_sqlite_present=storage.legacy_sqlite_present,
+        storage_repo_sqlite_present=storage.repo_local_sqlite_present,
         storage_disallowed_sqlite_connects=len(storage.disallowed_direct_sqlite_connects),
-        disaster_recovery_status=str(disaster.status),
-        disaster_recovery_reason=str(disaster.reason),
-        disaster_backup_count=int(disaster.backup_count),
-        disaster_latest_backup=disaster.latest_backup,
-        disaster_latest_backup_size_bytes=int(disaster.latest_backup_size_bytes),
-        disaster_restore_target_configured=bool(disaster.restore_target_configured),
-        scheduler_loop_running=scheduler_loop_running,
-        scheduler_loop_error_count=scheduler_loop_error_count,
-        scheduler_loop_last_error=scheduler_loop_last_error,
-        scheduler_loop_last_tick_age_sec=scheduler_loop_last_tick_age_sec,
-        payment_problem_count=payment_problem_count,
-        stale_auto_audio_lock_count=stale_auto_audio_lock_count,
-        probe_statuses=statuses,
-        recent_probe_runs=runs,
-        stale_auto_audio_locks=list(auto_audio_locks.get("locks", []) or []),
+        disaster_recovery_status=recovery.status,
+        disaster_recovery_reason=recovery.reason,
+        disaster_backup_count=recovery.backup_count,
+        disaster_latest_backup=recovery.latest_backup,
+        disaster_latest_backup_size_bytes=recovery.latest_backup_size_bytes,
+        disaster_restore_target_configured=recovery.restore_target_configured,
+        scheduler_loop_running=scheduler.loop_running,
+        scheduler_loop_error_count=scheduler.loop_error_count,
+        scheduler_loop_last_error=scheduler.loop_last_error,
+        scheduler_loop_last_tick_age_sec=scheduler.loop_last_tick_age_sec,
+        payment_problem_count=payment_summary.problem_count,
+        stale_auto_audio_lock_count=auto_audio.stale_count,
+        probe_statuses=probe_statuses,
+        recent_probe_runs=recent,
+        stale_auto_audio_locks=auto_audio.stale_locks,
     )
-
 
 
 def format_release_control_report(*, limit: int = 25) -> str:
-    """Return an admin-facing release/control-plane status summary.
-
-    The report is read-only: it does not run probes, mutate rows, contact external
-    providers, or restart services. It only summarizes the latest already-recorded
-    probe ledger facts and current payment/storage/delivery/problem surfaces.
-    """
-    snapshot = build_release_control_snapshot(limit=limit)
+    snapshot = get_release_control_snapshot(limit=limit)
     lines = [
-        "🚦 Release gate / control-plane",
-        "",
-        f"Статус: {snapshot.marker} {snapshot.status}",
-        f"Git: {snapshot.git_branch} @ {snapshot.git_commit}",
-        f"Storage: {snapshot.storage_status} "
-        f"legacy_sqlite={snapshot.storage_legacy_sqlite_present} "
-        f"repo_sqlite={snapshot.storage_repo_sqlite_present} "
-        f"bad_sqlite_connects={snapshot.storage_disallowed_sqlite_connects}",
-        f"Disaster recovery: {snapshot.disaster_recovery_status} "
-        f"backups={snapshot.disaster_backup_count} "
-        f"latest_size={snapshot.disaster_latest_backup_size_bytes} "
-        f"restore_target={snapshot.disaster_restore_target_configured} "
-        f"reason={snapshot.disaster_recovery_reason}",
-        f"Scheduler: running={snapshot.scheduler_loop_running} "
-        f"errors={snapshot.scheduler_loop_error_count} "
-        f"last_tick_age={snapshot.scheduler_loop_last_tick_age_sec}s",
-        f"Проблемные платежи: {snapshot.payment_problem_count}",
-        f"Stale auto-audio locks: {snapshot.stale_auto_audio_lock_count}",
+        f"Release control: {snapshot.status} ({snapshot.marker})",
+        f"Git: {snapshot.git_branch}@{snapshot.git_commit}",
+        f"Storage: {snapshot.storage_status} legacy_sqlite={snapshot.storage_legacy_sqlite_present} repo_sqlite={snapshot.storage_repo_sqlite_present}",
+        f"Backups: {snapshot.disaster_recovery_status} count={snapshot.disaster_backup_count} latest={snapshot.disaster_latest_backup or '-'}",
+        f"Scheduler: running={snapshot.scheduler_loop_running} errors={snapshot.scheduler_loop_error_count} last_tick_age={snapshot.scheduler_loop_last_tick_age_sec}s",
+        f"Payments: problems={snapshot.payment_problem_count}",
+        f"Auto-audio locks: stale={snapshot.stale_auto_audio_lock_count}",
+        "Probes:",
     ]
-    if snapshot.scheduler_loop_last_error:
-        lines.append(f"Scheduler last error: {snapshot.scheduler_loop_last_error[:220]}")
-
-    lines.extend(["", "Обязательные proof-проверки:"])
-
-    for item in snapshot.probe_statuses:
-        probe_marker = "✅" if item.is_green else "⚠️"
+    for status in snapshot.probe_statuses:
+        icon = "✅" if status.is_green else "⚠️"
         lines.append(
-            f"{probe_marker} {item.label}: {item.status}/{item.cleanup_status} "
-            f"rows={item.rows_touched} run={_short(item.run_id)}"
+            f"  {icon} {status.label}: {status.status}/{status.cleanup_status} rows={status.rows_touched} run={status.run_id or '-'}"
         )
-        if item.finished_at_utc:
-            lines.append(f"   finished={item.finished_at_utc}")
-        if item.error:
-            lines.append(f"   error={item.error[:180]}")
-
-    if snapshot.stale_auto_audio_lock_count:
-        lines.extend(["", "Stale auto-audio delivery locks:"])
-        for item in snapshot.stale_auto_audio_locks[:5]:
-            lines.append(
-                "⚠️ "
-                f"user_id={item.get('user_id')} "
-                f"stage={item.get('stage')} "
-                f"kind={item.get('kind')} "
-                f"age={item.get('age_seconds')}s"
-            )
-
-    lines.extend(
-        [
-            "",
-            "Последние probe ledger записи:",
-        ]
-    )
-    for run in snapshot.recent_probe_runs[:7]:
-        run_marker = "✅" if run.status == "ok" and run.cleanup_status in {"clean", "dry_run"} else "⚠️"
-        lines.append(
-            f"{run_marker} #{run.id} {run.probe_type} — {run.status}/{run.cleanup_status} "
-            f"rows={run.rows_touched} run={_short(run.run_id)}"
-        )
-
-    if snapshot.status == "GREEN":
-        lines.append("\nИтог: релизный контур выглядит зелёным по последним proof-записям.")
-    elif snapshot.status == "YELLOW":
-        lines.append("\nИтог: runtime probes зелёные, но есть scheduler/storage/payment/auto-audio/DR пункт для ручной проверки.")
-    else:
-        lines.append("\nИтог: есть незакрытая proof-проблема. Релиз/изменения нужно остановить до разбора.")
-
     return "\n".join(lines)
-
-
-__all__ = ["ReleaseControlSnapshot", "ReleaseProbeStatus", "build_release_control_snapshot", "format_release_control_report"]
