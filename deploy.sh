@@ -26,6 +26,42 @@ else
   echo "WARNING: env file not found: $ENV_FILE"
 fi
 
+_is_truthy() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on|webhook) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+require_telegram_polling_contract() {
+  telegram_transport="$(printf '%s' "${TELEGRAM_TRANSPORT:-polling}" | tr '[:upper:]' '[:lower:]')"
+  run_mode="$(printf '%s' "${RUN_MODE:-}" | tr '[:upper:]' '[:lower:]')"
+
+  if [ "$telegram_transport" != "polling" ]; then
+    echo "ERROR: Telegram production transport must stay polling; TELEGRAM_TRANSPORT=$telegram_transport"
+    exit 20
+  fi
+
+  if [ -n "$run_mode" ] && [ "$run_mode" != "polling" ]; then
+    echo "ERROR: Telegram production transport must stay polling; RUN_MODE=$run_mode"
+    exit 21
+  fi
+
+  if _is_truthy "${TELEGRAM_WEBHOOK_ENABLED:-0}"; then
+    echo "ERROR: Telegram webhook must stay disabled in production polling mode"
+    exit 22
+  fi
+
+  if _is_truthy "${TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED:-0}"; then
+    echo "ERROR: Telegram legacy token webhook must stay disabled in production polling mode"
+    exit 23
+  fi
+
+  echo "=== telegram transport contract OK: polling ==="
+}
+
+require_telegram_polling_contract
+
 OLD_SHA="$(git rev-parse HEAD)"
 echo "=== old sha: $OLD_SHA ==="
 
@@ -80,6 +116,8 @@ git merge --ff-only origin/main
 
 NEW_SHA="$(git rev-parse HEAD)"
 echo "=== new sha: $NEW_SHA ==="
+
+require_telegram_polling_contract
 
 if [ -f requirements.txt ]; then
   echo "=== install requirements ==="
