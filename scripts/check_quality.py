@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import compileall
 import os
-import subprocess
+# Reviewed: operator quality gate invokes fixed local checks without shell.
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
@@ -35,7 +36,8 @@ def _env() -> dict[str, str]:
 def _run(title: str, cmd: list[str]) -> int:
     print(f"\n== {title} ==")
     print("cmd:", " ".join(cmd))
-    completed = subprocess.run(cmd, cwd=ROOT, env=_env(), check=False)
+    # Reviewed: command lists are defined in this file and executed without shell.
+    completed = subprocess.run(cmd, cwd=ROOT, env=_env(), check=False)  # nosec B603
     return int(completed.returncode)
 
 
