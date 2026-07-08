@@ -20,7 +20,8 @@ import json
 import os
 import re
 import shlex
-import subprocess
+# Reviewed: operator restore-drill DB preparer invokes fixed runuser/psql/createdb commands without shell.
+import subprocess  # nosec B404
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
@@ -128,7 +129,8 @@ def _owner_from_url(prod_url: str) -> str:
 
 
 def _run(cmd: list[str]) -> str:
-    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    # Reviewed: fixed runuser/psql/createdb command lists; target DB name is allow-listed before use.
+    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)  # nosec B603
     output = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
         raise RuntimeError(output.strip() or str(proc.returncode))
@@ -189,22 +191,24 @@ def prepare_drill_db(*, target_db: str) -> DrillDbPrepareResult:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Prepare safe Postgres restore drill database")
+    parser = argparse.ArgumentParser(description="Prepare non-production Postgres restore-drill database")
     parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
     parser.add_argument("--target-db", default=os.getenv("METRO_RESTORE_DRILL_DB", "metrotherapy_restore_drill"))
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--print-export", action="store_true")
+    parser.add_argument("--print-export", action="store_true", help="Print shell export for METRO_RESTORE_DRILL_DATABASE_URL")
     args = parser.parse_args()
 
     _apply_env(_load_env_file(args.env_file))
     result = prepare_drill_db(target_db=str(args.target_db))
     if args.print_export:
-        print(f"export METRO_RESTORE_DRILL_DATABASE_URL={shlex.quote(result.target_url)}")
-    elif args.json:
+        if not result.ok:
+            raise SystemExit("restore drill DB preparation failed: " + "; ".join(result.problems))
+        print("export METRO_RESTORE_DRILL_DATABASE_URL=" + shlex.quote(result.target_url))
+        return 0
+    if args.json:
         print(json.dumps(result.to_safe_dict(), ensure_ascii=False, sort_keys=True))
     else:
-        state = "created" if result.created else "exists" if result.existed else "failed"
-        print(f"POSTGRES_RESTORE_DRILL_DB_{state.upper()} db={result.target_db} owner={result.owner}")
+        print(json.dumps(result.to_safe_dict(), ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if result.ok else 2
 
 
