@@ -31,7 +31,14 @@ class Finding:
     text: str
 
 
-def _run_bandit() -> tuple[int, str]:
+@dataclass(frozen=True)
+class BanditRun:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+def _run_bandit() -> BanditRun:
     cmd = [
         sys.executable,
         "-m",
@@ -52,19 +59,40 @@ def _run_bandit() -> tuple[int, str]:
         capture_output=True,
         text=True,
     )
-    return int(proc.returncode), (proc.stdout or "") + (proc.stderr or "")
+    return BanditRun(returncode=int(proc.returncode), stdout=proc.stdout or "", stderr=proc.stderr or "")
 
 
-def _load_bandit_payload(raw: str) -> dict:
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"BANDIT_SUBPROCESS_INVENTORY_FAILED: bandit_json_error={exc}\n{raw[-2000:]}") from exc
+def _json_slice(raw: str) -> str:
+    text = raw.strip()
+    if not text:
+        return ""
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end < start:
+        return text
+    return text[start : end + 1]
+
+
+def _load_bandit_payload(run: BanditRun) -> dict:
+    candidates = (run.stdout, run.stdout + "\n" + run.stderr)
+    errors: list[str] = []
+    for raw in candidates:
+        candidate = _json_slice(raw)
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            errors.append(f"{type(exc).__name__}: {exc}")
+            continue
+        if isinstance(payload, dict):
+            return payload
+    diagnostics = "\n".join(errors)
+    tail = ((run.stdout + "\n" + run.stderr).strip())[-2000:]
+    raise SystemExit(f"BANDIT_SUBPROCESS_INVENTORY_FAILED: bandit_json_error={diagnostics}\n{tail}")
 
 
 def collect_findings() -> list[Finding]:
-    _code, raw = _run_bandit()
-    payload = _load_bandit_payload(raw)
+    run = _run_bandit()
+    payload = _load_bandit_payload(run)
     findings: list[Finding] = []
     for item in payload.get("results") or []:
         issue = str(item.get("test_id") or "")
