@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
+# Reviewed: operator advisory gate invokes a configured local AI-code-filter tool without shell.
+import subprocess  # nosec B404
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,7 +47,8 @@ def _run_command(
     cmd_path.write_text(" ".join(command) + "\n", encoding="utf-8")
 
     try:
-        proc = subprocess.run(
+        # Reviewed: commands are generated from this file's fixed command list and run without shell.
+        proc = subprocess.run(  # nosec B603
             list(command),
             cwd=str(cwd),
             text=True,
