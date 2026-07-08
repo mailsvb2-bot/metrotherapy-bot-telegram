@@ -109,6 +109,7 @@ def collect_results() -> list[AcceptanceResult]:
     results.append(_run("pytest", [sys.executable, "-m", "pytest", "-q"], timeout=300))
     results.append(_run("prod_readiness", [sys.executable, "scripts/prod_readiness_check.py"], timeout=120))
     results.append(_run("runtime_observability", [sys.executable, "scripts/runtime_observability_check.py"], timeout=60))
+    results.append(_run("user_scenario_gate:prod", [sys.executable, "scripts/user_scenario_gate.py", "--mode", "prod"], timeout=120))
     results.append(_http_json("http:local_health", "http://127.0.0.1:8082/healthz"))
     results.append(_http_json("http:local_ready", "http://127.0.0.1:8082/readyz", readiness=True))
     results.append(_http_json("http:local_webhook_health", "http://127.0.0.1:8081/healthz"))
