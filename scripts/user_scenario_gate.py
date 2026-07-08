@@ -6,7 +6,7 @@ Hermetic acceptance gate for the critical user path. The default mode does not
 load production env, does not call Telegram, does not call YooKassa, and uses a
 private temporary SQLite database. Production mode reuses the same synthetic
 journey probe against the configured deployment DB and still avoids provider
-network calls and Telegram sends.
+etwork calls and Telegram sends.
 """
 
 import argparse
@@ -84,6 +84,8 @@ def _hermetic_env(temp_db: Path) -> dict[str, str]:
             "PAYMENT_CHECKOUT_SIGNING_KEY": "scenario-checkout-signing-key",
             "YOOKASSA_WEBHOOK_SECRET": "scenario-webhook-secret",
             "PAYMENT_PUBLIC_BASE_URL": "https://metrotherapy.example",
+            "TOKEN_ECONOMY_ENABLED": "1",
+            "TOKEN_ENFORCEMENT_MODE": "hard",
             "TELEGRAM_TRANSPORT": "polling",
             "TELEGRAM_WEBHOOK_ENABLED": "0",
             "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
