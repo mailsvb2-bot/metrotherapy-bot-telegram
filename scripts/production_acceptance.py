@@ -5,8 +5,12 @@ from __future__ import annotations
 This script composes the existing canonical checks instead of creating a second
 validator brain. It is designed for a production host after git pull/restart and
 before traffic or ad spend is increased.
+
+By default it does not run full pytest on the live host. Use --include-pytest
+only in an approved maintenance window.
 """
 
+import argparse
 import json
 import os
 import subprocess
@@ -111,11 +115,14 @@ def _method_probe(name: str, url: str, *, expected_status: int = 405, expected_a
     return AcceptanceResult(name=name, ok=ok, detail=f"status={status} allow={allow}")
 
 
-def collect_results() -> list[AcceptanceResult]:
+def collect_results(*, include_pytest: bool = False) -> list[AcceptanceResult]:
     public_base = os.getenv("METRO_PUBLIC_BOT_BASE_URL", os.getenv("MESSENGER_PUBLIC_BASE_URL", "https://metrotherapy-bot.metrotherapy.ru")).rstrip("/")
     results: list[AcceptanceResult] = []
     results.append(_run("compileall:project", [sys.executable, "-m", "compileall", "-q", "app.py", "main.py", "config", "core", "handlers", "interfaces", "keyboards", "runtime", "scripts", "services", "tests", "tools"], timeout=180))
-    results.append(_run("pytest", [sys.executable, "-m", "pytest", "-q"], timeout=300))
+    if include_pytest:
+        results.append(_run("pytest", [sys.executable, "-m", "pytest", "-q"], timeout=300))
+    else:
+        results.append(AcceptanceResult("pytest", True, "skipped by default on production host; use --include-pytest only in an approved maintenance window"))
     results.append(_run("prod_readiness", [sys.executable, "scripts/prod_readiness_check.py"], timeout=120))
     results.append(_run("runtime_observability", [sys.executable, "scripts/runtime_observability_check.py"], timeout=60))
     results.append(_run("user_scenario_gate:prod", [sys.executable, "scripts/user_scenario_gate.py", "--mode", "prod"], timeout=120))
@@ -129,7 +136,11 @@ def collect_results() -> list[AcceptanceResult]:
 
 
 def main() -> int:
-    results = collect_results()
+    parser = argparse.ArgumentParser(description="Run production acceptance checks without full pytest by default")
+    parser.add_argument("--include-pytest", action="store_true", help="Run full pytest; use only during an approved maintenance window")
+    args = parser.parse_args()
+
+    results = collect_results(include_pytest=bool(args.include_pytest))
     print(json.dumps([asdict(item) for item in results], ensure_ascii=False, indent=2))
     failed = [item for item in results if not item.ok]
     if failed:
