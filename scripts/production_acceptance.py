@@ -13,7 +13,8 @@ only in an approved maintenance window.
 import argparse
 import json
 import os
-import subprocess
+# Reviewed: operator acceptance runner invokes fixed local Python checks without shell.
+import subprocess  # nosec B404
 import sys
 import urllib.error
 import urllib.request
@@ -39,7 +40,8 @@ def _merged_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 
 def _run(name: str, cmd: list[str], *, timeout: int = 120, extra_env: dict[str, str] | None = None) -> AcceptanceResult:
     try:
-        proc = subprocess.run(
+        # Reviewed: all commands are static acceptance checks and execute without shell.
+        proc = subprocess.run(  # nosec B603
             cmd,
             check=False,
             capture_output=True,
