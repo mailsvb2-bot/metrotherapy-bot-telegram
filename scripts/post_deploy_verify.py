@@ -27,7 +27,8 @@ import argparse
 import json
 import os
 import shlex
-import subprocess
+# Reviewed: operator post-deploy verifier invokes fixed local probes without shell.
+import subprocess  # nosec B404
 import sys
 import urllib.error
 import urllib.request
@@ -71,7 +72,15 @@ def _run(cmd: list[str], *, env: Mapping[str, str] | None = None) -> str:
     merged_env = os.environ.copy()
     if env:
         merged_env.update({str(k): str(v) for k, v in env.items()})
-    proc = subprocess.run(cmd, cwd=str(ROOT), env=merged_env, text=True, capture_output=True, check=False)
+    # Reviewed: command lists are fixed local verification probes executed without shell.
+    proc = subprocess.run(  # nosec B603
+        cmd,
+        cwd=str(ROOT),
+        env=merged_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
     output = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
         raise SystemExit(
@@ -125,7 +134,7 @@ def _alias_urls(url: str, *, aliases: tuple[str, ...]) -> list[str]:
 
 def _http_json(url: str) -> dict:
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:  # nosec B310 - local operator-provided probe URL
+        with urllib.request.urlopen(url, timeout=5) as response:  # nosec B310
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = _decode_error_body(exc)
