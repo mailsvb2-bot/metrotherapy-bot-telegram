@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
-import subprocess
+# Reviewed: CI/local release gate invokes fixed Python commands, no user-controlled shell.
+import subprocess  # nosec B404
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -215,7 +216,8 @@ def _run(step: GateStep) -> int:
     print("cmd:", " ".join(step.cmd), flush=True)
     if step.env_file is not None:
         print(f"env-file: {step.env_file}", flush=True)
-    completed = subprocess.run(step.cmd, cwd=ROOT, env=env, check=False)
+    # Reviewed: each gate command is declared statically in STEPS and executed without shell.
+    completed = subprocess.run(step.cmd, cwd=ROOT, env=env, check=False)  # nosec B603
     if completed.returncode != 0:
         print(f"REGRESSION_GATE_FAILED step={step.name!r} code={completed.returncode}", flush=True)
         return int(completed.returncode)
