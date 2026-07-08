@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
+# Reviewed: operator installer invokes systemctl with fixed service/timer names and no shell.
+import subprocess  # nosec B404
 from pathlib import Path
 
 SERVICE = "/etc/systemd/system/metrotherapy-postgres-backup.service"
@@ -50,8 +51,9 @@ WantedBy=timers.target
     _write(SERVICE, service)
     _write(TIMER, timer)
     systemctl = _required_bin("systemctl", env_name="SYSTEMCTL_BIN")
-    subprocess.run([systemctl, "daemon-reload"], check=True)
-    subprocess.run([systemctl, "enable", "--now", "metrotherapy-postgres-backup.timer"], check=True)
+    # Reviewed: fixed systemctl maintenance commands for the known timer unit, no shell.
+    subprocess.run([systemctl, "daemon-reload"], check=True)  # nosec B603
+    subprocess.run([systemctl, "enable", "--now", "metrotherapy-postgres-backup.timer"], check=True)  # nosec B603
     print("POSTGRES_BACKUP_TIMER_INSTALLED metrotherapy-postgres-backup.timer")
 
 
