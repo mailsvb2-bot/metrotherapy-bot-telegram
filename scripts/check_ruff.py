@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-import subprocess
+# Reviewed: operator-only quality gate invokes the local Python Ruff module with fixed arguments.
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
@@ -53,7 +54,8 @@ def main() -> int:
     print("== Ruff quality gate ==")
     print("cwd:", ROOT)
     print("cmd:", " ".join(cmd))
-    return subprocess.call(cmd, cwd=ROOT, env=env)
+    # Reviewed: fixed local lint command, no shell, project target allow-list only.
+    return subprocess.call(cmd, cwd=ROOT, env=env)  # nosec B603
 
 
 if __name__ == "__main__":
