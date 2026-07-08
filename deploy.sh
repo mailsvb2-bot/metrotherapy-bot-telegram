@@ -3,6 +3,9 @@ set -Eeuo pipefail
 
 APP_DIR="/root/metrotherapy"
 SERVICE_NAME="metrotherapy.service"
+DEPLOY_WEBHOOK_SERVICE="github-deploy-webhook.service"
+DEPLOY_WEBHOOK_SOURCE="$APP_DIR/ops/deploy_webhook.py"
+DEPLOY_WEBHOOK_TARGET="/root/deploy_webhook.py"
 PYTHON="$APP_DIR/.venv/bin/python"
 PIP="$APP_DIR/.venv/bin/pip"
 ENV_FILE="/etc/metrotherapy/metrotherapy.env"
@@ -58,6 +61,23 @@ require_telegram_polling_contract() {
   fi
 
   echo "=== telegram transport contract OK: polling ==="
+}
+
+sync_deploy_webhook_service() {
+  if [ ! -f "$DEPLOY_WEBHOOK_SOURCE" ]; then
+    echo "WARNING: deploy webhook source not found: $DEPLOY_WEBHOOK_SOURCE"
+    return 0
+  fi
+
+  echo "=== sync deploy webhook service script ==="
+  install -m 0644 "$DEPLOY_WEBHOOK_SOURCE" "$DEPLOY_WEBHOOK_TARGET"
+
+  if systemctl list-unit-files "$DEPLOY_WEBHOOK_SERVICE" >/dev/null 2>&1; then
+    echo "=== restart deploy webhook service ==="
+    systemctl restart "$DEPLOY_WEBHOOK_SERVICE" || true
+  else
+    echo "WARNING: deploy webhook service not installed: $DEPLOY_WEBHOOK_SERVICE"
+  fi
 }
 
 require_telegram_polling_contract
@@ -118,6 +138,7 @@ NEW_SHA="$(git rev-parse HEAD)"
 echo "=== new sha: $NEW_SHA ==="
 
 require_telegram_polling_contract
+sync_deploy_webhook_service
 
 if [ -f requirements.txt ]; then
   echo "=== install requirements ==="
