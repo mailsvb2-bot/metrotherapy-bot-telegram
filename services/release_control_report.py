@@ -1,32 +1,20 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
-# Reviewed: release report only invokes local git for metadata, without shell.
-import subprocess  # nosec B404
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
+from datetime import datetime
 from typing import Any
 
-from services.auto_audio_recovery import auto_audio_lock_summary
+from services.admin_payment_report import payment_problem_summary
+from services.auto_audio import auto_audio_lock_summary
 from services.disaster_recovery_status import disaster_recovery_status
-from services.payments.reconciliation import payment_problem_summary
 from services.probe_ledger import ProbeRun, get_recent_probe_runs
 from services.scheduler import scheduler_health_snapshot
 from services.storage_legacy_audit import storage_legacy_audit
 
-ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_HEALTH_URL = "http://127.0.0.1:8082/health"
-
-REQUIRED_PROBES = {
-    "payment_entitlement_reconciliation_probe": "Payment entitlement",
-    "probe_scheduler_job_live": "Scheduler job",
-    "auto_audio_dry_run_probe": "Auto-audio dry-run",
-    "synthetic_user_journey_e2e_probe": "User journey E2E",
-}
+DEFAULT_HEALTH_URL = "http://127.0.0.1:8088/healthz"
 
 
 @dataclass(frozen=True)
@@ -37,84 +25,52 @@ class ReleaseProbeStatus:
     cleanup_status: str
     rows_touched: int
     run_id: str
-    finished_at_utc: str | None
+    finished_at_utc: datetime | None
     error: str | None
-
-    @property
-    def is_green(self) -> bool:
-        return self.status == "ok" and self.cleanup_status in {"clean", "dry_run"}
 
 
 @dataclass(frozen=True)
 class ReleaseControlSnapshot:
-    status: str
-    marker: str
-    git_branch: str
-    git_commit: str
-    storage_status: str
-    storage_legacy_sqlite_present: bool
-    storage_repo_sqlite_present: bool
-    storage_disallowed_sqlite_connects: int
-    disaster_recovery_status: str
-    disaster_recovery_reason: str
-    disaster_backup_count: int
-    disaster_latest_backup: str | None
-    disaster_latest_backup_size_bytes: int
-    disaster_restore_target_configured: bool
-    scheduler_loop_running: bool
-    scheduler_loop_error_count: int
-    scheduler_loop_last_error: str
-    scheduler_loop_last_tick_age_sec: int
-    payment_problem_count: int
-    stale_auto_audio_lock_count: int
+    generated_at_utc: datetime
+    overall_status: str
+    degraded_reasons: list[str]
     probe_statuses: list[ReleaseProbeStatus]
-    recent_probe_runs: list[ProbeRun]
-    stale_auto_audio_locks: list[dict[str, Any]]
+    storage_status: str
+    backup_status: str
+    scheduler_loop_running: bool
+    scheduler_error_count: int
+    payment_problem_count: int
+    stale_auto_audio_locks: int
+    health_payload: dict[str, Any]
 
 
-
-def _optional_bin(name: str, *, env_name: str | None = None) -> str | None:
-    raw = (os.getenv(env_name or "") or name).strip()
-    return shutil.which(raw) if raw else None
-
-
-def _git_value(*args: str) -> str:
-    git = _optional_bin("git", env_name="GIT_BIN")
-    if not git:
-        return "unknown"
-    try:
-        # Reviewed: local git binary path is resolved by shutil.which and args are fixed call sites.
-        proc = subprocess.run(  # nosec B603
-            [git, *args],
-            cwd=str(ROOT),
-            text=True,
-            capture_output=True,
-            timeout=2,
-            check=False,
-        )
-    except OSError:
-        return "unknown"
-    except subprocess.SubprocessError:
-        return "unknown"
-    if proc.returncode != 0:
-        return "unknown"
-    return (proc.stdout or "").strip() or "unknown"
+_REQUIRED_PROBES = (
+    ("post_deploy", "Post-deploy verify"),
+    ("db_restore", "DB restore drill"),
+    ("postgres_concurrency", "Postgres concurrency"),
+    ("auto_audio", "Auto-audio dry-run"),
+)
 
 
-
-def _latest_by_type(runs: list[ProbeRun]) -> dict[str, ProbeRun]:
-    result: dict[str, ProbeRun] = {}
-    for run in runs:
-        if run.probe_type and run.probe_type not in result:
-            result[run.probe_type] = run
-    return result
-
+def _latest_by_probe_type(runs: list[ProbeRun]) -> dict[str, ProbeRun]:
+    out: dict[str, ProbeRun] = {}
+    for run in runs or []:
+        probe_type = str(run.probe_type or "")
+        if not probe_type:
+            continue
+        current = out.get(probe_type)
+        if current is None:
+            out[probe_type] = run
+            continue
+        if (run.finished_at_utc or "") > (current.finished_at_utc or ""):
+            out[probe_type] = run
+    return out
 
 
 def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
-    latest = _latest_by_type(runs)
+    latest = _latest_by_probe_type(runs)
     statuses: list[ReleaseProbeStatus] = []
-    for probe_type, label in REQUIRED_PROBES.items():
+    for probe_type, label in _REQUIRED_PROBES:
         run = latest.get(probe_type)
         if run is None:
             statuses.append(
@@ -145,14 +101,14 @@ def _probe_statuses(runs: list[ProbeRun]) -> list[ReleaseProbeStatus]:
     return statuses
 
 
-
 def _health_payload(url: str = DEFAULT_HEALTH_URL) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(url, timeout=3) as response:  # nosec B310
             return json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+    except (urllib.error.URLError, TimeoutError, OSError):
         return {}
-
+    except json.JSONDecodeError:
+        return {}
 
 
 def get_release_control_snapshot(*, limit: int = 25) -> ReleaseControlSnapshot:
@@ -178,57 +134,50 @@ def get_release_control_snapshot(*, limit: int = 25) -> ReleaseControlSnapshot:
         degraded_reasons.append(f"payment_problems={payment_summary.problem_count}")
     if auto_audio.stale_count > 0:
         degraded_reasons.append(f"stale_auto_audio_locks={auto_audio.stale_count}")
-    if health.get("telegram_transport") != "polling":
-        degraded_reasons.append(f"telegram_transport={health.get('telegram_transport')}")
-    if health.get("telegram_webhook_enabled") is not False:
-        degraded_reasons.append("telegram_webhook_enabled")
-    missing_probes = [status.probe_type for status in probe_statuses if not status.is_green]
-    if missing_probes:
-        degraded_reasons.append("probes=" + ",".join(missing_probes))
+    for status in probe_statuses:
+        if status.status != "ok":
+            degraded_reasons.append(f"probe_{status.probe_type}={status.status}")
 
-    status = "GREEN" if not degraded_reasons else "YELLOW"
+    overall = "GREEN" if not degraded_reasons else "YELLOW"
     return ReleaseControlSnapshot(
-        status=status,
-        marker="PRODUCTION_READY" if status == "GREEN" else "PRODUCTION_DEGRADED",
-        git_branch=_git_value("rev-parse", "--abbrev-ref", "HEAD"),
-        git_commit=_git_value("rev-parse", "--short", "HEAD"),
-        storage_status=storage.status,
-        storage_legacy_sqlite_present=storage.legacy_sqlite_present,
-        storage_repo_sqlite_present=storage.repo_local_sqlite_present,
-        storage_disallowed_sqlite_connects=len(storage.disallowed_direct_sqlite_connects),
-        disaster_recovery_status=recovery.status,
-        disaster_recovery_reason=recovery.reason,
-        disaster_backup_count=recovery.backup_count,
-        disaster_latest_backup=recovery.latest_backup,
-        disaster_latest_backup_size_bytes=recovery.latest_backup_size_bytes,
-        disaster_restore_target_configured=recovery.restore_target_configured,
-        scheduler_loop_running=scheduler.loop_running,
-        scheduler_loop_error_count=scheduler.loop_error_count,
-        scheduler_loop_last_error=scheduler.loop_last_error,
-        scheduler_loop_last_tick_age_sec=scheduler.loop_last_tick_age_sec,
-        payment_problem_count=payment_summary.problem_count,
-        stale_auto_audio_lock_count=auto_audio.stale_count,
+        generated_at_utc=datetime.utcnow(),
+        overall_status=overall,
+        degraded_reasons=degraded_reasons,
         probe_statuses=probe_statuses,
-        recent_probe_runs=recent,
-        stale_auto_audio_locks=auto_audio.stale_locks,
+        storage_status=storage.status,
+        backup_status=recovery.status,
+        scheduler_loop_running=bool(scheduler.loop_running),
+        scheduler_error_count=int(scheduler.loop_error_count or 0),
+        payment_problem_count=int(payment_summary.problem_count or 0),
+        stale_auto_audio_locks=int(auto_audio.stale_count or 0),
+        health_payload=health,
     )
 
 
-def format_release_control_report(*, limit: int = 25) -> str:
-    snapshot = get_release_control_snapshot(limit=limit)
+def format_release_control_report(snapshot: ReleaseControlSnapshot | None = None) -> str:
+    snap = snapshot or get_release_control_snapshot()
     lines = [
-        f"Release control: {snapshot.status} ({snapshot.marker})",
-        f"Git: {snapshot.git_branch}@{snapshot.git_commit}",
-        f"Storage: {snapshot.storage_status} legacy_sqlite={snapshot.storage_legacy_sqlite_present} repo_sqlite={snapshot.storage_repo_sqlite_present}",
-        f"Backups: {snapshot.disaster_recovery_status} count={snapshot.disaster_backup_count} latest={snapshot.disaster_latest_backup or '-'}",
-        f"Scheduler: running={snapshot.scheduler_loop_running} errors={snapshot.scheduler_loop_error_count} last_tick_age={snapshot.scheduler_loop_last_tick_age_sec}s",
-        f"Payments: problems={snapshot.payment_problem_count}",
-        f"Auto-audio locks: stale={snapshot.stale_auto_audio_lock_count}",
+        "🚦 Release control",
+        f"Status: {snap.overall_status}",
+        f"Storage: {snap.storage_status}",
+        f"Backup: {snap.backup_status}",
+        f"Scheduler: {'ON' if snap.scheduler_loop_running else 'OFF'} (errors={snap.scheduler_error_count})",
+        f"Payment problems: {snap.payment_problem_count}",
+        f"Stale auto-audio locks: {snap.stale_auto_audio_locks}",
+        "",
         "Probes:",
     ]
-    for status in snapshot.probe_statuses:
-        icon = "✅" if status.is_green else "⚠️"
+    for probe in snap.probe_statuses:
         lines.append(
-            f"  {icon} {status.label}: {status.status}/{status.cleanup_status} rows={status.rows_touched} run={status.run_id or '-'}"
+            f"— {probe.label}: {probe.status} "
+            f"cleanup={probe.cleanup_status or '-'} rows={probe.rows_touched} "
+            f"run={probe.run_id or '-'}"
         )
+        if probe.error:
+            lines.append(f"  error={probe.error}")
+    if snap.degraded_reasons:
+        lines.append("")
+        lines.append("Degraded reasons:")
+        for reason in snap.degraded_reasons[:20]:
+            lines.append(f"— {reason}")
     return "\n".join(lines)
