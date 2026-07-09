@@ -14,7 +14,8 @@ It can:
 - find gaps in attribution/spend data;
 - detect payment/access risks;
 - produce a daily action plan with evidence;
-- show recommendations in the Telegram admin panel.
+- show recommendations in the Telegram admin panel;
+- show a read-only Action Inbox with prioritized admin tasks.
 
 It must not:
 
@@ -34,7 +35,7 @@ Telegram admin panel:
 🤖 Growth Autopilot
 ```
 
-Callback:
+Callbacks:
 
 ```text
 admin:growth:autopilot
@@ -42,7 +43,33 @@ admin:growth:autopilot:today
 admin:growth:autopilot:week
 admin:growth:autopilot:month
 admin:growth:autopilot:all
+
+admin:growth:actions:today
+admin:growth:actions:week
+admin:growth:actions:month
+admin:growth:actions:all
 ```
+
+## Action Inbox v1
+
+Action Inbox v1 converts Growth Autopilot recommendations into stable admin task cards.
+
+Each card contains:
+
+- stable `action_id`;
+- priority;
+- action type;
+- title;
+- recommended manual action;
+- evidence;
+- confidence;
+- risk;
+- apply mode;
+- `autopilot_can_apply_now`.
+
+Action Inbox v1 is still read-only. It must not write to the database, call advertising platforms, mutate budgets, change tariffs, send postbacks, or send marketing messages.
+
+The next stage may add confirmation buttons, but only through a guarded apply gateway with limits, audit log, and kill-switch.
 
 ## Evidence sources
 
@@ -83,7 +110,7 @@ This is a regression lock. Future versions must not silently weaken it.
 
 ## Next stages
 
-1. Action Inbox with explicit admin confirmation.
+1. Action Inbox confirmation buttons with explicit admin confirmation.
 2. Redirect click tracking: `click -> /start`.
 3. Creative library and creative diagnostics.
 4. Conversion Hub / postback queue in dry-run mode.
