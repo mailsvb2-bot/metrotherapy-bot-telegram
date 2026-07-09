@@ -1,4 +1,4 @@
-from services.growth_autopilot import diagnose_growth_snapshot, parse_ad_spend_to_minor
+from services.growth_autopilot_core import diagnose_growth_snapshot, parse_ad_spend_to_minor
 
 
 def test_parse_ad_spend_to_minor_keeps_legacy_human_labels():
@@ -33,7 +33,13 @@ def test_growth_autopilot_recommendations_are_read_only_and_guarded():
 
 def test_growth_autopilot_prioritizes_payment_access_guard():
     snapshot = {
-        "funnel": {"start_users": 50, "demo_sent_users": 30, "demo_ack_users": 20, "tariff_open_users": 12, "paid_users": 5},
+        "funnel": {
+            "start_users": 50,
+            "demo_sent_users": 30,
+            "demo_ack_users": 20,
+            "tariff_open_users": 12,
+            "paid_users": 5,
+        },
         "payments": {"payments": 5, "revenue_minor": 500000},
         "ad_links": {"links": 5, "with_spend": 5, "without_spend": 0},
         "access_alerts": {"count": 2},
