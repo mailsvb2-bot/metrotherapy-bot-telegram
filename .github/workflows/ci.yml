@@ -33,4 +33,13 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       - name: Regression contour
-        run: python scripts/regression_gate.py
+        run: |
+          set -o pipefail
+          python scripts/regression_gate.py 2>&1 | tee regression-contour.log
+
+      - name: Upload regression contour log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-contour-log
+          path: regression-contour.log
