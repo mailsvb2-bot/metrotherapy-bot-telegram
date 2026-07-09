@@ -253,8 +253,14 @@ def build_growth_action_cards(recommendations: list[dict[str, Any]]) -> list[dic
 
 def find_growth_action_card(cards: list[dict[str, Any]], card_id: str | None) -> dict[str, Any] | None:
     wanted = str(card_id or "")
+    wanted_idx = None
+    match = re.match(r"^ga:(\d+)$", wanted)
+    if match:
+        wanted_idx = safe_int(match.group(1))
     for card in cards or []:
         if str(card.get("id")) == wanted:
+            return card
+        if wanted_idx is not None and safe_int(card.get("idx")) == wanted_idx:
             return card
     return None
 
