@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -19,11 +19,6 @@ _PERIOD_DAYS: dict[str, int | None] = {
 
 _SAFE_AUTOPILOT_MODE = "read_only_plan_only"
 
-
-# ---------------------------------------------------------------------------
-# Small, defensive read helpers. Growth Autopilot v0 must never break the bot if
-# an optional analytics table/column is absent in an older deployment.
-# ---------------------------------------------------------------------------
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
@@ -92,9 +87,7 @@ def _money_rub_from_minor(amount_minor: int | float | None) -> str:
 def parse_ad_spend_to_minor(value: Any) -> int | None:
     """Best-effort parser for existing human-entered ad_spend values.
 
-    The old admin links intentionally allowed labels like "340rub" or
-    "340 RUB".  Growth Autopilot v0 keeps that compatibility and treats the
-    parsed result as low-confidence evidence, not accounting truth.
+    The parsed value is low-confidence evidence, not accounting truth.
     """
 
     text = str(value or "").strip().lower()
@@ -105,8 +98,6 @@ def parse_ad_spend_to_minor(value: Any) -> int | None:
     if not match:
         return None
     number = match.group(1).replace(" ", "").replace("_", "")
-    # 1.234 in Russian ad labels is more often a thousands separator than a
-    # decimal.  Comma is treated as decimal separator.
     if "," in number:
         number = number.replace(".", "").replace(",", ".")
     elif number.count(".") == 1 and len(number.split(".")[-1]) == 3:
@@ -123,7 +114,7 @@ def parse_ad_spend_to_minor(value: Any) -> int | None:
 def _table_columns(conn: Any, table: str) -> set[str]:
     try:
         return {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-    except Exception:
+    except (sqlite3.Error, OSError, TypeError):
         log.debug("table info read failed for %s", table, exc_info=True)
         return set()
 
@@ -132,7 +123,7 @@ def _fetch_rows(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     try:
         with db() as conn:
             return _rows(conn.execute(sql, params).fetchall())
-    except Exception:
+    except (sqlite3.Error, OSError, TypeError):
         log.debug("growth autopilot query skipped", exc_info=True)
         return []
 
@@ -147,14 +138,10 @@ def _fetch_scalar(sql: str, params: tuple[Any, ...] = ()) -> int:
             keys = list(row.keys())
             return _safe_int(row[keys[0]]) if keys else 0
         return _safe_int(row[0])
-    except Exception:
+    except (sqlite3.Error, OSError, TypeError):
         log.debug("growth autopilot scalar query skipped", exc_info=True)
         return 0
 
-
-# ---------------------------------------------------------------------------
-# Snapshot builders
-# ---------------------------------------------------------------------------
 
 def _event_counts(period: str) -> dict[str, int]:
     start = _period_start(period)
@@ -170,10 +157,7 @@ def _event_counts(period: str) -> dict[str, int]:
         "gift_redeemed",
     ]
     out = {name: 0 for name in names}
-    if start:
-        where = "WHERE name=? AND COALESCE(created_at, '') >= ?"
-    else:
-        where = "WHERE name=?"
+    where = "WHERE name=? AND COALESCE(created_at, '') >= ?" if start else "WHERE name=?"
     for name in names:
         params: tuple[Any, ...] = (name, start) if start else (name,)
         out[name] = _fetch_scalar(f"SELECT COUNT(DISTINCT user_id) AS c FROM events {where}", params)
@@ -228,7 +212,7 @@ def _payment_summary(period: str) -> dict[str, Any]:
                 "currency": str(data.get("currency") or "RUB"),
                 "status_source": status_col or "none",
             }
-    except Exception:
+    except (sqlite3.Error, OSError, TypeError):
         log.debug("payment summary failed", exc_info=True)
         return {"payments": 0, "revenue_minor": 0, "currency": "RUB", "status_source": "error"}
 
@@ -273,9 +257,12 @@ def _ad_link_summary(limit: int = 50) -> dict[str, Any]:
 def _safe_access_alerts() -> list[dict[str, Any]]:
     try:
         from services.admin_growth_ops import access_alerts
-
+    except ImportError:
+        log.debug("access alerts import unavailable", exc_info=True)
+        return []
+    try:
         return list(access_alerts(limit=20) or [])
-    except Exception:
+    except (sqlite3.Error, OSError, TypeError):
         log.debug("access alerts unavailable", exc_info=True)
         return []
 
@@ -283,9 +270,12 @@ def _safe_access_alerts() -> list[dict[str, Any]]:
 def _safe_segments() -> dict[str, int]:
     try:
         from services.segments import segment_counts
-
+    except ImportError:
+        log.debug("segment counts import unavailable", exc_info=True)
+        return {}
+    try:
         return {str(k): _safe_int(v) for k, v in (segment_counts(limit_users=5000) or {}).items()}
-    except Exception:
+    except (sqlite3.Error, OSError, TypeError):
         log.debug("segment counts unavailable", exc_info=True)
         return {}
 
@@ -293,9 +283,12 @@ def _safe_segments() -> dict[str, int]:
 def _safe_funnel2() -> dict[str, Any]:
     try:
         from services.funnel2_analytics import scenario_counts
-
+    except ImportError:
+        log.debug("funnel2 counts import unavailable", exc_info=True)
+        return {}
+    try:
         return dict(scenario_counts() or {})
-    except Exception:
+    except (sqlite3.Error, OSError, TypeError):
         log.debug("funnel2 counts unavailable", exc_info=True)
         return {}
 
@@ -303,8 +296,7 @@ def _safe_funnel2() -> dict[str, Any]:
 def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
     """Build a read-only Growth Autopilot evidence snapshot.
 
-    No writes, no external calls, no budget mutations.  This is the first safe
-    layer that later autonomous decisions can use as evidence.
+    No writes, no external calls, no budget mutations.
     """
 
     period = normalize_period(period)
@@ -362,12 +354,6 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
     snapshot["recommendations"] = diagnose_growth_snapshot(snapshot)
     return snapshot
 
-
-# ---------------------------------------------------------------------------
-# Deterministic recommendation layer.  It deliberately returns advisory items,
-# not executable actions.  Later versions can route selected proposals through a
-# guarded action gateway.
-# ---------------------------------------------------------------------------
 
 def _data_gaps(*, ad_links: dict[str, Any], payments: dict[str, Any], funnel: dict[str, Any]) -> list[str]:
     gaps: list[str] = []
@@ -518,10 +504,6 @@ def diagnose_growth_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     ))
     return recs
 
-
-# ---------------------------------------------------------------------------
-# Admin text formatter
-# ---------------------------------------------------------------------------
 
 def _fmt_pct(value: Any) -> str:
     return "—" if value is None else f"{float(value):.1f}%"
