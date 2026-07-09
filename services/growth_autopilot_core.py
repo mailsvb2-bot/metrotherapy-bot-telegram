@@ -216,6 +216,117 @@ def diagnose_growth_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     return recs
 
 
+def _slug(value: Any, fallback: str) -> str:
+    raw = str(value or "").strip().lower()
+    safe = re.sub(r"[^a-z0-9_:-]+", "_", raw).strip("_")
+    return safe[:48] or fallback
+
+
+def build_growth_action_cards(recommendations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build read-only action inbox cards from Growth Autopilot recommendations.
+
+    Cards are navigation/evidence objects only. They intentionally carry the same
+    manual-review safety contract as source recommendations and cannot be applied
+    automatically.
+    """
+
+    cards: list[dict[str, Any]] = []
+    for idx, rec in enumerate(recommendations or [], 1):
+        kind = _slug(rec.get("kind"), f"action_{idx}")
+        priority = str(rec.get("priority") or "white")
+        card = {
+            "id": f"ga:{idx}:{kind}",
+            "idx": idx,
+            "kind": kind,
+            "priority": priority,
+            "title": str(rec.get("title") or "Growth action"),
+            "evidence": [str(x) for x in list(rec.get("evidence") or [])[:6]],
+            "recommended_action": str(rec.get("recommended_action") or "Открыть рекомендацию и проверить вручную."),
+            "confidence": str(rec.get("confidence") or "low"),
+            "risk": str(rec.get("risk") or "low"),
+            "apply_mode": "manual_review_required",
+            "autopilot_can_apply_now": False,
+        }
+        cards.append(card)
+    return cards
+
+
+def find_growth_action_card(cards: list[dict[str, Any]], card_id: str | None) -> dict[str, Any] | None:
+    wanted = str(card_id or "")
+    wanted_idx = None
+    match = re.match(r"^ga:(\d+)$", wanted)
+    if match:
+        wanted_idx = safe_int(match.group(1))
+    for card in cards or []:
+        if str(card.get("id")) == wanted:
+            return card
+        if wanted_idx is not None and safe_int(card.get("idx")) == wanted_idx:
+            return card
+    return None
+
+
+def format_growth_action_inbox(cards: list[dict[str, Any]], *, period: str) -> str:
+    lines = [
+        "📥 Growth Action Inbox",
+        "read-only: карточки действий → доказательства → ручная проверка",
+        "",
+        f"Период: {period}",
+        f"Карточек: {len(cards)}",
+        "",
+    ]
+    if not cards:
+        lines.append("Пока нет действий. Автопилот ничего не применяет сам.")
+        return "\n".join(lines).strip()
+    for card in cards[:10]:
+        lines.extend([
+            f"{safe_int(card.get('idx'))}. {priority_icon(str(card.get('priority')))} {card.get('title')}",
+            f"   Тип: {card.get('kind')} | уверенность: {card.get('confidence')} | риск: {card.get('risk')}",
+            f"   Режим: {card.get('apply_mode')}",
+            "",
+        ])
+    lines.extend([
+        "🛡 Safety lock",
+        "— карточки не меняют бюджеты;",
+        "— не отправляют postbacks;",
+        "— не меняют тарифы/воронку;",
+        "— любые действия только вручную после проверки.",
+    ])
+    return "\n".join(lines).strip()
+
+
+def format_growth_action_card(card: dict[str, Any] | None, *, period: str) -> str:
+    if not card:
+        return "📥 Growth Action Inbox\n\nКарточка не найдена. Вернитесь к списку действий."
+    lines = [
+        "📥 Growth Action",
+        "",
+        f"Период: {period}",
+        f"Приоритет: {priority_icon(str(card.get('priority')))} {card.get('priority')}",
+        f"Тип: {card.get('kind')}",
+        f"Название: {card.get('title')}",
+        f"Уверенность: {card.get('confidence')}",
+        f"Риск: {card.get('risk')}",
+        "",
+        "Что сделать вручную:",
+        str(card.get("recommended_action") or "Проверить вручную."),
+        "",
+        "Доказательства:",
+    ]
+    evidence = list(card.get("evidence") or [])
+    if evidence:
+        for item in evidence[:8]:
+            lines.append(f"— {item}")
+    else:
+        lines.append("— доказательств пока нет")
+    lines.extend([
+        "",
+        "Safety:",
+        f"— apply_mode={card.get('apply_mode')}",
+        f"— autopilot_can_apply_now={card.get('autopilot_can_apply_now')}",
+    ])
+    return "\n".join(lines).strip()
+
+
 def fmt_pct(value: Any) -> str:
     return "—" if value is None else f"{float(value):.1f}%"
 

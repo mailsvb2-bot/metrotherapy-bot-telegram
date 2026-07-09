@@ -8,9 +8,13 @@ from typing import Any
 from services.db import db
 from services.growth_autopilot_core import (
     SAFE_AUTOPILOT_MODE,
+    build_growth_action_cards,
     data_confidence,
     data_gaps,
     diagnose_growth_snapshot,
+    find_growth_action_card,
+    format_growth_action_card,
+    format_growth_action_inbox,
     format_growth_autopilot_report,
     parse_ad_spend_to_minor,
     pct,
@@ -339,3 +343,16 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
 
 def build_growth_autopilot_report(period: str = "today") -> str:
     return format_growth_autopilot_report(build_growth_autopilot_snapshot(period))
+
+
+def build_growth_action_inbox_report(period: str = "today") -> str:
+    snapshot = build_growth_autopilot_snapshot(period)
+    cards = build_growth_action_cards(list(snapshot.get("recommendations") or []))
+    return format_growth_action_inbox(cards, period=str(snapshot.get("period") or normalize_period(period)))
+
+
+def build_growth_action_card_report(period: str = "today", card_id: str | None = None) -> str:
+    snapshot = build_growth_autopilot_snapshot(period)
+    period_value = str(snapshot.get("period") or normalize_period(period))
+    cards = build_growth_action_cards(list(snapshot.get("recommendations") or []))
+    return format_growth_action_card(find_growth_action_card(cards, card_id), period=period_value)

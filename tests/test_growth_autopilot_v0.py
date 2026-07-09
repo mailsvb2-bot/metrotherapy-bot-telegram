@@ -1,4 +1,11 @@
-from services.growth_autopilot_core import diagnose_growth_snapshot, parse_ad_spend_to_minor
+from services.growth_autopilot_core import (
+    build_growth_action_cards,
+    diagnose_growth_snapshot,
+    find_growth_action_card,
+    format_growth_action_card,
+    format_growth_action_inbox,
+    parse_ad_spend_to_minor,
+)
 
 
 def test_parse_ad_spend_to_minor_keeps_legacy_human_labels():
@@ -52,3 +59,47 @@ def test_growth_autopilot_prioritizes_payment_access_guard():
     assert first["priority"] == "red"
     assert first["kind"] == "payment_access_guard"
     assert "не масштабировать" in first["recommended_action"].lower()
+
+
+def test_growth_action_inbox_keeps_manual_review_safety_contract():
+    recs = [
+        {
+            "priority": "red",
+            "kind": "payment_access_guard",
+            "title": "Деньги есть, но доступ не найден",
+            "evidence": ["alerts=2"],
+            "recommended_action": "Проверить доступ вручную.",
+            "confidence": "high",
+            "risk": "high",
+        }
+    ]
+
+    cards = build_growth_action_cards(recs)
+
+    assert cards[0]["id"] == "ga:1:payment_access_guard"
+    assert cards[0]["apply_mode"] == "manual_review_required"
+    assert cards[0]["autopilot_can_apply_now"] is False
+    assert find_growth_action_card(cards, "ga:1") == cards[0]
+    assert find_growth_action_card(cards, "ga:1:payment_access_guard") == cards[0]
+
+
+def test_growth_action_inbox_format_is_read_only():
+    cards = build_growth_action_cards([
+        {
+            "priority": "yellow",
+            "kind": "data_quality",
+            "title": "Закрыть дыры в рекламной разметке",
+            "evidence": ["без расхода: 2"],
+            "recommended_action": "Внести расход вручную.",
+            "confidence": "high",
+            "risk": "low",
+        }
+    ])
+
+    inbox_text = format_growth_action_inbox(cards, period="today")
+    card_text = format_growth_action_card(cards[0], period="today")
+
+    assert "Growth Action Inbox" in inbox_text
+    assert "не меняют бюджеты" in inbox_text
+    assert "manual_review_required" in card_text
+    assert "autopilot_can_apply_now=False" in card_text
