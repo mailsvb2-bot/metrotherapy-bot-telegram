@@ -339,3 +339,9 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
 
 def build_growth_autopilot_report(period: str = "today") -> str:
     return format_growth_autopilot_report(build_growth_autopilot_snapshot(period))
+
+
+def build_growth_action_inbox_report(period: str = "today") -> str:
+    from services.growth_action_inbox import format_action_inbox
+
+    return format_action_inbox(build_growth_autopilot_snapshot(period))
