@@ -35,11 +35,11 @@ jobs:
       - name: Regression contour
         run: |
           set -o pipefail
-          python scripts/regression_gate.py 2>&1 | tee regression-contour.log
+          python scripts/regression_gate.py 2>&1 | tee "$RUNNER_TEMP/regression-contour.log"
 
       - name: Upload regression contour log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: regression-contour-log
-          path: regression-contour.log
+          path: ${{ runner.temp }}/regression-contour.log
