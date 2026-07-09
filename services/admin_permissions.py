@@ -98,6 +98,7 @@ PERMS: list[PermItem] = [
     PermItem("admin:users:today", "👥 Пользователи сегодня"),
     PermItem("admin:user:card", "🔎 Карточка пользователя"),
     PermItem("admin:behavior", "🧠 Поведение"),
+    PermItem("admin:growth:autopilot", "🤖 Growth Autopilot"),
     PermItem("admin:funnel", "📉 Воронка"),
     PermItem("admin:money:today", "💰 Деньги и клиенты"),
     PermItem("admin:conversion", "💰 Конверсия"),
@@ -112,4 +113,3 @@ PERMS: list[PermItem] = [
     # Тарифы — обычно только супер-админ, но если вдруг нужно делегировать.
     PermItem(ADMIN_TARIFFS, "💳 Тарифы"),
 ]
-

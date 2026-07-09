@@ -26,6 +26,13 @@ from handlers.admin_reports import (
     system_checks,
 )
 
+
+async def _run_growth_autopilot(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, log) -> bool:
+    from handlers.admin_reports import growth_autopilot
+
+    return await growth_autopilot.run(cb, state, ctx, log)
+
+
 _HANDLERS = {
     "admin:ab": ab.run,
     "admin:adlinks": ad_links.run,
@@ -38,6 +45,7 @@ _HANDLERS = {
     "admin:payment:problems": payment_problems.run,
     "admin:funnel2": funnel2.run,
     "admin:giftshare": giftshare.run,
+    "admin:growth:autopilot": _run_growth_autopilot,
     "admin:segments": segments.run,
     "admin:behavior": behavior.run,
     "admin:retention": retention.run,
@@ -58,6 +66,8 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
         return await money_clients.run(cb, state, ctx, log)
     if data.startswith("admin:adlinks:create:"):
         return await ad_links.run(cb, state, ctx, log)
+    if data.startswith("admin:growth:autopilot:"):
+        return await _run_growth_autopilot(cb, state, ctx, log)
     fn = _HANDLERS.get(data)
     if not fn:
         return False

@@ -30,6 +30,7 @@ def test_ensure_max_opus_file_converts_non_opus(monkeypatch, tmp_path: Path) -> 
     source.write_bytes(b"mp3")
     cache = tmp_path / "cache"
     monkeypatch.setenv("MAX_OPUS_CACHE_DIR", str(cache))
+    monkeypatch.setattr("services.messenger.max_audio._ffmpeg_bin", lambda platform: "ffmpeg")
 
     def fake_run(cmd, check, stdout, stderr, text, timeout):
         out = Path(cmd[-1])
@@ -61,6 +62,7 @@ def test_ensure_vk_opus_file_converts_non_opus_with_vk_cache(monkeypatch, tmp_pa
     source.write_bytes(b"mp3")
     vk_cache = tmp_path / "vk-cache"
     monkeypatch.setenv("VK_OPUS_CACHE_DIR", str(vk_cache))
+    monkeypatch.setattr("services.messenger.max_audio._ffmpeg_bin", lambda platform: "ffmpeg")
 
     def fake_run(cmd, check, stdout, stderr, text, timeout):
         out = Path(cmd[-1])
@@ -90,6 +92,7 @@ def test_ensure_messenger_opus_file_separates_provider_caches(monkeypatch, tmp_p
     vk_cache = tmp_path / "vk-cache"
     monkeypatch.setenv("MAX_OPUS_CACHE_DIR", str(max_cache))
     monkeypatch.setenv("VK_OPUS_CACHE_DIR", str(vk_cache))
+    monkeypatch.setattr("services.messenger.max_audio._ffmpeg_bin", lambda platform: "ffmpeg")
 
     def fake_run(cmd, check, stdout, stderr, text, timeout):
         out = Path(cmd[-1])

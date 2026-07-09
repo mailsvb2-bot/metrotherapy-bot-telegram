@@ -83,6 +83,7 @@ def kb_staff_menu(
 
     if ROLE_MARKETING in roles or ROLE_ADMIN in roles or is_superadmin:
         rows += [
+            [InlineKeyboardButton(text="🤖 Growth Autopilot", callback_data="admin:growth:autopilot")],
             [InlineKeyboardButton(text="📣 Рекламные ссылки", callback_data="admin:adlinks")],
             [InlineKeyboardButton(text="📉 Путь до оплаты", callback_data="admin:funnel")],
             [InlineKeyboardButton(text="💰 Деньги и клиенты", callback_data="admin:money:today")],
