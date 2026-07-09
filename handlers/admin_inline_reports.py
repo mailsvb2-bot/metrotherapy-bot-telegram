@@ -66,7 +66,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
         return await money_clients.run(cb, state, ctx, log)
     if data.startswith("admin:adlinks:create:"):
         return await ad_links.run(cb, state, ctx, log)
-    if data.startswith("admin:growth:autopilot:"):
+    if data.startswith("admin:growth:autopilot:") or data.startswith("admin:growth:actions:"):
         return await _run_growth_autopilot(cb, state, ctx, log)
     fn = _HANDLERS.get(data)
     if not fn:
