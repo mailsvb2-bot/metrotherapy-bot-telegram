@@ -88,6 +88,32 @@ def test_snapshot_counts_distinct_paid_users_separately_from_payment_rows(tmp_pa
     assert snapshot["funnel"]["paid_users"] == 1
 
 
+def test_snapshot_counts_redirect_clicks_as_total_events(tmp_path, monkeypatch):
+    path = tmp_path / "growth_autopilot_clicks.db"
+    with _fake_db(path) as conn:
+        _setup(conn)
+        conn.execute(
+            "INSERT INTO events(name, user_id, created_at) VALUES(?,?,?)",
+            ("ad_click_redirect", 0, "2026-05-10T10:00:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO events(name, user_id, created_at) VALUES(?,?,?)",
+            ("ad_click_redirect", 0, "2026-05-10T10:01:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO events(name, user_id, created_at) VALUES(?,?,?)",
+            ("funnel_start_command", 101, "2026-05-10T10:02:00+00:00"),
+        )
+
+    _patch_snapshot_dependencies(monkeypatch, path)
+
+    snapshot = growth_autopilot.build_growth_autopilot_snapshot("today")
+
+    assert snapshot["funnel"]["ad_clicks"] == 2
+    assert snapshot["funnel"]["start_users"] == 1
+    assert snapshot["funnel"]["click_to_start_pct"] == 50.0
+
+
 def test_snapshot_keeps_ad_link_evidence_inside_selected_period(tmp_path, monkeypatch):
     path = tmp_path / "growth_autopilot_links.db"
     with _fake_db(path) as conn:
