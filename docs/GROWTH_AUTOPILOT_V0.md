@@ -11,12 +11,14 @@ It can:
 - read bot analytics;
 - read ad tracking links;
 - read redirect click events;
+- read source/campaign/creative attribution;
 - read demo and payment evidence;
 - find gaps in attribution/spend data;
 - detect payment/access risks;
 - produce a daily action plan with evidence;
 - show recommendations in the Telegram admin panel;
-- show a read-only Action Inbox with recommendation cards and evidence.
+- show a read-only Action Inbox with recommendation cards and evidence;
+- show read-only creative diagnostics in the Growth report.
 
 It must not:
 
@@ -76,6 +78,35 @@ Safety rules:
 - only sanitized payload, attribution fields, user agent, and referer are recorded;
 - Telegram polling/webhook behavior is not changed;
 - direct Telegram links remain available as fallback.
+
+## Creative diagnostics
+
+Creative diagnostics are read-only and derived from existing evidence:
+
+- `admin_ad_links.latest` gives source/campaign/creative/spend labels;
+- `events.meta` or `events.payload` gives attribution for redirect clicks, `/start`, demo, tariff and payment events;
+- missing attribution is counted as `unattributed_events` rather than guessed.
+
+The report groups by:
+
+```text
+source / campaign / creative
+```
+
+For each group it can show:
+
+- links;
+- low-confidence spend parsed from manual labels;
+- redirect clicks;
+- `/start`;
+- demo acknowledgements;
+- tariff opens;
+- payments;
+- click→start;
+- demo_ack→payment;
+- estimated CPC/CPP when spend is available.
+
+This is diagnostic only. It does not create, edit, pause, or scale ad creatives.
 
 ## Evidence sources
 
