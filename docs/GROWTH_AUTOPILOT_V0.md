@@ -10,6 +10,7 @@ It can:
 
 - read bot analytics;
 - read ad tracking links;
+- read redirect click events;
 - read demo and payment evidence;
 - find gaps in attribution/spend data;
 - detect payment/access risks;
@@ -48,11 +49,39 @@ admin:growth:autopilot:inbox:<period>
 admin:growth:autopilot:action:ga:<index>:<period>
 ```
 
+## Redirect click tracking
+
+If `GROWTH_CLICK_BASE_URL` or `METRO_GROWTH_CLICK_BASE_URL` or `PUBLIC_BASE_URL` is configured, newly created ad links also show a tracking URL:
+
+```text
+https://<public-base>/a/<payload>
+```
+
+The health/runtime aiohttp server handles:
+
+```text
+GET /a/{payload}
+```
+
+The route records a best-effort `ad_click_redirect` event and then returns a `302` redirect to the Telegram start URL:
+
+```text
+https://t.me/<bot>?start=<payload>
+```
+
+Safety rules:
+
+- if event logging fails, the redirect still happens;
+- no IP address is stored by this feature;
+- only sanitized payload, attribution fields, user agent, and referer are recorded;
+- Telegram polling/webhook behavior is not changed;
+- direct Telegram links remain available as fallback.
+
 ## Evidence sources
 
 v0 reads existing project data only:
 
-- `events` for `/start`, demo, tariff, payment-related events;
+- `events` for redirect clicks, `/start`, demo, tariff, payment-related events;
 - `demo_events` for demo sent/ack counters;
 - `payments` for paid count, distinct paying users, and revenue;
 - `admin_ad_links` for source/campaign/creative/ad_spend coverage;
@@ -60,7 +89,7 @@ v0 reads existing project data only:
 - `services.segments.segment_counts()` when available;
 - `services.funnel2_analytics.scenario_counts()` when available.
 
-All period reports keep evidence in the selected period. For example, `today` must not show old ad links, old spend, or old paid-without-access alerts as if they happened today.
+All period reports keep evidence in the selected period. For example, `today` must not show old ad links, old spend, old clicks, or old paid-without-access alerts as if they happened today.
 
 Payment rows and paying users are deliberately separate metrics:
 
