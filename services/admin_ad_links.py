@@ -37,6 +37,20 @@ def _bot_username() -> str:
     return _safe_token(raw.replace("@", ""), fallback="metrotherapybot", limit=64)
 
 
+def _click_tracking_base_url() -> str:
+    raw = (
+        os.getenv("GROWTH_CLICK_BASE_URL")
+        or os.getenv("METRO_GROWTH_CLICK_BASE_URL")
+        or os.getenv("PUBLIC_BASE_URL")
+        or ""
+    ).strip()
+    if not raw:
+        return ""
+    if not (raw.startswith("https://") or raw.startswith("http://")):
+        return ""
+    return raw.rstrip("/")
+
+
 def _rowdict(row: Any | None) -> dict[str, Any] | None:
     if row is None:
         return None
@@ -66,6 +80,21 @@ def build_start_url(payload: str, *, bot_username: str | None = None) -> str:
     return f"https://t.me/{username}?start={quote_plus(str(payload or '').strip())}"
 
 
+def build_click_tracking_url(payload: str, *, base_url: str | None = None) -> str:
+    base = (base_url or _click_tracking_base_url()).strip().rstrip("/")
+    if not base:
+        return ""
+    if not (base.startswith("https://") or base.startswith("http://")):
+        return ""
+    return f"{base}/a/{quote_plus(str(payload or '').strip())}"
+
+
+def _attach_tracking_url(item: dict[str, Any]) -> dict[str, Any]:
+    payload = str(item.get("payload") or item.get("start_payload") or "")
+    item["tracking_url"] = build_click_tracking_url(payload)
+    return item
+
+
 def create_ad_link(source: str, *, campaign: str | None = None, creative: str | None = None, ad_spend: str = "") -> dict[str, Any]:
     now = _utc_now()
     src = _safe_token(source, fallback="telegram_ads")
@@ -88,7 +117,7 @@ def create_ad_link(source: str, *, campaign: str | None = None, creative: str | 
         )
         row = conn.execute("SELECT last_insert_rowid() AS id").fetchone()
     rid = _rowdict(row) or {}
-    return {
+    return _attach_tracking_url({
         "id": int(rid.get("id") or 0),
         "source": src,
         "source_label": _ALLOWED_SOURCES.get(src, src),
@@ -98,7 +127,7 @@ def create_ad_link(source: str, *, campaign: str | None = None, creative: str | 
         "payload": payload,
         "url": url,
         "created_at": created_at,
-    }
+    })
 
 
 def list_ad_links(*, limit: int = 10) -> list[dict[str, Any]]:
@@ -120,17 +149,22 @@ def list_ad_links(*, limit: int = 10) -> list[dict[str, Any]]:
         item = _rowdict(row)
         if item:
             item["source_label"] = _ALLOWED_SOURCES.get(str(item.get("source") or ""), str(item.get("source") or ""))
-            out.append(item)
+            out.append(_attach_tracking_url(item))
     return out
 
 
 def ad_links_report() -> dict[str, Any]:
     links = list_ad_links(limit=8)
-    return {"ok": True, "links": links, "sources": dict(_ALLOWED_SOURCES)}
+    return {"ok": True, "links": links, "sources": dict(_ALLOWED_SOURCES), "click_tracking_enabled": bool(_click_tracking_base_url())}
+
+
+def _display_url(item: dict[str, Any]) -> str:
+    return str(item.get("tracking_url") or item.get("url") or "")
 
 
 def format_ad_links_report(report: dict[str, Any]) -> str:
     links = report.get("links") or []
+    tracking_enabled = bool(report.get("click_tracking_enabled"))
     lines = [
         "📣 Рекламные ссылки",
         "",
@@ -138,20 +172,26 @@ def format_ad_links_report(report: dict[str, Any]) -> str:
         "",
         "Нажмите кнопку ниже, чтобы создать ссылку.",
     ]
+    if tracking_enabled:
+        lines += ["", "Click tracking: включён. В рекламу ставьте tracking-ссылку /a/<payload>."]
+    else:
+        lines += ["", "Click tracking: не настроен. Укажите GROWTH_CLICK_BASE_URL, чтобы считать click→start."]
     if links:
         lines += ["", "Последние ссылки:"]
         for item in links[:8]:
             spend = item.get("ad_spend") or "расход не указан"
             lines.append(
-                f"#{item.get('id')} — {item.get('source_label')}: {item.get('campaign')} / {item.get('creative')} / {spend}\n{item.get('url')}"
+                f"#{item.get('id')} — {item.get('source_label')}: {item.get('campaign')} / {item.get('creative')} / {spend}\n{_display_url(item)}"
             )
+            if item.get("tracking_url"):
+                lines.append(f"Прямая Telegram-ссылка: {item.get('url')}")
     else:
         lines += ["", "Пока ссылок нет."]
     return "\n".join(lines)
 
 
 def format_created_ad_link(item: dict[str, Any]) -> str:
-    return "\n".join([
+    lines = [
         "✅ Ссылка создана",
         "",
         f"Источник: {item.get('source_label')}",
@@ -159,7 +199,20 @@ def format_created_ad_link(item: dict[str, Any]) -> str:
         f"Креатив: {item.get('creative')}",
         f"Расход: {item.get('ad_spend') or 'можно добавить позже в названии ссылки'}",
         "",
-        str(item.get("url") or ""),
-        "",
-        "Эту ссылку можно ставить в рекламу. Данные попадут в путь до оплаты у новых пользователей.",
-    ])
+    ]
+    if item.get("tracking_url"):
+        lines += [
+            "Tracking-ссылка для рекламы:",
+            str(item.get("tracking_url") or ""),
+            "",
+            "Прямая Telegram-ссылка:",
+            str(item.get("url") or ""),
+        ]
+    else:
+        lines += [
+            str(item.get("url") or ""),
+            "",
+            "Чтобы считать click→start, укажите GROWTH_CLICK_BASE_URL и используйте tracking-ссылку.",
+        ]
+    lines += ["", "Эту ссылку можно ставить в рекламу. Данные попадут в путь до оплаты у новых пользователей."]
+    return "\n".join(lines)

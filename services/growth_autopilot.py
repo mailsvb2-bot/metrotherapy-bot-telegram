@@ -124,6 +124,16 @@ def _event_counts(period: str) -> dict[str, int]:
     return out
 
 
+def _event_total_count(period: str, name: str) -> int:
+    start = _period_start(period)
+    if start:
+        return _fetch_scalar(
+            "SELECT COUNT(*) AS c FROM events WHERE name=? AND COALESCE(created_at, '') >= ?",
+            (name, start),
+        )
+    return _fetch_scalar("SELECT COUNT(*) AS c FROM events WHERE name=?", (name,))
+
+
 def _demo_counts(period: str) -> dict[str, int]:
     start = _period_start(period)
     params: tuple[Any, ...] = (start,) if start else ()
@@ -294,6 +304,7 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
     segments = _safe_segments()
     funnel2 = _safe_funnel2()
 
+    ad_clicks = _event_total_count(period, "ad_click_redirect")
     start_users = max(events.get("funnel_start_command", 0), 0)
     demo_sent = max(demo.get("sent_users", 0), events.get("demo_sent", 0))
     demo_ack = max(demo.get("ack_users", 0), events.get("demo_ack", 0))
@@ -302,12 +313,14 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
     paid = safe_int(payments.get("paid_users"))
 
     funnel = {
+        "ad_clicks": ad_clicks,
         "start_users": start_users,
         "demo_sent_users": demo_sent,
         "demo_ack_users": demo_ack,
         "tariff_open_users": tariff_open,
         "payment_started_users": pay_click,
         "paid_users": paid,
+        "click_to_start_pct": pct(start_users, ad_clicks),
         "start_to_demo_pct": pct(demo_sent, start_users),
         "demo_to_ack_pct": pct(demo_ack, demo_sent),
         "ack_to_tariff_pct": pct(tariff_open, demo_ack),

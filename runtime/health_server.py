@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from services.ai.policy import ai_policy_snapshot
 from services.db import get_connection
 from services.db.runtime import CONFIG, redacted_db_target
 from services.db.schema.readiness import required_readiness_tables, schema_readiness
+from services.growth_click_tracking import build_click_redirect_target, record_click_redirect
 from services.messenger.preflight import check_all_preflights
 from services.scheduler import scheduler_health_snapshot
 
@@ -284,6 +286,26 @@ async def _ready(request: web.Request) -> web.Response:
     return web.json_response(payload, status=status)
 
 
+async def _growth_click_redirect(request: web.Request) -> web.Response:
+    payload = str(request.match_info.get('payload') or '')
+    target = build_click_redirect_target(payload)
+    request_meta = {
+        'user_agent': request.headers.get('User-Agent', ''),
+        'referer': request.headers.get('Referer', ''),
+    }
+    try:
+        await asyncio.to_thread(record_click_redirect, payload, request_meta=request_meta)
+    except RuntimeError:
+        log.debug('growth click tracking skipped', exc_info=True)
+    except OSError:
+        log.debug('growth click tracking skipped', exc_info=True)
+    except TypeError:
+        log.debug('growth click tracking skipped', exc_info=True)
+    except ValueError:
+        log.debug('growth click tracking skipped', exc_info=True)
+    return web.HTTPFound(target)
+
+
 async def start_health_runtime() -> HealthRuntime | None:
     enabled = (getattr(settings, 'HEALTHCHECK_ENABLED', True) or False)
     if not enabled:
@@ -291,6 +313,7 @@ async def start_health_runtime() -> HealthRuntime | None:
     host = getattr(settings, 'HEALTHCHECK_HOST', '127.0.0.1')
     port = int(getattr(settings, 'HEALTHCHECK_PORT', 8082))
     app = web.Application()
+    app.router.add_get('/a/{payload}', _growth_click_redirect)
     app.router.add_get('/health', _health)
     app.router.add_get('/healthz', _health)
     app.router.add_get('/readyz', _ready)

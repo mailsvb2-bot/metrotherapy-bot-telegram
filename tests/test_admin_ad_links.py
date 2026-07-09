@@ -45,6 +45,16 @@ def test_build_start_payload_is_telegram_safe():
     assert payload == "src_telegram_ads__camp_may_launch_2026__creative_reels_1__cost_340_rub"
 
 
+def test_build_click_tracking_url_requires_public_base(monkeypatch):
+    monkeypatch.delenv("GROWTH_CLICK_BASE_URL", raising=False)
+    monkeypatch.delenv("METRO_GROWTH_CLICK_BASE_URL", raising=False)
+    monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+
+    assert admin_ad_links.build_click_tracking_url("payload") == ""
+    assert admin_ad_links.build_click_tracking_url("payload", base_url="ftp://bad") == ""
+    assert admin_ad_links.build_click_tracking_url("src_a b", base_url="https://metrotherapy.ru") == "https://metrotherapy.ru/a/src_a+b"
+
+
 def test_create_ad_link_persists_and_returns_tme_url(tmp_path, monkeypatch):
     path = tmp_path / "adlinks.db"
     monkeypatch.setattr(admin_ad_links, "db", lambda: _fake_db(path))
@@ -66,6 +76,21 @@ def test_create_ad_link_persists_and_returns_tme_url(tmp_path, monkeypatch):
     links = admin_ad_links.list_ad_links()
     assert len(links) == 1
     assert links[0]["url"] == item["url"]
+
+
+def test_create_ad_link_adds_tracking_url_when_public_base_is_set(tmp_path, monkeypatch):
+    path = tmp_path / "adlinks_tracking.db"
+    monkeypatch.setattr(admin_ad_links, "db", lambda: _fake_db(path))
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "metrotherapybot")
+    monkeypatch.setenv("GROWTH_CLICK_BASE_URL", "https://metrotherapy.ru")
+    _prepare_ad_links_db(path)
+
+    item = admin_ad_links.create_ad_link("telegram_ads", campaign="may", creative="reels1")
+
+    assert item["tracking_url"] == "https://metrotherapy.ru/a/src_telegram_ads__camp_may__creative_reels1"
+    text = admin_ad_links.format_created_ad_link(item)
+    assert "Tracking-ссылка для рекламы" in text
+    assert "Прямая Telegram-ссылка" in text
 
 
 def test_ad_links_report_is_plain_admin_text(tmp_path, monkeypatch):
