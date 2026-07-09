@@ -16,6 +16,7 @@ from handlers.admin_reports import (
     conversion,
     funnel2,
     giftshare,
+    growth_autopilot,
     segments,
     behavior,
     retention,
@@ -38,6 +39,7 @@ _HANDLERS = {
     "admin:payment:problems": payment_problems.run,
     "admin:funnel2": funnel2.run,
     "admin:giftshare": giftshare.run,
+    "admin:growth:autopilot": growth_autopilot.run,
     "admin:segments": segments.run,
     "admin:behavior": behavior.run,
     "admin:retention": retention.run,
@@ -58,6 +60,8 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
         return await money_clients.run(cb, state, ctx, log)
     if data.startswith("admin:adlinks:create:"):
         return await ad_links.run(cb, state, ctx, log)
+    if data.startswith("admin:growth:autopilot:"):
+        return await growth_autopilot.run(cb, state, ctx, log)
     fn = _HANDLERS.get(data)
     if not fn:
         return False
