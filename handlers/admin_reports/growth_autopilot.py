@@ -85,7 +85,7 @@ def _kb(active: str) -> InlineKeyboardMarkup:
 
 def _inbox_kb(active: str) -> InlineKeyboardMarkup:
     rows = _period_buttons(active, target="inbox")
-    rows.append([InlineKeyboardButton(text="🔴 Первая карточка", callback_data=f"admin:growth:autopilot:action:ga:1:payment_access_guard:{active}")])
+    rows.append([InlineKeyboardButton(text="🔎 Открыть первую карточку", callback_data=f"admin:growth:autopilot:action:ga:1:{active}")])
     rows.append([InlineKeyboardButton(text="🤖 Отчёт Growth Autopilot", callback_data=f"admin:growth:autopilot:report:{active}")])
     rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
