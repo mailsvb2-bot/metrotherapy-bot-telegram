@@ -50,11 +50,19 @@ v0 reads existing project data only:
 
 - `events` for `/start`, demo, tariff, payment-related events;
 - `demo_events` for demo sent/ack counters;
-- `payments` for paid count and revenue;
+- `payments` for paid count, distinct paying users, and revenue;
 - `admin_ad_links` for source/campaign/creative/ad_spend coverage;
-- `services.admin_growth_ops.access_alerts()` for paid-without-access risks;
+- `payments` + `subscriptions` for paid-without-access risks;
 - `services.segments.segment_counts()` when available;
 - `services.funnel2_analytics.scenario_counts()` when available.
+
+All period reports keep evidence in the selected period. For example, `today` must not show old ad links, old spend, or old paid-without-access alerts as if they happened today.
+
+Payment rows and paying users are deliberately separate metrics:
+
+- `payments` counts successful payment rows;
+- `paid_users` counts distinct users who paid in the period;
+- user-based conversion rates and scale recommendations use `paid_users`, not payment rows.
 
 All reads are defensive. Missing optional tables must produce degraded evidence, not a broken admin panel.
 
