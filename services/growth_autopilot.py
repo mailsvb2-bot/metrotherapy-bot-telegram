@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import logging
-import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from services.db import db
+from services.growth_autopilot_core import (
+    SAFE_AUTOPILOT_MODE,
+    data_confidence,
+    data_gaps,
+    diagnose_growth_snapshot,
+    format_growth_autopilot_report,
+    parse_ad_spend_to_minor,
+    pct,
+    safe_int,
+)
 
 log = logging.getLogger(__name__)
 
@@ -17,15 +26,13 @@ _PERIOD_DAYS: dict[str, int | None] = {
     "all": None,
 }
 
-_SAFE_AUTOPILOT_MODE = "read_only_plan_only"
-
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 
 
 def _period_start(period: str) -> str | None:
-    normalized = (period or "today").strip().lower()
+    normalized = normalize_period(period)
     if normalized == "today":
         now = _utc_now()
         return datetime(now.year, now.month, now.day, tzinfo=timezone.utc).isoformat()
@@ -60,57 +67,6 @@ def _rows(items: list[Any]) -> list[dict[str, Any]]:
     return out
 
 
-def _safe_int(value: Any) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _safe_float(value: Any) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _pct(part: int, whole: int) -> float | None:
-    if int(whole or 0) <= 0:
-        return None
-    return round(float(part) * 100.0 / float(whole), 1)
-
-
-def _money_rub_from_minor(amount_minor: int | float | None) -> str:
-    return f"{_safe_float(amount_minor) / 100:.0f} ₽"
-
-
-def parse_ad_spend_to_minor(value: Any) -> int | None:
-    """Best-effort parser for existing human-entered ad_spend values.
-
-    The parsed value is low-confidence evidence, not accounting truth.
-    """
-
-    text = str(value or "").strip().lower()
-    if not text:
-        return None
-    normalized = text.replace("рублей", "rub").replace("руб.", "rub").replace("руб", "rub")
-    match = re.search(r"(\d+(?:[\s_.]\d{3})*(?:[,.]\d{1,2})?|\d+)", normalized)
-    if not match:
-        return None
-    number = match.group(1).replace(" ", "").replace("_", "")
-    if "," in number:
-        number = number.replace(".", "").replace(",", ".")
-    elif number.count(".") == 1 and len(number.split(".")[-1]) == 3:
-        number = number.replace(".", "")
-    try:
-        rub = float(number)
-    except ValueError:
-        return None
-    if rub < 0:
-        return None
-    return int(round(rub * 100))
-
-
 def _table_columns(conn: Any, table: str) -> set[str]:
     try:
         return {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -136,8 +92,8 @@ def _fetch_scalar(sql: str, params: tuple[Any, ...] = ()) -> int:
             return 0
         if hasattr(row, "keys"):
             keys = list(row.keys())
-            return _safe_int(row[keys[0]]) if keys else 0
-        return _safe_int(row[0])
+            return safe_int(row[keys[0]]) if keys else 0
+        return safe_int(row[0])
     except (sqlite3.Error, OSError, TypeError):
         log.debug("growth autopilot scalar query skipped", exc_info=True)
         return 0
@@ -207,8 +163,8 @@ def _payment_summary(period: str) -> dict[str, Any]:
             ).fetchone()
             data = _rowdict(row) or {}
             return {
-                "payments": _safe_int(data.get("payments")),
-                "revenue_minor": _safe_int(data.get("revenue_minor")),
+                "payments": safe_int(data.get("payments")),
+                "revenue_minor": safe_int(data.get("revenue_minor")),
                 "currency": str(data.get("currency") or "RUB"),
                 "status_source": status_col or "none",
             }
@@ -274,7 +230,7 @@ def _safe_segments() -> dict[str, int]:
         log.debug("segment counts import unavailable", exc_info=True)
         return {}
     try:
-        return {str(k): _safe_int(v) for k, v in (segment_counts(limit_users=5000) or {}).items()}
+        return {str(k): safe_int(v) for k, v in (segment_counts(limit_users=5000) or {}).items()}
     except (sqlite3.Error, OSError, TypeError):
         log.debug("segment counts unavailable", exc_info=True)
         return {}
@@ -313,7 +269,7 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
     demo_ack = max(demo.get("ack_users", 0), events.get("demo_ack", 0))
     tariff_open = max(events.get("sub_menu_open", 0), events.get("funnel_tariffs_command", 0))
     pay_click = events.get("payment_started", 0)
-    paid = _safe_int(payments.get("payments"))
+    paid = safe_int(payments.get("payments"))
 
     funnel = {
         "start_users": start_users,
@@ -322,28 +278,28 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
         "tariff_open_users": tariff_open,
         "payment_started_users": pay_click,
         "paid_users": paid,
-        "start_to_demo_pct": _pct(demo_sent, start_users),
-        "demo_to_ack_pct": _pct(demo_ack, demo_sent),
-        "ack_to_tariff_pct": _pct(tariff_open, demo_ack),
-        "tariff_to_paid_pct": _pct(paid, tariff_open),
-        "start_to_paid_pct": _pct(paid, start_users),
+        "start_to_demo_pct": pct(demo_sent, start_users),
+        "demo_to_ack_pct": pct(demo_ack, demo_sent),
+        "ack_to_tariff_pct": pct(tariff_open, demo_ack),
+        "tariff_to_paid_pct": pct(paid, tariff_open),
+        "start_to_paid_pct": pct(paid, start_users),
     }
 
-    data_quality = {
-        "mode": _SAFE_AUTOPILOT_MODE,
+    quality = {
+        "mode": SAFE_AUTOPILOT_MODE,
         "external_writes_enabled": False,
         "budget_writes_enabled": False,
         "conversion_postbacks_enabled": False,
-        "confidence": _data_confidence(ad_links=ad_links, payments=payments, funnel=funnel),
-        "gaps": _data_gaps(ad_links=ad_links, payments=payments, funnel=funnel),
+        "confidence": data_confidence(ad_links=ad_links, payments=payments, funnel=funnel),
+        "gaps": data_gaps(ad_links=ad_links, payments=payments, funnel=funnel),
     }
 
     snapshot = {
         "ok": True,
         "period": period,
         "generated_at_utc": _utc_now().isoformat(),
-        "autopilot_mode": _SAFE_AUTOPILOT_MODE,
-        "data_quality": data_quality,
+        "autopilot_mode": SAFE_AUTOPILOT_MODE,
+        "data_quality": quality,
         "ad_links": ad_links,
         "funnel": funnel,
         "payments": payments,
@@ -353,228 +309,6 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
     }
     snapshot["recommendations"] = diagnose_growth_snapshot(snapshot)
     return snapshot
-
-
-def _data_gaps(*, ad_links: dict[str, Any], payments: dict[str, Any], funnel: dict[str, Any]) -> list[str]:
-    gaps: list[str] = []
-    if _safe_int(ad_links.get("links")) == 0:
-        gaps.append("Нет рекламных tracking-ссылок: невозможно связать канал/кампанию/креатив с оплатой.")
-    if _safe_int(ad_links.get("without_spend")) > 0:
-        gaps.append("Есть рекламные ссылки без расхода: CAC/ROMI будут неполными.")
-    if _safe_int(funnel.get("start_users")) == 0:
-        gaps.append("Нет /start-событий за период: click→start и start→payment пока не считаются.")
-    if str(payments.get("status_source")) in {"missing_table", "error"}:
-        gaps.append("Платёжная таблица недоступна для Growth Autopilot snapshot.")
-    return gaps
-
-
-def _data_confidence(*, ad_links: dict[str, Any], payments: dict[str, Any], funnel: dict[str, Any]) -> str:
-    gaps = _data_gaps(ad_links=ad_links, payments=payments, funnel=funnel)
-    if len(gaps) >= 3:
-        return "low"
-    if gaps:
-        return "medium"
-    return "high"
-
-
-def _recommendation(
-    *,
-    priority: str,
-    kind: str,
-    title: str,
-    evidence: list[str],
-    action: str,
-    confidence: str,
-    risk: str = "low",
-) -> dict[str, Any]:
-    return {
-        "priority": priority,
-        "kind": kind,
-        "title": title,
-        "evidence": evidence,
-        "recommended_action": action,
-        "confidence": confidence,
-        "risk": risk,
-        "apply_mode": "manual_review_required",
-        "autopilot_can_apply_now": False,
-    }
-
-
-def diagnose_growth_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-    funnel = dict(snapshot.get("funnel") or {})
-    payments = dict(snapshot.get("payments") or {})
-    ad_links = dict(snapshot.get("ad_links") or {})
-    access = dict(snapshot.get("access_alerts") or {})
-    dq = dict(snapshot.get("data_quality") or {})
-
-    recs: list[dict[str, Any]] = []
-    confidence = str(dq.get("confidence") or "low")
-
-    access_count = _safe_int(access.get("count"))
-    if access_count > 0:
-        recs.append(_recommendation(
-            priority="red",
-            kind="payment_access_guard",
-            title="Деньги есть, но доступ не найден",
-            evidence=[f"Проблемных оплат без активного доступа: {access_count}"],
-            action="Сначала проверить выдачу доступа. Пока не масштабировать рекламу по этому периоду.",
-            confidence="high",
-            risk="high",
-        ))
-
-    if _safe_int(ad_links.get("links")) == 0 or _safe_int(ad_links.get("without_spend")) > 0:
-        recs.append(_recommendation(
-            priority="yellow",
-            kind="data_quality",
-            title="Закрыть дыры в рекламной разметке",
-            evidence=[
-                f"tracking-ссылок: {_safe_int(ad_links.get('links'))}",
-                f"без расхода: {_safe_int(ad_links.get('without_spend'))}",
-            ],
-            action="Создавать все кампании через рекламные ссылки и вносить расход/креатив. Без этого CAC/ROMI будут слепыми.",
-            confidence="high",
-        ))
-
-    start_users = _safe_int(funnel.get("start_users"))
-    demo_sent = _safe_int(funnel.get("demo_sent_users"))
-    demo_ack = _safe_int(funnel.get("demo_ack_users"))
-    tariff_open = _safe_int(funnel.get("tariff_open_users"))
-    paid = _safe_int(funnel.get("paid_users"))
-    revenue_minor = _safe_int(payments.get("revenue_minor"))
-
-    if start_users >= 20 and _pct(demo_sent, start_users) is not None and (_pct(demo_sent, start_users) or 0) < 35:
-        recs.append(_recommendation(
-            priority="yellow",
-            kind="start_to_demo_drop",
-            title="Много входов, мало демо",
-            evidence=[f"/start: {start_users}", f"demo_sent: {demo_sent}", f"start→demo: {_pct(demo_sent, start_users)}%"],
-            action="Проверить первый экран, кнопку демо и обещание в рекламном креативе.",
-            confidence=confidence,
-        ))
-
-    if demo_ack >= 10 and paid == 0:
-        recs.append(_recommendation(
-            priority="red",
-            kind="creative_offer_mismatch",
-            title="Демо слушают, но оплат нет",
-            evidence=[f"demo_ack: {demo_ack}", f"paid: {paid}"],
-            action="Не увеличивать бюджет. Сгенерировать новые креативы и post-demo оффер, запустить A/B только с тестовым лимитом.",
-            confidence=confidence,
-            risk="medium",
-        ))
-
-    if tariff_open >= 5 and paid == 0:
-        recs.append(_recommendation(
-            priority="red",
-            kind="tariff_to_payment_drop",
-            title="Тарифы открывают, но не платят",
-            evidence=[f"tariff_open: {tariff_open}", f"paid: {paid}"],
-            action="Проверить цену, доверие, платёжный UX и текст перед оплатой. Не винить рекламу до проверки оплаты.",
-            confidence=confidence,
-            risk="medium",
-        ))
-
-    if paid >= 3 and revenue_minor > 0 and access_count == 0:
-        recs.append(_recommendation(
-            priority="green",
-            kind="scale_candidate",
-            title="Есть оплаты — можно искать масштабирование",
-            evidence=[f"paid: {paid}", f"revenue: {_money_rub_from_minor(revenue_minor)}", f"access_alerts: {access_count}"],
-            action="Показать лучшие источники/креативы, проверить CAC и только затем предложить +10–15% бюджета в каналах с высокой достоверностью данных.",
-            confidence=confidence,
-        ))
-
-    if not recs:
-        recs.append(_recommendation(
-            priority="white",
-            kind="observe_more",
-            title="Данных пока мало — работаем в режиме наблюдения",
-            evidence=[f"/start: {start_users}", f"demo_ack: {demo_ack}", f"paid: {paid}"],
-            action="Продолжать сбор событий, закрыть разметку расходов и не включать автоуправление бюджетом.",
-            confidence=confidence,
-        ))
-
-    recs.append(_recommendation(
-        priority="white",
-        kind="autopilot_safety_contract",
-        title="Автопилот v0 ничего не применяет сам",
-        evidence=["external_writes_enabled=False", "budget_writes_enabled=False", "conversion_postbacks_enabled=False"],
-        action="Следующий этап — Action Inbox с подтверждением, затем guarded apply с лимитами.",
-        confidence="high",
-    ))
-    return recs
-
-
-def _fmt_pct(value: Any) -> str:
-    return "—" if value is None else f"{float(value):.1f}%"
-
-
-def _priority_icon(priority: str) -> str:
-    return {
-        "red": "🔴",
-        "yellow": "🟡",
-        "green": "🟢",
-        "white": "⚪",
-    }.get(str(priority), "⚪")
-
-
-def format_growth_autopilot_report(snapshot: dict[str, Any]) -> str:
-    funnel = dict(snapshot.get("funnel") or {})
-    payments = dict(snapshot.get("payments") or {})
-    ad_links = dict(snapshot.get("ad_links") or {})
-    dq = dict(snapshot.get("data_quality") or {})
-    recs = list(snapshot.get("recommendations") or [])
-
-    lines = [
-        "🤖 Growth Autopilot v0",
-        "read-only: анализ → рекомендации → доказательства",
-        "",
-        f"Период: {snapshot.get('period')}",
-        f"Режим: {snapshot.get('autopilot_mode')}",
-        f"Достоверность данных: {dq.get('confidence', 'low')}",
-        "",
-        "📊 Воронка",
-        f"— /start: {_safe_int(funnel.get('start_users'))}",
-        f"— демо отправлено: {_safe_int(funnel.get('demo_sent_users'))} ({_fmt_pct(funnel.get('start_to_demo_pct'))} от /start)",
-        f"— демо подтверждено: {_safe_int(funnel.get('demo_ack_users'))} ({_fmt_pct(funnel.get('demo_to_ack_pct'))} от demo)",
-        f"— тарифы открыли: {_safe_int(funnel.get('tariff_open_users'))} ({_fmt_pct(funnel.get('ack_to_tariff_pct'))} от ack)",
-        f"— оплатили: {_safe_int(funnel.get('paid_users'))} ({_fmt_pct(funnel.get('start_to_paid_pct'))} от /start)",
-        "",
-        "💰 Деньги / реклама",
-        f"— выручка: {_money_rub_from_minor(_safe_int(payments.get('revenue_minor')))}",
-        f"— рекламных ссылок: {_safe_int(ad_links.get('links'))}",
-        f"— ссылок без расхода: {_safe_int(ad_links.get('without_spend'))}",
-        f"— расход из ссылок (низкая достоверность): {_money_rub_from_minor(_safe_int(ad_links.get('spend_minor_low_confidence')))}",
-        "",
-    ]
-
-    gaps = list(dq.get("gaps") or [])
-    if gaps:
-        lines.append("🧩 Дыры в данных")
-        for gap in gaps[:6]:
-            lines.append(f"— {gap}")
-        lines.append("")
-
-    lines.append("📌 План действий")
-    for idx, rec in enumerate(recs[:8], 1):
-        evidence = list(rec.get("evidence") or [])
-        lines.extend([
-            f"{idx}. {_priority_icon(str(rec.get('priority')))} {rec.get('title')}",
-            f"   Что сделать: {rec.get('recommended_action')}",
-            f"   Уверенность: {rec.get('confidence')} | риск: {rec.get('risk')}",
-        ])
-        if evidence:
-            lines.append("   Доказательства: " + "; ".join(str(x) for x in evidence[:4]))
-        lines.append("")
-
-    lines.extend([
-        "🛡 Защита от регрессий",
-        "— модуль только читает БД;",
-        "— бюджеты и рекламные кабинеты не меняет;",
-        "— конверсии наружу не отправляет;",
-        "— пользовательские сценарии демо/оплат/тарифов не затрагивает.",
-    ])
-    return "\n".join(lines).strip()
 
 
 def build_growth_autopilot_report(period: str = "today") -> str:
