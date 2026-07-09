@@ -102,6 +102,14 @@ def recommendation(
     }
 
 
+def _paid_users_from_snapshot(*, funnel: dict[str, Any], payments: dict[str, Any]) -> int:
+    if "paid_users" in funnel:
+        return safe_int(funnel.get("paid_users"))
+    if "paid_users" in payments:
+        return safe_int(payments.get("paid_users"))
+    return safe_int(payments.get("payments"))
+
+
 def diagnose_growth_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     funnel = dict(snapshot.get("funnel") or {})
     payments = dict(snapshot.get("payments") or {})
@@ -141,7 +149,7 @@ def diagnose_growth_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     demo_sent = safe_int(funnel.get("demo_sent_users"))
     demo_ack = safe_int(funnel.get("demo_ack_users"))
     tariff_open = safe_int(funnel.get("tariff_open_users"))
-    paid = safe_int(funnel.get("paid_users"))
+    paid = _paid_users_from_snapshot(funnel=funnel, payments=payments)
     revenue_minor = safe_int(payments.get("revenue_minor"))
 
     start_to_demo = pct(demo_sent, start_users)
@@ -160,7 +168,7 @@ def diagnose_growth_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
             priority="red",
             kind="creative_offer_mismatch",
             title="Демо слушают, но оплат нет",
-            evidence=[f"demo_ack: {demo_ack}", f"paid: {paid}"],
+            evidence=[f"demo_ack: {demo_ack}", f"paid_users: {paid}"],
             action="Не увеличивать бюджет. Сгенерировать новые креативы и post-demo оффер, запустить A/B только с тестовым лимитом.",
             confidence=confidence,
             risk="medium",
@@ -171,7 +179,7 @@ def diagnose_growth_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
             priority="red",
             kind="tariff_to_payment_drop",
             title="Тарифы открывают, но не платят",
-            evidence=[f"tariff_open: {tariff_open}", f"paid: {paid}"],
+            evidence=[f"tariff_open: {tariff_open}", f"paid_users: {paid}"],
             action="Проверить цену, доверие, платёжный UX и текст перед оплатой. Не винить рекламу до проверки оплаты.",
             confidence=confidence,
             risk="medium",
@@ -182,7 +190,7 @@ def diagnose_growth_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
             priority="green",
             kind="scale_candidate",
             title="Есть оплаты — можно искать масштабирование",
-            evidence=[f"paid: {paid}", f"revenue: {money_rub_from_minor(revenue_minor)}", f"access_alerts: {access_count}"],
+            evidence=[f"paid_users: {paid}", f"revenue: {money_rub_from_minor(revenue_minor)}", f"access_alerts: {access_count}"],
             action="Показать лучшие источники/креативы, проверить CAC и только затем предложить +10–15% бюджета в каналах с высокой достоверностью данных.",
             confidence=confidence,
         ))
@@ -192,7 +200,7 @@ def diagnose_growth_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
             priority="white",
             kind="observe_more",
             title="Данных пока мало — работаем в режиме наблюдения",
-            evidence=[f"/start: {start_users}", f"demo_ack: {demo_ack}", f"paid: {paid}"],
+            evidence=[f"/start: {start_users}", f"demo_ack: {demo_ack}", f"paid_users: {paid}"],
             action="Продолжать сбор событий, закрыть разметку расходов и не включать автоуправление бюджетом.",
             confidence=confidence,
         ))
@@ -228,6 +236,9 @@ def format_growth_autopilot_report(snapshot: dict[str, Any]) -> str:
     dq = dict(snapshot.get("data_quality") or {})
     recs = list(snapshot.get("recommendations") or [])
 
+    paid_users = _paid_users_from_snapshot(funnel=funnel, payments=payments)
+    payment_rows = safe_int(payments.get("payments"))
+
     lines = [
         "🤖 Growth Autopilot v0",
         "read-only: анализ → рекомендации → доказательства",
@@ -241,9 +252,10 @@ def format_growth_autopilot_report(snapshot: dict[str, Any]) -> str:
         f"— демо отправлено: {safe_int(funnel.get('demo_sent_users'))} ({fmt_pct(funnel.get('start_to_demo_pct'))} от /start)",
         f"— демо подтверждено: {safe_int(funnel.get('demo_ack_users'))} ({fmt_pct(funnel.get('demo_to_ack_pct'))} от demo)",
         f"— тарифы открыли: {safe_int(funnel.get('tariff_open_users'))} ({fmt_pct(funnel.get('ack_to_tariff_pct'))} от ack)",
-        f"— оплатили: {safe_int(funnel.get('paid_users'))} ({fmt_pct(funnel.get('start_to_paid_pct'))} от /start)",
+        f"— оплатили пользователей: {paid_users} ({fmt_pct(funnel.get('start_to_paid_pct'))} от /start)",
         "",
         "💰 Деньги / реклама",
+        f"— успешных платежей: {payment_rows}",
         f"— выручка: {money_rub_from_minor(safe_int(payments.get('revenue_minor')))}",
         f"— рекламных ссылок: {safe_int(ad_links.get('links'))}",
         f"— ссылок без расхода: {safe_int(ad_links.get('without_spend'))}",
