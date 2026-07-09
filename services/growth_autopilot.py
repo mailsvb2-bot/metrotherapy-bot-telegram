@@ -139,12 +139,19 @@ def _payment_summary(period: str) -> dict[str, Any]:
         with db() as conn:
             cols = _table_columns(conn, "payments")
             if not cols:
-                return {"payments": 0, "revenue_minor": 0, "currency": "RUB", "status_source": "missing_table"}
+                return {
+                    "payments": 0,
+                    "paid_users": 0,
+                    "revenue_minor": 0,
+                    "currency": "RUB",
+                    "status_source": "missing_table",
+                }
 
             status_col = "provider_status" if "provider_status" in cols else ("status" if "status" in cols else "")
             amount_col = "amount" if "amount" in cols else ("amount_minor" if "amount_minor" in cols else "")
             created_col = "created_at" if "created_at" in cols else ("paid_at" if "paid_at" in cols else "")
             currency_col = "currency" if "currency" in cols else ""
+            user_expr = "user_id" if "user_id" in cols else "NULL"
 
             conditions: list[str] = []
             params: list[Any] = []
@@ -158,30 +165,40 @@ def _payment_summary(period: str) -> dict[str, Any]:
             amount_expr = f"COALESCE({amount_col}, 0)" if amount_col else "0"
             currency_expr = f"COALESCE(MAX({currency_col}), 'RUB')" if currency_col else "'RUB'"
             row = conn.execute(
-                f"SELECT COUNT(*) AS payments, SUM({amount_expr}) AS revenue_minor, {currency_expr} AS currency FROM payments {where}",
+                "SELECT "
+                "COUNT(*) AS payments, "
+                f"COUNT(DISTINCT {user_expr}) AS paid_users, "
+                f"SUM({amount_expr}) AS revenue_minor, "
+                f"{currency_expr} AS currency "
+                f"FROM payments {where}",
                 tuple(params),
             ).fetchone()
             data = _rowdict(row) or {}
             return {
                 "payments": safe_int(data.get("payments")),
+                "paid_users": safe_int(data.get("paid_users")),
                 "revenue_minor": safe_int(data.get("revenue_minor")),
                 "currency": str(data.get("currency") or "RUB"),
                 "status_source": status_col or "none",
             }
     except (sqlite3.Error, OSError, TypeError):
         log.debug("payment summary failed", exc_info=True)
-        return {"payments": 0, "revenue_minor": 0, "currency": "RUB", "status_source": "error"}
+        return {"payments": 0, "paid_users": 0, "revenue_minor": 0, "currency": "RUB", "status_source": "error"}
 
 
-def _ad_link_summary(limit: int = 50) -> dict[str, Any]:
+def _ad_link_summary(period: str, *, limit: int = 50) -> dict[str, Any]:
+    start = _period_start(period)
+    where = "WHERE COALESCE(created_at, '') >= ?" if start else ""
+    params: tuple[Any, ...] = (start, int(limit)) if start else (int(limit),)
     rows = _fetch_rows(
-        """
+        f"""
         SELECT source, campaign, creative, ad_spend, start_payload, url, created_at
         FROM admin_ad_links
+        {where}
         ORDER BY id DESC
         LIMIT ?
         """.strip(),
-        (int(limit),),
+        params,
     )
     spend_minor = 0
     with_spend = 0
@@ -210,17 +227,26 @@ def _ad_link_summary(limit: int = 50) -> dict[str, Any]:
     }
 
 
-def _safe_access_alerts() -> list[dict[str, Any]]:
-    try:
-        from services.admin_growth_ops import access_alerts
-    except ImportError:
-        log.debug("access alerts import unavailable", exc_info=True)
-        return []
-    try:
-        return list(access_alerts(limit=20) or [])
-    except (sqlite3.Error, OSError, TypeError):
-        log.debug("access alerts unavailable", exc_info=True)
-        return []
+def _safe_access_alerts(period: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    start = _period_start(period)
+    period_clause = "AND COALESCE(p.created_at, '') >= ?" if start else ""
+    params: tuple[Any, ...] = (start, int(limit)) if start else (int(limit),)
+    return _fetch_rows(
+        f"""
+        SELECT p.id, p.user_id, p.amount, p.currency, p.created_at, p.provider_status,
+               u.username, u.first_name,
+               s.status AS subscription_status, s.scope, s.plan_type
+        FROM payments p
+        LEFT JOIN users u ON u.user_id = p.user_id
+        LEFT JOIN subscriptions s ON s.user_id = p.user_id AND COALESCE(s.status, '') = 'active'
+        WHERE COALESCE(p.provider_status, 'succeeded') IN ('succeeded', 'paid', 'captured')
+          AND s.user_id IS NULL
+          {period_clause}
+        ORDER BY p.id DESC
+        LIMIT ?
+        """.strip(),
+        params,
+    )
 
 
 def _safe_segments() -> dict[str, int]:
@@ -259,8 +285,8 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
     events = _event_counts(period)
     demo = _demo_counts(period)
     payments = _payment_summary(period)
-    ad_links = _ad_link_summary()
-    access_alert_rows = _safe_access_alerts()
+    ad_links = _ad_link_summary(period)
+    access_alert_rows = _safe_access_alerts(period)
     segments = _safe_segments()
     funnel2 = _safe_funnel2()
 
@@ -269,7 +295,7 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
     demo_ack = max(demo.get("ack_users", 0), events.get("demo_ack", 0))
     tariff_open = max(events.get("sub_menu_open", 0), events.get("funnel_tariffs_command", 0))
     pay_click = events.get("payment_started", 0)
-    paid = safe_int(payments.get("payments"))
+    paid = safe_int(payments.get("paid_users"))
 
     funnel = {
         "start_users": start_users,
