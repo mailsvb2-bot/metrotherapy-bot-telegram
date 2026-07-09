@@ -20,6 +20,7 @@ from services.growth_autopilot_core import (
     pct,
     safe_int,
 )
+from services.growth_creative_diagnostics import build_creative_diagnostics, format_creative_diagnostics
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +30,17 @@ _PERIOD_DAYS: dict[str, int | None] = {
     "month": 30,
     "all": None,
 }
+
+_CREATIVE_EVENT_NAMES = (
+    "ad_click_redirect",
+    "funnel_start_command",
+    "demo_sent",
+    "demo_ack",
+    "sub_menu_open",
+    "funnel_tariffs_command",
+    "payment_success",
+    "gift_paid",
+)
 
 
 def _utc_now() -> datetime:
@@ -132,6 +144,35 @@ def _event_total_count(period: str, name: str) -> int:
             (name, start),
         )
     return _fetch_scalar("SELECT COUNT(*) AS c FROM events WHERE name=?", (name,))
+
+
+def _creative_event_rows(period: str, *, limit: int = 500) -> list[dict[str, Any]]:
+    start = _period_start(period)
+    try:
+        with db() as conn:
+            cols = _table_columns(conn, "events")
+            if not cols or "name" not in cols:
+                return []
+            select_cols = ["name"]
+            for optional in ("user_id", "meta", "payload", "created_at"):
+                if optional in cols:
+                    select_cols.append(optional)
+            placeholders = ",".join("?" for _ in _CREATIVE_EVENT_NAMES)
+            conditions = [f"name IN ({placeholders})"]
+            params: list[Any] = list(_CREATIVE_EVENT_NAMES)
+            if start and "created_at" in cols:
+                conditions.append("COALESCE(created_at, '') >= ?")
+                params.append(start)
+            sql = (
+                f"SELECT {', '.join(select_cols)} FROM events "
+                f"WHERE {' AND '.join(conditions)} "
+                "ORDER BY rowid DESC LIMIT ?"
+            )
+            params.append(int(limit))
+            return _rows(conn.execute(sql, tuple(params)).fetchall())
+    except (sqlite3.Error, OSError, TypeError):
+        log.debug("creative event rows unavailable", exc_info=True)
+        return []
 
 
 def _demo_counts(period: str) -> dict[str, int]:
@@ -300,6 +341,8 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
     demo = _demo_counts(period)
     payments = _payment_summary(period)
     ad_links = _ad_link_summary(period)
+    creative_event_rows = _creative_event_rows(period)
+    creative_diagnostics = build_creative_diagnostics(ad_links=ad_links, event_rows=creative_event_rows)
     access_alert_rows = _safe_access_alerts(period)
     segments = _safe_segments()
     funnel2 = _safe_funnel2()
@@ -344,6 +387,7 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
         "autopilot_mode": SAFE_AUTOPILOT_MODE,
         "data_quality": quality,
         "ad_links": ad_links,
+        "creative_diagnostics": creative_diagnostics,
         "funnel": funnel,
         "payments": payments,
         "access_alerts": {"count": len(access_alert_rows), "rows": access_alert_rows[:5]},
@@ -355,7 +399,10 @@ def build_growth_autopilot_snapshot(period: str = "today") -> dict[str, Any]:
 
 
 def build_growth_autopilot_report(period: str = "today") -> str:
-    return format_growth_autopilot_report(build_growth_autopilot_snapshot(period))
+    snapshot = build_growth_autopilot_snapshot(period)
+    base = format_growth_autopilot_report(snapshot)
+    creative_lines = format_creative_diagnostics(dict(snapshot.get("creative_diagnostics") or {}))
+    return base + "\n\n" + "\n".join(creative_lines)
 
 
 def build_growth_action_inbox_report(period: str = "today") -> str:
