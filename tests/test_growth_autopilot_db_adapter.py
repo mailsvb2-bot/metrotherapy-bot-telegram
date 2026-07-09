@@ -57,6 +57,13 @@ def _setup(conn: sqlite3.Connection) -> None:
     )
 
 
+def _patch_snapshot_dependencies(monkeypatch, path: Path) -> None:
+    monkeypatch.setattr(growth_autopilot, "db", lambda: _fake_db(path))
+    monkeypatch.setattr(growth_autopilot, "_period_start", lambda period: "2026-05-10T00:00:00+00:00")
+    monkeypatch.setattr(growth_autopilot, "_safe_segments", lambda: {})
+    monkeypatch.setattr(growth_autopilot, "_safe_funnel2", lambda: {})
+
+
 def test_snapshot_counts_distinct_paid_users_separately_from_payment_rows(tmp_path, monkeypatch):
     path = tmp_path / "growth_autopilot.db"
     with _fake_db(path) as conn:
@@ -72,8 +79,7 @@ def test_snapshot_counts_distinct_paid_users_separately_from_payment_rows(tmp_pa
             (101, 790000, "RUB", "2026-05-10T11:00:00+00:00", "succeeded"),
         )
 
-    monkeypatch.setattr(growth_autopilot, "db", lambda: _fake_db(path))
-    monkeypatch.setattr(growth_autopilot, "_period_start", lambda period: "2026-05-10T00:00:00+00:00")
+    _patch_snapshot_dependencies(monkeypatch, path)
 
     snapshot = growth_autopilot.build_growth_autopilot_snapshot("today")
 
@@ -95,8 +101,7 @@ def test_snapshot_keeps_ad_link_evidence_inside_selected_period(tmp_path, monkey
             ("partner", "old", "creative_b", "999rub", "p2", "https://t.me/bot?start=p2", "2026-05-01T10:00:00+00:00"),
         )
 
-    monkeypatch.setattr(growth_autopilot, "db", lambda: _fake_db(path))
-    monkeypatch.setattr(growth_autopilot, "_period_start", lambda period: "2026-05-10T00:00:00+00:00")
+    _patch_snapshot_dependencies(monkeypatch, path)
 
     snapshot = growth_autopilot.build_growth_autopilot_snapshot("today")
 
@@ -120,8 +125,7 @@ def test_snapshot_keeps_access_alerts_inside_selected_period(tmp_path, monkeypat
             (202, 790000, "RUB", "2026-05-10T11:00:00+00:00", "succeeded"),
         )
 
-    monkeypatch.setattr(growth_autopilot, "db", lambda: _fake_db(path))
-    monkeypatch.setattr(growth_autopilot, "_period_start", lambda period: "2026-05-10T00:00:00+00:00")
+    _patch_snapshot_dependencies(monkeypatch, path)
 
     snapshot = growth_autopilot.build_growth_autopilot_snapshot("today")
 
