@@ -200,7 +200,7 @@ def test_verified_yookassa_wrapper_enqueues_only_after_success(monkeypatch):
     )
     monkeypatch.setattr(
         verified_reconciliation,
-        "record_payment_conversion_dry_run_safe",
+        "_enqueue_growth_conversion",
         lambda **kwargs: captured.update(kwargs),
     )
     payload = {
@@ -256,7 +256,7 @@ def test_verified_yookassa_wrapper_does_not_enqueue_problem_result(monkeypatch):
             side_effects_done=False,
         ),
     )
-    monkeypatch.setattr(verified_reconciliation, "record_payment_conversion_dry_run_safe", _capture)
+    monkeypatch.setattr(verified_reconciliation, "_enqueue_growth_conversion", _capture)
 
     verified_reconciliation.record_verified_yookassa_webhook(
         {
