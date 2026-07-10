@@ -18,7 +18,8 @@ It can:
 - produce a daily action plan with evidence;
 - show recommendations in the Telegram admin panel;
 - show a read-only Action Inbox with recommendation cards and evidence;
-- show read-only creative diagnostics in the Growth report.
+- show read-only creative diagnostics in the Growth report;
+- store provider-verified payment conversions in a dry-run outbox.
 
 It must not:
 
@@ -49,6 +50,7 @@ admin:growth:autopilot:all
 admin:growth:autopilot:report:<period>
 admin:growth:autopilot:inbox:<period>
 admin:growth:autopilot:action:ga:<index>:<period>
+admin:growth:autopilot:conversions:<period>
 ```
 
 ## Redirect click tracking
@@ -108,6 +110,64 @@ For each group it can show:
 
 This is diagnostic only. It does not create, edit, pause, or scale ad creatives.
 
+## Conversion Hub dry-run
+
+Conversion Hub introduces a typed outbox without an outbound sender.
+
+Table:
+
+```text
+growth_conversion_outbox
+```
+
+Current runtime ingestion is deliberately narrow:
+
+- only the public provider-verified YooKassa wrapper is connected;
+- only reconciled successful payments with completed side effects are accepted;
+- payment problems, failed grants, pending statuses and provider-verification failures are not conversions;
+- gift payments become `gift_paid`; regular payments become `payment_success`.
+
+Supported domain types are already explicit for future bridges:
+
+```text
+demo_ack
+tariff_open
+payment_success
+gift_paid
+```
+
+Every row is hard-locked to:
+
+```text
+mode = dry_run
+status = planned
+dispatch_allowed = 0
+attempts = 0
+```
+
+There is intentionally no sender or flush function in this stage.
+
+### Idempotency
+
+When a provider event ID exists, it is the stable business identity together with:
+
+```text
+conversion_type + source_platform + external_event_id
+```
+
+Webhook retries with corrected metadata or amount must resolve to the same idempotency key rather than create duplicates. Payload/user/amount are used only as fallback identity for sources without an external event ID.
+
+### Failure isolation
+
+Growth conversion ingestion is best-effort and happens only after provider verification and payment reconciliation. A missing migration, DB error or malformed Growth payload must not:
+
+- roll back a payment;
+- revoke or block access;
+- change payment reconciliation status;
+- break the public webhook response.
+
+The Conversion Hub table is intentionally not added to the core P0 readiness-table set. The migration is applied through the normal deterministic migration chain, but Growth degradation must not stop the primary payment and delivery runtime.
+
 ## Evidence sources
 
 v0 reads existing project data only:
@@ -116,11 +176,12 @@ v0 reads existing project data only:
 - `demo_events` for demo sent/ack counters;
 - `payments` for paid count, distinct paying users, and revenue;
 - `admin_ad_links` for source/campaign/creative/ad_spend coverage;
+- `growth_conversion_outbox` for dry-run conversion plans;
 - `payments` + `subscriptions` for paid-without-access risks;
 - `services.segments.segment_counts()` when available;
 - `services.funnel2_analytics.scenario_counts()` when available.
 
-All period reports keep evidence in the selected period. For example, `today` must not show old ad links, old spend, old clicks, or old paid-without-access alerts as if they happened today.
+All period reports keep evidence in the selected period. For example, `today` must not show old ad links, old spend, old clicks, old conversions, or old paid-without-access alerts as if they happened today.
 
 Payment rows and paying users are deliberately separate metrics:
 
@@ -128,7 +189,7 @@ Payment rows and paying users are deliberately separate metrics:
 - `paid_users` counts distinct users who paid in the period;
 - user-based conversion rates and scale recommendations use `paid_users`, not payment rows.
 
-All reads are defensive. Missing optional tables must produce degraded evidence, not a broken admin panel.
+All reads are defensive. Missing optional tables must produce degraded evidence, not a broken primary runtime.
 
 ## Action Inbox safety
 
@@ -167,6 +228,7 @@ This is a regression lock. Future versions must not silently weaken it.
 2. Redirect click tracking: `click -> /start`.
 3. Creative library and creative diagnostics.
 4. Conversion Hub / postback queue in dry-run mode.
-5. Guarded apply gateway with budget limits and kill-switch.
-6. Platform adapters: Yandex Direct, VK Ads, TgAds manual/import, MAX manual/channel tracking.
-7. Autopilot limited mode only after evidence, guardrails, tests, and rollback are production-ready.
+5. Unified event-to-conversion bridge for demo/tariff events.
+6. Guarded apply gateway with budget limits and kill-switch.
+7. Platform adapters: Yandex Direct, VK Ads, TgAds manual/import, MAX manual/channel tracking.
+8. Autopilot limited mode only after evidence, guardrails, tests, and rollback are production-ready.
