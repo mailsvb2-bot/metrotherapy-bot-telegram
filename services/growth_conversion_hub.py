@@ -223,4 +223,20 @@ def conversion_hub_snapshot(period: str = "today", *, limit: int = 20) -> dict[s
 
 
 def build_conversion_hub_report(period: str = "today") -> str:
-    return format_conversion_hub_report(conversion_hub_snapshot(period))
+    normalized_period = normalize_period(period)
+    try:
+        return format_conversion_hub_report(conversion_hub_snapshot(normalized_period))
+    except (sqlite3.Error, RuntimeError, OSError, TypeError, ValueError) as exc:
+        log.warning("Conversion Hub report degraded: %s", type(exc).__name__)
+        return "\n".join([
+            "🧪 Conversion Hub",
+            "",
+            f"Период: {normalized_period}",
+            "Статус: DEGRADED",
+            f"Причина: {type(exc).__name__}:{exc}",
+            "",
+            "Safety lock:",
+            "— основной платёжный и пользовательский контур продолжает работу;",
+            "— postback sender отсутствует;",
+            "— dispatch_allowed=False.",
+        ])
