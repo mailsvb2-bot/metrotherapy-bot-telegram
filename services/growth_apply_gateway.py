@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sqlite3
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -39,10 +38,26 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_int(name: str, default: int = 0) -> int:
+    try:
+        return int(os.getenv(name, str(default)) or str(default))
+    except (TypeError, ValueError):
+        log.warning("Invalid integer Growth apply setting: %s", name)
+        return default
+
+
+def _env_float(name: str, default: float = 0.0) -> float:
+    try:
+        return float(os.getenv(name, str(default)) or str(default))
+    except (TypeError, ValueError):
+        log.warning("Invalid float Growth apply setting: %s", name)
+        return default
+
+
 def current_apply_policy() -> ApplyPolicy:
     return ApplyPolicy(
-        max_abs_budget_delta_minor=max(0, int(os.getenv("GROWTH_APPLY_MAX_BUDGET_DELTA_MINOR", "0") or "0")),
-        max_budget_delta_pct=max(0.0, float(os.getenv("GROWTH_APPLY_MAX_BUDGET_DELTA_PCT", "0") or "0")),
+        max_abs_budget_delta_minor=max(0, _env_int("GROWTH_APPLY_MAX_BUDGET_DELTA_MINOR")),
+        max_budget_delta_pct=max(0.0, _env_float("GROWTH_APPLY_MAX_BUDGET_DELTA_PCT")),
         allow_pause_resume=_env_bool("GROWTH_APPLY_ALLOW_PAUSE_RESUME", False),
         allow_creative_rotate=_env_bool("GROWTH_APPLY_ALLOW_CREATIVE_ROTATE", False),
         require_distinct_approver=_env_bool("GROWTH_APPLY_REQUIRE_DISTINCT_APPROVER", True),
@@ -122,7 +137,8 @@ def create_apply_request(
         payload=normalized_payload,
     )
     now = _utc_now()
-    expires_at = now + timedelta(minutes=max(5, min(int(ttl_minutes), 24 * 60)))
+    ttl = max(5, min(int(ttl_minutes), 24 * 60))
+    expires_at = now + timedelta(minutes=ttl)
 
     with db() as conn:
         ensure_schema(conn)
@@ -162,8 +178,7 @@ def create_apply_request(
                 "SELECT COUNT(*) AS n FROM growth_apply_audit WHERE request_id=?",
                 (request_id,),
             ).fetchone()
-            n = int(_rowdict(audit_count).get("n") or 0)
-            if n == 0:
+            if int(_rowdict(audit_count).get("n") or 0) == 0:
                 _audit(
                     conn,
                     request_id=request_id,
@@ -171,7 +186,10 @@ def create_apply_request(
                     actor_id=int(requested_by),
                     before_status=None,
                     after_status="pending_review",
-                    details={"policy_passed": evaluation["policy_passed"], "violations": ",".join(evaluation["violations"])},
+                    details={
+                        "policy_passed": evaluation["policy_passed"],
+                        "violations": ",".join(evaluation["violations"]),
+                    },
                 )
     return data
 
@@ -184,6 +202,9 @@ def decide_apply_request(
     reason: str,
 ) -> dict[str, Any]:
     now = _utc_now()
+    expired = False
+    updated_data: dict[str, Any] = {}
+
     with db() as conn:
         ensure_schema(conn)
         with tx(conn):
@@ -199,9 +220,16 @@ def decide_apply_request(
             expires_at_raw = str(data.get("expires_at") or "")
             if expires_at_raw and datetime.fromisoformat(expires_at_raw) <= now:
                 conn.execute(
-                    "UPDATE growth_apply_requests SET status='expired', decided_at=? WHERE id=? AND status='pending_review'",
-                    (now.isoformat(), int(request_id)),
+                    """
+                    UPDATE growth_apply_requests
+                    SET status='expired', decided_by=?, decided_at=?, decision_reason=?
+                    WHERE id=? AND status='pending_review'
+                    """.strip(),
+                    (int(decided_by), now.isoformat(), "ttl_expired", int(request_id)),
                 )
+                changed = conn.execute("SELECT changes() AS n").fetchone()
+                if int(_rowdict(changed).get("n") or 0) != 1:
+                    raise RuntimeError("growth_apply_request_concurrent_transition")
                 _audit(
                     conn,
                     request_id=int(request_id),
@@ -211,56 +239,65 @@ def decide_apply_request(
                     after_status="expired",
                     details={"reason": "ttl_expired"},
                 )
-                raise ValueError("growth_apply_request_expired")
+                updated = conn.execute(
+                    "SELECT * FROM growth_apply_requests WHERE id=? LIMIT 1",
+                    (int(request_id),),
+                ).fetchone()
+                updated_data = _rowdict(updated)
+                expired = True
+            else:
+                payload = json.loads(str(data.get("payload_json") or "{}"))
+                policy = current_apply_policy()
+                evaluation = evaluate_apply_policy(
+                    action_type=str(data.get("action_type") or ""),
+                    payload=payload if isinstance(payload, dict) else {},
+                    requester_id=int(data.get("requested_by") or 0),
+                    approver_id=int(decided_by),
+                    policy=policy,
+                )
+                target_status = next_status(
+                    current_status=current_status,
+                    decision=decision,
+                    policy_passed=bool(evaluation["policy_passed"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE growth_apply_requests
+                    SET status=?, decided_by=?, decided_at=?, decision_reason=?,
+                        policy_json=?, dispatch_allowed=0, mode=?
+                    WHERE id=? AND status='pending_review'
+                    """.strip(),
+                    (
+                        target_status,
+                        int(decided_by),
+                        now.isoformat(),
+                        str(reason or "").strip()[:500],
+                        stable_json({**asdict(policy), "evaluation": evaluation}),
+                        GATEWAY_MODE,
+                        int(request_id),
+                    ),
+                )
+                changed = conn.execute("SELECT changes() AS n").fetchone()
+                if int(_rowdict(changed).get("n") or 0) != 1:
+                    raise RuntimeError("growth_apply_request_concurrent_transition")
+                _audit(
+                    conn,
+                    request_id=int(request_id),
+                    event_type=f"request_{target_status}",
+                    actor_id=int(decided_by),
+                    before_status=current_status,
+                    after_status=target_status,
+                    details={"reason": reason, "policy_passed": evaluation["policy_passed"]},
+                )
+                updated = conn.execute(
+                    "SELECT * FROM growth_apply_requests WHERE id=? LIMIT 1",
+                    (int(request_id),),
+                ).fetchone()
+                updated_data = _rowdict(updated)
 
-            payload = json.loads(str(data.get("payload_json") or "{}"))
-            policy = current_apply_policy()
-            evaluation = evaluate_apply_policy(
-                action_type=str(data.get("action_type") or ""),
-                payload=payload if isinstance(payload, dict) else {},
-                requester_id=int(data.get("requested_by") or 0),
-                approver_id=int(decided_by),
-                policy=policy,
-            )
-            target_status = next_status(
-                current_status=current_status,
-                decision=decision,
-                policy_passed=bool(evaluation["policy_passed"]),
-            )
-            conn.execute(
-                """
-                UPDATE growth_apply_requests
-                SET status=?, decided_by=?, decided_at=?, decision_reason=?,
-                    policy_json=?, dispatch_allowed=0, mode=?
-                WHERE id=? AND status='pending_review'
-                """.strip(),
-                (
-                    target_status,
-                    int(decided_by),
-                    now.isoformat(),
-                    str(reason or "").strip()[:500],
-                    stable_json({**asdict(policy), "evaluation": evaluation}),
-                    GATEWAY_MODE,
-                    int(request_id),
-                ),
-            )
-            changed = conn.execute("SELECT changes() AS n").fetchone()
-            if int(_rowdict(changed).get("n") or 0) != 1:
-                raise RuntimeError("growth_apply_request_concurrent_transition")
-            _audit(
-                conn,
-                request_id=int(request_id),
-                event_type=f"request_{target_status}",
-                actor_id=int(decided_by),
-                before_status=current_status,
-                after_status=target_status,
-                details={"reason": reason, "policy_passed": evaluation["policy_passed"]},
-            )
-            updated = conn.execute(
-                "SELECT * FROM growth_apply_requests WHERE id=? LIMIT 1",
-                (int(request_id),),
-            ).fetchone()
-    return _rowdict(updated)
+    if expired:
+        raise ValueError("growth_apply_request_expired")
+    return updated_data
 
 
 def apply_gateway_snapshot(*, limit: int = 20) -> dict[str, Any]:
@@ -287,7 +324,10 @@ def apply_gateway_snapshot(*, limit: int = 20) -> dict[str, Any]:
         "dispatch_allowed": False,
         "kill_switch_enabled": policy.kill_switch_enabled,
         "policy": asdict(policy),
-        "counts": {str(_rowdict(row).get("status")): int(_rowdict(row).get("n") or 0) for row in counts},
+        "counts": {
+            str(_rowdict(row).get("status")): int(_rowdict(row).get("n") or 0)
+            for row in counts
+        },
         "latest": [_rowdict(row) for row in rows],
     }
 
