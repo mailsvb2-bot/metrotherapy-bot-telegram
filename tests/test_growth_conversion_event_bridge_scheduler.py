@@ -17,7 +17,6 @@ async def test_scheduler_runs_growth_bridge_through_safe_boundary(monkeypatch):
 
     monkeypatch.setattr(bridge, "run_event_conversion_bridge_safe", _fake_runner)
     monkeypatch.setenv("GROWTH_CONVERSION_BRIDGE_BATCH_SIZE", "73")
-    monkeypatch.setenv("GROWTH_CONVERSION_BRIDGE_TIMEOUT_SEC", "2")
 
     await scheduler._run_growth_conversion_bridge_tick()
 
