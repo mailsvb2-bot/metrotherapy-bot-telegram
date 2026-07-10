@@ -64,6 +64,12 @@ def _conversion_builder() -> Callable[[str], str]:
     return build_growth_conversion_runtime_report
 
 
+def _apply_gateway_builder() -> Callable[[], str]:
+    from services.growth_apply_gateway import build_apply_gateway_report
+
+    return build_apply_gateway_report
+
+
 def _period_buttons(active: str, *, target: str) -> list[list[InlineKeyboardButton]]:
     labels = [
         ("today", "Сегодня"),
@@ -80,10 +86,18 @@ def _period_buttons(active: str, *, target: str) -> list[list[InlineKeyboardButt
     return [first, second]
 
 
+def _growth_nav(active: str) -> list[list[InlineKeyboardButton]]:
+    return [
+        [InlineKeyboardButton(text="📥 Action Inbox", callback_data=f"admin:growth:autopilot:inbox:{active}")],
+        [InlineKeyboardButton(text="🧪 Conversion Hub", callback_data=f"admin:growth:autopilot:conversions:{active}")],
+        [InlineKeyboardButton(text="🛡 Guarded Apply", callback_data=f"admin:growth:autopilot:apply:{active}")],
+        [InlineKeyboardButton(text="🤖 Отчёт Growth Autopilot", callback_data=f"admin:growth:autopilot:report:{active}")],
+    ]
+
+
 def _kb(active: str) -> InlineKeyboardMarkup:
     rows = _period_buttons(active, target="report")
-    rows.append([InlineKeyboardButton(text="📥 Action Inbox", callback_data=f"admin:growth:autopilot:inbox:{active}")])
-    rows.append([InlineKeyboardButton(text="🧪 Conversion Hub", callback_data=f"admin:growth:autopilot:conversions:{active}")])
+    rows.extend(_growth_nav(active)[:3])
     rows.append([InlineKeyboardButton(text="📣 Рекламные ссылки", callback_data="admin:adlinks")])
     rows.append([InlineKeyboardButton(text="💰 Деньги и клиенты", callback_data="admin:money:today")])
     rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")])
@@ -93,26 +107,26 @@ def _kb(active: str) -> InlineKeyboardMarkup:
 def _inbox_kb(active: str) -> InlineKeyboardMarkup:
     rows = _period_buttons(active, target="inbox")
     rows.append([InlineKeyboardButton(text="🔎 Открыть первую карточку", callback_data=f"admin:growth:autopilot:action:ga:1:{active}")])
-    rows.append([InlineKeyboardButton(text="🧪 Conversion Hub", callback_data=f"admin:growth:autopilot:conversions:{active}")])
-    rows.append([InlineKeyboardButton(text="🤖 Отчёт Growth Autopilot", callback_data=f"admin:growth:autopilot:report:{active}")])
+    rows.extend(_growth_nav(active)[1:])
     rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _card_kb(active: str) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text="📥 К списку действий", callback_data=f"admin:growth:autopilot:inbox:{active}")],
-        [InlineKeyboardButton(text="🧪 Conversion Hub", callback_data=f"admin:growth:autopilot:conversions:{active}")],
-        [InlineKeyboardButton(text="🤖 Отчёт Growth Autopilot", callback_data=f"admin:growth:autopilot:report:{active}")],
-        [InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")],
-    ]
+    rows = _growth_nav(active)
+    rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _conversion_kb(active: str) -> InlineKeyboardMarkup:
     rows = _period_buttons(active, target="conversions")
-    rows.append([InlineKeyboardButton(text="📥 Action Inbox", callback_data=f"admin:growth:autopilot:inbox:{active}")])
-    rows.append([InlineKeyboardButton(text="🤖 Отчёт Growth Autopilot", callback_data=f"admin:growth:autopilot:report:{active}")])
+    rows.extend(_growth_nav(active)[0:1] + _growth_nav(active)[2:])
+    rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _apply_kb(active: str) -> InlineKeyboardMarkup:
+    rows = _growth_nav(active)[:2] + _growth_nav(active)[3:]
     rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -138,6 +152,12 @@ async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, log) -> bool:
         build_conversions = _conversion_builder()
         text = await asyncio.to_thread(build_conversions, period)
         await safe_edit(cb, text, reply_markup=_conversion_kb(period))
+        return True
+
+    if data.startswith("admin:growth:autopilot:apply"):
+        build_gateway = _apply_gateway_builder()
+        text = await asyncio.to_thread(build_gateway)
+        await safe_edit(cb, text, reply_markup=_apply_kb(period))
         return True
 
     build_report = _report_builder()
