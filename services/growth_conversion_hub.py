@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -14,6 +13,7 @@ from services.growth_conversion_hub_core import (
     payment_conversion_type,
     stable_json,
 )
+from services.migrations._helpers import table_exists
 
 log = logging.getLogger(__name__)
 
@@ -54,10 +54,7 @@ def _period_start(period: str) -> str | None:
 
 
 def ensure_schema(conn: Any) -> None:
-    row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='growth_conversion_outbox' LIMIT 1"
-    ).fetchone()
-    if row is None:
+    if not table_exists(conn, "growth_conversion_outbox"):
         raise RuntimeError("growth_conversion_outbox_schema_not_migrated")
 
 
@@ -209,7 +206,11 @@ def conversion_hub_snapshot(period: str = "today", *, limit: int = 20) -> dict[s
         ).fetchall()
 
     latest = [_rowdict(row) for row in rows]
-    counts = {str(row["conversion_type"]): int(row["n"] or 0) for row in count_rows}
+    counts = {
+        str(row["conversion_type"] if hasattr(row, "keys") else row[0]):
+        int((row["n"] if hasattr(row, "keys") else row[1]) or 0)
+        for row in count_rows
+    }
     return {
         "ok": True,
         "period": normalized_period,
