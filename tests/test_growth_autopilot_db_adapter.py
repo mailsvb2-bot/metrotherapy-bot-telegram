@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -31,7 +32,7 @@ def _fake_db(path: Path):
 def _setup(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
-        CREATE TABLE events(name TEXT, user_id INTEGER, created_at TEXT);
+        CREATE TABLE events(name TEXT, user_id INTEGER, meta TEXT, created_at TEXT);
         CREATE TABLE demo_events(user_id INTEGER, sent_at_utc TEXT, ack_at_utc TEXT);
         CREATE TABLE users(user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT);
         CREATE TABLE payments(
@@ -64,6 +65,10 @@ def _patch_snapshot_dependencies(monkeypatch, path: Path) -> None:
     monkeypatch.setattr(growth_autopilot, "_safe_funnel2", lambda: {})
 
 
+def _attr_meta(source="telegram_ads", campaign="may", creative="reels1") -> str:
+    return json.dumps({"source": source, "campaign": campaign, "creative": creative})
+
+
 def test_snapshot_counts_distinct_paid_users_separately_from_payment_rows(tmp_path, monkeypatch):
     path = tmp_path / "growth_autopilot.db"
     with _fake_db(path) as conn:
@@ -93,16 +98,16 @@ def test_snapshot_counts_redirect_clicks_as_total_events(tmp_path, monkeypatch):
     with _fake_db(path) as conn:
         _setup(conn)
         conn.execute(
-            "INSERT INTO events(name, user_id, created_at) VALUES(?,?,?)",
-            ("ad_click_redirect", 0, "2026-05-10T10:00:00+00:00"),
+            "INSERT INTO events(name, user_id, meta, created_at) VALUES(?,?,?,?)",
+            ("ad_click_redirect", 0, "{}", "2026-05-10T10:00:00+00:00"),
         )
         conn.execute(
-            "INSERT INTO events(name, user_id, created_at) VALUES(?,?,?)",
-            ("ad_click_redirect", 0, "2026-05-10T10:01:00+00:00"),
+            "INSERT INTO events(name, user_id, meta, created_at) VALUES(?,?,?,?)",
+            ("ad_click_redirect", 0, "{}", "2026-05-10T10:01:00+00:00"),
         )
         conn.execute(
-            "INSERT INTO events(name, user_id, created_at) VALUES(?,?,?)",
-            ("funnel_start_command", 101, "2026-05-10T10:02:00+00:00"),
+            "INSERT INTO events(name, user_id, meta, created_at) VALUES(?,?,?,?)",
+            ("funnel_start_command", 101, "{}", "2026-05-10T10:02:00+00:00"),
         )
 
     _patch_snapshot_dependencies(monkeypatch, path)
@@ -112,6 +117,43 @@ def test_snapshot_counts_redirect_clicks_as_total_events(tmp_path, monkeypatch):
     assert snapshot["funnel"]["ad_clicks"] == 2
     assert snapshot["funnel"]["start_users"] == 1
     assert snapshot["funnel"]["click_to_start_pct"] == 50.0
+
+
+def test_snapshot_builds_creative_diagnostics_from_attributed_events(tmp_path, monkeypatch):
+    path = tmp_path / "growth_autopilot_creatives.db"
+    with _fake_db(path) as conn:
+        _setup(conn)
+        conn.execute(
+            "INSERT INTO admin_ad_links(source, campaign, creative, ad_spend, start_payload, url, created_at) VALUES(?,?,?,?,?,?,?)",
+            (
+                "telegram_ads",
+                "may",
+                "reels1",
+                "340rub",
+                "src_telegram_ads__camp_may__creative_reels1",
+                "https://t.me/bot?start=p1",
+                "2026-05-10T10:00:00+00:00",
+            ),
+        )
+        for event_name in ["ad_click_redirect", "ad_click_redirect", "funnel_start_command", "demo_ack", "payment_success"]:
+            conn.execute(
+                "INSERT INTO events(name, user_id, meta, created_at) VALUES(?,?,?,?)",
+                (event_name, 101, _attr_meta(), "2026-05-10T10:10:00+00:00"),
+            )
+
+    _patch_snapshot_dependencies(monkeypatch, path)
+
+    snapshot = growth_autopilot.build_growth_autopilot_snapshot("today")
+
+    creative = snapshot["creative_diagnostics"]["items"][0]
+    assert creative["source"] == "telegram_ads"
+    assert creative["campaign"] == "may"
+    assert creative["creative"] == "reels1"
+    assert creative["clicks"] == 2
+    assert creative["starts"] == 1
+    assert creative["demo_ack"] == 1
+    assert creative["payments"] == 1
+    assert creative["click_to_start_pct"] == 50.0
 
 
 def test_snapshot_keeps_ad_link_evidence_inside_selected_period(tmp_path, monkeypatch):
