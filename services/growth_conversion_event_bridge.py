@@ -20,6 +20,10 @@ log = logging.getLogger(__name__)
 BRIDGE_NAME = "events_to_growth_conversions_v1"
 
 
+class GrowthBridgeUnavailable(RuntimeError):
+    """Expected optional-runtime unavailability, such as migrations not applied yet."""
+
+
 @dataclass(frozen=True)
 class EventBridgeResult:
     processed: int = 0
@@ -45,11 +49,11 @@ def _rowdict(row: Any | None) -> dict[str, Any]:
 
 def ensure_bridge_schema(conn: Any) -> None:
     if not table_exists(conn, "events"):
-        raise RuntimeError("events_schema_not_migrated")
+        raise GrowthBridgeUnavailable("events_schema_not_migrated")
     if not table_exists(conn, "growth_conversion_outbox"):
-        raise RuntimeError("growth_conversion_outbox_schema_not_migrated")
+        raise GrowthBridgeUnavailable("growth_conversion_outbox_schema_not_migrated")
     if not table_exists(conn, "growth_conversion_bridge_state"):
-        raise RuntimeError("growth_conversion_bridge_state_schema_not_migrated")
+        raise GrowthBridgeUnavailable("growth_conversion_bridge_state_schema_not_migrated")
 
 
 def _last_event_id(conn: Any) -> int:
@@ -188,11 +192,8 @@ def run_event_conversion_bridge_safe(*, batch_size: int = 100) -> EventBridgeRes
     except OSError as exc:
         log.warning("Growth event conversion bridge skipped: %s", type(exc).__name__)
         return EventBridgeResult(error=f"{type(exc).__name__}:{exc}")
-    except RuntimeError as exc:
-        log.warning("Growth event conversion bridge skipped: %s", type(exc).__name__)
-        return EventBridgeResult(error=f"{type(exc).__name__}:{exc}")
-    except (TypeError, ValueError) as exc:
-        log.warning("Growth event conversion bridge skipped: %s", type(exc).__name__)
+    except GrowthBridgeUnavailable as exc:
+        log.warning("Growth event conversion bridge unavailable: %s", exc)
         return EventBridgeResult(error=f"{type(exc).__name__}:{exc}")
 
 
@@ -225,7 +226,7 @@ def event_conversion_bridge_snapshot() -> dict[str, Any]:
         return {"ok": False, "bridge_name": BRIDGE_NAME, "error": f"{type(exc).__name__}:{exc}"}
     except OSError as exc:
         return {"ok": False, "bridge_name": BRIDGE_NAME, "error": f"{type(exc).__name__}:{exc}"}
-    except RuntimeError as exc:
+    except GrowthBridgeUnavailable as exc:
         return {"ok": False, "bridge_name": BRIDGE_NAME, "error": f"{type(exc).__name__}:{exc}"}
     except (TypeError, ValueError) as exc:
         return {"ok": False, "bridge_name": BRIDGE_NAME, "error": f"{type(exc).__name__}:{exc}"}
