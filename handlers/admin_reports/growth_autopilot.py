@@ -59,9 +59,9 @@ def _card_builder() -> Callable[[str, str | None], str]:
 
 
 def _conversion_builder() -> Callable[[str], str]:
-    from services.growth_conversion_hub import build_conversion_hub_report
+    from services.growth_conversion_runtime_report import build_growth_conversion_runtime_report
 
-    return build_conversion_hub_report
+    return build_growth_conversion_runtime_report
 
 
 def _period_buttons(active: str, *, target: str) -> list[list[InlineKeyboardButton]]:
