@@ -108,6 +108,48 @@ def test_reject_confirmation_is_admin_bound_hashed_and_one_time(tmp_path, monkey
         growth_apply_review.consume_review_confirmation(token=prepared["token"], admin_id=2)
 
 
+def test_successful_two_step_approval_remains_non_executable(tmp_path, monkeypatch):
+    path = tmp_path / "review_approve.db"
+    _prepare(path)
+    _patch_db(monkeypatch, path)
+    _allow_reviewer(monkeypatch)
+    monkeypatch.setattr(growth_apply_review, "current_apply_policy", _permissive_pause_policy)
+    monkeypatch.setattr(growth_apply_gateway, "current_apply_policy", _permissive_pause_policy)
+
+    request = growth_apply_gateway.create_apply_request(
+        action_type="campaign_pause",
+        target_platform="yandex_ads",
+        target_ref="campaign:101",
+        payload={"risk": "low"},
+        requested_by=30,
+    )
+    prepared = growth_apply_review.prepare_review_confirmation(
+        request_id=int(request["id"]),
+        decision="approve",
+        admin_id=31,
+    )
+    result = growth_apply_review.consume_review_confirmation(
+        token=prepared["token"],
+        admin_id=31,
+    )
+
+    assert result["request"]["status"] == "approved"
+    assert result["request"]["dispatch_allowed"] == 0
+    assert result["request"]["mode"] == "approval_only"
+
+    with _fake_db(path) as conn:
+        audit = conn.execute(
+            "SELECT event_type, actor_id, after_status FROM growth_apply_audit ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        confirmation = conn.execute(
+            "SELECT status FROM growth_apply_confirmations"
+        ).fetchone()
+    assert audit["event_type"] == "request_approved"
+    assert audit["actor_id"] == 31
+    assert audit["after_status"] == "approved"
+    assert confirmation["status"] == "consumed"
+
+
 def test_policy_is_rechecked_after_confirmation_preparation(tmp_path, monkeypatch):
     path = tmp_path / "review_policy.db"
     _prepare(path)
