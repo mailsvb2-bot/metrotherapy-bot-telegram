@@ -112,16 +112,29 @@ def build_conversion_idempotency_key(
     payload: dict[str, Any] | None = None,
 ) -> str:
     normalized_type = normalize_conversion_type(conversion_type)
-    seed = {
-        "conversion_type": normalized_type,
-        "source_platform": _clean(source_platform, limit=64).lower(),
-        "source_event": _clean(source_event, limit=96).lower(),
-        "external_event_id": _clean(external_event_id, limit=192),
-        "user_id": safe_int(user_id),
-        "amount_minor": max(0, safe_int(amount_minor)),
-        "currency": (_clean(currency, limit=12) or "RUB").upper(),
-        "payload": normalize_payload(payload),
-    }
+    platform = _clean(source_platform, limit=64).lower() or "unknown"
+    event_id = _clean(external_event_id, limit=192)
+
+    # A provider/event ID is the stable business identity. Webhook retries may
+    # legitimately carry corrected amount/metadata; those must update evidence,
+    # not create duplicate conversion records. Fields below are fallback identity
+    # only for sources that do not provide an external event ID.
+    if event_id:
+        seed = {
+            "conversion_type": normalized_type,
+            "source_platform": platform,
+            "external_event_id": event_id,
+        }
+    else:
+        seed = {
+            "conversion_type": normalized_type,
+            "source_platform": platform,
+            "source_event": _clean(source_event, limit=96).lower(),
+            "user_id": safe_int(user_id),
+            "amount_minor": max(0, safe_int(amount_minor)),
+            "currency": (_clean(currency, limit=12) or "RUB").upper(),
+            "payload": normalize_payload(payload),
+        }
     digest = hashlib.sha256(stable_json(seed).encode("utf-8")).hexdigest()[:32]
     return f"growth_conversion:v1:{normalized_type}:{digest}"
 
