@@ -69,6 +69,7 @@ Tables:
 ```text
 growth_apply_requests
 growth_apply_audit
+growth_apply_confirmations
 ```
 
 Request creation, state transition and audit insertion are transactional.
@@ -93,27 +94,77 @@ action_type + target_platform + target_ref + normalized payload
 
 Repeated creation of the same proposal returns the existing request and does not duplicate the initial audit event.
 
+## Review permission
+
+Read-only Growth access and review access are separate permissions.
+
+Sensitive review callbacks require:
+
+```text
+admin:growth:apply:review
+```
+
+A non-superadmin must have an explicit `allowed=1` permission row. The legacy read-navigation behavior where no permission rows means unrestricted access does not apply to this write boundary.
+
+Superadmins remain allowed through the immutable environment-configured superadmin list.
+
+## Two-step confirmation
+
+Review uses two independent steps:
+
+```text
+prepare approve/reject
+        ↓
+server creates one-time confirmation challenge
+        ↓
+final confirm/cancel callback
+```
+
+The confirmation challenge is:
+
+- bound to one request;
+- bound to one decision;
+- bound to one admin ID;
+- stored only as a SHA-256 token hash;
+- valid for a short TTL;
+- single use;
+- cancelled when a newer challenge is created for the same admin/request.
+
+The raw token exists only in Telegram callback data. Callback values remain below Telegram's 64-byte limit.
+
+The policy is evaluated when the confirmation is prepared and evaluated again inside the Gateway when the final decision is consumed. A kill-switch or limit change between the two clicks therefore blocks approval.
+
+A consumed confirmation cannot be replayed. If the final policy evaluation fails, the request remains `pending_review`, `dispatch_allowed` remains zero, and a new confirmation must be prepared.
+
 ## UI scope
 
-The Growth admin panel currently exposes a read-only Guarded Apply report.
+The Growth admin panel exposes:
 
-v0 does not expose approve/reject callbacks. Before write UI is added, it must have:
+- a read-only Guarded Apply overview;
+- request details;
+- prepare approval/rejection controls only for authorized reviewers;
+- a separate final confirmation screen;
+- explicit cancel.
 
-- a dedicated permission separate from read-only Growth access;
-- explicit confirmation UX;
-- actor identity tests;
-- concurrent transition tests;
-- audit contract tests;
-- no route that can dispatch an external action.
+There is no callback containing or invoking:
+
+```text
+execute
+dispatch
+flush
+send
+```
+
+Approval and rejection only transition review state and write audit history.
 
 ## Readiness isolation
 
 These tables are optional Growth infrastructure and are not part of the primary payment/delivery P0 readiness set.
 
-Missing Gateway schema degrades the report but must not block:
+Missing Gateway or confirmation schema degrades the Growth review surface but must not block:
 
 - payments;
 - access grants;
-- Telegram handlers;
+- Telegram handlers outside Growth review;
 - scheduler liveness;
 - public runtime health.
