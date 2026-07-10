@@ -58,6 +58,12 @@ def _card_builder() -> Callable[[str, str | None], str]:
     return build_growth_action_card_report
 
 
+def _conversion_builder() -> Callable[[str], str]:
+    from services.growth_conversion_hub import build_conversion_hub_report
+
+    return build_conversion_hub_report
+
+
 def _period_buttons(active: str, *, target: str) -> list[list[InlineKeyboardButton]]:
     labels = [
         ("today", "Сегодня"),
@@ -77,6 +83,7 @@ def _period_buttons(active: str, *, target: str) -> list[list[InlineKeyboardButt
 def _kb(active: str) -> InlineKeyboardMarkup:
     rows = _period_buttons(active, target="report")
     rows.append([InlineKeyboardButton(text="📥 Action Inbox", callback_data=f"admin:growth:autopilot:inbox:{active}")])
+    rows.append([InlineKeyboardButton(text="🧪 Conversion Hub", callback_data=f"admin:growth:autopilot:conversions:{active}")])
     rows.append([InlineKeyboardButton(text="📣 Рекламные ссылки", callback_data="admin:adlinks")])
     rows.append([InlineKeyboardButton(text="💰 Деньги и клиенты", callback_data="admin:money:today")])
     rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")])
@@ -86,6 +93,7 @@ def _kb(active: str) -> InlineKeyboardMarkup:
 def _inbox_kb(active: str) -> InlineKeyboardMarkup:
     rows = _period_buttons(active, target="inbox")
     rows.append([InlineKeyboardButton(text="🔎 Открыть первую карточку", callback_data=f"admin:growth:autopilot:action:ga:1:{active}")])
+    rows.append([InlineKeyboardButton(text="🧪 Conversion Hub", callback_data=f"admin:growth:autopilot:conversions:{active}")])
     rows.append([InlineKeyboardButton(text="🤖 Отчёт Growth Autopilot", callback_data=f"admin:growth:autopilot:report:{active}")])
     rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -94,9 +102,18 @@ def _inbox_kb(active: str) -> InlineKeyboardMarkup:
 def _card_kb(active: str) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="📥 К списку действий", callback_data=f"admin:growth:autopilot:inbox:{active}")],
+        [InlineKeyboardButton(text="🧪 Conversion Hub", callback_data=f"admin:growth:autopilot:conversions:{active}")],
         [InlineKeyboardButton(text="🤖 Отчёт Growth Autopilot", callback_data=f"admin:growth:autopilot:report:{active}")],
         [InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")],
     ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _conversion_kb(active: str) -> InlineKeyboardMarkup:
+    rows = _period_buttons(active, target="conversions")
+    rows.append([InlineKeyboardButton(text="📥 Action Inbox", callback_data=f"admin:growth:autopilot:inbox:{active}")])
+    rows.append([InlineKeyboardButton(text="🤖 Отчёт Growth Autopilot", callback_data=f"admin:growth:autopilot:report:{active}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -115,6 +132,12 @@ async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, log) -> bool:
         build_card = _card_builder()
         text = await asyncio.to_thread(build_card, period, _card_id_from_callback(data))
         await safe_edit(cb, text, reply_markup=_card_kb(period))
+        return True
+
+    if data.startswith("admin:growth:autopilot:conversions"):
+        build_conversions = _conversion_builder()
+        text = await asyncio.to_thread(build_conversions, period)
+        await safe_edit(cb, text, reply_markup=_conversion_kb(period))
         return True
 
     build_report = _report_builder()
