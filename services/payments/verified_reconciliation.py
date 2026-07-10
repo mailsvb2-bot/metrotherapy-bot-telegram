@@ -3,7 +3,6 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
-from services.growth_conversion_hub import record_payment_conversion_dry_run_safe
 from services.payments.reconciliation import ReconciliationResult, record_yookassa_webhook
 from services.payments.yookassa_provider import (
     YooKassaProviderVerificationError,
@@ -47,6 +46,16 @@ def _metadata_user_id(meta: dict[str, Any]) -> int:
     return 0
 
 
+def _enqueue_growth_conversion(**kwargs: Any) -> None:
+    """Lazy boundary: payment webhook import must not depend on Growth modules."""
+
+    try:
+        from services.growth_conversion_hub import record_payment_conversion_dry_run_safe
+    except ImportError:
+        return
+    record_payment_conversion_dry_run_safe(**kwargs)
+
+
 def _record_verified_conversion_dry_run(payload: dict[str, Any], result: ReconciliationResult) -> None:
     if not result.ok or not result.side_effects_done:
         return
@@ -76,7 +85,7 @@ def _record_verified_conversion_dry_run(payload: dict[str, Any], result: Reconci
         )
         if meta.get(key) not in (None, "")
     }
-    record_payment_conversion_dry_run_safe(
+    _enqueue_growth_conversion(
         source_platform="yookassa",
         source_event=event or status or "payment.succeeded",
         external_event_id=payment_id,
