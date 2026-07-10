@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Callable
+from typing import Any, Callable
 
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
+from core.callback_utils import safe_answer_callback
 from handlers.admin_inline_common import AdminCtx, safe_edit
+from services.admin_permissions import GROWTH_APPLY_REVIEW_PERMISSION
 
 _PERIODS = {"today", "week", "month", "all"}
 
@@ -37,10 +39,47 @@ def _card_id_from_callback(data: str | None) -> str | None:
     return tail or None
 
 
+def _callback_parts(data: str) -> list[str]:
+    return [part for part in str(data or "").split(":") if part]
+
+
+def _request_id_from_callback(data: str) -> int:
+    parts = _callback_parts(data)
+    for marker in ("req", "prep"):
+        if marker in parts:
+            idx = parts.index(marker)
+            offset = 2 if marker == "prep" else 1
+            return int(parts[idx + offset])
+    raise ValueError("growth_apply_request_id_missing")
+
+
+def _decision_from_callback(data: str) -> str:
+    parts = _callback_parts(data)
+    if "prep" not in parts:
+        raise ValueError("growth_apply_decision_missing")
+    decision = parts[parts.index("prep") + 1]
+    if decision not in {"approve", "reject"}:
+        raise ValueError("invalid_review_decision")
+    return decision
+
+
+def _token_from_callback(data: str, marker: str) -> str:
+    parts = _callback_parts(data)
+    if marker not in parts:
+        raise ValueError("review_confirmation_token_missing")
+    token = parts[parts.index(marker) + 1]
+    if not token:
+        raise ValueError("review_confirmation_token_missing")
+    return token
+
+
+def _can_render_review_controls(ctx: AdminCtx) -> bool:
+    if ctx.is_superadmin:
+        return True
+    return ctx.allowed_perms is not None and GROWTH_APPLY_REVIEW_PERMISSION in ctx.allowed_perms
+
+
 def _report_builder() -> Callable[[str], str]:
-    # Keep the DB-heavy analytics service out of admin-router import time.
-    # Smoke/startup validation should not touch optional growth tables unless an
-    # admin explicitly opens this report.
     from services.growth_autopilot import build_growth_autopilot_report
 
     return build_growth_autopilot_report
@@ -70,6 +109,36 @@ def _apply_gateway_builder() -> Callable[[], str]:
     return build_apply_gateway_report
 
 
+def _apply_snapshot_builder() -> Callable[..., dict[str, Any]]:
+    from services.growth_apply_gateway import apply_gateway_snapshot
+
+    return apply_gateway_snapshot
+
+
+def _review_preview_builder() -> Callable[..., dict[str, Any]]:
+    from services.growth_apply_review import review_request_preview
+
+    return review_request_preview
+
+
+def _review_prepare_builder() -> Callable[..., dict[str, Any]]:
+    from services.growth_apply_review import prepare_review_confirmation
+
+    return prepare_review_confirmation
+
+
+def _review_consume_builder() -> Callable[..., dict[str, Any]]:
+    from services.growth_apply_review import consume_review_confirmation
+
+    return consume_review_confirmation
+
+
+def _review_cancel_builder() -> Callable[..., bool]:
+    from services.growth_apply_review import cancel_review_confirmation
+
+    return cancel_review_confirmation
+
+
 def _period_buttons(active: str, *, target: str) -> list[list[InlineKeyboardButton]]:
     labels = [
         ("today", "Сегодня"),
@@ -77,8 +146,8 @@ def _period_buttons(active: str, *, target: str) -> list[list[InlineKeyboardButt
         ("month", "30 дней"),
         ("all", "Всё время"),
     ]
-    first = []
-    second = []
+    first: list[InlineKeyboardButton] = []
+    second: list[InlineKeyboardButton] = []
     for idx, (key, title) in enumerate(labels):
         prefix = "✅ " if key == active else ""
         btn = InlineKeyboardButton(text=f"{prefix}{title}", callback_data=f"admin:growth:autopilot:{target}:{key}")
@@ -125,42 +194,203 @@ def _conversion_kb(active: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _apply_kb(active: str) -> InlineKeyboardMarkup:
-    rows = _growth_nav(active)[:2] + _growth_nav(active)[3:]
+def _apply_kb(active: str, snapshot: dict[str, Any]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in list(snapshot.get("latest") or [])[:8]:
+        request_id = int(item.get("id") or 0)
+        status = str(item.get("status") or "unknown")
+        action_type = str(item.get("action_type") or "action")
+        rows.append([
+            InlineKeyboardButton(
+                text=f"🔎 #{request_id} {action_type} · {status}",
+                callback_data=f"admin:growth:autopilot:apply:req:{request_id}:{active}",
+            )
+        ])
+    rows.extend(_growth_nav(active)[:2] + _growth_nav(active)[3:])
     rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _request_text(preview: dict[str, Any]) -> str:
+    request = dict(preview.get("request") or {})
+    evaluation = dict(preview.get("evaluation") or {})
+    violations = list(evaluation.get("violations") or [])
+    lines = [
+        f"🛡 Guarded Apply · заявка #{request.get('id')}",
+        "",
+        f"Статус: {request.get('status')}",
+        f"Действие: {request.get('action_type')}",
+        f"Платформа: {request.get('target_platform')}",
+        f"Цель: {request.get('target_ref')}",
+        f"Запросил: {request.get('requested_by')}",
+        f"Создана: {request.get('requested_at')}",
+        f"Истекает: {request.get('expires_at') or '—'}",
+        "",
+        f"Policy passed: {bool(evaluation.get('policy_passed'))}",
+        f"Нарушения: {', '.join(str(x) for x in violations) if violations else 'нет'}",
+        "",
+        "dispatch_allowed=False",
+        "Одобрение означает только review. Исполняющего adapter нет.",
+    ]
+    return "\n".join(lines)
+
+
+def _request_kb(active: str, preview: dict[str, Any], *, can_review: bool) -> InlineKeyboardMarkup:
+    request = dict(preview.get("request") or {})
+    request_id = int(request.get("id") or 0)
+    rows: list[list[InlineKeyboardButton]] = []
+    if can_review and bool(preview.get("can_approve")):
+        rows.append([
+            InlineKeyboardButton(
+                text="✅ Подготовить одобрение",
+                callback_data=f"admin:growth:autopilot:apply:prep:approve:{request_id}:{active}",
+            )
+        ])
+    if can_review and bool(preview.get("can_reject")):
+        rows.append([
+            InlineKeyboardButton(
+                text="⛔ Подготовить отклонение",
+                callback_data=f"admin:growth:autopilot:apply:prep:reject:{request_id}:{active}",
+            )
+        ])
+    rows.append([InlineKeyboardButton(text="⬅️ К Guarded Apply", callback_data=f"admin:growth:autopilot:apply:{active}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _confirmation_text(prepared: dict[str, Any]) -> str:
+    request = dict(prepared.get("request") or {})
+    decision = str(prepared.get("decision") or "")
+    label = "ОДОБРИТЬ" if decision == "approve" else "ОТКЛОНИТЬ"
+    return "\n".join([
+        "⚠️ Финальное подтверждение",
+        "",
+        f"Решение: {label}",
+        f"Заявка: #{request.get('id')} {request.get('action_type')}",
+        f"Платформа: {request.get('target_platform')}",
+        f"Цель: {request.get('target_ref')}",
+        f"Токен истекает: {prepared.get('expires_at')}",
+        "",
+        "После подтверждения изменится только review-статус.",
+        "dispatch_allowed останется False.",
+    ])
+
+
+def _confirmation_kb(active: str, prepared: dict[str, Any]) -> InlineKeyboardMarkup:
+    token = str(prepared.get("token") or "")
+    decision = str(prepared.get("decision") or "")
+    label = "✅ Да, одобрить" if decision == "approve" else "⛔ Да, отклонить"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=label, callback_data=f"admin:growth:autopilot:apply:confirm:{token}:{active}")],
+        [InlineKeyboardButton(text="Отмена", callback_data=f"admin:growth:autopilot:apply:cancel:{token}:{active}")],
+        [InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")],
+    ])
+
+
+async def _show_apply_overview(cb: CallbackQuery, period: str) -> None:
+    build_gateway = _apply_gateway_builder()
+    build_snapshot = _apply_snapshot_builder()
+    text, snapshot = await asyncio.gather(
+        asyncio.to_thread(build_gateway),
+        asyncio.to_thread(build_snapshot),
+    )
+    await safe_edit(cb, text, reply_markup=_apply_kb(period, snapshot))
+
+
 async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, log) -> bool:
-    del state, ctx, log
+    del state, log
     data = str(getattr(cb, "data", "") or "")
     period = _period_from_callback(data)
 
     if data.startswith("admin:growth:autopilot:inbox"):
-        build_inbox = _inbox_builder()
-        text = await asyncio.to_thread(build_inbox, period)
+        text = await asyncio.to_thread(_inbox_builder(), period)
         await safe_edit(cb, text, reply_markup=_inbox_kb(period))
         return True
 
     if data.startswith("admin:growth:autopilot:action:"):
-        build_card = _card_builder()
-        text = await asyncio.to_thread(build_card, period, _card_id_from_callback(data))
+        text = await asyncio.to_thread(_card_builder(), period, _card_id_from_callback(data))
         await safe_edit(cb, text, reply_markup=_card_kb(period))
         return True
 
     if data.startswith("admin:growth:autopilot:conversions"):
-        build_conversions = _conversion_builder()
-        text = await asyncio.to_thread(build_conversions, period)
+        text = await asyncio.to_thread(_conversion_builder(), period)
         await safe_edit(cb, text, reply_markup=_conversion_kb(period))
         return True
 
-    if data.startswith("admin:growth:autopilot:apply"):
-        build_gateway = _apply_gateway_builder()
-        text = await asyncio.to_thread(build_gateway)
-        await safe_edit(cb, text, reply_markup=_apply_kb(period))
+    if data.startswith("admin:growth:autopilot:apply:req:"):
+        try:
+            preview = await asyncio.to_thread(
+                _review_preview_builder(),
+                request_id=_request_id_from_callback(data),
+                admin_id=ctx.uid,
+            )
+        except PermissionError:
+            await safe_answer_callback(cb, "Нет права review Growth Apply.", show_alert=True)
+            return True
+        except ValueError as exc:
+            await safe_answer_callback(cb, str(exc), show_alert=True)
+            return True
+        await safe_edit(cb, _request_text(preview), reply_markup=_request_kb(period, preview, can_review=_can_render_review_controls(ctx)))
         return True
 
-    build_report = _report_builder()
-    text = await asyncio.to_thread(build_report, period)
+    if data.startswith("admin:growth:autopilot:apply:prep:"):
+        try:
+            prepared = await asyncio.to_thread(
+                _review_prepare_builder(),
+                request_id=_request_id_from_callback(data),
+                decision=_decision_from_callback(data),
+                admin_id=ctx.uid,
+            )
+        except PermissionError:
+            await safe_answer_callback(cb, "Нет права review Growth Apply.", show_alert=True)
+            return True
+        except ValueError as exc:
+            await safe_answer_callback(cb, str(exc), show_alert=True)
+            return True
+        await safe_edit(cb, _confirmation_text(prepared), reply_markup=_confirmation_kb(period, prepared))
+        return True
+
+    if data.startswith("admin:growth:autopilot:apply:confirm:"):
+        try:
+            result = await asyncio.to_thread(
+                _review_consume_builder(),
+                token=_token_from_callback(data, "confirm"),
+                admin_id=ctx.uid,
+            )
+        except PermissionError:
+            await safe_answer_callback(cb, "Нет права review Growth Apply.", show_alert=True)
+            return True
+        except ValueError as exc:
+            await safe_answer_callback(cb, str(exc), show_alert=True)
+            return True
+        except RuntimeError as exc:
+            await safe_answer_callback(cb, str(exc), show_alert=True)
+            return True
+        request = dict(result.get("request") or {})
+        await safe_answer_callback(cb, f"Заявка #{request.get('id')}: {request.get('status')}", show_alert=True)
+        await _show_apply_overview(cb, period)
+        return True
+
+    if data.startswith("admin:growth:autopilot:apply:cancel:"):
+        try:
+            await asyncio.to_thread(
+                _review_cancel_builder(),
+                token=_token_from_callback(data, "cancel"),
+                admin_id=ctx.uid,
+            )
+        except PermissionError:
+            await safe_answer_callback(cb, "Нет права review Growth Apply.", show_alert=True)
+            return True
+        except ValueError as exc:
+            await safe_answer_callback(cb, str(exc), show_alert=True)
+            return True
+        await _show_apply_overview(cb, period)
+        return True
+
+    if data.startswith("admin:growth:autopilot:apply"):
+        await _show_apply_overview(cb, period)
+        return True
+
+    text = await asyncio.to_thread(_report_builder(), period)
     await safe_edit(cb, text, reply_markup=_kb(period))
     return True
