@@ -72,7 +72,7 @@ def _event_rows(conn: Any, *, after_id: int, batch_size: int) -> list[dict[str, 
         SELECT id, user_id, name, event, meta, created_at, ts
         FROM events
         WHERE id > ?
-          AND COALESCE(name, event, '') IN ({placeholders})
+          AND COALESCE(NULLIF(name, ''), event, '') IN ({placeholders})
         ORDER BY id ASC
         LIMIT ?
         """.strip(),
@@ -90,7 +90,7 @@ def _latest_start_attribution(conn: Any, *, user_id: int, event_id: int) -> dict
         FROM events
         WHERE user_id=?
           AND id<=?
-          AND COALESCE(name, event, '')='funnel_start_command'
+          AND COALESCE(NULLIF(name, ''), event, '')='funnel_start_command'
         ORDER BY id DESC
         LIMIT 1
         """.strip(),
