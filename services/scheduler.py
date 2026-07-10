@@ -15,7 +15,6 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-
 def _coro_name(coro: Awaitable[None]) -> str:
     try:
         return getattr(coro, "__name__")  # type: ignore[attr-defined]
@@ -251,6 +250,20 @@ async def _safe_ux_guard_tick() -> None:
         log.exception("UX guard unexpected failure")
 
 
+async def _run_growth_conversion_bridge_tick() -> None:
+    from services.growth_conversion_event_bridge import run_event_conversion_bridge_safe
+
+    batch_size = int(os.getenv("GROWTH_CONVERSION_BRIDGE_BATCH_SIZE", "100") or "100")
+    timeout_sec = float(os.getenv("GROWTH_CONVERSION_BRIDGE_TIMEOUT_SEC", "5") or "5")
+    timeout_sec = max(1.0, timeout_sec)
+    result = await asyncio.wait_for(
+        asyncio.to_thread(run_event_conversion_bridge_safe, batch_size=batch_size),
+        timeout=timeout_sec,
+    )
+    if result.error:
+        log.warning("Growth conversion bridge degraded: %s", result.error)
+
+
 async def _background_loop(bot: 'Bot') -> None:
     """Canonical lightweight background loop with crash containment.
 
@@ -272,8 +285,11 @@ async def _background_loop(bot: 'Bot') -> None:
 
     last_ux_guard = 0.0
     last_reward = 0.0
+    last_growth_conversion_bridge = 0.0
     reward_interval = float(os.getenv('REWARD_TICK_INTERVAL_SEC', '60') or '60')
     reward_interval = max(10.0, reward_interval)
+    growth_bridge_interval = float(os.getenv('GROWTH_CONVERSION_BRIDGE_INTERVAL_SEC', '60') or '60')
+    growth_bridge_interval = max(10.0, growth_bridge_interval)
     while True:
         await asyncio.sleep(1)
         _bg_iteration_count += 1
@@ -306,6 +322,12 @@ async def _background_loop(bot: 'Bot') -> None:
                 await asyncio.wait_for(reward_task, timeout=reward_timeout)
 
             await _run_protected_tick("RewardEngine.tick", _reward_tick)
+
+        # Growth conversion bridge (best-effort dry-run only).
+        now_m = time.monotonic()
+        if now_m - last_growth_conversion_bridge >= growth_bridge_interval:
+            last_growth_conversion_bridge = now_m
+            await _run_protected_tick("GrowthConversionBridge.tick", _run_growth_conversion_bridge_tick)
 
         # UX guard (best-effort)
         # Runs rarely and MUST be read-only (SQLite query_only=ON), to avoid competing with writes.
