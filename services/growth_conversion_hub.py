@@ -123,6 +123,27 @@ def enqueue_conversion_dry_run(
     )
 
 
+def _failed_enqueue_result(
+    exc: BaseException,
+    *,
+    source_platform: str,
+    source_event: str,
+    external_event_id: str,
+) -> ConversionEnqueueResult:
+    log.warning(
+        "Growth conversion dry-run enqueue skipped: source=%s event=%s external_event_id=%s error=%s",
+        source_platform,
+        source_event,
+        external_event_id,
+        type(exc).__name__,
+    )
+    return ConversionEnqueueResult(
+        inserted=False,
+        idempotency_key="",
+        error=f"{type(exc).__name__}:{exc}",
+    )
+
+
 def record_payment_conversion_dry_run_safe(
     *,
     source_platform: str,
@@ -150,18 +171,33 @@ def record_payment_conversion_dry_run_safe(
             payload=payload,
             target_provider="none",
         )
-    except (sqlite3.Error, RuntimeError, OSError, TypeError, ValueError) as exc:
-        log.warning(
-            "Growth conversion dry-run enqueue skipped: source=%s event=%s external_event_id=%s error=%s",
-            source_platform,
-            source_event,
-            external_event_id,
-            type(exc).__name__,
+    except sqlite3.Error as exc:
+        return _failed_enqueue_result(
+            exc,
+            source_platform=source_platform,
+            source_event=source_event,
+            external_event_id=external_event_id,
         )
-        return ConversionEnqueueResult(
-            inserted=False,
-            idempotency_key="",
-            error=f"{type(exc).__name__}:{exc}",
+    except OSError as exc:
+        return _failed_enqueue_result(
+            exc,
+            source_platform=source_platform,
+            source_event=source_event,
+            external_event_id=external_event_id,
+        )
+    except RuntimeError as exc:
+        return _failed_enqueue_result(
+            exc,
+            source_platform=source_platform,
+            source_event=source_event,
+            external_event_id=external_event_id,
+        )
+    except (TypeError, ValueError) as exc:
+        return _failed_enqueue_result(
+            exc,
+            source_platform=source_platform,
+            source_event=source_event,
+            external_event_id=external_event_id,
         )
 
 
@@ -222,21 +258,31 @@ def conversion_hub_snapshot(period: str = "today", *, limit: int = 20) -> dict[s
     }
 
 
+def _degraded_report(period: str, exc: BaseException) -> str:
+    log.warning("Conversion Hub report degraded: %s", type(exc).__name__)
+    return "\n".join([
+        "🧪 Conversion Hub",
+        "",
+        f"Период: {period}",
+        "Статус: DEGRADED",
+        f"Причина: {type(exc).__name__}:{exc}",
+        "",
+        "Safety lock:",
+        "— основной платёжный и пользовательский контур продолжает работу;",
+        "— postback sender отсутствует;",
+        "— dispatch_allowed=False.",
+    ])
+
+
 def build_conversion_hub_report(period: str = "today") -> str:
     normalized_period = normalize_period(period)
     try:
         return format_conversion_hub_report(conversion_hub_snapshot(normalized_period))
-    except (sqlite3.Error, RuntimeError, OSError, TypeError, ValueError) as exc:
-        log.warning("Conversion Hub report degraded: %s", type(exc).__name__)
-        return "\n".join([
-            "🧪 Conversion Hub",
-            "",
-            f"Период: {normalized_period}",
-            "Статус: DEGRADED",
-            f"Причина: {type(exc).__name__}:{exc}",
-            "",
-            "Safety lock:",
-            "— основной платёжный и пользовательский контур продолжает работу;",
-            "— postback sender отсутствует;",
-            "— dispatch_allowed=False.",
-        ])
+    except sqlite3.Error as exc:
+        return _degraded_report(normalized_period, exc)
+    except OSError as exc:
+        return _degraded_report(normalized_period, exc)
+    except RuntimeError as exc:
+        return _degraded_report(normalized_period, exc)
+    except (TypeError, ValueError) as exc:
+        return _degraded_report(normalized_period, exc)
