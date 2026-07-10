@@ -58,7 +58,48 @@ def ensure_schema(conn: Any) -> None:
         raise RuntimeError("growth_conversion_outbox_schema_not_migrated")
 
 
-def enqueue_conversion_dry_run(
+def _insert_dry_run_item(conn: Any, item: dict[str, Any]) -> ConversionEnqueueResult:
+    ensure_schema(conn)
+    cursor = conn.execute(
+        """
+        INSERT OR IGNORE INTO growth_conversion_outbox(
+            conversion_type, source_platform, source_event, external_event_id,
+            user_id, amount_minor, currency, attribution_json, payload_json,
+            target_provider, mode, status, dispatch_allowed, idempotency_key
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """.strip(),
+        (
+            item["conversion_type"],
+            item["source_platform"],
+            item["source_event"],
+            item["external_event_id"],
+            item["user_id"],
+            item["amount_minor"],
+            item["currency"],
+            stable_json(dict(item["attribution"])),
+            stable_json(dict(item["payload"])),
+            item["target_provider"],
+            item["mode"],
+            item["status"],
+            1 if item["dispatch_allowed"] else 0,
+            item["idempotency_key"],
+        ),
+    )
+    inserted = int(getattr(cursor, "rowcount", 0) or 0) > 0
+    row = conn.execute(
+        "SELECT id FROM growth_conversion_outbox WHERE idempotency_key=? LIMIT 1",
+        (item["idempotency_key"],),
+    ).fetchone()
+    row_id = int(row["id"] if hasattr(row, "keys") else row[0]) if row is not None else 0
+    return ConversionEnqueueResult(
+        inserted=inserted,
+        idempotency_key=str(item["idempotency_key"]),
+        row_id=row_id,
+    )
+
+
+def enqueue_conversion_dry_run_tx(
+    conn: Any,
     *,
     conversion_type: str,
     source_platform: Any,
@@ -83,44 +124,36 @@ def enqueue_conversion_dry_run(
         payload=payload,
         target_provider=target_provider,
     )
+    return _insert_dry_run_item(conn, item)
+
+
+def enqueue_conversion_dry_run(
+    *,
+    conversion_type: str,
+    source_platform: Any,
+    source_event: Any,
+    external_event_id: Any,
+    user_id: Any = 0,
+    amount_minor: Any = 0,
+    currency: Any = "RUB",
+    attribution: dict[str, Any] | None = None,
+    payload: dict[str, Any] | None = None,
+    target_provider: Any = "none",
+) -> ConversionEnqueueResult:
     with db() as conn:
-        ensure_schema(conn)
-        cursor = conn.execute(
-            """
-            INSERT OR IGNORE INTO growth_conversion_outbox(
-                conversion_type, source_platform, source_event, external_event_id,
-                user_id, amount_minor, currency, attribution_json, payload_json,
-                target_provider, mode, status, dispatch_allowed, idempotency_key
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """.strip(),
-            (
-                item["conversion_type"],
-                item["source_platform"],
-                item["source_event"],
-                item["external_event_id"],
-                item["user_id"],
-                item["amount_minor"],
-                item["currency"],
-                stable_json(dict(item["attribution"])),
-                stable_json(dict(item["payload"])),
-                item["target_provider"],
-                item["mode"],
-                item["status"],
-                1 if item["dispatch_allowed"] else 0,
-                item["idempotency_key"],
-            ),
+        return enqueue_conversion_dry_run_tx(
+            conn,
+            conversion_type=conversion_type,
+            source_platform=source_platform,
+            source_event=source_event,
+            external_event_id=external_event_id,
+            user_id=user_id,
+            amount_minor=amount_minor,
+            currency=currency,
+            attribution=attribution,
+            payload=payload,
+            target_provider=target_provider,
         )
-        inserted = int(getattr(cursor, "rowcount", 0) or 0) > 0
-        row = conn.execute(
-            "SELECT id FROM growth_conversion_outbox WHERE idempotency_key=? LIMIT 1",
-            (item["idempotency_key"],),
-        ).fetchone()
-        row_id = int(row["id"] if hasattr(row, "keys") else row[0]) if row is not None else 0
-    return ConversionEnqueueResult(
-        inserted=inserted,
-        idempotency_key=str(item["idempotency_key"]),
-        row_id=row_id,
-    )
 
 
 def _failed_enqueue_result(
