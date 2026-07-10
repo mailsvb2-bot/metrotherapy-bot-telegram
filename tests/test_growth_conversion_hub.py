@@ -71,6 +71,29 @@ def test_dry_run_conversion_rejects_unknown_type():
         )
 
 
+def test_provider_event_id_is_stable_identity_even_if_metadata_changes():
+    first = build_dry_run_conversion(
+        conversion_type="payment_success",
+        source_platform="yookassa",
+        source_event="payment.succeeded",
+        external_event_id="pay_stable_1",
+        user_id=101,
+        amount_minor=190000,
+        payload={"package_id": "p10", "provider_status": "succeeded"},
+    )
+    replay = build_dry_run_conversion(
+        conversion_type="payment_success",
+        source_platform="yookassa",
+        source_event="payment.succeeded",
+        external_event_id="pay_stable_1",
+        user_id=101,
+        amount_minor=190001,
+        payload={"package_id": "p10", "provider_status": "succeeded", "extra": "corrected"},
+    )
+
+    assert first["idempotency_key"] == replay["idempotency_key"]
+
+
 def test_conversion_outbox_is_idempotent_and_never_dispatchable(tmp_path, monkeypatch):
     path = tmp_path / "conversion_hub.db"
     _prepare(path)
