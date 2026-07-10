@@ -220,15 +220,16 @@ This prevents a later campaign visit from being incorrectly attached to an earli
 
 ### Scheduler ownership
 
-The canonical scheduler runs the bridge through a protected, configurable tick:
+The canonical scheduler runs the bridge through one protected, sequential tick:
 
 ```text
 GROWTH_CONVERSION_BRIDGE_INTERVAL_SEC
 GROWTH_CONVERSION_BRIDGE_BATCH_SIZE
-GROWTH_CONVERSION_BRIDGE_TIMEOUT_SEC
 ```
 
-Expected Growth schema/storage failures are returned as a degraded bridge result and do not mark the primary scheduler as failed. Unexpected programming failures still pass through the existing scheduler protected-tick diagnostics.
+There is intentionally no `wait_for(to_thread(...))` timeout around the write transaction: timing out an asyncio future does not stop the worker thread and could leave an orphaned writer. The bounded batch and the scheduler's single ownership prevent overlapping bridge transactions.
+
+Expected optional-schema/storage failures are returned as a degraded bridge result and do not mark the primary scheduler as failed. Unexpected programming failures are not swallowed; they pass through the existing scheduler protected-tick diagnostics and the transaction rolls back.
 
 The Conversion Hub admin screen shows:
 
