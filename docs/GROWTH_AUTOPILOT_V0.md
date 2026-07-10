@@ -19,7 +19,8 @@ It can:
 - show recommendations in the Telegram admin panel;
 - show a read-only Action Inbox with recommendation cards and evidence;
 - show read-only creative diagnostics in the Growth report;
-- store provider-verified payment conversions in a dry-run outbox.
+- store provider-verified payment conversions in a dry-run outbox;
+- bridge canonical demo/tariff events into the same dry-run outbox.
 
 It must not:
 
@@ -120,14 +121,14 @@ Table:
 growth_conversion_outbox
 ```
 
-Current runtime ingestion is deliberately narrow:
+Provider payment ingestion remains deliberately narrow:
 
 - only the public provider-verified YooKassa wrapper is connected;
 - only reconciled successful payments with completed side effects are accepted;
 - payment problems, failed grants, pending statuses and provider-verification failures are not conversions;
 - gift payments become `gift_paid`; regular payments become `payment_success`.
 
-Supported domain types are already explicit for future bridges:
+Supported domain types:
 
 ```text
 demo_ack
@@ -168,6 +169,76 @@ Growth conversion ingestion is best-effort and happens only after provider verif
 
 The Conversion Hub table is intentionally not added to the core P0 readiness-table set. The migration is applied through the normal deterministic migration chain, but Growth degradation must not stop the primary payment and delivery runtime.
 
+## Event-to-conversion bridge
+
+The bridge converts canonical internal events into dry-run Conversion Hub rows without adding calls to individual handlers.
+
+State table:
+
+```text
+growth_conversion_bridge_state
+```
+
+Current mappings:
+
+```text
+demo_ack      -> demo_ack
+sub_menu_open -> tariff_open
+```
+
+`sub_menu_open` is used as the canonical tariff-open event. Merely showing a tariffs command or button is not treated as an opened tariff screen.
+
+### Cursor and atomicity
+
+The bridge reads:
+
+```text
+events.id > last_event_id
+```
+
+in ascending batches. For every event it uses:
+
+```text
+external_event_id = events:<id>
+```
+
+Outbox inserts and cursor advancement happen in one transaction. If any event in a batch fails:
+
+- all outbox inserts from that batch roll back;
+- the cursor does not advance;
+- the same events remain available for a later retry.
+
+### Attribution at event time
+
+For each downstream event the bridge reads the latest preceding `funnel_start_command` for the same user with:
+
+```text
+start_event.id <= downstream_event.id
+```
+
+This prevents a later campaign visit from being incorrectly attached to an earlier demo or tariff event. Missing attribution stays empty; the bridge does not guess a source.
+
+### Scheduler ownership
+
+The canonical scheduler runs the bridge through a protected, configurable tick:
+
+```text
+GROWTH_CONVERSION_BRIDGE_INTERVAL_SEC
+GROWTH_CONVERSION_BRIDGE_BATCH_SIZE
+GROWTH_CONVERSION_BRIDGE_TIMEOUT_SEC
+```
+
+Expected Growth schema/storage failures are returned as a degraded bridge result and do not mark the primary scheduler as failed. Unexpected programming failures still pass through the existing scheduler protected-tick diagnostics.
+
+The Conversion Hub admin screen shows:
+
+- cursor event ID;
+- last batch size;
+- inserted rows;
+- duplicates;
+- update timestamp;
+- degraded error when the optional schema is unavailable.
+
 ## Evidence sources
 
 v0 reads existing project data only:
@@ -177,6 +248,7 @@ v0 reads existing project data only:
 - `payments` for paid count, distinct paying users, and revenue;
 - `admin_ad_links` for source/campaign/creative/ad_spend coverage;
 - `growth_conversion_outbox` for dry-run conversion plans;
+- `growth_conversion_bridge_state` for bridge cursor/diagnostics;
 - `payments` + `subscriptions` for paid-without-access risks;
 - `services.segments.segment_counts()` when available;
 - `services.funnel2_analytics.scenario_counts()` when available.
