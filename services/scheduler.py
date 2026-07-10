@@ -254,12 +254,7 @@ async def _run_growth_conversion_bridge_tick() -> None:
     from services.growth_conversion_event_bridge import run_event_conversion_bridge_safe
 
     batch_size = int(os.getenv("GROWTH_CONVERSION_BRIDGE_BATCH_SIZE", "100") or "100")
-    timeout_sec = float(os.getenv("GROWTH_CONVERSION_BRIDGE_TIMEOUT_SEC", "5") or "5")
-    timeout_sec = max(1.0, timeout_sec)
-    result = await asyncio.wait_for(
-        asyncio.to_thread(run_event_conversion_bridge_safe, batch_size=batch_size),
-        timeout=timeout_sec,
-    )
+    result = await asyncio.to_thread(run_event_conversion_bridge_safe, batch_size=batch_size)
     if result.error:
         log.warning("Growth conversion bridge degraded: %s", result.error)
 
