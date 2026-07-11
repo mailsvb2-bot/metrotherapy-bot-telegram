@@ -9,6 +9,12 @@ from aiogram.exceptions import TelegramAPIError
 from aiohttp import web
 
 from config.settings import settings
+from runtime.ingress_flags import (
+    http_ingress_enabled,
+    max_webhook_enabled,
+    payment_http_enabled,
+    vk_webhook_enabled,
+)
 from runtime.messenger_ingress import max_webhook, vk_webhook
 from runtime.messenger_media_http import audio_access, audio_media
 from runtime.payment_http import pay_yookassa_web, yookassa_reconciliation_webhook
@@ -43,39 +49,6 @@ async def _health(request: web.Request) -> web.Response:
 
 def _truthy_env(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _optional_env_flag(name: str) -> bool | None:
-    if name not in os.environ:
-        return None
-    return _truthy_env(name)
-
-
-def payment_http_enabled() -> bool:
-    explicit = _optional_env_flag("PAYMENT_HTTP_ENABLED")
-    if explicit is not None:
-        return explicit
-    return bool(getattr(settings, "MESSENGER_WEBHOOK_ENABLED", False) or False)
-
-
-def max_webhook_enabled() -> bool:
-    explicit = _optional_env_flag("MAX_WEBHOOK_ENABLED")
-    if explicit is not None:
-        return explicit
-    return bool(
-        getattr(settings, "MESSENGER_WEBHOOK_ENABLED", False)
-        and str(getattr(settings, "MAX_BOT_TOKEN", "") or "").strip()
-    )
-
-
-def vk_webhook_enabled() -> bool:
-    explicit = _optional_env_flag("VK_WEBHOOK_ENABLED")
-    if explicit is not None:
-        return explicit
-    return bool(
-        getattr(settings, "MESSENGER_WEBHOOK_ENABLED", False)
-        and str(getattr(settings, "VK_GROUP_TOKEN", "") or "").strip()
-    )
 
 
 def _register_health_routes(app: web.Application) -> None:
@@ -125,13 +98,13 @@ def _register_telegram_routes(
     return public_url
 
 
-def _resolve_ingress_bind(*, http_ingress_enabled: bool, telegram_enabled: bool) -> tuple[str, int]:
+def _resolve_ingress_bind(*, ingress_enabled: bool, telegram_enabled: bool) -> tuple[str, int]:
     ingress_host = getattr(settings, "MESSENGER_WEBHOOK_HOST", "127.0.0.1")
     ingress_port = int(getattr(settings, "MESSENGER_WEBHOOK_PORT", 8081))
     telegram_host = getattr(settings, "TELEGRAM_WEBHOOK_HOST", ingress_host)
     telegram_port = int(getattr(settings, "TELEGRAM_WEBHOOK_PORT", ingress_port))
 
-    if http_ingress_enabled and telegram_enabled and (
+    if ingress_enabled and telegram_enabled and (
         str(ingress_host) != str(telegram_host) or int(ingress_port) != int(telegram_port)
     ):
         raise RuntimeError("Telegram and HTTP ingress runtimes must share the same ingress host/port")
@@ -148,9 +121,9 @@ async def start_messenger_webhook_runtime(
     payment_enabled = payment_http_enabled()
     max_enabled = max_webhook_enabled()
     vk_enabled = vk_webhook_enabled()
-    http_ingress_enabled = bool(payment_enabled or max_enabled or vk_enabled)
+    ingress_enabled = http_ingress_enabled()
     telegram_enabled = telegram_transport() == "webhook"
-    if not http_ingress_enabled and not telegram_enabled:
+    if not ingress_enabled and not telegram_enabled:
         return None
 
     app = web.Application()
@@ -170,7 +143,7 @@ async def start_messenger_webhook_runtime(
         telegram_public_url = _register_telegram_routes(app, bot=bot, dispatcher=dispatcher)
 
     host, port = _resolve_ingress_bind(
-        http_ingress_enabled=http_ingress_enabled,
+        ingress_enabled=ingress_enabled,
         telegram_enabled=telegram_enabled,
     )
 
