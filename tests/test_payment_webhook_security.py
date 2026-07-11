@@ -5,17 +5,30 @@ from aiohttp.test_utils import make_mocked_request
 from runtime import payment_http
 
 
-def test_yookassa_webhook_query_auth_rejected_in_prod(monkeypatch):
+def test_yookassa_native_webhook_without_custom_header_allowed_in_prod(monkeypatch):
     monkeypatch.setenv("APP_ENV", "prod")
     monkeypatch.setenv("YOOKASSA_WEBHOOK_SECRET", "fixture-value")
 
     request = make_mocked_request(
         "POST",
-        "/pay/yookassa/webhook?secret=fixture-value",
+        "/pay/yookassa/webhook",
         headers={},
     )
 
-    assert payment_http._webhook_secret_ok(request) is False
+    assert payment_http._webhook_secret_ok(request) is True
+
+
+def test_yookassa_webhook_query_auth_is_not_used_in_prod(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("YOOKASSA_WEBHOOK_SECRET", "fixture-value")
+
+    request = make_mocked_request(
+        "POST",
+        "/pay/yookassa/webhook?secret=wrong-query-value",
+        headers={},
+    )
+
+    assert payment_http._webhook_secret_ok(request) is True
 
 
 def test_yookassa_webhook_header_auth_allowed_in_prod(monkeypatch):
@@ -29,6 +42,19 @@ def test_yookassa_webhook_header_auth_allowed_in_prod(monkeypatch):
     )
 
     assert payment_http._webhook_secret_ok(request) is True
+
+
+def test_yookassa_webhook_wrong_supplied_header_is_rejected(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("YOOKASSA_WEBHOOK_SECRET", "fixture-value")
+
+    request = make_mocked_request(
+        "POST",
+        "/pay/yookassa/webhook",
+        headers={"X-Metrotherapy-Webhook-Secret": "wrong-value"},
+    )
+
+    assert payment_http._webhook_secret_ok(request) is False
 
 
 def test_yookassa_webhook_query_auth_kept_for_non_prod_compat(monkeypatch):
