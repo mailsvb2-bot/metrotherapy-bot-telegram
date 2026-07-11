@@ -85,6 +85,19 @@ def _env_int(
     return value
 
 
+def _env_int_fallback(
+    name: str,
+    fallback_name: str,
+    default: int,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    if os.getenv(name) not in (None, ""):
+        return _env_int(name, default, minimum=minimum, maximum=maximum)
+    return _env_int(fallback_name, default, minimum=minimum, maximum=maximum)
+
+
 def _truthy_env(name: str) -> bool:
     return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on", "webhook"}
 
@@ -123,18 +136,20 @@ class Settings:
     VK_API_VERSION: str = _env("VK_API_VERSION", "5.199")
     MESSENGER_WEBHOOK_ENABLED: bool = _env_bool("MESSENGER_WEBHOOK_ENABLED")
     MESSENGER_WEBHOOK_HOST: str = _env("MESSENGER_WEBHOOK_HOST", _env("WEBHOOK_HOST", "127.0.0.1"))
-    MESSENGER_WEBHOOK_PORT: int = _env_int(
+    MESSENGER_WEBHOOK_PORT: int = _env_int_fallback(
         "MESSENGER_WEBHOOK_PORT",
-        _env_int("WEBHOOK_PORT", 8081, minimum=1, maximum=65535),
+        "WEBHOOK_PORT",
+        8081,
         minimum=1,
         maximum=65535,
     )
     TELEGRAM_TRANSPORT: str = (_env("TELEGRAM_TRANSPORT", _env("RUN_MODE", "polling")) or "polling").strip().lower()
     TELEGRAM_WEBHOOK_ENABLED: bool = _env_bool("TELEGRAM_WEBHOOK_ENABLED")
     TELEGRAM_WEBHOOK_HOST: str = _env("TELEGRAM_WEBHOOK_HOST", _env("WEBHOOK_HOST", "127.0.0.1"))
-    TELEGRAM_WEBHOOK_PORT: int = _env_int(
+    TELEGRAM_WEBHOOK_PORT: int = _env_int_fallback(
         "TELEGRAM_WEBHOOK_PORT",
-        _env_int("WEBHOOK_PORT", 8081, minimum=1, maximum=65535),
+        "WEBHOOK_PORT",
+        8081,
         minimum=1,
         maximum=65535,
     )
