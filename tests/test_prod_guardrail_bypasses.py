@@ -8,6 +8,7 @@ from services.validators.prod import validate_prod_guardrails
 
 def _prod_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("ADMIN_IDS", "1")
     monkeypatch.setenv("VALIDATOR_RELEASE_MODE", "1")
     monkeypatch.setenv("VALIDATOR_GUARDRAILS_STRICT", "1")
     monkeypatch.setenv("TELEGRAM_TRANSPORT", "polling")
