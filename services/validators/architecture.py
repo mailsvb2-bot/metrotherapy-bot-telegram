@@ -98,6 +98,16 @@ def _is_secret_scan_candidate(path: Path) -> bool:
     return False
 
 
+def _truthy_env(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _payment_http_enabled() -> bool:
+    if "PAYMENT_HTTP_ENABLED" in os.environ:
+        return _truthy_env("PAYMENT_HTTP_ENABLED")
+    return _truthy_env("MESSENGER_WEBHOOK_ENABLED")
+
+
 def validate_no_embedded_secrets(*, strict: bool = True) -> None:
     bad: list[str] = []
     for p in PROJECT_ROOT.rglob("*"):
@@ -119,12 +129,12 @@ def validate_public_payment_base_url(*, strict: bool = True) -> None:
     """Production payment links must never silently degrade into relative URLs."""
     app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
     release_mode = os.getenv("VALIDATOR_RELEASE_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
-    messenger_enabled = os.getenv("MESSENGER_WEBHOOK_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
     required = os.getenv("PAYMENT_PUBLIC_URL_REQUIRED", "").strip().lower() in {"1", "true", "yes", "on"}
+    payment_enabled = _payment_http_enabled()
 
     # Release-mode CI stays hermetic unless the contract is explicitly requested;
-    # real prod deployments with messenger/payment ingress must provide a public HTTPS base.
-    if not (required or (app_env in {"prod", "production"} and messenger_enabled and not release_mode)):
+    # real prod deployments with payment ingress must provide a public HTTPS base.
+    if not (required or (app_env in {"prod", "production"} and payment_enabled and not release_mode)):
         return
 
     base = (
