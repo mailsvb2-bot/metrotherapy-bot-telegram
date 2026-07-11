@@ -3,7 +3,7 @@ from __future__ import annotations
 from scripts import regression_gate
 
 
-def test_live_prod_detection_is_not_tied_to_checkout_path(tmp_path, monkeypatch):
+def test_prod_host_detection_is_not_tied_to_checkout_path(tmp_path, monkeypatch):
     env_file = tmp_path / "metrotherapy.env"
     env_file.write_text(
         "APP_ENV=prod\nMETRO_DB_ENGINE=postgres\nDATABASE_URL=postgresql://db/metrotherapy\n",
@@ -19,7 +19,7 @@ def test_live_prod_detection_is_not_tied_to_checkout_path(tmp_path, monkeypatch)
     assert regression_gate._is_live_prod_host() is True
 
 
-def test_ci_never_uses_live_prod_host_guard(tmp_path, monkeypatch):
+def test_ci_never_uses_prod_host_guard(tmp_path, monkeypatch):
     env_file = tmp_path / "metrotherapy.env"
     env_file.write_text("APP_ENV=prod\nMETRO_DB_ENGINE=postgres\n", encoding="utf-8")
     monkeypatch.setattr(regression_gate, "PROD_ENV_FILE", env_file)
@@ -28,7 +28,7 @@ def test_ci_never_uses_live_prod_host_guard(tmp_path, monkeypatch):
     assert regression_gate._is_live_prod_host() is False
 
 
-def test_non_prod_env_file_does_not_trigger_live_guard(tmp_path, monkeypatch):
+def test_non_prod_env_file_does_not_trigger_host_guard(tmp_path, monkeypatch):
     env_file = tmp_path / "metrotherapy.env"
     env_file.write_text("APP_ENV=stage\nMETRO_DB_ENGINE=postgres\n", encoding="utf-8")
     monkeypatch.setattr(regression_gate, "PROD_ENV_FILE", env_file)
