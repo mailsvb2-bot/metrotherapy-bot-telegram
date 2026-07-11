@@ -61,7 +61,7 @@ run_step release_hygiene_before python scripts/check_release_hygiene.py || failu
 run_step compile_project python -m compileall services scripts handlers core runtime config app.py main.py || failures=$((failures+1))
 cleanup_local_artifacts
 
-APP_ENV=prod \
+APP_ENV=test \
 METRO_DB_ENGINE=sqlite \
 DATABASE_URL= \
 VALIDATOR_RELEASE_MODE=1 \
@@ -78,7 +78,7 @@ cleanup_local_artifacts
 APP_ENV=test LOAD_DOTENV=0 METRO_DB_ENGINE=sqlite DATABASE_URL= run_step pytest python -m pytest -q -p no:cacheprovider || failures=$((failures+1))
 cleanup_local_artifacts
 
-APP_ENV=prod \
+APP_ENV=test \
 METRO_DB_ENGINE=sqlite \
 DATABASE_URL= \
 VALIDATOR_RELEASE_MODE=1 \
@@ -90,6 +90,21 @@ PAYMENT_CHECKOUT_SIGNING_KEY=server-check \
 YOOKASSA_WEBHOOK_SECRET=server-check \
 PAYMENT_PUBLIC_BASE_URL=https://metrotherapy.example \
 run_step strict_validation python scripts/validate_project.py || failures=$((failures+1))
+cleanup_local_artifacts
+
+APP_ENV=prod \
+METRO_DB_ENGINE=postgres \
+DATABASE_URL=postgresql://quality-check/metrotherapy \
+VALIDATOR_RELEASE_MODE=1 \
+VALIDATOR_GUARDRAILS_STRICT=1 \
+TELEGRAM_TRANSPORT=polling \
+TELEGRAM_WEBHOOK_ENABLED=0 \
+TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED=0 \
+ADMIN_IDS=1 \
+TOKEN_ECONOMY_ENABLED=1 \
+TOKEN_ENFORCEMENT_MODE=hard \
+YOOKASSA_RECEIPT_EMAIL=quality-check@metrotherapy.example \
+run_step prod_contract python -c 'from services.validators.prod import validate_prod_guardrails; validate_prod_guardrails(strict=True)' || failures=$((failures+1))
 cleanup_local_artifacts
 
 run_step ruff python scripts/check_ruff.py || failures=$((failures+1))
@@ -113,6 +128,9 @@ if ! is_placeholder_database_url; then
   PAYMENT_CHECKOUT_SIGNING_KEY=server-check \
   YOOKASSA_WEBHOOK_SECRET=server-check \
   PAYMENT_PUBLIC_BASE_URL=https://metrotherapy.example \
+  TOKEN_ECONOMY_ENABLED=1 \
+  TOKEN_ENFORCEMENT_MODE=hard \
+  YOOKASSA_RECEIPT_EMAIL=quality-check@metrotherapy.example \
   run_step smoke_postgres python scripts/smoke.py || failures=$((failures+1))
 else
   echo "SKIP: smoke_postgres because DATABASE_URL is empty or placeholder"
