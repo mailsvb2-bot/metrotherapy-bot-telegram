@@ -135,9 +135,11 @@ def run() -> tuple[list[str], list[str]]:
         # Canonical payment path is external YooKassa/package checkout. Webhook
         # authenticity is proven by provider source-of-truth verification; an
         # optional reverse-proxy header secret is defense in depth only.
-        for name in ("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY", "PAYMENT_CHECKOUT_SIGNING_KEY"):
+        for name in ("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY"):
             if not _value(name):
                 errors.append(f"{name} is required in prod")
+        if not _first_value("PAYMENT_CHECKOUT_SIGNING_KEY", "CHECKOUT_SIGNING_KEY"):
+            errors.append("PAYMENT_CHECKOUT_SIGNING_KEY is required in prod")
         payment_base = _payment_public_base_url()
         if not payment_base:
             errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required in prod")
