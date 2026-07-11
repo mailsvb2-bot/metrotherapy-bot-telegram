@@ -81,7 +81,11 @@ def check_telegram_preflight() -> MessengerPreflightStatus:
         ok=not missing,
         missing=tuple(missing),
         warnings=tuple(warnings),
-        details={"enabled": True, "transport": transport, "webhook_enabled": webhook_enabled},
+        details={
+            "enabled": _deployed_env(),
+            "transport": transport,
+            "webhook_enabled": webhook_enabled,
+        },
     )
 
 
