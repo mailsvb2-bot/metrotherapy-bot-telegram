@@ -94,12 +94,14 @@ def check_payment_preflight() -> MessengerPreflightStatus:
     if not enabled:
         return MessengerPreflightStatus(channel="payment", ok=True, details={"enabled": False})
 
-    required = [
-        "YOOKASSA_SHOP_ID",
-        "YOOKASSA_SECRET_KEY",
-        "PAYMENT_CHECKOUT_SIGNING_KEY",
-    ]
-    missing = list(_missing(*required))
+    missing = list(_missing("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY"))
+    signing_key = (
+        (os.getenv("PAYMENT_CHECKOUT_SIGNING_KEY") or "").strip()
+        or (os.getenv("CHECKOUT_SIGNING_KEY") or "").strip()
+    )
+    if not signing_key:
+        missing.append("PAYMENT_CHECKOUT_SIGNING_KEY")
+
     public_base = str(
         os.getenv("PAYMENT_PUBLIC_BASE_URL")
         or os.getenv("MESSENGER_PUBLIC_BASE_URL")
