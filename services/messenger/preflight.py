@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from config.settings import settings
+from runtime.ingress_flags import max_webhook_enabled, payment_http_enabled, vk_webhook_enabled
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,13 @@ class MessengerPreflightStatus:
 
 def _value(name: str, default: Any = "") -> Any:
     return getattr(settings, name, default)
+
+
+def _env_or_setting(name: str, default: Any = "") -> Any:
+    raw = os.getenv(name)
+    if raw is not None:
+        return raw
+    return _value(name, default)
 
 
 def _app_env() -> str:
@@ -38,7 +46,7 @@ def _public_webhook_url(path: str) -> str:
 def _missing(*names: str) -> tuple[str, ...]:
     out: list[str] = []
     for name in names:
-        value = _value(name, "")
+        value = _env_or_setting(name, "")
         if isinstance(value, bool):
             if not value:
                 out.append(name)
@@ -73,20 +81,55 @@ def check_telegram_preflight() -> MessengerPreflightStatus:
         ok=not missing,
         missing=tuple(missing),
         warnings=tuple(warnings),
-        details={"transport": transport, "webhook_enabled": webhook_enabled},
+        details={"enabled": True, "transport": transport, "webhook_enabled": webhook_enabled},
+    )
+
+
+def check_payment_preflight() -> MessengerPreflightStatus:
+    enabled = payment_http_enabled()
+    if not enabled:
+        return MessengerPreflightStatus(channel="payment", ok=True, details={"enabled": False})
+
+    required = [
+        "YOOKASSA_SHOP_ID",
+        "YOOKASSA_SECRET_KEY",
+        "PAYMENT_CHECKOUT_SIGNING_KEY",
+    ]
+    missing = list(_missing(*required))
+    public_base = str(
+        os.getenv("PAYMENT_PUBLIC_BASE_URL")
+        or os.getenv("MESSENGER_PUBLIC_BASE_URL")
+        or os.getenv("PUBLIC_BASE_URL")
+        or _value("MESSENGER_PUBLIC_BASE_URL", "")
+        or ""
+    ).strip()
+    if not public_base:
+        missing.append("PAYMENT_PUBLIC_BASE_URL")
+
+    warnings: list[str] = []
+    if _deployed_env():
+        _https_warning("PAYMENT_PUBLIC_BASE_URL", public_base, warnings)
+
+    return MessengerPreflightStatus(
+        channel="payment",
+        ok=not missing,
+        missing=tuple(sorted(set(missing))),
+        warnings=tuple(warnings),
+        details={"enabled": True, "checkout_url": f"{public_base.rstrip('/')}/pay/yookassa" if public_base else ""},
     )
 
 
 def check_vk_preflight() -> MessengerPreflightStatus:
-    required = ["VK_GROUP_TOKEN", "VK_CONFIRMATION_TOKEN", "VK_GROUP_ID"]
-    webhook_enabled = bool(_value("MESSENGER_WEBHOOK_ENABLED", False))
-    if webhook_enabled:
-        required.append("MESSENGER_PUBLIC_BASE_URL")
-        if _deployed_env():
-            required.append("VK_SECRET")
+    enabled = vk_webhook_enabled()
+    if not enabled:
+        return MessengerPreflightStatus(channel="vk", ok=True, details={"enabled": False})
+
+    required = ["VK_GROUP_TOKEN", "VK_CONFIRMATION_TOKEN", "VK_GROUP_ID", "MESSENGER_PUBLIC_BASE_URL"]
+    if _deployed_env():
+        required.append("VK_SECRET")
     missing = _missing(*required)
     warnings: list[str] = []
-    if webhook_enabled and not str(_value("VK_SECRET", "") or "").strip():
+    if not str(_value("VK_SECRET", "") or "").strip():
         warnings.append("VK_SECRET is not configured; VK webhook secret verification is not enforced")
     if _deployed_env():
         _https_warning("MESSENGER_PUBLIC_BASE_URL", str(_value("MESSENGER_PUBLIC_BASE_URL", "") or ""), warnings)
@@ -95,20 +138,21 @@ def check_vk_preflight() -> MessengerPreflightStatus:
         ok=not missing,
         missing=missing,
         warnings=tuple(warnings),
-        details={"webhook_url": _public_webhook_url("/webhooks/vk")},
+        details={"enabled": True, "webhook_url": _public_webhook_url("/webhooks/vk")},
     )
 
 
 def check_max_preflight() -> MessengerPreflightStatus:
-    required = ["MAX_BOT_TOKEN", "MAX_BOT_LINK_BASE"]
-    webhook_enabled = bool(_value("MESSENGER_WEBHOOK_ENABLED", False))
-    if webhook_enabled:
-        required.append("MESSENGER_PUBLIC_BASE_URL")
-        if _deployed_env():
-            required.append("MAX_WEBHOOK_SECRET")
+    enabled = max_webhook_enabled()
+    if not enabled:
+        return MessengerPreflightStatus(channel="max", ok=True, details={"enabled": False})
+
+    required = ["MAX_BOT_TOKEN", "MAX_BOT_LINK_BASE", "MESSENGER_PUBLIC_BASE_URL"]
+    if _deployed_env():
+        required.append("MAX_WEBHOOK_SECRET")
     missing = _missing(*required)
     warnings: list[str] = []
-    if webhook_enabled and not str(_value("MAX_WEBHOOK_SECRET", "") or "").strip():
+    if not str(_value("MAX_WEBHOOK_SECRET", "") or "").strip():
         warnings.append("MAX_WEBHOOK_SECRET is not configured; MAX webhook secret verification is not enforced")
     if _deployed_env():
         _https_warning("MESSENGER_PUBLIC_BASE_URL", str(_value("MESSENGER_PUBLIC_BASE_URL", "") or ""), warnings)
@@ -120,13 +164,18 @@ def check_max_preflight() -> MessengerPreflightStatus:
         ok=not missing,
         missing=missing,
         warnings=tuple(warnings),
-        details={"webhook_url": _public_webhook_url("/webhooks/max"), "api_base": api_base or "https://platform-api.max.ru"},
+        details={
+            "enabled": True,
+            "webhook_url": _public_webhook_url("/webhooks/max"),
+            "api_base": api_base or "https://platform-api.max.ru",
+        },
     )
 
 
 def check_all_preflights() -> tuple[MessengerPreflightStatus, ...]:
     return (
         check_telegram_preflight(),
+        check_payment_preflight(),
         check_max_preflight(),
         check_vk_preflight(),
     )
