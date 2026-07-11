@@ -76,3 +76,24 @@ def validate_full_audio(strict: bool = True) -> None:
         if strict:
             raise ValidationError(msg)
         log.warning(msg)
+
+
+def audio_readiness() -> tuple[bool, str | None]:
+    """Return a fail-closed audio-content readiness result for deployed production.
+
+    Runtime readiness intentionally ignores VALIDATOR_SKIP_AUDIO. That flag exists
+    only for hermetic source-tree CI where licensed/large audio assets are not
+    shipped with the repository. A live production process must prove that its
+    demo and full-audio content is actually present and structurally usable.
+    """
+
+    old_value = os.environ.pop("VALIDATOR_SKIP_AUDIO", None)
+    try:
+        validate_demo_audio(strict=True)
+        validate_full_audio(strict=True)
+    except ValidationError as exc:
+        return False, f"audio:{exc}"
+    finally:
+        if old_value is not None:
+            os.environ["VALIDATOR_SKIP_AUDIO"] = old_value
+    return True, None
