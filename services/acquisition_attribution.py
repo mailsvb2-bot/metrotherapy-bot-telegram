@@ -119,11 +119,22 @@ def _from_short_ad_link(payload: str) -> dict[str, str]:
         return {}
     try:
         resolved = resolve_ad_link_payload(payload)
-    except (RuntimeError, OSError, TypeError, ValueError):
+    except RuntimeError:
+        return {}
+    except OSError:
+        return {}
+    except TypeError:
+        return {}
+    except ValueError:
         return {}
     if not resolved:
         return {}
-    return {str(key): _clean(value) for key, value in resolved.items() if _clean(value)}
+    out: dict[str, str] = {}
+    for key, value in resolved.items():
+        cleaned = _clean(value)
+        if cleaned:
+            out[str(key)] = cleaned
+    return out
 
 
 def start_attribution_meta(payload: str | None) -> dict[str, str]:
