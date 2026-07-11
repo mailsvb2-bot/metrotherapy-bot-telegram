@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import sys
 
 
 def _normalize_telegram_token_env() -> None:
@@ -22,6 +23,7 @@ _normalize_telegram_token_env()
 # В PROD не пишем байткод, чтобы релиз оставался чистым и не плодил __pycache__.
 if os.getenv("APP_ENV", "dev").strip().lower() in {"prod", "production"}:
     os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+    sys.dont_write_bytecode = True
 
 from app import create_application
 
