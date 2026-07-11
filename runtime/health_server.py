@@ -11,6 +11,12 @@ from aiohttp import web
 
 from config.settings import settings
 from core.paths import DB_PATH, ROOT
+from runtime.ingress_flags import (
+    http_ingress_enabled,
+    max_webhook_enabled,
+    payment_http_enabled,
+    vk_webhook_enabled,
+)
 from runtime.telegram_transport import telegram_transport
 from services.ai.policy import ai_policy_snapshot
 from services.db import get_connection
@@ -19,6 +25,7 @@ from services.db.schema.readiness import required_readiness_tables, schema_readi
 from services.growth_click_tracking import build_click_redirect_target, record_click_redirect
 from services.messenger.preflight import check_all_preflights
 from services.scheduler import scheduler_health_snapshot
+from services.validators.audio import audio_readiness
 
 log = logging.getLogger(__name__)
 
@@ -126,6 +133,7 @@ def _scheduler_readiness(scheduler: dict[str, Any]) -> tuple[bool, list[str], di
 
 
 def _messenger_webhook_configured() -> bool:
+    """Legacy diagnostic field retained for operator/dashboard compatibility."""
     try:
         return bool(getattr(settings, 'MESSENGER_WEBHOOK_ENABLED', False) or False)
     except (AttributeError, RuntimeError):
@@ -144,7 +152,7 @@ def _telegram_webhook_configured() -> bool:
 
 
 def _webhook_configured() -> bool:
-    return bool(_messenger_webhook_configured() or _telegram_webhook_configured())
+    return bool(http_ingress_enabled() or _telegram_webhook_configured())
 
 
 def _db_ready() -> tuple[bool, str | None]:
@@ -158,6 +166,12 @@ def _db_ready() -> tuple[bool, str | None]:
 
 def _schema_ready() -> tuple[bool, str | None]:
     return schema_readiness()
+
+
+def _audio_ready(app_env: str) -> tuple[bool, str | None]:
+    if app_env not in {'prod', 'production'}:
+        return True, None
+    return audio_readiness()
 
 
 def _storage_health_fields() -> dict[str, Any]:
@@ -182,19 +196,35 @@ def _storage_health_fields() -> dict[str, Any]:
 
 
 def _messenger_preflight_readiness() -> tuple[bool, list[str], dict[str, Any]]:
+    """Validate only enabled ingress channels.
+
+    The function name is kept for compatibility with existing diagnostics/tests;
+    the contract now covers payment, MAX and VK independently.
+    """
     statuses = check_all_preflights()
     details: dict[str, Any] = {}
     errors: list[str] = []
-    messenger_enabled = _messenger_webhook_configured()
     for status in statuses:
+        status_details = dict(status.details or {})
+        enabled = bool(status_details.get('enabled', True))
+        details[f'{status.channel}_preflight_enabled'] = enabled
         details[f'{status.channel}_preflight_ok'] = bool(status.ok)
         details[f'{status.channel}_preflight_missing'] = list(status.missing)
         details[f'{status.channel}_preflight_warnings'] = list(status.warnings)
         if status.details:
             details[f'{status.channel}_preflight_details'] = status.details
-        if messenger_enabled and status.channel in {'max', 'vk'} and not status.ok:
-            errors.append(f"messenger:{status.channel}:missing:{','.join(status.missing)}")
+        if enabled and not status.ok:
+            errors.append(f"ingress:{status.channel}:missing:{','.join(status.missing)}")
     return not errors, errors, details
+
+
+def _ingress_health_fields() -> dict[str, bool]:
+    return {
+        'payment_http_enabled': payment_http_enabled(),
+        'max_webhook_enabled': max_webhook_enabled(),
+        'vk_webhook_enabled': vk_webhook_enabled(),
+        'http_ingress_enabled': http_ingress_enabled(),
+    }
 
 
 def build_health_payload() -> tuple[dict[str, Any], int]:
@@ -202,7 +232,7 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
     telegram_transport_value = _telegram_transport()
     messenger_webhook_enabled = _messenger_webhook_configured()
     telegram_webhook_enabled = telegram_transport_value == 'webhook'
-    webhook_runtime_enabled = bool(messenger_webhook_enabled or telegram_webhook_enabled)
+    webhook_runtime_enabled = _webhook_configured()
     _, _, messenger_preflight_fields = _messenger_preflight_readiness()
     details: dict[str, Any] = {
         'ok': True,
@@ -215,6 +245,7 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
         'messenger_webhook_enabled': messenger_webhook_enabled,
         'webhook_runtime_enabled': webhook_runtime_enabled,
         'app_env': (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower(),
+        **_ingress_health_fields(),
         **_storage_health_fields(),
         **messenger_preflight_fields,
         **ai_policy_snapshot(),
@@ -230,31 +261,36 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
     telegram_transport_value = _telegram_transport()
     messenger_webhook_enabled = _messenger_webhook_configured()
     telegram_webhook_enabled = telegram_transport_value == 'webhook'
-    webhook_runtime_enabled = bool(messenger_webhook_enabled or telegram_webhook_enabled)
+    webhook_runtime_enabled = _webhook_configured()
     app_env = (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower()
     scheduler_ok, scheduler_errors, scheduler_flags = _scheduler_readiness(scheduler)
-    messenger_ok, messenger_errors, messenger_fields = _messenger_preflight_readiness()
+    ingress_ok, ingress_errors, ingress_fields = _messenger_preflight_readiness()
+    audio_ok, audio_error = _audio_ready(app_env)
     webhook_ok = True
-    if app_env in {'prod', 'production'} and telegram_webhook_enabled:
+    if app_env in {'prod', 'production'} and (http_ingress_enabled() or telegram_webhook_enabled):
         webhook_ok = webhook_runtime_enabled
     errors: list[str] = []
     if db_error is not None:
         errors.append(db_error)
     if schema_error is not None:
         errors.append(schema_error)
+    if audio_error is not None:
+        errors.append(audio_error)
     errors.extend(scheduler_errors)
-    errors.extend(messenger_errors)
+    errors.extend(ingress_errors)
     if not webhook_ok:
         errors.append('webhook:not_ready')
-    ready = bool(db_ok and schema_ok and scheduler_ok and messenger_ok and webhook_ok)
+    ready = bool(db_ok and schema_ok and scheduler_ok and ingress_ok and audio_ok and webhook_ok)
     details: dict[str, Any] = {
         'ok': ready,
         'service': 'metrotherapy',
         'probe': 'readiness',
         'db_ready': db_ok,
         'schema_ready': schema_ok,
+        'audio_ready': audio_ok,
         'scheduler_ready': scheduler_ok,
-        'messenger_ready': messenger_ok,
+        'messenger_ready': ingress_ok,
+        'ingress_ready': ingress_ok,
         'webhook_ready': webhook_ok,
         'required_tables': required_readiness_tables(),
         'db_engine': CONFIG.engine,
@@ -264,9 +300,10 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         'messenger_webhook_enabled': messenger_webhook_enabled,
         'webhook_runtime_enabled': webhook_runtime_enabled,
         'app_env': app_env,
+        **_ingress_health_fields(),
         **scheduler_flags,
         **_storage_health_fields(),
-        **messenger_fields,
+        **ingress_fields,
         **ai_policy_snapshot(),
         **scheduler,
     }
