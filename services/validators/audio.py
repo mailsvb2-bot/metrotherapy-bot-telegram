@@ -23,8 +23,8 @@ def _iter_audio_files(folder: Path) -> list[Path]:
     return [p for p in files if p.suffix.lower() in exts]
 
 
-def validate_demo_audio(strict: bool = True) -> None:
-    if _audio_validation_skipped():
+def validate_demo_audio(strict: bool = True, *, allow_skip: bool = True) -> None:
+    if allow_skip and _audio_validation_skipped():
         return
     demo_dir = PROJECT_ROOT / "audio" / "demo"
     files = _iter_audio_files(demo_dir)
@@ -38,8 +38,8 @@ def validate_demo_audio(strict: bool = True) -> None:
         log.warning(msg)
 
 
-def validate_full_audio(strict: bool = True) -> None:
-    if _audio_validation_skipped():
+def validate_full_audio(strict: bool = True, *, allow_skip: bool = True) -> None:
+    if allow_skip and _audio_validation_skipped():
         return
     full_dir = PROJECT_ROOT / "audio" / "full"
     files = _iter_audio_files(full_dir)
@@ -87,13 +87,9 @@ def audio_readiness() -> tuple[bool, str | None]:
     demo and full-audio content is actually present and structurally usable.
     """
 
-    old_value = os.environ.pop("VALIDATOR_SKIP_AUDIO", None)
     try:
-        validate_demo_audio(strict=True)
-        validate_full_audio(strict=True)
+        validate_demo_audio(strict=True, allow_skip=False)
+        validate_full_audio(strict=True, allow_skip=False)
     except ValidationError as exc:
         return False, f"audio:{exc}"
-    finally:
-        if old_value is not None:
-            os.environ["VALIDATOR_SKIP_AUDIO"] = old_value
     return True, None
