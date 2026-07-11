@@ -3,14 +3,12 @@ from __future__ import annotations
 """Offline/live production-readiness checks.
 
 This script deliberately does not call Telegram/YooKassa/VK/MAX. It validates
-runtime contract before deploy or during post-deploy smoke: secrets must be
-supplied through env, webhook/health ports must not collide, and required audio
-folders must exist.
+runtime contracts before deploy or during post-deploy smoke: required production
+configuration, split HTTP ingress, port isolation and required runtime paths.
 
 Release artifact checks are strict only when VALIDATOR_RELEASE_MODE=1 or
-PROD_READINESS_RELEASE_MODE=1. A live server is expected to contain .env,
-runtime DB files and logs; those are warnings in normal mode and errors in
-release packaging mode.
+PROD_READINESS_RELEASE_MODE=1. A live server may contain runtime files; those are
+warnings in normal mode and errors in release packaging mode.
 """
 
 import os
@@ -27,13 +25,29 @@ def _truthy(name: str, default: str = "0") -> bool:
     return (os.getenv(name, default) or default).strip().lower() in {"1", "true", "yes", "on", "webhook"}
 
 
+def _optional_flag(name: str) -> bool | None:
+    if name not in os.environ:
+        return None
+    return _truthy(name)
+
+
 def _int(name: str, default: int, errors: list[str]) -> int:
     raw = (os.getenv(name, str(default)) or str(default)).strip()
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError:
         errors.append(f"{name} must be integer, got {raw!r}")
         return default
+    if value <= 0:
+        errors.append(f"{name} must be positive, got {value}")
+        return default
+    return value
+
+
+def _int_fallback(name: str, fallback_name: str, default: int, errors: list[str]) -> int:
+    if (os.getenv(name) or "").strip():
+        return _int(name, default, errors)
+    return _int(fallback_name, default, errors)
 
 
 def _looks_placeholder(value: str) -> bool:
@@ -42,10 +56,6 @@ def _looks_placeholder(value: str) -> bool:
 
 def _release_mode() -> bool:
     return _truthy("VALIDATOR_RELEASE_MODE") or _truthy("PROD_READINESS_RELEASE_MODE")
-
-
-def _require_postgres() -> bool:
-    return _truthy("REQUIRE_POSTGRES") or _truthy("METRO_OBS_REQUIRE_POSTGRES")
 
 
 def _require_env(name: str, errors: list[str], *, placeholder: bool = True) -> str:
@@ -64,7 +74,43 @@ def _first_env(*names: str) -> str:
 
 
 def _payment_public_base_url() -> str:
-    return _first_env("MESSENGER_PUBLIC_BASE_URL", "PAYMENT_PUBLIC_BASE_URL", "PUBLIC_BASE_URL").rstrip("/")
+    return _first_env("PAYMENT_PUBLIC_BASE_URL", "MESSENGER_PUBLIC_BASE_URL", "PUBLIC_BASE_URL").rstrip("/")
+
+
+def _payment_http_enabled() -> bool:
+    explicit = _optional_flag("PAYMENT_HTTP_ENABLED")
+    if explicit is not None:
+        return explicit
+    return _truthy("MESSENGER_WEBHOOK_ENABLED")
+
+
+def _max_webhook_enabled() -> bool:
+    explicit = _optional_flag("MAX_WEBHOOK_ENABLED")
+    if explicit is not None:
+        return explicit
+    return _truthy("MESSENGER_WEBHOOK_ENABLED") and bool((os.getenv("MAX_BOT_TOKEN") or "").strip())
+
+
+def _vk_webhook_enabled() -> bool:
+    explicit = _optional_flag("VK_WEBHOOK_ENABLED")
+    if explicit is not None:
+        return explicit
+    return _truthy("MESSENGER_WEBHOOK_ENABLED") and bool((os.getenv("VK_GROUP_TOKEN") or "").strip())
+
+
+def _http_ingress_enabled() -> bool:
+    return _payment_http_enabled() or _max_webhook_enabled() or _vk_webhook_enabled()
+
+
+def _validate_admin_ids(errors: list[str]) -> None:
+    raw = (os.getenv("ADMIN_IDS") or os.getenv("ADMIN_ID") or "").strip()
+    if _looks_placeholder(raw):
+        errors.append("ADMIN_IDS or ADMIN_ID is required in prod")
+        return
+    tokens = [part.strip() for part in raw.split(",") if part.strip()]
+    invalid = [token for token in tokens if not token.isdigit() or int(token) <= 0]
+    if invalid or not tokens:
+        errors.append("ADMIN_IDS or ADMIN_ID must contain positive numeric IDs")
 
 
 def _validate_ai_runtime(prod: bool, errors: list[str], warnings: list[str]) -> None:
@@ -90,15 +136,20 @@ def _validate_ai_runtime(prod: bool, errors: list[str], warnings: list[str]) -> 
 
 def _validate_database_runtime(prod: bool, errors: list[str], warnings: list[str]) -> None:
     database_url = (os.getenv("DATABASE_URL") or "").strip()
-    if database_url:
-        if not database_url.startswith(("postgresql://", "postgres://")):
-            warnings.append("DATABASE_URL is set but does not look like a Postgres URL")
+    engine = (os.getenv("METRO_DB_ENGINE") or "").strip().lower()
+    if prod:
+        if engine not in {"postgres", "postgresql", "pg"}:
+            errors.append("METRO_DB_ENGINE must be postgres in prod")
+        if not database_url:
+            errors.append("DATABASE_URL is required in prod")
+        elif not database_url.startswith(("postgresql://", "postgres://")):
+            errors.append("DATABASE_URL must use postgres/postgresql scheme in prod")
+        if _truthy("ALLOW_SQLITE_IN_PROD"):
+            errors.append("ALLOW_SQLITE_IN_PROD is not a supported production bypass")
         return
-    message = "DATABASE_URL is empty; runtime will use SQLite"
-    if prod and _require_postgres():
-        errors.append(message + " but REQUIRE_POSTGRES=1")
-    elif prod:
-        warnings.append(message + " (acceptable for alpha/staging, not full production-grade)")
+
+    if database_url and not database_url.startswith(("postgresql://", "postgres://")):
+        warnings.append("DATABASE_URL is set but does not look like a Postgres URL")
 
 
 def _validate_payment_runtime(prod: bool, errors: list[str]) -> None:
@@ -106,8 +157,6 @@ def _validate_payment_runtime(prod: bool, errors: list[str]) -> None:
         return
     for name in ("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY", "PAYMENT_CHECKOUT_SIGNING_KEY"):
         _require_env(name, errors)
-    if not _first_env("YOOKASSA_WEBHOOK_SECRET", "PAYMENT_WEBHOOK_SECRET", "WEBHOOK_SECRET"):
-        errors.append("YOOKASSA_WEBHOOK_SECRET is missing or placeholder")
     public_base = _payment_public_base_url()
     if not public_base:
         errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is missing or placeholder")
@@ -124,46 +173,44 @@ def _validate_payment_runtime(prod: bool, errors: list[str]) -> None:
             errors.append("dangerous payment override(s) enabled in prod: " + ", ".join(enabled))
 
 
-def _validate_messenger_runtime(prod: bool, messenger_webhook: bool, errors: list[str], warnings: list[str]) -> None:
-    """Validate VK/MAX webhook runtime contract without making network calls."""
+def _validate_http_ingress(prod: bool, errors: list[str], warnings: list[str]) -> bool:
+    payment_enabled = _payment_http_enabled()
+    max_enabled = _max_webhook_enabled()
+    vk_enabled = _vk_webhook_enabled()
+    ingress_enabled = payment_enabled or max_enabled or vk_enabled
+
+    if payment_enabled and not _payment_public_base_url():
+        errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required when payment HTTP ingress is enabled")
+
     public_base = (os.getenv("MESSENGER_PUBLIC_BASE_URL") or "").strip().rstrip("/")
-    max_token = (os.getenv("MAX_BOT_TOKEN") or "").strip()
-    max_link_base = (os.getenv("MAX_BOT_LINK_BASE") or "").strip()
-    vk_group_id = (os.getenv("VK_GROUP_ID") or "").strip()
-    vk_group_token = (os.getenv("VK_GROUP_TOKEN") or "").strip()
-    vk_confirmation = (os.getenv("VK_CONFIRMATION_TOKEN") or "").strip()
+    if max_enabled or vk_enabled:
+        if not public_base:
+            errors.append("MESSENGER_PUBLIC_BASE_URL is required for MAX/VK webhook runtime")
+        elif prod and not public_base.startswith("https://"):
+            errors.append("MESSENGER_PUBLIC_BASE_URL must start with https:// in prod")
+        elif not (public_base.startswith("https://") or public_base.startswith("http://")):
+            warnings.append("MESSENGER_PUBLIC_BASE_URL should be a full URL, for example https://your-domain.tld")
 
-    max_configured = bool(max_token or max_link_base)
-    vk_configured = bool(vk_group_id or vk_group_token or vk_confirmation)
-
-    if not messenger_webhook:
-        if prod and (max_configured or vk_configured):
-            errors.append("MESSENGER_WEBHOOK_ENABLED=1 is required in prod when VK/MAX env is configured")
-        return
-
-    if not public_base:
-        errors.append("MESSENGER_PUBLIC_BASE_URL is required for VK/MAX webhook runtime")
-    elif prod and not public_base.startswith("https://"):
-        errors.append("MESSENGER_PUBLIC_BASE_URL must start with https:// in prod")
-    elif not (public_base.startswith("https://") or public_base.startswith("http://")):
-        warnings.append("MESSENGER_PUBLIC_BASE_URL should be a full URL, for example https://your-domain.tld")
-
-    if not (max_configured or vk_configured):
-        errors.append("VK or MAX env must be configured when MESSENGER_WEBHOOK_ENABLED=1")
-        return
-
-    if max_configured:
+    if max_enabled:
+        max_link_base = _require_env("MAX_BOT_LINK_BASE", errors, placeholder=False)
         _require_env("MAX_BOT_TOKEN", errors)
-        _require_env("MAX_BOT_LINK_BASE", errors, placeholder=False)
         if max_link_base and "{payload}" not in max_link_base:
             warnings.append("MAX_BOT_LINK_BASE has no {payload}; fallback ?start=... links may be less reliable")
+        if prod:
+            _require_env("MAX_WEBHOOK_SECRET", errors)
 
-    if vk_configured:
+    if vk_enabled:
         _require_env("VK_GROUP_ID", errors)
         _require_env("VK_GROUP_TOKEN", errors)
         _require_env("VK_CONFIRMATION_TOKEN", errors)
-        if not (os.getenv("VK_SECRET") or "").strip():
+        if prod:
+            _require_env("VK_SECRET", errors)
+        elif not (os.getenv("VK_SECRET") or "").strip():
             warnings.append("VK_SECRET is empty; VK webhook secret verification is not enforced")
+
+    if not ingress_enabled:
+        warnings.append("HTTP ingress is disabled; YooKassa/MAX/VK web endpoints will not be served by this process")
+    return ingress_enabled
 
 
 def _is_runtime_scan_candidate(path: Path) -> bool:
@@ -247,8 +294,7 @@ def run() -> tuple[list[str], list[str]]:
             errors.append("BOT_TOKEN is missing or placeholder")
         if bot_token and not re.match(r"^\d{8,12}:[A-Za-z0-9_-]{25,}$", bot_token):
             warnings.append("BOT_TOKEN format does not look like a Telegram bot token")
-        if _looks_placeholder((os.getenv("ADMIN_IDS") or os.getenv("ADMIN_ID") or "").strip()):
-            errors.append("ADMIN_IDS or ADMIN_ID is required in prod")
+        _validate_admin_ids(errors)
 
     _validate_payment_runtime(prod, errors)
     _validate_database_runtime(prod, errors, warnings)
@@ -256,7 +302,7 @@ def run() -> tuple[list[str], list[str]]:
 
     telegram_transport = (os.getenv("TELEGRAM_TRANSPORT", os.getenv("RUN_MODE", "polling")) or "polling").strip().lower()
     telegram_webhook = telegram_transport == "webhook" or _truthy("TELEGRAM_WEBHOOK_ENABLED")
-    messenger_webhook = _truthy("MESSENGER_WEBHOOK_ENABLED")
+    http_ingress = _validate_http_ingress(prod, errors, warnings)
 
     if prod and not _truthy("HEALTHCHECK_ENABLED", "1"):
         errors.append("HEALTHCHECK_ENABLED must be 1 in prod")
@@ -273,21 +319,23 @@ def run() -> tuple[list[str], list[str]]:
         if prod and not (os.getenv("TELEGRAM_WEBHOOK_SECRET_TOKEN") or "").strip():
             errors.append("TELEGRAM_WEBHOOK_SECRET_TOKEN is required in prod webhook mode")
 
-    _validate_messenger_runtime(prod, messenger_webhook, errors, warnings)
-
-    if telegram_webhook or messenger_webhook:
-        wh_host = (os.getenv("TELEGRAM_WEBHOOK_HOST") or os.getenv("WEBHOOK_HOST") or "127.0.0.1").strip()
-        wh_port = _int("TELEGRAM_WEBHOOK_PORT", _int("WEBHOOK_PORT", 8081, errors), errors)
+    if telegram_webhook or http_ingress:
+        if telegram_webhook:
+            ingress_host = (os.getenv("TELEGRAM_WEBHOOK_HOST") or os.getenv("WEBHOOK_HOST") or "127.0.0.1").strip()
+            ingress_port = _int_fallback("TELEGRAM_WEBHOOK_PORT", "WEBHOOK_PORT", 8081, errors)
+        else:
+            ingress_host = (os.getenv("MESSENGER_WEBHOOK_HOST") or os.getenv("WEBHOOK_HOST") or "127.0.0.1").strip()
+            ingress_port = _int_fallback("MESSENGER_WEBHOOK_PORT", "WEBHOOK_PORT", 8081, errors)
         health_host = (os.getenv("HEALTHCHECK_HOST", "127.0.0.1") or "127.0.0.1").strip()
         health_port = _int("HEALTHCHECK_PORT", 8082, errors)
-        same_host = wh_host == health_host or "0.0.0.0" in {wh_host, health_host}  # nosec B104 - sentinel comparison, not a bind
-        if same_host and wh_port == health_port:
-            errors.append(f"Webhook port and health port collide on {wh_host}:{wh_port}")
+        same_host = ingress_host == health_host or "0.0.0.0" in {ingress_host, health_host}  # nosec B104 - sentinel comparison, not a bind
+        if same_host and ingress_port == health_port:
+            errors.append(f"HTTP ingress port and health port collide on {ingress_host}:{ingress_port}")
 
     required_paths = [ROOT / "audio" / "demo", ROOT / "audio" / "full", ROOT / "data"]
-    for p in required_paths:
-        if not p.exists():
-            errors.append(f"Required path missing: {p.relative_to(ROOT)}")
+    for path in required_paths:
+        if not path.exists():
+            errors.append(f"Required path missing: {path.relative_to(ROOT)}")
 
     forbidden = _collect_release_artifacts()
     if forbidden:
