@@ -34,15 +34,17 @@ def _prepare_ad_links_db(path: Path) -> None:
         apply_admin_ad_links_v1(conn)
 
 
-def test_build_start_payload_is_telegram_safe():
+def test_build_start_payload_never_exceeds_telegram_limit():
     payload = admin_ad_links.build_start_payload(
         source="Telegram Ads",
-        campaign="May Launch 2026",
-        creative="Reels #1",
-        ad_spend="340 RUB",
+        campaign="May Launch 2026 with an intentionally very long campaign name",
+        creative="Reels #1 with another intentionally very long creative name",
+        ad_spend="340 RUB monthly attribution budget",
     )
 
-    assert payload == "src_telegram_ads__camp_may_launch_2026__creative_reels_1__cost_340_rub"
+    assert len(payload) <= 64
+    assert payload.startswith("src_telegram_ads")
+    assert "__h_" in payload
 
 
 def test_build_click_tracking_url_requires_public_base(monkeypatch):
@@ -55,7 +57,7 @@ def test_build_click_tracking_url_requires_public_base(monkeypatch):
     assert admin_ad_links.build_click_tracking_url("src_a b", base_url="https://metrotherapy.ru") == "https://metrotherapy.ru/a/src_a+b"
 
 
-def test_create_ad_link_persists_and_returns_tme_url(tmp_path, monkeypatch):
+def test_create_ad_link_persists_short_tme_payload_and_resolves_metadata(tmp_path, monkeypatch):
     path = tmp_path / "adlinks.db"
     monkeypatch.setattr(admin_ad_links, "db", lambda: _fake_db(path))
     monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "metrotherapybot")
@@ -70,12 +72,20 @@ def test_create_ad_link_persists_and_returns_tme_url(tmp_path, monkeypatch):
 
     assert item["id"] == 1
     assert item["source"] == "telegram_ads"
-    assert item["payload"] == "src_telegram_ads__camp_may__creative_reels1__cost_340rub"
-    assert item["url"] == "https://t.me/metrotherapybot?start=src_telegram_ads__camp_may__creative_reels1__cost_340rub"
+    assert item["payload"] == "ad_1"
+    assert item["url"] == "https://t.me/metrotherapybot?start=ad_1"
+
+    resolved = admin_ad_links.resolve_ad_link_payload("ad_1")
+    assert resolved is not None
+    assert resolved["utm_source"] == "telegram_ads"
+    assert resolved["utm_campaign"] == "may"
+    assert resolved["utm_creative"] == "reels1"
+    assert resolved["ad_spend"] == "340rub"
 
     links = admin_ad_links.list_ad_links()
     assert len(links) == 1
     assert links[0]["url"] == item["url"]
+    assert links[0]["start_payload"] == "ad_1"
 
 
 def test_create_ad_link_adds_tracking_url_when_public_base_is_set(tmp_path, monkeypatch):
@@ -87,7 +97,7 @@ def test_create_ad_link_adds_tracking_url_when_public_base_is_set(tmp_path, monk
 
     item = admin_ad_links.create_ad_link("telegram_ads", campaign="may", creative="reels1")
 
-    assert item["tracking_url"] == "https://metrotherapy.ru/a/src_telegram_ads__camp_may__creative_reels1"
+    assert item["tracking_url"] == "https://metrotherapy.ru/a/ad_1"
     text = admin_ad_links.format_created_ad_link(item)
     assert "Tracking-ссылка для рекламы" in text
     assert "Прямая Telegram-ссылка" in text
