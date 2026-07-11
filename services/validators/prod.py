@@ -40,6 +40,36 @@ def _resolved_db_engine() -> str:
     return "postgres" if _env("DATABASE_URL") else "sqlite"
 
 
+def validate_prod_admin_contract(*, strict: bool = True) -> None:
+    """Production must have at least one actually parseable positive admin ID."""
+
+    if not _prod():
+        return
+
+    raw_many = _env("ADMIN_IDS")
+    raw_one = _env("ADMIN_ID")
+    if raw_many:
+        tokens = [part.strip() for part in raw_many.split(",") if part.strip()]
+        source_name = "ADMIN_IDS"
+    elif raw_one:
+        tokens = [raw_one]
+        source_name = "ADMIN_ID"
+    else:
+        tokens = []
+        source_name = "ADMIN_IDS/ADMIN_ID"
+
+    invalid = [token for token in tokens if not token.isdigit() or int(token) <= 0]
+    valid = [int(token) for token in tokens if token.isdigit() and int(token) > 0]
+    errors: list[str] = []
+    if invalid:
+        errors.append(f"{source_name} contains invalid values: {', '.join(invalid)}")
+    if not valid:
+        errors.append("at least one positive numeric admin id is required")
+
+    if errors and strict:
+        raise ValidationError("Production admin contract failed: " + "; ".join(errors))
+
+
 def validate_prod_telegram_polling_contract(*, strict: bool = True) -> None:
     """Production Telegram ingress is polling-only.
 
@@ -129,6 +159,7 @@ def validate_prod_guardrails(*, strict: bool = True) -> None:
     if app_env not in {"prod", "production"}:
         return
 
+    validate_prod_admin_contract(strict=True)
     validate_prod_telegram_polling_contract(strict=True)
     validate_prod_postgres_contract(strict=True)
     validate_prod_monetization_contract(strict=True)

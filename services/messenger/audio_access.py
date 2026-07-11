@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from core.time_utils import utc_now
@@ -26,8 +28,29 @@ class AudioAccessGrant:
     title: str | None
     file_path: Path
     platform: str
+    created_at: str
     first_accessed_at: str | None
     access_count: int
+
+
+def _audio_access_ttl_hours() -> int:
+    raw = (os.getenv("AUDIO_ACCESS_TOKEN_TTL_HOURS") or "24").strip()
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return 24
+    return max(1, min(parsed, 24 * 7))
+
+
+def _grant_expired(created_at: str, *, now: datetime | None = None) -> bool:
+    try:
+        created = datetime.fromisoformat(str(created_at))
+    except (TypeError, ValueError):
+        return True
+    current = now or utc_now()
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=current.tzinfo)
+    return current >= created + timedelta(hours=_audio_access_ttl_hours())
 
 
 def issue_audio_access_token(
@@ -87,13 +110,17 @@ def get_audio_access_grant(token: str) -> AudioAccessGrant | None:
     with db() as conn:
         row = conn.execute(
             '''
-            SELECT token, user_id, sequence_key, anchor, title, file_path, platform, first_accessed_at, access_count
+            SELECT token, user_id, sequence_key, anchor, title, file_path, platform,
+                   created_at, first_accessed_at, access_count
             FROM user_audio_access_tokens
             WHERE token=?
             '''.strip(),
             (raw,),
         ).fetchone()
     if not row:
+        return None
+    created_at = str(row['created_at'] or '')
+    if _grant_expired(created_at):
         return None
     return AudioAccessGrant(
         token=str(row['token']),
@@ -103,6 +130,7 @@ def get_audio_access_grant(token: str) -> AudioAccessGrant | None:
         title=str(row['title']) if row['title'] is not None else None,
         file_path=Path(str(row['file_path'])),
         platform=str(row['platform']),
+        created_at=created_at,
         first_accessed_at=str(row['first_accessed_at']) if row['first_accessed_at'] is not None else None,
         access_count=int(row['access_count'] or 0),
     )

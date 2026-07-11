@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from services import admin_ad_links
 from services.acquisition_attribution import start_attribution_meta
 
 
@@ -25,6 +26,29 @@ def test_start_attribution_meta_parses_telegram_safe_tokens():
     assert meta["campaign"] == "may"
     assert meta["creative"] == "reels1"
     assert meta["ad_spend"] == "340rub"
+
+
+def test_start_attribution_meta_resolves_short_ad_payload(monkeypatch):
+    monkeypatch.setattr(
+        admin_ad_links,
+        "resolve_ad_link_payload",
+        lambda payload: {
+            "utm_source": "telegram_ads",
+            "utm_campaign": "july",
+            "utm_creative": "reels7",
+            "ad_spend": "900rub",
+        }
+        if payload == "ad_17"
+        else None,
+    )
+
+    meta = start_attribution_meta("ad_17")
+
+    assert meta["payload"] == "ad_17"
+    assert meta["source"] == "telegram_ads"
+    assert meta["campaign"] == "july"
+    assert meta["creative"] == "reels7"
+    assert meta["ad_spend"] == "900rub"
 
 
 def test_start_attribution_meta_ignores_unknown_keys():

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""One-command non-bypassable regression contour for CI and local release checks."""
+"""Canonical one-command regression contour for CI and local release checks."""
 
 import os
 import shlex
@@ -97,7 +97,7 @@ STEPS = (
         STRICT_VALIDATOR_ENV,
     ),
     GateStep(
-        "prod-like validation",
+        "optional prod-config validation",
         (sys.executable, "scripts/validate_project.py"),
         PROD_LIKE_VALIDATOR_ENV,
         env_file=PROD_ENV_FILE,
@@ -118,27 +118,57 @@ def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _is_live_prod_host() -> bool:
-    """Detect the real production VPS and refuse heavy checks by default.
+def _load_env_file(path: Path) -> dict[str, str]:
+    loaded: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        tokens = shlex.split(line, comments=True, posix=True)
+        if not tokens:
+            continue
+        if tokens[0] == "export":
+            tokens = tokens[1:]
+        for token in tokens:
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            key = key.strip()
+            if key:
+                loaded[key] = value
+    return loaded
 
-    The full regression contour owns compileall + smoke + full pytest + validator.
-    It is correct for CI/local release proof, but too heavy for the live VPS.
-    Operators can still override deliberately with ALLOW_FULL_REGRESSION_ON_PROD=1.
+
+def _is_live_prod_host() -> bool:
+    """Detect a real production deployment and refuse heavy checks by default.
+
+    Production identity is derived from the deployment contract, not from a
+    hard-coded checkout path. This keeps the safety guard effective for /opt,
+    containers, relocated systemd deployments and future host layouts.
     """
     if _truthy(os.getenv("CI")):
         return False
     if _truthy(os.getenv(FULL_GATE_PROD_OVERRIDE)):
         return False
-    if ROOT == Path("/root/metrotherapy") and PROD_ENV_FILE.exists():
-        return True
-    return False
+    if not PROD_ENV_FILE.exists():
+        return False
+
+    try:
+        file_env = _load_env_file(PROD_ENV_FILE)
+    except OSError:
+        return False
+    app_env = (os.getenv("APP_ENV") or file_env.get("APP_ENV") or "").strip().lower()
+    db_engine = (os.getenv("METRO_DB_ENGINE") or file_env.get("METRO_DB_ENGINE") or "").strip().lower()
+    database_url = (os.getenv("DATABASE_URL") or file_env.get("DATABASE_URL") or "").strip().lower()
+    postgres = db_engine in {"postgres", "postgresql", "pg"} or database_url.startswith(("postgresql://", "postgres://"))
+    return app_env in {"prod", "production"} and postgres
 
 
 def _guard_live_prod_host() -> int:
     if not _is_live_prod_host():
         return 0
     print(
-        "REGRESSION_GATE_REFUSED_ON_LIVE_PROD: full pytest/regression is disabled on the live VPS.\n"
+        "REGRESSION_GATE_REFUSED_ON_LIVE_PROD: full pytest/regression is disabled on the live production deployment.\n"
         "Use lightweight production checks instead: scripts/user_scenario_gate.py, healthz, readyz, "
         "and scripts/post_deploy_verify.py --skip-pytest.\n"
         f"Emergency override, only with an approved maintenance window: {FULL_GATE_PROD_OVERRIDE}=1",
@@ -171,27 +201,6 @@ def _cleanup_generated_python_artifacts() -> None:
                     (current_path / filename).unlink()
                 except FileNotFoundError:
                     pass
-
-
-def _load_env_file(path: Path) -> dict[str, str]:
-    loaded: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        tokens = shlex.split(line, comments=True, posix=True)
-        if not tokens:
-            continue
-        if tokens[0] == "export":
-            tokens = tokens[1:]
-        for token in tokens:
-            if "=" not in token:
-                continue
-            key, value = token.split("=", 1)
-            key = key.strip()
-            if key:
-                loaded[key] = value
-    return loaded
 
 
 def _run(step: GateStep) -> int:

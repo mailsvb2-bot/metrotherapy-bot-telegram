@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import sys
 
 
 def _normalize_telegram_token_env() -> None:
@@ -22,6 +23,7 @@ _normalize_telegram_token_env()
 # В PROD не пишем байткод, чтобы релиз оставался чистым и не плодил __pycache__.
 if os.getenv("APP_ENV", "dev").strip().lower() in {"prod", "production"}:
     os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+    sys.dont_write_bytecode = True
 
 from app import create_application
 
@@ -42,9 +44,18 @@ def _restart_limit() -> int:
         return 3
 
 
+def _restart_backoff_sec() -> int:
+    raw = (os.getenv("APP_SELF_HEAL_BACKOFF_SEC") or "2").strip()
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        log.warning("Bad APP_SELF_HEAL_BACKOFF_SEC=%r; using 2 seconds", raw)
+        return 2
+
+
 async def _run_with_restart() -> None:
     restart_enabled = (os.getenv("APP_SELF_HEAL_RESTART", "0") or "0").strip() in {"1", "true", "yes", "on"}
-    backoff = max(1, int(os.getenv("APP_SELF_HEAL_BACKOFF_SEC", "2") or 2))
+    backoff = _restart_backoff_sec()
     max_restarts = _restart_limit()
     crash_count = 0
 

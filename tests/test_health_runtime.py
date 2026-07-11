@@ -79,7 +79,7 @@ def test_build_health_payload_reports_schema_missing(monkeypatch, tmp_path):
     assert 'jobs' in payload['error']
 
 
-def test_build_health_payload_reports_hybrid_polling_plus_messenger_webhook(monkeypatch, tmp_path):
+def test_build_health_payload_reports_hybrid_polling_plus_http_ingress(monkeypatch, tmp_path):
     class DummyCursor:
         def __init__(self, rows):
             self._rows = rows
@@ -109,6 +109,7 @@ def test_build_health_payload_reports_hybrid_polling_plus_messenger_webhook(monk
     monkeypatch.setattr(health_server, 'ROOT', tmp_path)
     monkeypatch.setattr(health_server, '_scheduler_snapshot', lambda: {'scheduler_loop_task_running': True, 'precise_scheduler_running': True, 'precise_scheduler_task_running': True, 'precise_scheduler_queue_size': 0})
     monkeypatch.setattr(health_server, '_messenger_webhook_configured', lambda: True)
+    monkeypatch.setattr(health_server, 'http_ingress_enabled', lambda: True)
     monkeypatch.setattr(health_server, '_telegram_transport', lambda: 'polling')
 
     payload, status = health_server.build_health_payload()
