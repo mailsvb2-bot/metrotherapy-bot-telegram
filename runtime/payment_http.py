@@ -100,11 +100,20 @@ def _provided_secret(request: web.Request) -> str:
 
 
 def _webhook_secret_ok(request: web.Request) -> bool:
-    expected = _webhook_secret()
-    if not expected:
-        return not _is_prod()
+    """Validate an optional reverse-proxy secret without blocking native YooKassa webhooks.
+
+    YooKassa does not send the project's private X-Metrotherapy-Webhook-Secret
+    header. Grant-producing events are authenticated against YooKassa's API in
+    record_verified_yookassa_webhook(), which is the canonical source-of-truth
+    check. A configured custom header remains supported as defense in depth when
+    a trusted reverse proxy injects it; a wrong supplied header is rejected.
+    """
+
     actual = _provided_secret(request)
     if not actual:
+        return True
+    expected = _webhook_secret()
+    if not expected:
         return False
     return hmac.compare_digest(actual, expected)
 
