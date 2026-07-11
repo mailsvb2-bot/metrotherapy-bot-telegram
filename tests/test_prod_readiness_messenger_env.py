@@ -15,8 +15,13 @@ def _run(monkeypatch, **env):
         "TELEGRAM_WEBHOOK_ENABLED",
         "MESSENGER_WEBHOOK_ENABLED",
         "MESSENGER_PUBLIC_BASE_URL",
+        "PAYMENT_HTTP_ENABLED",
+        "PAYMENT_PUBLIC_BASE_URL",
+        "MAX_WEBHOOK_ENABLED",
+        "VK_WEBHOOK_ENABLED",
         "MAX_BOT_TOKEN",
         "MAX_BOT_LINK_BASE",
+        "MAX_WEBHOOK_SECRET",
         "VK_GROUP_ID",
         "VK_GROUP_TOKEN",
         "VK_CONFIRMATION_TOKEN",
@@ -40,22 +45,26 @@ def _base_dev_env() -> dict[str, str]:
     }
 
 
-def test_readiness_fails_when_messenger_webhook_enabled_without_vk_or_max(monkeypatch):
+def test_readiness_accepts_payment_ingress_without_vk_or_max(monkeypatch):
     errors, warnings = _run(
         monkeypatch,
         **_base_dev_env(),
-        MESSENGER_WEBHOOK_ENABLED="1",
-        MESSENGER_PUBLIC_BASE_URL="https://metrotherapy.ru",
+        PAYMENT_HTTP_ENABLED="1",
+        PAYMENT_PUBLIC_BASE_URL="https://metrotherapy.ru",
+        MAX_WEBHOOK_ENABLED="0",
+        VK_WEBHOOK_ENABLED="0",
     )
 
-    assert any("VK or MAX env" in error for error in errors)
+    assert not any("VK_" in error or "MAX_" in error for error in errors)
+    assert not any("HTTP ingress is disabled" in warning for warning in warnings)
 
 
-def test_readiness_fails_when_vk_env_is_partial(monkeypatch):
+def test_readiness_fails_when_enabled_vk_env_is_partial(monkeypatch):
     errors, warnings = _run(
         monkeypatch,
         **_base_dev_env(),
-        MESSENGER_WEBHOOK_ENABLED="1",
+        PAYMENT_HTTP_ENABLED="0",
+        VK_WEBHOOK_ENABLED="1",
         MESSENGER_PUBLIC_BASE_URL="https://metrotherapy.ru",
         VK_GROUP_ID="238191212",
         VK_GROUP_TOKEN="vk-token-for-test",
@@ -64,11 +73,13 @@ def test_readiness_fails_when_vk_env_is_partial(monkeypatch):
     assert any("VK_CONFIRMATION_TOKEN" in error for error in errors)
 
 
-def test_readiness_accepts_complete_vk_and_max_env_for_messenger_contract(monkeypatch):
+def test_readiness_accepts_complete_vk_and_max_env(monkeypatch):
     errors, warnings = _run(
         monkeypatch,
         **_base_dev_env(),
-        MESSENGER_WEBHOOK_ENABLED="1",
+        PAYMENT_HTTP_ENABLED="0",
+        MAX_WEBHOOK_ENABLED="1",
+        VK_WEBHOOK_ENABLED="1",
         MESSENGER_PUBLIC_BASE_URL="https://metrotherapy.ru",
         MAX_BOT_TOKEN="max-token-for-test",
         MAX_BOT_LINK_BASE="https://max.example/bot/{payload}",
@@ -78,15 +89,16 @@ def test_readiness_accepts_complete_vk_and_max_env_for_messenger_contract(monkey
         VK_SECRET="vk-secret-for-test",
     )
 
-    assert not any("MESSENGER" in error or "VK_" in error or "MAX_" in error for error in errors)
+    assert not any("VK_" in error or "MAX_" in error for error in errors)
     assert not any("VK_SECRET" in warning for warning in warnings)
 
 
-def test_readiness_warns_when_vk_secret_absent(monkeypatch):
+def test_readiness_warns_when_dev_vk_secret_absent(monkeypatch):
     errors, warnings = _run(
         monkeypatch,
         **_base_dev_env(),
-        MESSENGER_WEBHOOK_ENABLED="1",
+        PAYMENT_HTTP_ENABLED="0",
+        VK_WEBHOOK_ENABLED="1",
         MESSENGER_PUBLIC_BASE_URL="https://metrotherapy.ru",
         VK_GROUP_ID="238191212",
         VK_GROUP_TOKEN="vk-token-for-test",
@@ -94,3 +106,15 @@ def test_readiness_warns_when_vk_secret_absent(monkeypatch):
     )
 
     assert any("VK_SECRET" in warning for warning in warnings)
+
+
+def test_legacy_messenger_flag_keeps_payment_compat_without_enabling_empty_channels(monkeypatch):
+    errors, warnings = _run(
+        monkeypatch,
+        **_base_dev_env(),
+        MESSENGER_WEBHOOK_ENABLED="1",
+        PAYMENT_PUBLIC_BASE_URL="https://metrotherapy.ru",
+    )
+
+    assert not any("VK or MAX" in error for error in errors)
+    assert not any("VK_" in error or "MAX_" in error for error in errors)
