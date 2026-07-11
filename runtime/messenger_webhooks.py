@@ -38,11 +38,44 @@ class MessengerWebhookRuntime:
 
 
 async def _health(request: web.Request) -> web.Response:
-    return web.json_response({"ok": True, "service": "messenger-webhooks"})
+    return web.json_response({"ok": True, "service": "http-ingress"})
 
 
 def _truthy_env(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _optional_env_flag(name: str) -> bool | None:
+    if name not in os.environ:
+        return None
+    return _truthy_env(name)
+
+
+def payment_http_enabled() -> bool:
+    explicit = _optional_env_flag("PAYMENT_HTTP_ENABLED")
+    if explicit is not None:
+        return explicit
+    return bool(getattr(settings, "MESSENGER_WEBHOOK_ENABLED", False) or False)
+
+
+def max_webhook_enabled() -> bool:
+    explicit = _optional_env_flag("MAX_WEBHOOK_ENABLED")
+    if explicit is not None:
+        return explicit
+    return bool(
+        getattr(settings, "MESSENGER_WEBHOOK_ENABLED", False)
+        and str(getattr(settings, "MAX_BOT_TOKEN", "") or "").strip()
+    )
+
+
+def vk_webhook_enabled() -> bool:
+    explicit = _optional_env_flag("VK_WEBHOOK_ENABLED")
+    if explicit is not None:
+        return explicit
+    return bool(
+        getattr(settings, "MESSENGER_WEBHOOK_ENABLED", False)
+        and str(getattr(settings, "VK_GROUP_TOKEN", "") or "").strip()
+    )
 
 
 def _register_health_routes(app: web.Application) -> None:
@@ -51,11 +84,20 @@ def _register_health_routes(app: web.Application) -> None:
     app.router.add_get("/healthz", _health)
 
 
-def _register_messenger_routes(app: web.Application) -> None:
+def _register_payment_routes(app: web.Application) -> None:
     app.router.add_get("/pay/yookassa", pay_yookassa_web)
     app.router.add_post("/pay/yookassa/webhook", yookassa_reconciliation_webhook)
-    app.router.add_post("/webhooks/vk", vk_webhook)
+
+
+def _register_max_routes(app: web.Application) -> None:
     app.router.add_post("/webhooks/max", max_webhook)
+
+
+def _register_vk_routes(app: web.Application) -> None:
+    app.router.add_post("/webhooks/vk", vk_webhook)
+
+
+def _register_audio_routes(app: web.Application) -> None:
     app.router.add_get(f"{AUDIO_MEDIA_PREFIX}{{filename}}", audio_media)
     app.router.add_get(f"{AUDIO_ACCESS_PREFIX}{{token}}", audio_access)
 
@@ -83,42 +125,54 @@ def _register_telegram_routes(
     return public_url
 
 
-def _resolve_ingress_bind(*, messenger_enabled: bool, telegram_enabled: bool) -> tuple[str, int]:
-    messenger_host = getattr(settings, "MESSENGER_WEBHOOK_HOST", "127.0.0.1")
-    messenger_port = int(getattr(settings, "MESSENGER_WEBHOOK_PORT", 8081))
-    telegram_host = getattr(settings, "TELEGRAM_WEBHOOK_HOST", messenger_host)
-    telegram_port = int(getattr(settings, "TELEGRAM_WEBHOOK_PORT", messenger_port))
+def _resolve_ingress_bind(*, http_ingress_enabled: bool, telegram_enabled: bool) -> tuple[str, int]:
+    ingress_host = getattr(settings, "MESSENGER_WEBHOOK_HOST", "127.0.0.1")
+    ingress_port = int(getattr(settings, "MESSENGER_WEBHOOK_PORT", 8081))
+    telegram_host = getattr(settings, "TELEGRAM_WEBHOOK_HOST", ingress_host)
+    telegram_port = int(getattr(settings, "TELEGRAM_WEBHOOK_PORT", ingress_port))
 
-    if messenger_enabled and telegram_enabled and (
-        str(messenger_host) != str(telegram_host) or int(messenger_port) != int(telegram_port)
+    if http_ingress_enabled and telegram_enabled and (
+        str(ingress_host) != str(telegram_host) or int(ingress_port) != int(telegram_port)
     ):
-        raise RuntimeError("Telegram and messenger webhook runtimes must share the same ingress host/port")
+        raise RuntimeError("Telegram and HTTP ingress runtimes must share the same ingress host/port")
 
     if telegram_enabled:
         return str(telegram_host), int(telegram_port)
-    return str(messenger_host), int(messenger_port)
+    return str(ingress_host), int(ingress_port)
 
 
 async def start_messenger_webhook_runtime(
     bot: "Bot | None" = None,
     dispatcher: "Dispatcher | None" = None,
 ) -> MessengerWebhookRuntime | None:
-    messenger_enabled = bool(getattr(settings, "MESSENGER_WEBHOOK_ENABLED", False) or False)
+    payment_enabled = payment_http_enabled()
+    max_enabled = max_webhook_enabled()
+    vk_enabled = vk_webhook_enabled()
+    http_ingress_enabled = bool(payment_enabled or max_enabled or vk_enabled)
     telegram_enabled = telegram_transport() == "webhook"
-    if not messenger_enabled and not telegram_enabled:
+    if not http_ingress_enabled and not telegram_enabled:
         return None
 
     app = web.Application()
     _register_health_routes(app)
 
-    if messenger_enabled:
-        _register_messenger_routes(app)
+    if payment_enabled:
+        _register_payment_routes(app)
+    if max_enabled:
+        _register_max_routes(app)
+    if vk_enabled:
+        _register_vk_routes(app)
+    if max_enabled or vk_enabled:
+        _register_audio_routes(app)
 
     telegram_public_url = ""
     if telegram_enabled:
         telegram_public_url = _register_telegram_routes(app, bot=bot, dispatcher=dispatcher)
 
-    host, port = _resolve_ingress_bind(messenger_enabled=messenger_enabled, telegram_enabled=telegram_enabled)
+    host, port = _resolve_ingress_bind(
+        http_ingress_enabled=http_ingress_enabled,
+        telegram_enabled=telegram_enabled,
+    )
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -134,9 +188,14 @@ async def start_messenger_webhook_runtime(
             )
             log.info("Telegram webhook runtime started on %s:%s, public_url=%s", host, port, telegram_public_url)
 
-        if messenger_enabled:
-            log.info("Messenger webhook runtime started on %s:%s", host, port)
-
+        log.info(
+            "HTTP ingress started on %s:%s payment=%s max=%s vk=%s",
+            host,
+            port,
+            payment_enabled,
+            max_enabled,
+            vk_enabled,
+        )
         return MessengerWebhookRuntime(runner=runner, site=site, telegram_public_url=telegram_public_url)
     except (OSError, RuntimeError, ValueError, TypeError, AttributeError, TelegramAPIError):
         await runner.cleanup()
