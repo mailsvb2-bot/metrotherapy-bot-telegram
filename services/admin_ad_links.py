@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sqlite3
@@ -14,6 +15,8 @@ _ALLOWED_SOURCES = {
     "telegram_post": "Пост в Telegram",
     "partner": "Партнёр/посев",
 }
+_TELEGRAM_START_MAX_LEN = 64
+_SHORT_PAYLOAD_RE = re.compile(r"^ad_(\d+)$")
 
 
 def _utc_now() -> datetime:
@@ -64,6 +67,16 @@ def _rowdict(row: Any | None) -> dict[str, Any] | None:
         return None
 
 
+def _telegram_safe_payload(payload: str) -> str:
+    clean = str(payload or "").strip()
+    if len(clean) <= _TELEGRAM_START_MAX_LEN:
+        return clean
+    digest = hashlib.blake2s(clean.encode("utf-8"), digest_size=5).hexdigest()
+    suffix = f"__h_{digest}"
+    prefix = clean[: _TELEGRAM_START_MAX_LEN - len(suffix)].rstrip("_-")
+    return f"{prefix}{suffix}"
+
+
 def build_start_payload(*, source: str, campaign: str, creative: str, ad_spend: str = "") -> str:
     source = _safe_token(source, fallback="telegram_ads")
     campaign = _safe_token(campaign, fallback="campaign")
@@ -72,12 +85,13 @@ def build_start_payload(*, source: str, campaign: str, creative: str, ad_spend: 
     parts = [f"src_{source}", f"camp_{campaign}", f"creative_{creative}"]
     if spend:
         parts.append(f"cost_{spend}")
-    return "__".join(parts)
+    return _telegram_safe_payload("__".join(parts))
 
 
 def build_start_url(payload: str, *, bot_username: str | None = None) -> str:
     username = _safe_token(bot_username or _bot_username(), fallback="metrotherapybot", limit=64)
-    return f"https://t.me/{username}?start={quote_plus(str(payload or '').strip())}"
+    safe_payload = _telegram_safe_payload(str(payload or "").strip())
+    return f"https://t.me/{username}?start={quote_plus(safe_payload)}"
 
 
 def build_click_tracking_url(payload: str, *, base_url: str | None = None) -> str:
@@ -95,6 +109,46 @@ def _attach_tracking_url(item: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+def _short_start_payload(link_id: int) -> str:
+    if int(link_id) <= 0:
+        raise ValueError("ad link id must be positive")
+    return f"ad_{int(link_id)}"
+
+
+def resolve_ad_link_payload(payload: str) -> dict[str, str] | None:
+    """Resolve a compact Telegram start payload back to stored attribution metadata."""
+
+    match = _SHORT_PAYLOAD_RE.fullmatch(str(payload or "").strip())
+    if match is None:
+        return None
+    link_id = int(match.group(1))
+    with db() as conn:
+        try:
+            row = conn.execute(
+                """
+                SELECT source, campaign, creative, ad_spend
+                FROM admin_ad_links
+                WHERE id=?
+                LIMIT 1
+                """.strip(),
+                (link_id,),
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+    item = _rowdict(row)
+    if not item:
+        return None
+    return {
+        "utm_source": str(item.get("source") or ""),
+        "source": str(item.get("source") or ""),
+        "utm_campaign": str(item.get("campaign") or ""),
+        "campaign": str(item.get("campaign") or ""),
+        "utm_creative": str(item.get("creative") or ""),
+        "creative": str(item.get("creative") or ""),
+        "ad_spend": str(item.get("ad_spend") or ""),
+    }
+
+
 def create_ad_link(source: str, *, campaign: str | None = None, creative: str | None = None, ad_spend: str = "") -> dict[str, Any]:
     now = _utc_now()
     src = _safe_token(source, fallback="telegram_ads")
@@ -103,8 +157,12 @@ def create_ad_link(source: str, *, campaign: str | None = None, creative: str | 
     campaign_token = _safe_token(campaign or f"campaign_{now:%Y%m%d}", fallback=f"campaign_{now:%Y%m%d}")
     creative_token = _safe_token(creative or "creative_1", fallback="creative_1")
     spend = _safe_token(ad_spend, fallback="", limit=32)
-    payload = build_start_payload(source=src, campaign=campaign_token, creative=creative_token, ad_spend=spend)
-    url = build_start_url(payload)
+    attribution_payload = build_start_payload(
+        source=src,
+        campaign=campaign_token,
+        creative=creative_token,
+        ad_spend=spend,
+    )
     created_at = now.isoformat()
 
     with db() as conn:
@@ -113,12 +171,20 @@ def create_ad_link(source: str, *, campaign: str | None = None, creative: str | 
             INSERT INTO admin_ad_links(source, campaign, creative, ad_spend, start_payload, url, created_at)
             VALUES(?,?,?,?,?,?,?)
             """.strip(),
-            (src, campaign_token, creative_token, spend, payload, url, created_at),
+            (src, campaign_token, creative_token, spend, attribution_payload, build_start_url(attribution_payload), created_at),
         )
         row = conn.execute("SELECT last_insert_rowid() AS id").fetchone()
-    rid = _rowdict(row) or {}
+        rid = _rowdict(row) or {}
+        link_id = int(rid.get("id") or 0)
+        payload = _short_start_payload(link_id)
+        url = build_start_url(payload)
+        conn.execute(
+            "UPDATE admin_ad_links SET start_payload=?, url=? WHERE id=?",
+            (payload, url, link_id),
+        )
+
     return _attach_tracking_url({
-        "id": int(rid.get("id") or 0),
+        "id": link_id,
         "source": src,
         "source_label": _ALLOWED_SOURCES.get(src, src),
         "campaign": campaign_token,
