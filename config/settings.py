@@ -17,6 +17,11 @@ if os.getenv("LOAD_DOTENV", "") == "1" or APP_ENV in {"dev", "stage"}:
         # dotenv не обязателен (особенно в минимальных прод-сборках)
         pass
 
+
+class ConfigurationError(ValueError):
+    """Raised when an environment value cannot satisfy the typed runtime contract."""
+
+
 # --- Админ-доступ к аналитике ---
 # ADMIN_IDS можно задать так: ADMIN_IDS="123,456" или ADMIN_ID="123"
 def _parse_admin_ids_env() -> list[int]:
@@ -40,9 +45,9 @@ def _parse_admin_ids_env() -> list[int]:
             return []
     return []
 
+
 # ВАЖНО: это module-level переменная для удобного импорта в keyboards/handlers.
 ADMIN_IDS: list[int] = _parse_admin_ids_env()
-
 
 
 def _env(name: str, default: str = "") -> str:
@@ -61,6 +66,25 @@ def _env_bool(name: str, default: str = "0") -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on", "webhook"}
 
 
+def _env_int(
+    name: str,
+    default: int,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    raw = _env(name, str(default))
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError(f"{name} must be an integer, got {raw!r}") from exc
+    if minimum is not None and value < minimum:
+        raise ConfigurationError(f"{name} must be >= {minimum}, got {value}")
+    if maximum is not None and value > maximum:
+        raise ConfigurationError(f"{name} must be <= {maximum}, got {value}")
+    return value
+
+
 def _truthy_env(name: str) -> bool:
     return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on", "webhook"}
 
@@ -71,6 +95,12 @@ def _first_env(*names: str) -> str:
         if value:
             return value
     return ""
+
+
+def _optional_feature_flag(name: str) -> bool | None:
+    if name not in os.environ:
+        return None
+    return _truthy_env(name)
 
 
 @dataclass
@@ -93,30 +123,34 @@ class Settings:
     VK_API_VERSION: str = _env("VK_API_VERSION", "5.199")
     MESSENGER_WEBHOOK_ENABLED: bool = _env_bool("MESSENGER_WEBHOOK_ENABLED")
     MESSENGER_WEBHOOK_HOST: str = _env("MESSENGER_WEBHOOK_HOST", _env("WEBHOOK_HOST", "127.0.0.1"))
-    MESSENGER_WEBHOOK_PORT: int = int(_env("MESSENGER_WEBHOOK_PORT", _env("WEBHOOK_PORT", "8081")))
+    MESSENGER_WEBHOOK_PORT: int = _env_int(
+        "MESSENGER_WEBHOOK_PORT",
+        _env_int("WEBHOOK_PORT", 8081, minimum=1, maximum=65535),
+        minimum=1,
+        maximum=65535,
+    )
     TELEGRAM_TRANSPORT: str = (_env("TELEGRAM_TRANSPORT", _env("RUN_MODE", "polling")) or "polling").strip().lower()
     TELEGRAM_WEBHOOK_ENABLED: bool = _env_bool("TELEGRAM_WEBHOOK_ENABLED")
     TELEGRAM_WEBHOOK_HOST: str = _env("TELEGRAM_WEBHOOK_HOST", _env("WEBHOOK_HOST", "127.0.0.1"))
-    TELEGRAM_WEBHOOK_PORT: int = int(_env("TELEGRAM_WEBHOOK_PORT", _env("WEBHOOK_PORT", "8081")))
+    TELEGRAM_WEBHOOK_PORT: int = _env_int(
+        "TELEGRAM_WEBHOOK_PORT",
+        _env_int("WEBHOOK_PORT", 8081, minimum=1, maximum=65535),
+        minimum=1,
+        maximum=65535,
+    )
     TELEGRAM_WEBHOOK_PREFIX: str = _env("TELEGRAM_WEBHOOK_PREFIX", "/telegram-webhook")
     TELEGRAM_WEBHOOK_SECRET_TOKEN: str = _env("TELEGRAM_WEBHOOK_SECRET_TOKEN", "")
     TELEGRAM_WEBHOOK_PUBLIC_BASE_URL: str = _env("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", _env("PUBLIC_BASE_URL", ""))
     TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES: bool = _env_bool("TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES")
     HEALTHCHECK_ENABLED: bool = _env_bool("HEALTHCHECK_ENABLED", "1")
     HEALTHCHECK_HOST: str = _env("HEALTHCHECK_HOST", "127.0.0.1")
-    HEALTHCHECK_PORT: int = int(_env("HEALTHCHECK_PORT", "8082"))
+    HEALTHCHECK_PORT: int = _env_int("HEALTHCHECK_PORT", 8082, minimum=1, maximum=65535)
     MESSENGER_PUBLIC_BASE_URL: str = _env("MESSENGER_PUBLIC_BASE_URL", "")
-    MESSENGER_BRIDGE_TOKEN_TTL_HOURS: int = int(_env("MESSENGER_BRIDGE_TOKEN_TTL_HOURS", "72"))
+    MESSENGER_BRIDGE_TOKEN_TTL_HOURS: int = _env_int("MESSENGER_BRIDGE_TOKEN_TTL_HOURS", 72, minimum=1)
 
-    # --- YooKassa (Telegram Payments) ---
-    # Во многих подключениях YooKassa требуется передавать чек (receipt) для фискализации.
-    # Telegram позволяет прокинуть данные в провайдера через provider_data.
-    # Параметры ниже можно переопределить в .env.
-    # tax_system_code: 1..6 (система налогообложения в чеке)
-    YOOKASSA_TAX_SYSTEM_CODE: int = int(_env("YOOKASSA_TAX_SYSTEM_CODE", "2"))
-    # vat_code: 1..6 (ставка НДС для позиции; 1 обычно означает "без НДС")
-    YOOKASSA_VAT_CODE: int = int(_env("YOOKASSA_VAT_CODE", "1"))
-    # payment_subject/payment_mode для позиции чека (значения по умолчанию подходят для цифровой услуги)
+    # --- YooKassa ---
+    YOOKASSA_TAX_SYSTEM_CODE: int = _env_int("YOOKASSA_TAX_SYSTEM_CODE", 2, minimum=1, maximum=6)
+    YOOKASSA_VAT_CODE: int = _env_int("YOOKASSA_VAT_CODE", 1, minimum=1, maximum=6)
     YOOKASSA_PAYMENT_SUBJECT: str = _env("YOOKASSA_PAYMENT_SUBJECT", "service")
     YOOKASSA_PAYMENT_MODE: str = _env("YOOKASSA_PAYMENT_MODE", "full_payment")
 
@@ -129,11 +163,7 @@ class Settings:
     EVENING_TIME: str = _env("EVENING_TIME", "19:30")
 
     # Default duration (seconds) for full tracks (used for post-rating fallback timer)
-    # Override in .env: TRACK_DURATION_SEC=1680  (28 min)
-    TRACK_DURATION_SEC: int = int(_env("TRACK_DURATION_SEC", "1680"))
-
-
-
+    TRACK_DURATION_SEC: int = _env_int("TRACK_DURATION_SEC", 1680, minimum=1)
 
     AUDIO_DIR: str = _env("AUDIO_DIR", "audio/full")
     DEMO_DIR: str = _env("DEMO_DIR", "audio/demo")
@@ -141,22 +171,21 @@ class Settings:
     # Источник истины для тарифов: БД (таблица plans). Файл тарифов не используется.
 
     # 0 = unlimited
-    DEMO_LIMIT: int = int(_env("DEMO_LIMIT", "0"))
+    DEMO_LIMIT: int = _env_int("DEMO_LIMIT", 0, minimum=0)
 
     # Funnel timings
-    DEMO_REMINDER_MINUTES: int = int(_env("DEMO_REMINDER_MINUTES", "5"))
-    FUNNEL_AFTER_DEMO_MINUTES: int = int(_env("FUNNEL_AFTER_DEMO_MINUTES", "30"))
-    # Мягкое касание после demo_ack, если человек ещё не открыл тарифы
-    FUNNEL_POSTDEMO_MINUTES: int = int(_env("FUNNEL_POSTDEMO_MINUTES", "10"))
-    FUNNEL_DEADLINE_HOURS: int = int(_env("FUNNEL_DEADLINE_HOURS", "24"))
-    FUNNEL_LASTCALL_HOURS: int = int(_env("FUNNEL_LASTCALL_HOURS", "48"))
+    DEMO_REMINDER_MINUTES: int = _env_int("DEMO_REMINDER_MINUTES", 5, minimum=0)
+    FUNNEL_AFTER_DEMO_MINUTES: int = _env_int("FUNNEL_AFTER_DEMO_MINUTES", 30, minimum=0)
+    FUNNEL_POSTDEMO_MINUTES: int = _env_int("FUNNEL_POSTDEMO_MINUTES", 10, minimum=0)
+    FUNNEL_DEADLINE_HOURS: int = _env_int("FUNNEL_DEADLINE_HOURS", 24, minimum=0)
+    FUNNEL_LASTCALL_HOURS: int = _env_int("FUNNEL_LASTCALL_HOURS", 48, minimum=0)
 
     # Referral bonuses
-    REF_BONUS_WEEK_DAYS: int = int(_env("REF_BONUS_WEEK_DAYS", "3"))
-    REF_BONUS_MONTH_DAYS: int = int(_env("REF_BONUS_MONTH_DAYS", "7"))
+    REF_BONUS_WEEK_DAYS: int = _env_int("REF_BONUS_WEEK_DAYS", 3, minimum=0)
+    REF_BONUS_MONTH_DAYS: int = _env_int("REF_BONUS_MONTH_DAYS", 7, minimum=0)
 
     # Referral PRO anti-abuse
-    REF_MAX_BONUSES: int = int(_env("REF_MAX_BONUSES", "10"))
+    REF_MAX_BONUSES: int = _env_int("REF_MAX_BONUSES", 10, minimum=0)
 
     ADMIN_IDS: str = _env("ADMIN_IDS", "")
     PREWARM_ENABLED: bool = _env_bool("PREWARM_ENABLED")
@@ -169,8 +198,7 @@ class Settings:
     OPENAI_BASE_URL: str = _env("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
     # Для безопасного запуска: можно жёстко отключить AI, даже если ключ задан.
-    AI_ENABLED: int = int(_env("AI_ENABLED", "1"))
-
+    AI_ENABLED: int = _env_int("AI_ENABLED", 1, minimum=0, maximum=1)
 
     @property
     def admin_id_list(self) -> list[int]:
@@ -231,17 +259,12 @@ def _fail_fast_prod_config() -> None:
         missing.append('ADMIN_IDS')
 
     # Canonical production payment path: public YooKassa/package checkout.
-    # PAY_PROVIDER_TOKEN is intentionally not required here: Telegram invoice
-    # callbacks are legacy/disabled and must not keep production dependent on
-    # the old BotFather provider token.
     if not _first_env('YOOKASSA_SHOP_ID'):
         missing.append('YOOKASSA_SHOP_ID')
     if not _first_env('YOOKASSA_SECRET_KEY'):
         missing.append('YOOKASSA_SECRET_KEY')
     if not _first_env('PAYMENT_CHECKOUT_SIGNING_KEY', 'CHECKOUT_SIGNING_KEY'):
         missing.append('PAYMENT_CHECKOUT_SIGNING_KEY')
-    if not _first_env('YOOKASSA_WEBHOOK_SECRET', 'PAYMENT_WEBHOOK_SECRET', 'WEBHOOK_SECRET'):
-        missing.append('YOOKASSA_WEBHOOK_SECRET')
 
     public_payment_base = _prod_payment_base_url()
     if not public_payment_base:
@@ -274,14 +297,33 @@ def _fail_fast_prod_config() -> None:
         if not (settings.TELEGRAM_WEBHOOK_PREFIX or '').strip().startswith('/'):
             raise SystemExit('TELEGRAM_WEBHOOK_PREFIX must start with / in prod webhook mode')
 
-    messenger_webhook = bool(settings.MESSENGER_WEBHOOK_ENABLED)
-    if messenger_webhook:
+    legacy_messenger = bool(settings.MESSENGER_WEBHOOK_ENABLED)
+    max_flag = _optional_feature_flag('MAX_WEBHOOK_ENABLED')
+    vk_flag = _optional_feature_flag('VK_WEBHOOK_ENABLED')
+    max_enabled = max_flag if max_flag is not None else bool(legacy_messenger and settings.MAX_BOT_TOKEN)
+    vk_enabled = vk_flag if vk_flag is not None else bool(legacy_messenger and settings.VK_GROUP_TOKEN)
+
+    if max_enabled:
         if not (settings.MESSENGER_PUBLIC_BASE_URL or '').strip():
             missing.append('MESSENGER_PUBLIC_BASE_URL')
-        if (settings.VK_GROUP_TOKEN or settings.VK_GROUP_ID) and not (settings.VK_SECRET or '').strip():
-            missing.append('VK_SECRET')
-        if settings.MAX_BOT_TOKEN and not (settings.MAX_WEBHOOK_SECRET or '').strip():
+        if not (settings.MAX_BOT_TOKEN or '').strip():
+            missing.append('MAX_BOT_TOKEN')
+        if not (settings.MAX_BOT_LINK_BASE or '').strip():
+            missing.append('MAX_BOT_LINK_BASE')
+        if not (settings.MAX_WEBHOOK_SECRET or '').strip():
             missing.append('MAX_WEBHOOK_SECRET')
+
+    if vk_enabled:
+        if not (settings.MESSENGER_PUBLIC_BASE_URL or '').strip():
+            missing.append('MESSENGER_PUBLIC_BASE_URL')
+        if not (settings.VK_GROUP_TOKEN or '').strip():
+            missing.append('VK_GROUP_TOKEN')
+        if not (settings.VK_CONFIRMATION_TOKEN or '').strip():
+            missing.append('VK_CONFIRMATION_TOKEN')
+        if not (settings.VK_GROUP_ID or '').strip():
+            missing.append('VK_GROUP_ID')
+        if not (settings.VK_SECRET or '').strip():
+            missing.append('VK_SECRET')
 
     if not bool(settings.HEALTHCHECK_ENABLED):
         raise SystemExit('HEALTHCHECK_ENABLED must be 1 in prod')
