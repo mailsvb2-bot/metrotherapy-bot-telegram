@@ -55,6 +55,14 @@ STRICT_VALIDATOR_ENV = {
     "VALIDATOR_SKIP_AUDIO": "1",
 }
 
+DEEP_JOURNEY_ENV = {
+    **STRICT_VALIDATOR_ENV,
+    # Hermetic source CI does not ship licensed demo media. These valid tiny WAV
+    # fixtures exercise the real demo selector/delivery flow without weakening
+    # production audio readiness, which always validates configured live media.
+    "DEMO_DIR": "tests/fixtures/audio/demo",
+}
+
 PYTEST_ENV = {
     "APP_ENV": "test",
     "LOAD_DOTENV": "0",
@@ -89,7 +97,7 @@ STEPS = (
     GateStep(
         "deep user journey acceptance gate",
         (sys.executable, "scripts/probe_deep_user_journeys.py"),
-        STRICT_VALIDATOR_ENV,
+        DEEP_JOURNEY_ENV,
     ),
     GateStep(
         "full pytest regression gate",
