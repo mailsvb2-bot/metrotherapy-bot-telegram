@@ -26,21 +26,17 @@ from services.migrations.growth_apply_gateway_v3 import apply as _apply_growth_a
 from services.migrations.growth_apply_review_confirmations_v4 import apply as _apply_growth_apply_review_confirmations_v4
 from services.migrations.practice_token_economy_v1 import apply as _apply_practice_token_economy_v1
 from services.migrations.practice_token_audit_v2 import apply as _apply_practice_token_audit_v2
+from services.migrations.practice_journey_consistency_v3 import apply as _apply_practice_journey_consistency_v3
 from services.migrations.premium_entitlements_v1 import apply as _apply_premium_entitlements_v1
 from services.migrations.gift_claims_v1 import apply as _apply_gift_claims_v1
 from services.migrations.gift_claims_recipient_hint_v2 import apply as _apply_gift_claims_recipient_hint_v2
 
 
 def apply_all_migrations(conn: sqlite3.Connection) -> None:
-    """Apply repo migrations safely even on a fresh/empty SQLite file.
+    """Apply repo migrations safely even on a fresh/empty SQLite file."""
 
-    Tests and ad-hoc scripts sometimes call migrations directly without going through
-    services.schema.init_db(). In that case base tables may not exist yet.
-    We ensure the canonical base schema first, then run one-time migrations.
-    """
     db_schema.create_or_update_tables(conn)
     ensure_prod_tables(conn)
-    # Keep order deterministic.
     _apply_sched(conn)
     _apply_jobs_job_key_unique_v2(conn)
     _apply_events(conn)
@@ -63,6 +59,7 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_growth_apply_review_confirmations_v4(conn)
     _apply_practice_token_economy_v1(conn)
     _apply_practice_token_audit_v2(conn)
+    _apply_practice_journey_consistency_v3(conn)
     _apply_premium_entitlements_v1(conn)
     _apply_gift_claims_v1(conn)
     _apply_gift_claims_recipient_hint_v2(conn)
