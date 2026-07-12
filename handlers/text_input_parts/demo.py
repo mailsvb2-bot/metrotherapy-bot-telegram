@@ -1,98 +1,122 @@
 from __future__ import annotations
-from keyboards.inline import kb_back_main
-from zoneinfo import ZoneInfo
 
-import logging
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Router
-from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
 
-from handlers.text_input_parts.common import tzinfo, parse_hhmm, add_job
-from handlers.text_input_parts.states import InputState
-from services.events import log_event
-
+from config.settings import settings
 from core.callback_utils import safe_answer_callback
+from handlers.text_input_parts.common import add_job, parse_hhmm
+from handlers.text_input_parts.states import InputState
+from keyboards.inline import kb_back_main
+from services.delivery_preferences import get_user_timezone
+from services.events import log_event
+from services.jobs import cancel_jobs
+
 router = Router()
+UTC = ZoneInfo("UTC")
 
 
 def _callback_message(cb: CallbackQuery) -> Message | None:
-    message = cb.message
-    return message if isinstance(message, Message) else None
+    return cb.message if isinstance(cb.message, Message) else None
 
 
 def _message_user_id(message: Message) -> int | None:
     user = message.from_user
     return int(user.id) if user is not None else None
 
+
+def _resolved_user_timezone(user_id: int) -> tuple[str, ZoneInfo]:
+    candidates = (
+        get_user_timezone(int(user_id)),
+        getattr(settings, "TIMEZONE", "UTC"),
+        "UTC",
+    )
+    for candidate in candidates:
+        name = str(candidate or "").strip()
+        if not name:
+            continue
+        try:
+            return name, ZoneInfo(name)
+        except ZoneInfoNotFoundError:
+            continue
+    return "UTC", UTC
+
+
 @router.callback_query(lambda c: c.data in ("demo_kind_work", "demo_kind_home"))
-async def pick_demo_kind(cb: CallbackQuery, state: FSMContext):
+async def pick_demo_kind(cb: CallbackQuery, state: FSMContext) -> None:
     await safe_answer_callback(cb)
+    user_id = int(cb.from_user.id)
     kind = "work" if cb.data == "demo_kind_work" else "home"
+    timezone_name, _ = _resolved_user_timezone(user_id)
 
     await state.update_data(demo_kind=kind)
     await state.set_state(InputState.demo_time)
 
-    text = (
-        "🕰 Укажите время, когда прислать демо-транс.\n\n"
-        "Напишите в формате HH:MM (например, 08:30).\n\n"
-        "Рекомендация: выберите время, когда Вы едете на работу или домой — "
-        "так Вы сможете максимально почувствовать эффект ресурсного аудиотранса: "
-        "состояние становится легче и яснее, как после освежающего душа.\n\n"
-        "Часовой пояс: Europe/Moscow."
-    )
     message = _callback_message(cb)
     if message is None:
         return
-    await message.answer(text, reply_markup=kb_back_main())
-
-
+    await message.answer(
+        "🕰 Укажите местное время, когда прислать демо-транс.\n\n"
+        "Напишите в формате HH:MM (например, 08:30).\n\n"
+        "Рекомендация: выберите время, когда Вы едете на работу или домой — "
+        "так проще оценить практику в реальном ритме дня.\n\n"
+        f"Часовой пояс: {timezone_name}.",
+        reply_markup=kb_back_main(),
+    )
 
 
 @router.message(InputState.demo_time)
-async def msg_demo_time(message: Message, state: FSMContext):
-    t = parse_hhmm(message.text or "")
-    if not t:
-        await message.answer("Пожалуйста, напишите время в формате HH:MM (например, 08:30).", reply_markup=kb_back_main())
+async def msg_demo_time(message: Message, state: FSMContext) -> None:
+    parsed = parse_hhmm(message.text or "")
+    if parsed is None:
+        await message.answer(
+            "Пожалуйста, напишите время в формате HH:MM (например, 08:30).",
+            reply_markup=kb_back_main(),
+        )
         return
 
-    h, m = t
-    data = await state.get_data()
-    kind = data.get("demo_kind", "work")
     user_id = _message_user_id(message)
     if user_id is None:
         return
+    hour, minute = parsed
+    data = await state.get_data()
+    kind = "home" if data.get("demo_kind") == "home" else "work"
+    timezone_name, timezone = _resolved_user_timezone(user_id)
 
-    now_local = datetime.now(tzinfo())
-    send_local = now_local.replace(hour=h, minute=m, second=0, microsecond=0)
-
-    # если время уже прошло сегодня — переносим на завтра
+    now_local = datetime.now(timezone)
+    send_local = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if send_local <= now_local:
-        send_local = send_local + timedelta(days=1)
+        send_local += timedelta(days=1)
+    send_utc = send_local.astimezone(UTC)
+    now_utc = datetime.now(UTC)
 
-    send_utc = send_local.astimezone(ZoneInfo("UTC"))
-    now_utc = datetime.now(ZoneInfo("UTC"))
-
-    # ставим job на отправку демо
+    cancel_jobs(user_id, job_types=["demo_send", "demo_reminder"])
     add_job(user_id, "demo_send", send_utc.isoformat(), {"kind": kind})
-    log_event(user_id, "demo_scheduled", {"kind": kind, "send_utc": send_utc.isoformat()})
+    log_event(
+        user_id,
+        "demo_scheduled",
+        {"kind": kind, "send_utc": send_utc.isoformat(), "timezone": timezone_name},
+    )
 
-    # напоминание за 5 минут — только если до отправки больше 5 минут
     delta_sec = (send_utc - now_utc).total_seconds()
     if delta_sec > 5 * 60:
         remind_utc = send_utc - timedelta(minutes=5)
         add_job(user_id, "demo_reminder", remind_utc.isoformat(), {"kind": kind})
-        log_event(user_id, "demo_reminder_scheduled", {"kind": kind, "remind_utc": remind_utc.isoformat()})
+        log_event(
+            user_id,
+            "demo_reminder_scheduled",
+            {"kind": kind, "remind_utc": remind_utc.isoformat(), "timezone": timezone_name},
+        )
 
     await state.clear()
-
-    confirm = (
-        f"✅ Отлично. Я пришлю демо-транс в {send_local.strftime('%H:%M')} (Europe/Moscow).\n"
+    confirmation = (
+        f"✅ Отлично. Я пришлю демо-транс в {send_local.strftime('%H:%M')} "
+        f"({timezone_name}).\n"
     )
     if delta_sec > 5 * 60:
-        confirm += "И мягко напомню за 5 минут до отправки.\n"
-    await message.answer(confirm, reply_markup=kb_back_main())
-
-
-
+        confirmation += "И мягко напомню за 5 минут до отправки.\n"
+    await message.answer(confirmation, reply_markup=kb_back_main())
