@@ -11,6 +11,18 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 
 
+def _token_product_authoritative() -> bool:
+    from services.practice_tokens import token_access_authoritative
+
+    return bool(token_access_authoritative())
+
+
+def _token_product_active(user_id: int) -> bool:
+    from services.practice_tokens import has_paid_practice_access
+
+    return bool(has_paid_practice_access(int(user_id)))
+
+
 @dataclass(frozen=True)
 class Subscription:
     user_id: int
@@ -70,7 +82,11 @@ def get_subscription(user_id: int) -> Optional[Subscription]:
 
 
 def is_active(user_id: int) -> bool:
-    """Совместимость со старым кодом: активна ли подписка вообще (по касаниям)."""
+    """Canonical paid-access decision with legacy fallback."""
+
+    if _token_product_authoritative():
+        return _token_product_active(int(user_id))
+
     s = get_subscription(user_id)
     if not s:
         return False
@@ -80,10 +96,8 @@ def is_active(user_id: int) -> bool:
 
 
 def get_scope(user_id: int) -> str | None:
-    """Возвращает scope активной подписки: morning | evening | both, или None.
-
-    Нужен для обратной совместимости (services.store и диагностические сообщения).
-    """
+    if _token_product_authoritative():
+        return "both" if _token_product_active(int(user_id)) else None
 
     s = get_subscription(user_id)
     if not s:
@@ -91,11 +105,8 @@ def get_scope(user_id: int) -> str | None:
     if (s.status or "active") != "active" or s.is_finished:
         return None
 
-    # Если scope уже сохранён — используем его.
     if s.scope in ("morning", "evening", "both"):
         return s.scope
-
-    # Fallback по totals.
     if (s.total_morning or 0) > 0 and (s.total_evening or 0) > 0:
         return "both"
     if (s.total_morning or 0) > 0:
@@ -106,7 +117,11 @@ def get_scope(user_id: int) -> str | None:
 
 
 def has_access(user_id: int, slot: str) -> bool:
-    """slot: 'morning' | 'evening'. Доступ = есть активная подписка и есть оставшиеся касания."""
+    """Check paid access for a route/settings slot."""
+
+    if _token_product_authoritative():
+        return slot in {"morning", "evening", "both"} and _token_product_active(int(user_id))
+
     s = get_subscription(user_id)
     if not s:
         return False
@@ -116,22 +131,33 @@ def has_access(user_id: int, slot: str) -> bool:
         return s.remaining_morning > 0
     if slot == "evening":
         return s.remaining_evening > 0
+    if slot == "both":
+        return s.remaining_morning > 0 and s.remaining_evening > 0
     return False
 
 
 def remaining(user_id: int) -> Tuple[int, int]:
+    if _token_product_authoritative():
+        from services.practice_tokens import get_wallet
+
+        wallet = get_wallet(int(user_id))
+        return (int(wallet.available_tokens), int(wallet.available_tokens))
+
     s = get_subscription(user_id)
     if not s:
         return (0, 0)
     return (s.remaining_morning, s.remaining_evening)
 
 
-def grant(user_id: int, scope: str, days: int, *, price: int = 0, source: str = "pay", gift_id: str | None = None) -> None:
-    """
-    Выдача подписки как фиксированного количества рабочих касаний.
-    days здесь = количество касаний (обычно 5 или 20).
-    scope: morning | evening | both
-    """
+def grant(
+    user_id: int,
+    scope: str,
+    days: int,
+    *,
+    price: int = 0,
+    source: str = "pay",
+    gift_id: str | None = None,
+) -> None:
     with db() as conn:
         grant_tx(conn, user_id, scope, days, price=price, source=source, gift_id=gift_id)
 
@@ -146,11 +172,8 @@ def grant_tx(
     source: str = "pay",
     gift_id: str | None = None,
 ) -> None:
-    """Транзакционная версия grant().
+    """Legacy subscription grant kept for old invoices/data migrations."""
 
-    Можно вызывать внутри внешней транзакции (payments/gifts), чтобы выдача доступа
-    и запись состояния в subscriptions были атомарны.
-    """
     days = int(days)
     add_m = days if scope in ("morning", "both") else 0
     add_e = days if scope in ("evening", "both") else 0
@@ -179,17 +202,8 @@ def grant_tx(
             VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
-                int(user_id),
-                scope,
-                int(add_m),
-                int(add_e),
-                0,
-                0,
-                "active",
-                now,
-                scope,
-                now,
-                now,
+                int(user_id), scope, int(add_m), int(add_e), 0, 0,
+                "active", now, scope, now, now,
             ),
         )
         return
@@ -212,18 +226,17 @@ def grant_tx(
                    paid_at=?
              WHERE user_id=?
             """,
-            (scope, total_m, total_e, int(used_m), int(used_e), now, scope, now, int(user_id)),
+            (
+                scope, total_m, total_e, int(used_m), int(used_e),
+                now, scope, now, int(user_id),
+            ),
         )
         return
 
     conn.execute(
         """
         UPDATE subscriptions
-           SET plan_type=?,
-               total_morning=?,
-               total_evening=?,
-               scope=?,
-               paid_at=?
+           SET plan_type=?, total_morning=?, total_evening=?, scope=?, paid_at=?
          WHERE user_id=?
         """,
         (scope, total_m, total_e, scope, now, int(user_id)),
@@ -231,10 +244,11 @@ def grant_tx(
 
 
 def register_touch(user_id: int, slot: str) -> bool:
-    """
-    Засчитываем касание СТРОГО ПОСЛЕ факта (аудио реально отправлено).
-    Возвращает True, если касание засчитано (и было что списывать).
-    """
+    """Legacy touch counter; token wallet owns paid consumption when enabled."""
+
+    if _token_product_authoritative():
+        return False
+
     if slot not in ("morning", "evening"):
         return False
 
@@ -262,17 +276,14 @@ def register_touch(user_id: int, slot: str) -> bool:
                 (int(user_id),),
             )
 
-        changed = int(getattr(cur, "rowcount", 0) or 0)
-        if changed <= 0:
+        if int(getattr(cur, "rowcount", 0) or 0) <= 0:
             return False
 
-        # если лимиты исчерпаны по обоим слотам — помечаем finished
         r = conn.execute(
             """
             SELECT COALESCE(total_morning,0), COALESCE(total_evening,0),
                    COALESCE(used_morning,0),  COALESCE(used_evening,0)
-              FROM subscriptions
-             WHERE user_id=?
+              FROM subscriptions WHERE user_id=?
             """,
             (int(user_id),),
         ).fetchone()
@@ -280,5 +291,8 @@ def register_touch(user_id: int, slot: str) -> bool:
             return True
         total_m, total_e, used_m, used_e = map(int, r)
         if used_m >= total_m and used_e >= total_e:
-            conn.execute("UPDATE subscriptions SET status='finished' WHERE user_id=?", (int(user_id),))
+            conn.execute(
+                "UPDATE subscriptions SET status='finished' WHERE user_id=?",
+                (int(user_id),),
+            )
         return True
