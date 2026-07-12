@@ -87,6 +87,11 @@ STEPS = (
         STRICT_VALIDATOR_ENV,
     ),
     GateStep(
+        "deep user journey acceptance gate",
+        (sys.executable, "scripts/probe_deep_user_journeys.py"),
+        STRICT_VALIDATOR_ENV,
+    ),
+    GateStep(
         "full pytest regression gate",
         (sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"),
         PYTEST_ENV,
