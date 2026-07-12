@@ -24,6 +24,12 @@ _REQUIRED_SCHEMA_TABLES = frozenset({
     "practice_reservations",
 })
 
+EMPTY_BALANCE_MESSAGE = (
+    "🔐 На балансе нет доступных практик. "
+    "Откройте «💳 Пакеты практик», чтобы продолжить маршрут."
+)
+RESERVE_FAILED_MESSAGE = "⚠️ Не удалось зарезервировать практику. Попробуйте ещё раз."
+
 
 @dataclass(frozen=True)
 class PracticeWallet:
@@ -60,6 +66,10 @@ def enforcement_mode() -> str:
     if normalized in {"soft", "warn", "warning"}:
         return "soft"
     return "off"
+
+
+def token_access_authoritative() -> bool:
+    return token_economy_enabled() and enforcement_mode() != "off"
 
 
 def ensure_schema(conn: Any) -> None:
@@ -107,6 +117,12 @@ def _canonical_practice_user_id(user_id: int) -> int:
     return ensure_account(uid)
 
 
+def canonical_practice_user_id(user_id: int) -> int:
+    """Public canonical account id used by the practice wallet."""
+
+    return _canonical_practice_user_id(int(user_id))
+
+
 def _wallet_from_row(row: Any, user_id: int) -> PracticeWallet:
     if not row:
         return PracticeWallet(int(user_id), 0, 0, 0)
@@ -134,11 +150,84 @@ def _get_wallet_in_conn(conn: Any, user_id: int) -> PracticeWallet:
     return _wallet_from_row(row, int(user_id))
 
 
+def _delivered_reservation_ids(user_id: int) -> list[str]:
+    """Return reserved rows with durable proof that audio already left the system.
+
+    Session-bound deliveries are proven by mood_sessions.audio_sent. Direct queue
+    deliveries are proven by account_audio_progress, which is account-scoped and
+    therefore survives a Telegram -> VK/MAX switch.
+    """
+
+    with db() as conn:
+        ensure_schema(conn)
+        try:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT r.reservation_id
+                FROM practice_reservations r
+                LEFT JOIN mood_sessions s ON s.id=r.session_id
+                LEFT JOIN account_audio_progress ap
+                  ON ap.account_id=r.user_id
+                 AND ap.product_id='metrotherapy'
+                 AND ap.program_id='full_series'
+                 AND ap.pending_audio_no=r.audio_anchor
+                WHERE r.user_id=?
+                  AND r.status='reserved'
+                  AND (
+                        (r.session_id IS NOT NULL AND COALESCE(s.audio_sent,0)=1)
+                     OR (r.session_id IS NULL AND r.audio_anchor IS NOT NULL AND ap.pending_audio_no IS NOT NULL)
+                  )
+                ORDER BY r.created_at, r.reservation_id
+                """.strip(),
+                (int(user_id),),
+            ).fetchall()
+        except Exception as exc:  # validator: allow-wide-except
+            # Minimal migration/unit-test schemas may not yet have account audio
+            # tables. Session evidence remains sufficient for those environments.
+            error_text = str(exc).lower()
+            if "does not exist" not in error_text and "no such table" not in error_text:
+                raise
+            rows = conn.execute(
+                """
+                SELECT DISTINCT r.reservation_id
+                FROM practice_reservations r
+                JOIN mood_sessions s ON s.id=r.session_id
+                WHERE r.user_id=?
+                  AND r.status='reserved'
+                  AND COALESCE(s.audio_sent,0)=1
+                ORDER BY r.created_at, r.reservation_id
+                """.strip(),
+                (int(user_id),),
+            ).fetchall()
+    return [str(row["reservation_id"]) for row in rows]
+
+
+def reconcile_delivered_reservations(user_id: int) -> int:
+    """Repair reservations after a successful external send but failed DB finalize."""
+
+    uid = _canonical_practice_user_id(int(user_id))
+    repaired = 0
+    for reservation_id in _delivered_reservation_ids(uid):
+        if consume_reservation(reservation_id, reason="audio_delivery_reconciled"):
+            repaired += 1
+    return repaired
+
+
 def get_wallet(user_id: int) -> PracticeWallet:
     uid = _canonical_practice_user_id(int(user_id))
+    # Reconcile only rows with durable evidence of a successful delivery.
+    # The query is side-effect free when no interrupted finalize exists.
+    reconcile_delivered_reservations(uid)
     with db() as conn:
         _ensure_wallet(conn, uid)
         return _get_wallet_in_conn(conn, uid)
+
+
+def has_paid_practice_access(user_id: int) -> bool:
+    """Whether the canonical token product currently has usable/in-flight access."""
+
+    wallet = get_wallet(int(user_id))
+    return int(wallet.available_tokens) > 0 or int(wallet.reserved_tokens) > 0
 
 
 def _insert_ledger(
@@ -163,8 +252,16 @@ def _insert_ledger(
         ) VALUES(?,?,?,?,?,?,?,?,?,?)
         """.strip(),
         (
-            int(user_id), event_type, int(amount), int(balance_after), reason,
-            source, package_id, provider, provider_payment_id, idempotency_key,
+            int(user_id),
+            event_type,
+            int(amount),
+            int(balance_after),
+            reason,
+            source,
+            package_id,
+            provider,
+            provider_payment_id,
+            idempotency_key,
         ),
     )
     row = conn.execute("SELECT last_insert_rowid() AS id").fetchone()
@@ -215,6 +312,38 @@ def grant_tokens(
     return True, wallet_after, ledger_id
 
 
+def _existing_reserved(
+    conn: Any,
+    *,
+    user_id: int,
+    session_id: int | None,
+    audio_anchor: int | None,
+) -> Any | None:
+    if session_id is not None:
+        return conn.execute(
+            """
+            SELECT reservation_id
+            FROM practice_reservations
+            WHERE user_id=? AND session_id=? AND status='reserved'
+            ORDER BY created_at, reservation_id
+            LIMIT 1
+            """.strip(),
+            (int(user_id), int(session_id)),
+        ).fetchone()
+    if audio_anchor is not None:
+        return conn.execute(
+            """
+            SELECT reservation_id
+            FROM practice_reservations
+            WHERE user_id=? AND session_id IS NULL AND audio_anchor=? AND status='reserved'
+            ORDER BY created_at, reservation_id
+            LIMIT 1
+            """.strip(),
+            (int(user_id), int(audio_anchor)),
+        ).fetchone()
+    return None
+
+
 def reserve_practice(
     user_id: int,
     *,
@@ -222,115 +351,201 @@ def reserve_practice(
     audio_anchor: int | None = None,
     reason: str = "audio_delivery",
 ) -> tuple[bool, PracticeWallet, str | None]:
+    """Reserve exactly one token with DB-level concurrency protection.
+
+    A pending reservation is reused for the same mood session / direct audio
+    anchor. The wallet decrement is a conditional UPDATE, so two workers cannot
+    both spend the same last available token.
+    """
+
     uid = _canonical_practice_user_id(int(user_id))
     reservation_id = f"practice_res_{uuid.uuid4().hex}"
     with db() as conn:
         with tx(conn):
             _ensure_wallet(conn, uid)
-            wallet = _get_wallet_in_conn(conn, uid)
-            if wallet.available_tokens <= 0:
-                return False, wallet, None
-            available_after = int(wallet.available_tokens) - 1
-            reserved_after = int(wallet.reserved_tokens) + 1
-            conn.execute(
-                "UPDATE practice_wallets SET available_tokens=?, reserved_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
-                (available_after, reserved_after, uid),
+
+            existing = _existing_reserved(
+                conn,
+                user_id=uid,
+                session_id=session_id,
+                audio_anchor=audio_anchor,
             )
-            conn.execute(
+            if existing:
+                return True, _get_wallet_in_conn(conn, uid), str(existing["reservation_id"])
+
+            insert_cursor = conn.execute(
                 """
-                INSERT INTO practice_reservations(
+                INSERT OR IGNORE INTO practice_reservations(
                     reservation_id, user_id, amount, status, session_id, audio_anchor, reason
                 ) VALUES(?,?,?,?,?,?,?)
                 """.strip(),
                 (
-                    reservation_id, uid, 1, "reserved",
+                    reservation_id,
+                    uid,
+                    1,
+                    "reserved",
                     int(session_id) if session_id is not None else None,
                     int(audio_anchor) if audio_anchor is not None else None,
                     reason,
                 ),
             )
+            if int(getattr(insert_cursor, "rowcount", 0) or 0) <= 0:
+                existing = _existing_reserved(
+                    conn,
+                    user_id=uid,
+                    session_id=session_id,
+                    audio_anchor=audio_anchor,
+                )
+                if existing:
+                    return True, _get_wallet_in_conn(conn, uid), str(existing["reservation_id"])
+                return False, _get_wallet_in_conn(conn, uid), None
+
+            cursor = conn.execute(
+                """
+                UPDATE practice_wallets
+                SET available_tokens=available_tokens - 1,
+                    reserved_tokens=reserved_tokens + 1,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE user_id=? AND available_tokens > 0
+                """.strip(),
+                (uid,),
+            )
+            changed = int(getattr(cursor, "rowcount", 0) or 0)
+            if changed <= 0:
+                conn.execute(
+                    "DELETE FROM practice_reservations WHERE reservation_id=? AND status='reserved'",
+                    (reservation_id,),
+                )
+                return False, _get_wallet_in_conn(conn, uid), None
+
+            wallet_after = _get_wallet_in_conn(conn, uid)
             _insert_ledger(
                 conn,
                 user_id=uid,
                 event_type="reserve",
                 amount=-1,
-                balance_after=available_after,
+                balance_after=int(wallet_after.available_tokens),
                 reason=reason,
                 idempotency_key=f"reserve:{reservation_id}",
             )
-            wallet_after = _get_wallet_in_conn(conn, uid)
     return True, wallet_after, reservation_id
 
 
+def _reservation_row(conn: Any, reservation_id: str) -> Any | None:
+    return conn.execute(
+        "SELECT * FROM practice_reservations WHERE reservation_id=?",
+        (reservation_id,),
+    ).fetchone()
+
+
 def consume_reservation(reservation_id: str, *, reason: str = "audio_delivery_succeeded") -> bool:
-    if not str(reservation_id or "").strip():
+    raw = str(reservation_id or "").strip()
+    if not raw:
         return False
     with db() as conn:
         with tx(conn):
             ensure_schema(conn)
-            row = conn.execute(
-                "SELECT * FROM practice_reservations WHERE reservation_id=?",
-                (reservation_id,),
-            ).fetchone()
-            if not row or str(row["status"]) != "reserved":
+            row = _reservation_row(conn, raw)
+            if not row:
                 return False
+            status = str(row["status"])
+            if status == "consumed":
+                return True
+            if status != "reserved":
+                return False
+
+            cursor = conn.execute(
+                """
+                UPDATE practice_reservations
+                SET status='consumed', updated_at=CURRENT_TIMESTAMP
+                WHERE reservation_id=? AND status='reserved'
+                """.strip(),
+                (raw,),
+            )
+            if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
+                current = _reservation_row(conn, raw)
+                return bool(current and str(current["status"]) == "consumed")
+
             user_id = int(row["user_id"])
-            wallet = _get_wallet_in_conn(conn, user_id)
-            reserved_after = max(0, int(wallet.reserved_tokens) - int(row["amount"]))
-            used_after = int(wallet.used_tokens) + int(row["amount"])
+            amount = int(row["amount"])
             conn.execute(
-                "UPDATE practice_wallets SET reserved_tokens=?, used_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
-                (reserved_after, used_after, user_id),
+                """
+                UPDATE practice_wallets
+                SET reserved_tokens=CASE
+                        WHEN reserved_tokens >= ? THEN reserved_tokens - ?
+                        ELSE 0
+                    END,
+                    used_tokens=used_tokens + ?,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE user_id=?
+                """.strip(),
+                (amount, amount, amount, user_id),
             )
-            conn.execute(
-                "UPDATE practice_reservations SET status='consumed', updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?",
-                (reservation_id,),
-            )
+            wallet_after = _get_wallet_in_conn(conn, user_id)
             _insert_ledger(
                 conn,
                 user_id=user_id,
                 event_type="consume",
-                amount=-int(row["amount"]),
-                balance_after=int(wallet.available_tokens),
+                amount=-amount,
+                balance_after=int(wallet_after.available_tokens),
                 reason=reason,
-                idempotency_key=f"consume:{reservation_id}",
+                idempotency_key=f"consume:{raw}",
             )
     return True
 
 
 def release_reservation(reservation_id: str, *, reason: str = "audio_delivery_failed") -> bool:
-    if not str(reservation_id or "").strip():
+    raw = str(reservation_id or "").strip()
+    if not raw:
         return False
     with db() as conn:
         with tx(conn):
             ensure_schema(conn)
-            row = conn.execute(
-                "SELECT * FROM practice_reservations WHERE reservation_id=?",
-                (reservation_id,),
-            ).fetchone()
-            if not row or str(row["status"]) != "reserved":
+            row = _reservation_row(conn, raw)
+            if not row:
                 return False
+            status = str(row["status"])
+            if status == "released":
+                return True
+            if status != "reserved":
+                return False
+
+            cursor = conn.execute(
+                """
+                UPDATE practice_reservations
+                SET status='released', updated_at=CURRENT_TIMESTAMP
+                WHERE reservation_id=? AND status='reserved'
+                """.strip(),
+                (raw,),
+            )
+            if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
+                current = _reservation_row(conn, raw)
+                return bool(current and str(current["status"]) == "released")
+
             user_id = int(row["user_id"])
             amount = int(row["amount"])
-            wallet = _get_wallet_in_conn(conn, user_id)
-            available_after = int(wallet.available_tokens) + amount
-            reserved_after = max(0, int(wallet.reserved_tokens) - amount)
             conn.execute(
-                "UPDATE practice_wallets SET available_tokens=?, reserved_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
-                (available_after, reserved_after, user_id),
+                """
+                UPDATE practice_wallets
+                SET available_tokens=available_tokens + ?,
+                    reserved_tokens=CASE
+                        WHEN reserved_tokens >= ? THEN reserved_tokens - ?
+                        ELSE 0
+                    END,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE user_id=?
+                """.strip(),
+                (amount, amount, amount, user_id),
             )
-            conn.execute(
-                "UPDATE practice_reservations SET status='released', updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?",
-                (reservation_id,),
-            )
+            wallet_after = _get_wallet_in_conn(conn, user_id)
             _insert_ledger(
                 conn,
                 user_id=user_id,
                 event_type="release",
                 amount=amount,
-                balance_after=available_after,
+                balance_after=available_after if False else int(wallet_after.available_tokens),
                 reason=reason,
-                idempotency_key=f"release:{reservation_id}",
+                idempotency_key=f"release:{raw}",
             )
     return True
 
@@ -345,31 +560,75 @@ def check_and_reserve_for_audio(
     mode = enforcement_mode()
     if is_demo or not token_economy_enabled() or mode == "off":
         return PracticeAccessDecision(True, mode, "free_demo_or_disabled")
+
     uid = _canonical_practice_user_id(int(user_id))
-    wallet = get_wallet(uid)
+    with db() as conn:
+        _ensure_wallet(conn, uid)
+        existing = _existing_reserved(
+            conn,
+            user_id=uid,
+            session_id=session_id,
+            audio_anchor=audio_anchor,
+        )
+        if existing:
+            return PracticeAccessDecision(
+                True,
+                mode,
+                "existing_reservation",
+                reservation_id=str(existing["reservation_id"]),
+            )
+        wallet = _get_wallet_in_conn(conn, uid)
+
     if wallet.available_tokens <= 0:
-        message = "Practice balance is empty. Open practice packages to continue."
         if mode == "soft":
-            return PracticeAccessDecision(True, mode, "soft_insufficient_balance", warning=message)
-        return PracticeAccessDecision(False, mode, "insufficient_balance", message=message)
+            return PracticeAccessDecision(
+                True,
+                mode,
+                "soft_insufficient_balance",
+                warning=EMPTY_BALANCE_MESSAGE,
+            )
+        return PracticeAccessDecision(
+            False,
+            mode,
+            "insufficient_balance",
+            message=EMPTY_BALANCE_MESSAGE,
+        )
+
     ok, _wallet_after, reservation_id = reserve_practice(
-        uid, session_id=session_id, audio_anchor=audio_anchor
+        uid,
+        session_id=session_id,
+        audio_anchor=audio_anchor,
     )
     if not ok:
-        message = "A practice token is required to continue."
         if mode == "soft":
-            return PracticeAccessDecision(True, mode, "soft_reserve_failed", warning=message)
-        return PracticeAccessDecision(False, mode, "reserve_failed", message=message)
-    return PracticeAccessDecision(True, mode, "reserved", reservation_id=reservation_id)
+            return PracticeAccessDecision(
+                True,
+                mode,
+                "soft_reserve_failed",
+                warning=RESERVE_FAILED_MESSAGE,
+            )
+        return PracticeAccessDecision(
+            False,
+            mode,
+            "reserve_failed",
+            message=RESERVE_FAILED_MESSAGE,
+        )
+    return PracticeAccessDecision(
+        True,
+        mode,
+        "reserved",
+        reservation_id=reservation_id,
+    )
 
 
-def finalize_audio_access(decision: PracticeAccessDecision, *, delivered: bool) -> None:
+def finalize_audio_access(decision: PracticeAccessDecision, *, delivered: bool) -> bool:
+    """Finalize an audio reservation idempotently."""
+
     if not decision.reservation_id:
-        return
+        return True
     if delivered:
-        consume_reservation(decision.reservation_id)
-    else:
-        release_reservation(decision.reservation_id)
+        return consume_reservation(decision.reservation_id)
+    return release_reservation(decision.reservation_id)
 
 
 def grant_tokens_for_payment(
@@ -391,6 +650,7 @@ def grant_tokens_for_payment(
             ).fetchone()
             if existing:
                 return False, _get_wallet_in_conn(conn, uid), int(existing["ledger_id"] or 0)
+
     inserted, wallet, ledger_id = grant_tokens(
         uid,
         package_id=package.package_id,
@@ -409,7 +669,14 @@ def grant_tokens_for_payment(
                     provider, provider_payment_id, user_id, package_id, tokens_granted, ledger_id
                 ) VALUES(?,?,?,?,?,?)
                 """.strip(),
-                (provider, provider_payment_id, uid, package.package_id, package.tokens, ledger_id),
+                (
+                    provider,
+                    provider_payment_id,
+                    uid,
+                    package.package_id,
+                    package.tokens,
+                    ledger_id,
+                ),
             )
     return inserted, wallet, ledger_id
 
@@ -454,7 +721,12 @@ def payment_url(
     gift_token: str | None = None,
 ) -> str:
     public_id = (external_user_id or "").strip() or str(int(user_id))
-    params = {"source": platform or "messenger", "user_id": public_id, "kind": "tokens", "package_id": package_id}
+    params = {
+        "source": platform or "messenger",
+        "user_id": public_id,
+        "kind": "tokens",
+        "package_id": package_id,
+    }
     if str(gift_token or "").strip():
         params["gift_token"] = str(gift_token).strip()
         params["gift"] = "1"
@@ -478,7 +750,13 @@ def _mode_title(mode: str) -> str:
     return "1 практика в день"
 
 
-def render_packages_text(user_id: int, *, base_url: str, platform: str, external_user_id: str | None = None) -> str:
+def render_packages_text(
+    user_id: int,
+    *,
+    base_url: str,
+    platform: str,
+    external_user_id: str | None = None,
+) -> str:
     wallet = get_wallet(int(user_id))
     mode = get_delivery_mode(int(user_id))
     cost = daily_practice_cost(mode)
@@ -489,7 +767,7 @@ def render_packages_text(user_id: int, *, base_url: str, platform: str, external
         "1 практика = одно аудио с оценкой состояния ДО и ПОСЛЕ.",
         "Если аудио не отправилось, практика не списывается.",
         "",
-        f"Сейчас у вас: {wallet.available_tokens} практик.",
+        f"Сейчас у Вас: {wallet.available_tokens} практик.",
         f"Ритм: {_mode_title(mode)} ({days}).",
         "",
         "Выберите пакет:",
@@ -519,7 +797,11 @@ def render_rhythm_text(user_id: int) -> str:
     mode = get_delivery_mode(int(user_id))
     wallet = get_wallet(int(user_id))
     cost = daily_practice_cost(mode)
-    days = "практики не расходуются, пока стоит пауза" if cost <= 0 else f"баланса хватит примерно на {wallet.available_tokens // cost} дн."
+    days = (
+        "практики не расходуются, пока стоит пауза"
+        if cost <= 0
+        else f"баланса хватит примерно на {wallet.available_tokens // cost} дн."
+    )
     return (
         "🕒 Ритм практик\n\n"
         f"Сейчас: {_mode_title(mode)}.\n"
