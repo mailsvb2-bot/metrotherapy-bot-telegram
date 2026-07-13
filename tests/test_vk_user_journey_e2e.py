@@ -12,7 +12,9 @@ from runtime.messenger_vk_sender import _callback_keyboard_json
 from runtime.messenger_vk_ui import prepare_vk_keyboard_json
 from services.messenger.audio_progress import AudioProgressItem, get_pending_audio_token, get_progress_snapshot
 from services.messenger.reply_dispatcher import send_reply_bundle
-from services.messenger.text_ui import MessengerReply, handle_incoming_text
+from services.messenger.text_ui import MessengerReply
+from services.messenger.text_ui_router import handle_incoming_text
+from services.practice_tokens import get_wallet, grant_tokens
 
 
 @dataclass(frozen=True)
@@ -30,13 +32,27 @@ class _FakeVkSender:
         self.image_calls: list[tuple[str, Path, str | None, dict[str, Any]]] = []
         self.text_calls: list[tuple[str, str, dict[str, Any]]] = []
 
-    async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any) -> dict[str, Any]:
+    async def send_audio_file(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        caption: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         self.audio_calls.append((str(external_user_id), Path(file_path), caption, dict(kwargs)))
         if self.fail_audio:
             raise RuntimeError("VK rejected this audio attachment")
         return {"ok": True}
 
-    async def send_image_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any) -> dict[str, Any]:
+    async def send_image_file(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        caption: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         self.image_calls.append((str(external_user_id), Path(file_path), caption, dict(kwargs)))
         return {"ok": True}
 
@@ -47,7 +63,11 @@ class _FakeVkSender:
         stored = dict(kwargs)
         keyboard_json = stored.get("keyboard_json")
         if keyboard_json:
-            rendered = prepare_vk_keyboard_json(str(keyboard_json), external_user_id=str(external_user_id), text=str(text or ""))
+            rendered = prepare_vk_keyboard_json(
+                str(keyboard_json),
+                external_user_id=str(external_user_id),
+                text=str(text or ""),
+            )
             stored["keyboard_json"] = _callback_keyboard_json(rendered)
         self.text_calls.append((str(external_user_id), str(text), stored))
         return {"ok": True}
@@ -61,11 +81,6 @@ def _commands(keyboard_json: str) -> list[str]:
             payload = json.loads(button["action"].get("payload") or "{}")
             commands.append(str(payload.get("command") or ""))
     return commands
-
-
-def _labels(keyboard_json: str) -> list[str]:
-    keyboard = json.loads(keyboard_json)
-    return [button["action"]["label"] for row in keyboard["buttons"] for button in row]
 
 
 def _latest_keyboard(sender: _FakeVkSender) -> str:
@@ -87,6 +102,26 @@ async def _dispatch_vk(user_id: int, text: str) -> list[MessengerReply]:
     return replies
 
 
+def _prepare_paid_route(monkeypatch, *, user_id: int, item: AudioProgressItem, anchored: _AnchoredAudio, sender: _FakeVkSender) -> None:
+    monkeypatch.setenv("TOKEN_ENFORCEMENT_MODE", "hard")
+    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://example.test")
+    monkeypatch.setattr(settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test", raising=False)
+    monkeypatch.setattr("services.messenger.audio_progress.list_full_series", lambda: [item])
+    monkeypatch.setattr(
+        "services.mood_text_flow.get_by_anchor",
+        lambda anchor: anchored if int(anchor) == int(anchored.anchor) else None,
+    )
+    monkeypatch.setattr("services.messenger.reply_dispatcher.VkBotSender", lambda: sender)
+    grant_tokens(
+        user_id,
+        package_id="practice_start_7",
+        amount=3,
+        provider="test",
+        provider_payment_id=f"vk-e2e-{user_id}",
+        idempotency_key=f"grant:test:vk-e2e:{user_id}",
+    )
+
+
 def test_vk_audio_rejection_uses_link_fallback(monkeypatch, tmp_path):
     user_id = 918000000 + (os.getpid() % 100000)
     audio_path = tmp_path / "01_morning.ogg"
@@ -95,15 +130,10 @@ def test_vk_audio_rejection_uses_link_fallback(monkeypatch, tmp_path):
     anchored = _AnchoredAudio(anchor=1, clean_title="Morning Route", path=audio_path)
 
     sender = _FakeVkSender(fail_audio=True)
-    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://example.test")
-    monkeypatch.setattr(settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test", raising=False)
-    monkeypatch.setattr("services.messenger.audio_progress.list_full_series", lambda: [item])
-    monkeypatch.setattr("services.mood_text_flow.get_by_anchor", lambda anchor: anchored if int(anchor) == 1 else None)
-    monkeypatch.setattr("services.messenger.reply_dispatcher.VkBotSender", lambda: sender)
+    _prepare_paid_route(monkeypatch, user_id=user_id, item=item, anchored=anchored, sender=sender)
 
     asyncio.run(_dispatch_vk(user_id, "start"))
-    asyncio.run(_dispatch_vk(user_id, "demo"))
-    asyncio.run(_dispatch_vk(user_id, "demo_work"))
+    asyncio.run(_dispatch_vk(user_id, "continue"))
     score_keyboard = _latest_keyboard(sender)
     assert json.loads(score_keyboard)["inline"] is False
     score_commands = _commands(score_keyboard)[:21]
@@ -112,9 +142,9 @@ def test_vk_audio_rejection_uses_link_fallback(monkeypatch, tmp_path):
 
     asyncio.run(_dispatch_vk(user_id, "-9"))
     assert sender.audio_calls
-    access_text = sender.text_calls[-1][1]
-    assert "media/audio/access" in access_text
+    assert any("media/audio/access" in text for _, text, _ in sender.text_calls)
     assert get_pending_audio_token(user_id)
+    assert get_wallet(user_id).used_tokens == 1
 
 
 def test_vk_native_audio_success_is_not_rolled_back_when_notice_fails(monkeypatch, tmp_path):
@@ -125,15 +155,10 @@ def test_vk_native_audio_success_is_not_rolled_back_when_notice_fails(monkeypatc
     anchored = _AnchoredAudio(anchor=1, clean_title="Morning Route", path=audio_path)
 
     sender = _FakeVkSender(fail_audio=False)
-    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://example.test")
-    monkeypatch.setattr(settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test", raising=False)
-    monkeypatch.setattr("services.messenger.audio_progress.list_full_series", lambda: [item])
-    monkeypatch.setattr("services.mood_text_flow.get_by_anchor", lambda anchor: anchored if int(anchor) == 1 else None)
-    monkeypatch.setattr("services.messenger.reply_dispatcher.VkBotSender", lambda: sender)
+    _prepare_paid_route(monkeypatch, user_id=user_id, item=item, anchored=anchored, sender=sender)
 
     asyncio.run(_dispatch_vk(user_id, "start"))
-    asyncio.run(_dispatch_vk(user_id, "demo"))
-    asyncio.run(_dispatch_vk(user_id, "demo_work"))
+    asyncio.run(_dispatch_vk(user_id, "continue"))
 
     sender.fail_next_text = True
     before_texts = len(sender.text_calls)
@@ -144,6 +169,7 @@ def test_vk_native_audio_success_is_not_rolled_back_when_notice_fails(monkeypatc
     snapshot = get_progress_snapshot(user_id)
     assert snapshot.pending_item is not None
     assert snapshot.pending_item.anchor == 1
+    assert get_wallet(user_id).used_tokens == 1
     new_texts = "\n".join(text for _, text, _ in sender.text_calls[before_texts:])
     assert "media/audio/access" not in new_texts
 
@@ -156,15 +182,10 @@ def test_vk_post_score_does_not_start_new_audio(monkeypatch, tmp_path):
     anchored = _AnchoredAudio(anchor=1, clean_title="Morning Route", path=audio_path)
 
     sender = _FakeVkSender(fail_audio=False)
-    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://example.test")
-    monkeypatch.setattr(settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test", raising=False)
-    monkeypatch.setattr("services.messenger.audio_progress.list_full_series", lambda: [item])
-    monkeypatch.setattr("services.mood_text_flow.get_by_anchor", lambda anchor: anchored if int(anchor) == 1 else None)
-    monkeypatch.setattr("services.messenger.reply_dispatcher.VkBotSender", lambda: sender)
+    _prepare_paid_route(monkeypatch, user_id=user_id, item=item, anchored=anchored, sender=sender)
 
     asyncio.run(_dispatch_vk(user_id, "start"))
-    asyncio.run(_dispatch_vk(user_id, "demo"))
-    asyncio.run(_dispatch_vk(user_id, "demo_work"))
+    asyncio.run(_dispatch_vk(user_id, "continue"))
     asyncio.run(_dispatch_vk(user_id, "-4"))
 
     assert len(sender.audio_calls) == 1
