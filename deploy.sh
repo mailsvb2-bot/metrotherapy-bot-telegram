@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Production topology contract: the server keeps one local branch named main.
 APP_DIR="/root/metrotherapy"
 SERVICE_NAME="metrotherapy.service"
 DEPLOY_WEBHOOK_SERVICE="github-deploy-webhook.service"
