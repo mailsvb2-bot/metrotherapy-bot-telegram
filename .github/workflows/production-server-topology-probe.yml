@@ -1,5 +1,6 @@
 name: Production server topology probe
 
+# Marker-gated exact read-only audit of /root/metrotherapy refs/heads.
 on:
   push:
     branches:
