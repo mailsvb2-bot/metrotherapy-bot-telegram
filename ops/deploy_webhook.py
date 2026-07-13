@@ -10,8 +10,9 @@ from pathlib import Path
 HOST = "127.0.0.1"
 PORT = 9001
 SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
-DEPLOY_SH = "/root/metrotherapy/deploy.sh"
-LOCK_FILE = Path("/root/metrotherapy/data/deploy/metrotherapy_deploy.lock")
+APP_DIR = Path("/root/metrotherapy")
+DEPLOY_SH = str(APP_DIR / "deploy.sh")
+LOCK_FILE = APP_DIR / "data/deploy/metrotherapy_deploy.lock"
 LOG_FILE = "/var/log/metrotherapy_deploy.log"
 
 
@@ -38,6 +39,36 @@ echo "=== deploy queued finished: $(date -Is) ===" >> {LOG_FILE}
     )
 
 
+def _local_branch_topology() -> tuple[list[str], str | None]:
+    try:
+        completed = subprocess.run(  # nosec B603
+            [
+                "/usr/bin/git",
+                "-C",
+                str(APP_DIR),
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/heads",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [], f"{type(exc).__name__}:{exc}"
+
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "git branch audit failed").strip()
+        return [], detail[:240]
+    branches = sorted(
+        line.strip()
+        for line in completed.stdout.splitlines()
+        if line.strip()
+    )
+    return branches, None
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body: bytes):
         self.send_response(code)
@@ -47,7 +78,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/github-deploy":
-            self._send(200, b"ok: github deploy webhook accepts POST")
+            branches, error = _local_branch_topology()
+            if error is not None:
+                self._send(503, f"error: branch audit unavailable: {error}".encode("utf-8"))
+                return
+            body = (
+                "ok: github deploy webhook accepts POST "
+                f"local_branch_count={len(branches)} "
+                f"local_branches={','.join(branches)}"
+            )
+            self._send(200, body.encode("utf-8"))
         else:
             self._send(404, b"not found")
 
