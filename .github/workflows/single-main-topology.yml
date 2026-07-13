@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  statuses: write
 
 jobs:
   cleanup:
@@ -20,31 +21,54 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const branches = await github.paginate(
-              github.rest.repos.listBranches,
-              { owner, repo, per_page: 100 },
-            );
+            let failure = null;
+            let description = 'GitHub branch cleanup did not complete';
 
-            for (const branch of branches) {
-              if (branch.name === 'main') continue;
-              core.info(`Deleting non-main branch: ${branch.name}`);
-              await github.rest.git.deleteRef({
-                owner,
-                repo,
-                ref: `heads/${branch.name}`,
-              });
+            try {
+              const branches = await github.paginate(
+                github.rest.repos.listBranches,
+                { owner, repo, per_page: 100 },
+              );
+
+              for (const branch of branches) {
+                if (branch.name === 'main') continue;
+                core.info(`Deleting non-main branch: ${branch.name}`);
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `heads/${branch.name}`,
+                });
+              }
+
+              const remaining = await github.paginate(
+                github.rest.repos.listBranches,
+                { owner, repo, per_page: 100 },
+              );
+              const names = remaining.map((branch) => branch.name).sort();
+              core.info(`GITHUB_BRANCH_COUNT=${names.length}`);
+              core.info(`GITHUB_BRANCHES=${names.join(',')}`);
+
+              if (names.length !== 1 || names[0] !== 'main') {
+                throw new Error(
+                  `Expected exactly one GitHub branch named main; got ${names.length}: ${names.join(',')}`,
+                );
+              }
+              description = `GitHub branches=${names.length}: ${names.join(',')}`;
+            } catch (error) {
+              failure = error;
+              description = `Branch cleanup failed: ${error.message}`.slice(0, 140);
             }
 
-            const remaining = await github.paginate(
-              github.rest.repos.listBranches,
-              { owner, repo, per_page: 100 },
-            );
-            const names = remaining.map((branch) => branch.name).sort();
-            core.info(`GITHUB_BRANCH_COUNT=${names.length}`);
-            core.info(`GITHUB_BRANCHES=${names.join(',')}`);
+            await github.rest.repos.createCommitStatus({
+              owner,
+              repo,
+              sha: context.sha,
+              state: failure ? 'failure' : 'success',
+              context: 'ops/single-main-topology',
+              description,
+              target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+            });
 
-            if (names.length !== 1 || names[0] !== 'main') {
-              core.setFailed(
-                `Expected exactly one GitHub branch named main; got ${names.length}: ${names.join(',')}`,
-              );
+            if (failure) {
+              core.setFailed(failure.message);
             }
