@@ -105,6 +105,50 @@ require_single_local_main_branch() {
   echo "=== production branch topology OK: count=1 branch=main ==="
 }
 
+publish_server_branch_audit_if_requested() {
+  local request_message
+  local local_branch_list
+  local local_branch_count
+  local local_branch_csv
+  local remote_branch_list
+  local remote_branch_count
+  local remote_branch_csv
+  local audit_message
+
+  request_message="$(git log -1 --pretty=%B)"
+  case "$request_message" in
+    *"[server-branch-audit-request]"*) ;;
+    *) return 0 ;;
+  esac
+
+  echo "=== explicit server branch audit requested ==="
+  local_branch_list="$(git for-each-ref --format='%(refname:short)' refs/heads | sort)"
+  local_branch_count="$(printf '%s\n' "$local_branch_list" | sed '/^$/d' | wc -l | tr -d ' ')"
+  local_branch_csv="$(printf '%s\n' "$local_branch_list" | sed '/^$/d' | paste -sd, -)"
+
+  remote_branch_list="$(git ls-remote --heads origin | awk '{ref=$2; sub("^refs/heads/", "", ref); print ref}' | sort)"
+  remote_branch_count="$(printf '%s\n' "$remote_branch_list" | sed '/^$/d' | wc -l | tr -d ' ')"
+  remote_branch_csv="$(printf '%s\n' "$remote_branch_list" | sed '/^$/d' | paste -sd, -)"
+
+  if [ "$local_branch_count" != "1" ] || [ "$local_branch_csv" != "main" ]; then
+    echo "ERROR: server audit expected local_count=1 local_branches=main"
+    echo "ERROR: local_count=$local_branch_count local_branches=$local_branch_csv"
+    exit 12
+  fi
+  if [ "$remote_branch_count" != "1" ] || [ "$remote_branch_csv" != "main" ]; then
+    echo "ERROR: server audit expected remote_count=1 remote_branches=main"
+    echo "ERROR: remote_count=$remote_branch_count remote_branches=$remote_branch_csv"
+    exit 13
+  fi
+
+  audit_message="[server-branch-audit-result] local_count=$local_branch_count local_branches=$local_branch_csv remote_count=$remote_branch_count remote_branches=$remote_branch_csv"
+  git -c user.name="Metrotherapy Deploy Audit" \
+      -c user.email="deploy-audit@metrotherapy.local" \
+      commit --allow-empty -m "$audit_message"
+  git push origin main
+  echo "=== $audit_message ==="
+}
+
 require_telegram_polling_contract
 
 OLD_SHA="$(git rev-parse HEAD)"
@@ -165,6 +209,7 @@ git merge --ff-only origin/main
 require_single_local_main_branch
 
 git remote prune origin
+publish_server_branch_audit_if_requested
 
 NEW_SHA="$(git rev-parse HEAD)"
 echo "=== new sha: $NEW_SHA ==="
