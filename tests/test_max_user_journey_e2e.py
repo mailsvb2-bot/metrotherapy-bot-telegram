@@ -184,6 +184,11 @@ def test_max_full_user_journey_score_audio_done_repeat_pay_gift(monkeypatch, tmp
     assert all(str(button.get("url") or "").startswith("https://example.test/") for button in pay_links)
 
     asyncio.run(_dispatch_max(user_id, "gift"))
+    assert "кому" in sender.text_calls[-1][1].casefold()
+    assert not _link_buttons(_attachments(sender)[0])
+
+    asyncio.run(_dispatch_max(user_id, "Анна +79990001122"))
     gift_links = _link_buttons(_attachments(sender)[0])
     assert gift_links
     assert all(str(button.get("url") or "").startswith("https://example.test/") for button in gift_links)
+    assert all("gift=1" in str(button.get("url") or "") for button in gift_links)
