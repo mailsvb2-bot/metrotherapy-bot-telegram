@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from services.validators.base import ValidationError
 from services.validators import delivery_contracts
+from services.validators.base import ValidationError
 
 
 def _run_demo_validator(monkeypatch: pytest.MonkeyPatch, source: str) -> None:
     def _fake_read(path: str) -> str:
-        assert path == "handlers/mood_flow/ratings.py"
+        assert path == "services/mood_text_flow.py"
         return source
 
     monkeypatch.setattr(delivery_contracts, "_read", _fake_read)
@@ -24,28 +24,39 @@ def _run_auto_audio_validator(monkeypatch: pytest.MonkeyPatch, source: str) -> N
     delivery_contracts.validate_auto_audio_pre_score_lifecycle(strict=True)
 
 
-def test_delivery_validator_accepts_multiline_final_marker_and_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_delivery_validator_accepts_canonical_service_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
     source = '''
-async def _send_audio():
+async def complete_pre_score_and_send():
+    if was_delivered(int(user_id), idem_kind, "audio", idem_scheduled_at):
+        return
+    audio_lock = await asyncio.to_thread(
+        acquire_delivery_lock,
+        int(user_id),
+        idem_kind,
+        "audio_lock",
+        idem_scheduled_at,
+        final_stage="audio",
+    )
+    if _recover_sent_session_from_pending(int(user_id), session, int(session_id), sequence_key):
+        mark_delivery_once(
+            int(user_id),
+            idem_kind,
+            "audio",
+            idem_scheduled_at,
+        )
+        return
+    result = await _core.complete_pre_score_and_send(int(user_id))
     mark_delivery_once(
-        int(cb.from_user.id),
+        int(user_id),
         idem_kind,
         "audio",
         idem_scheduled_at,
     )
     unmark_delivery(
-        int(cb.from_user.id),
+        int(user_id),
         idem_kind,
         "audio_lock",
         idem_scheduled_at,
-    )
-    await asyncio.to_thread(
-        acquire_delivery_lock,
-        user_id,
-        idem_kind,
-        "audio_lock",
-        idem_scheduled_at,
-        final_stage="audio",
     )
 '''
 
@@ -54,14 +65,21 @@ async def _send_audio():
 
 def test_delivery_validator_rejects_missing_lock_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
     source = '''
-async def _send_audio():
-    await asyncio.to_thread(acquire_delivery_lock, user_id, idem_kind, "audio_lock", idem_scheduled_at, final_stage="audio")
-    mark_delivery_once(
-        int(cb.from_user.id),
+async def complete_pre_score_and_send():
+    if was_delivered(int(user_id), idem_kind, "audio", idem_scheduled_at):
+        return
+    await asyncio.to_thread(
+        acquire_delivery_lock,
+        int(user_id),
         idem_kind,
-        "audio",
+        "audio_lock",
         idem_scheduled_at,
+        final_stage="audio",
     )
+    if _recover_sent_session_from_pending(int(user_id), session, int(session_id), sequence_key):
+        return
+    result = await _core.complete_pre_score_and_send(int(user_id))
+    mark_delivery_once(int(user_id), idem_kind, "audio", idem_scheduled_at)
 '''
 
     with pytest.raises(ValidationError):
@@ -70,11 +88,11 @@ async def _send_audio():
 
 def test_delivery_validator_rejects_old_final_marker_before_send_pattern(monkeypatch: pytest.MonkeyPatch) -> None:
     source = '''
-async def _send_audio():
-    else:
-            if not mark_delivery_once(user_id, idem_kind, "audio", idem_scheduled_at):
-                return
-    unmark_delivery(int(cb.from_user.id), idem_kind, "audio_lock", idem_scheduled_at)
+async def complete_pre_score_and_send():
+    if not mark_delivery_once(user_id, idem_kind, "audio", idem_scheduled_at):
+        return
+    await send_audio()
+    unmark_delivery(int(user_id), idem_kind, "audio_lock", idem_scheduled_at)
 '''
 
     with pytest.raises(ValidationError):
