@@ -15,24 +15,35 @@ from services.mood_text_flow_core import *  # noqa: F403
 
 MoodTextFlowResult = _core.MoodTextFlowResult
 
+_HOOK_NAMES = (
+    "get_by_anchor",
+    "pick_demo_file",
+    "ensure_max_opus_file",
+    "ensure_vk_opus_file",
+)
+_ORIGINAL_FACADE_HOOKS = {name: globals().get(name) for name in _HOOK_NAMES}
+_ORIGINAL_CORE_HOOKS = {name: getattr(_core, name, None) for name in _HOOK_NAMES}
+
 
 def _sync_core_hooks() -> None:
-    """Keep dependency injection attached to the public facade.
+    """Keep dependency injection attached to the stable public boundary.
 
-    The implementation was split into a core module, but callers and focused
-    tests historically patch ``services.mood_text_flow``. Preserve that public
-    injection surface instead of forcing them to know the internal owner.
+    Public callers historically patch ``services.mood_text_flow`` while some
+    hermetic probes patch the implementation core directly. Respect whichever
+    side was intentionally overridden and never overwrite a direct core override
+    with an untouched facade default.
     """
 
-    for name in (
-        "get_by_anchor",
-        "pick_demo_file",
-        "ensure_max_opus_file",
-        "ensure_vk_opus_file",
-    ):
-        value = globals().get(name)
-        if value is not None:
-            setattr(_core, name, value)
+    for name in _HOOK_NAMES:
+        facade_value = globals().get(name)
+        core_value = getattr(_core, name, None)
+        original_facade = _ORIGINAL_FACADE_HOOKS.get(name)
+        original_core = _ORIGINAL_CORE_HOOKS.get(name)
+
+        if facade_value is not original_facade:
+            setattr(_core, name, facade_value)
+        elif core_value is original_core:
+            setattr(_core, name, facade_value)
 
 
 def _idempotency_context(user_id: int, session: Any, session_id: int) -> tuple[str, str, str]:
