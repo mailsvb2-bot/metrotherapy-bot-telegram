@@ -5,34 +5,66 @@ import os
 import re
 from pathlib import Path
 
-from core.paths import ROOT as PROJECT_ROOT
 from services.validators.base import ValidationError
 
 log = logging.getLogger(__name__)
 
+# Public compatibility surface used by readiness probes and focused tests.
+# Runtime directories are resolved dynamically so monkeypatching PROJECT_ROOT or
+# setting AUDIO_DIR/DEMO_DIR affects the same checks that live readiness uses.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _audio_validation_skipped() -> bool:
-    return (os.getenv("VALIDATOR_SKIP_AUDIO") or "").strip().lower() in {"1", "true", "yes", "on"}
+    return (os.getenv("VALIDATOR_SKIP_AUDIO") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _configured_dir(env_name: str, default_relative: str) -> Path:
+    raw = (os.getenv(env_name) or "").strip()
+    if not raw:
+        return PROJECT_ROOT / default_relative
+    path = Path(raw).expanduser()
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def _demo_dir() -> Path:
+    return _configured_dir("DEMO_DIR", "audio/demo")
+
+
+def _full_dir() -> Path:
+    return _configured_dir("AUDIO_DIR", "audio/full")
 
 
 def _iter_audio_files(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
     exts = {".opus", ".ogg", ".mp3", ".wav", ".m4a"}
-    files = [p for p in folder.iterdir() if p.is_file() and not p.name.startswith(".")]
-    return [p for p in files if p.suffix.lower() in exts]
+    files = [
+        path
+        for path in folder.iterdir()
+        if path.is_file() and not path.name.startswith(".")
+    ]
+    return [path for path in files if path.suffix.lower() in exts]
 
 
 def validate_demo_audio(strict: bool = True, *, allow_skip: bool = True) -> None:
     if allow_skip and _audio_validation_skipped():
         return
-    demo_dir = PROJECT_ROOT / "audio" / "demo"
+    demo_dir = _demo_dir()
     files = _iter_audio_files(demo_dir)
-    names = {p.stem.lower(): p for p in files}
+    names = {path.stem.lower(): path for path in files}
 
-    missing = [k for k in ("work", "home") if k not in names]
+    missing = [kind for kind in ("work", "home") if kind not in names]
     if missing:
-        msg = f"Demo audio missing: {missing}. Expected work/home audio files in {demo_dir}"
+        msg = (
+            f"Demo audio missing: {missing}. "
+            f"Expected work/home audio files in {demo_dir}"
+        )
         if strict:
             raise ValidationError(msg)
         log.warning(msg)
@@ -41,10 +73,10 @@ def validate_demo_audio(strict: bool = True, *, allow_skip: bool = True) -> None
 def validate_full_audio(strict: bool = True, *, allow_skip: bool = True) -> None:
     if allow_skip and _audio_validation_skipped():
         return
-    full_dir = PROJECT_ROOT / "audio" / "full"
+    full_dir = _full_dir()
     files = _iter_audio_files(full_dir)
 
-    bad = [p.name for p in files if not re.match(r"^\d+_", p.name)]
+    bad = [path.name for path in files if not re.match(r"^\d+_", path.name)]
     if bad:
         msg = (
             "Full audio files must start with a numeric prefix and underscore. "
@@ -55,14 +87,14 @@ def validate_full_audio(strict: bool = True, *, allow_skip: bool = True) -> None
         log.warning(msg)
 
     nums: list[int] = []
-    for p in files:
-        m = re.match(r"^(\d+)_", p.name)
-        if m:
-            nums.append(int(m.group(1)))
+    for path in files:
+        match = re.match(r"^(\d+)_", path.name)
+        if match:
+            nums.append(int(match.group(1)))
 
     if nums:
-        has_odd = any(n % 2 == 1 for n in nums)
-        has_even = any(n % 2 == 0 for n in nums)
+        has_odd = any(number % 2 == 1 for number in nums)
+        has_even = any(number % 2 == 0 for number in nums)
         if not (has_odd and has_even):
             msg = (
                 "Full audio numbering must include BOTH odd and even numbers. "
@@ -79,13 +111,7 @@ def validate_full_audio(strict: bool = True, *, allow_skip: bool = True) -> None
 
 
 def audio_readiness() -> tuple[bool, str | None]:
-    """Return a fail-closed audio-content readiness result for deployed production.
-
-    Runtime readiness intentionally ignores VALIDATOR_SKIP_AUDIO. That flag exists
-    only for hermetic source-tree CI where licensed/large audio assets are not
-    shipped with the repository. A live production process must prove that its
-    demo and full-audio content is actually present and structurally usable.
-    """
+    """Fail closed against the same configured media directories runtime uses."""
 
     try:
         validate_demo_audio(strict=True, allow_skip=False)

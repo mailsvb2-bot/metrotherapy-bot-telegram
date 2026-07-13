@@ -4,15 +4,16 @@ import inspect
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import handlers.mood_flow.ratings as mood_ratings
 import services.auto_audio as auto_audio
+import services.mood_text_flow as mood_flow
+import services.mood_text_flow_core as mood_flow_core
 from services.auto_audio import _is_due_local_day, _matches_slot_second
 from services.idempotency_keys import for_demo_click, for_session
 
 
 def _legacy_demo_key_from_rating_handler_shape(session_id: int) -> int:
-    # Mirrors the legacy handlers.mood_flow.ratings shape where `sid` is a local
-    # variable and for_demo_click() is called with no args.
+    # Mirrors the legacy handler call shape where `sid` is a local variable and
+    # for_demo_click() is called without explicit args.
     sid = int(session_id)
     return for_demo_click()
 
@@ -43,19 +44,25 @@ def test_auto_audio_due_window_survives_slow_scheduler_tick() -> None:
     assert not _is_due_local_day(datetime(2026, 6, 3, 0, 0, 0, tzinfo=tz), "23:59:59")
 
 
-def test_mood_audio_send_path_uses_practice_token_guard_and_finalize() -> None:
-    source = inspect.getsource(mood_ratings.mood_answer)
-    assert "acquire_delivery_lock" in source
-    assert "check_and_reserve_for_audio" in source
-    assert "finalize_audio_access" in source
-    assert "delivered=True" in source
-    assert "delivered=False" in source
-    assert "audio_lock" in source
+def test_mood_audio_send_path_uses_canonical_lock_and_token_effects() -> None:
+    facade_source = inspect.getsource(mood_flow.complete_pre_score_and_send)
+    core_source = inspect.getsource(mood_flow_core.complete_pre_score_and_send)
+
+    assert "acquire_delivery_lock" in facade_source
+    assert "audio_lock" in facade_source
+    assert "_core.complete_pre_score_and_send" in facade_source
+    assert "mark_delivery_once" in facade_source
+    assert "_cleanup_audio_lock" in facade_source
+
+    assert "check_and_reserve_for_audio" in core_source
+    assert "finalize_audio_access" in core_source
+    assert "delivered=True" in core_source
+    assert "delivered=False" in core_source
 
 
 def test_auto_audio_prompt_path_uses_reclaimable_pre_score_lock() -> None:
     source = inspect.getsource(auto_audio.tick)
     assert "acquire_delivery_lock" in source
     assert "pre_score_lock" in source
-    assert "final_stage=\"pre_score\"" in source
+    assert 'final_stage="pre_score"' in source
     assert "auto_audio_stale_lock_reclaimed" in source

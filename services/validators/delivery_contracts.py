@@ -31,13 +31,14 @@ def _unparse(node: ast.AST) -> str:
         return ""
 
 
-def _has_call(text: str, *, func_name: str, args: tuple[str, ...], keywords: dict[str, str] | None = None) -> bool:
-    """Return True when source contains func_name(*args), independent of formatting.
-
-    The production validator must enforce the delivery lifecycle contract without
-    coupling startup to one exact line-wrapping style. This keeps the guardrail
-    strict while allowing normal formatter-safe edits.
-    """
+def _has_call(
+    text: str,
+    *,
+    func_name: str,
+    args: tuple[str, ...],
+    keywords: dict[str, str] | None = None,
+) -> bool:
+    """Return True when source contains func_name(*args), independent of formatting."""
 
     try:
         tree = ast.parse(text)
@@ -99,53 +100,79 @@ def _has_to_thread_call(
 
 
 def validate_demo_idempotency_cleanup(*, strict: bool = True) -> None:
-    """Demo audio idempotency must use a two-phase lock and final marker after send."""
-    text = _read("handlers/mood_flow/ratings.py")
+    """Canonical audio effect must use one two-phase lifecycle for all channels."""
+
+    text = _read("services/mood_text_flow.py")
     if not text:
         return
-    old_demo_final_marker_before_send = "else:\n            if not mark_delivery_once(user_id, idem_kind, \"audio\", idem_scheduled_at):"
-    has_final_marker = _has_call(
+
+    has_final_check = _has_call(
         text,
-        func_name="mark_delivery_once",
-        args=("int(cb.from_user.id)", "idem_kind", "'audio'", "idem_scheduled_at"),
-    )
-    has_lock_cleanup = _has_call(
-        text,
-        func_name="unmark_delivery",
-        args=("int(cb.from_user.id)", "idem_kind", "'audio_lock'", "idem_scheduled_at"),
+        func_name="was_delivered",
+        args=("int(user_id)", "idem_kind", "'audio'", "idem_scheduled_at"),
     )
     has_lock = _has_to_thread_call(
         text,
         target="acquire_delivery_lock",
-        args=("user_id", "idem_kind", "'audio_lock'", "idem_scheduled_at"),
+        args=("int(user_id)", "idem_kind", "'audio_lock'", "idem_scheduled_at"),
         keywords={"final_stage": "'audio'"},
-    ) or _has_call(
+    )
+    has_final_marker = _has_call(
         text,
         func_name="mark_delivery_once",
-        args=("user_id", "idem_kind", "'audio_lock'", "idem_scheduled_at"),
+        args=("int(user_id)", "idem_kind", "'audio'", "idem_scheduled_at"),
     )
-    if old_demo_final_marker_before_send in text or not has_lock or not has_final_marker or not has_lock_cleanup:
-        msg = "Demo audio idempotency is not using the canonical lock-before-send/final-marker-after-send lifecycle"
+    has_lock_cleanup = _has_call(
+        text,
+        func_name="unmark_delivery",
+        args=("int(user_id)", "idem_kind", "'audio_lock'", "idem_scheduled_at"),
+    )
+    owns_effect = "_core.complete_pre_score_and_send" in text
+    owns_crash_recovery = "_recover_sent_session_from_pending" in text
+
+    if not (
+        has_final_check
+        and has_lock
+        and has_final_marker
+        and has_lock_cleanup
+        and owns_effect
+        and owns_crash_recovery
+    ):
+        msg = (
+            "Canonical mood/audio delivery is not using lock-before-send, "
+            "durable crash recovery, final-marker-after-send and lock cleanup"
+        )
         if strict:
             raise ValidationError(msg)
 
 
 def validate_auto_audio_not_subscription_only(*, strict: bool = True) -> None:
-    """New practice-token checkout must be connected to delivery entitlement."""
+    """Practice-token checkout must be connected to automatic delivery entitlement."""
+
     text = _read("services/auto_audio.py")
     adapter = _read("services/auto_audio_entitlement.py")
     if not text:
         return
-    connected = "services.auto_audio_entitlement" in text and "eligible_user_ids" in text and "has_entitlement" in text
-    adapter_uses_tokens = "practice_wallets" in adapter and "has_access" in adapter and "get_wallet" in adapter
-    if not connected or not adapter_uses_tokens:
-        msg = "auto_audio delivery is not connected to unified subscription/practice-token entitlement"
+    connected = (
+        "services.auto_audio_entitlement" in text
+        and "eligible_user_ids" in text
+        and "has_entitlement" in text
+    )
+    adapter_uses_wallet = (
+        "practice_wallets" in adapter
+        and "has_access" in adapter
+        and "token_economy_enabled" in adapter
+        and "enforcement_mode" in adapter
+    )
+    if not connected or not adapter_uses_wallet:
+        msg = "auto_audio delivery is not connected to the canonical practice-wallet entitlement"
         if strict:
             raise ValidationError(msg)
 
 
 def validate_auto_audio_pre_score_lifecycle(*, strict: bool = True) -> None:
     """Auto-audio prompt delivery must use lock-before-send and final marker-after-send."""
+
     text = _read("services/auto_audio.py")
     if not text:
         return

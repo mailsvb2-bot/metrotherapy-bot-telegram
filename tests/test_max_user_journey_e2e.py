@@ -11,7 +11,9 @@ from runtime import messenger_max_ui as max_ui
 from runtime.messenger_payloads import normalise_messenger_text
 from services.messenger.audio_progress import AudioProgressItem, get_progress_snapshot
 from services.messenger.reply_dispatcher import send_reply_bundle
-from services.messenger.text_ui import MessengerReply, handle_incoming_text
+from services.messenger.text_ui import MessengerReply
+from services.messenger.text_ui_router import handle_incoming_text
+from services.practice_tokens import get_wallet, grant_tokens
 
 
 @dataclass(frozen=True)
@@ -27,7 +29,14 @@ class _FakeMaxSender:
         self.audio_calls: list[tuple[str, Path, str | None, dict[str, Any]]] = []
         self.text_calls: list[tuple[str, str, dict[str, Any]]] = []
 
-    async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any) -> dict[str, Any]:
+    async def send_audio_file(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        caption: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         self.audio_calls.append((str(external_user_id), Path(file_path), caption, dict(kwargs)))
         if self.fail_audio:
             raise RuntimeError("MAX rejected this audio attachment")
@@ -38,7 +47,13 @@ class _FakeMaxSender:
         attachments = list(stored.get("attachments") or max_ui.native_keyboard_attachments(str(text or "")))
         if attachments:
             stored["attachments"] = attachments
-        self.text_calls.append((str(external_user_id), max_ui.prepare_text(str(text or ""), has_native_keyboard=bool(attachments)), stored))
+        self.text_calls.append(
+            (
+                str(external_user_id),
+                max_ui.prepare_text(str(text or ""), has_native_keyboard=bool(attachments)),
+                stored,
+            )
+        )
         return {"ok": True}
 
 
@@ -101,6 +116,7 @@ def test_max_full_user_journey_score_audio_done_repeat_pay_gift(monkeypatch, tmp
     anchored = _AnchoredAudio(anchor=1, clean_title="Morning Route", path=source_path)
 
     sender = _FakeMaxSender()
+    monkeypatch.setenv("TOKEN_ENFORCEMENT_MODE", "hard")
     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://example.test")
     monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://example.test")
     monkeypatch.setattr(settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test", raising=False)
@@ -112,20 +128,26 @@ def test_max_full_user_journey_score_audio_done_repeat_pay_gift(monkeypatch, tmp
     monkeypatch.setattr("services.messenger.reply_dispatcher.MaxBotSender", lambda: sender)
     monkeypatch.setattr("services.messenger.reply_dispatcher.build_vk_mood_progress_chart_path", lambda uid: None)
 
+    grant_tokens(
+        user_id,
+        package_id="practice_start_7",
+        amount=3,
+        provider="test",
+        provider_payment_id=f"max-e2e-{user_id}",
+        idempotency_key=f"grant:test:max-e2e:{user_id}",
+    )
+
     asyncio.run(_dispatch_max(user_id, "start"))
     assert "Главное меню" in sender.text_calls[-1][1]
     assert _button_commands(_attachments(sender)[0])
 
-    asyncio.run(_dispatch_max(user_id, "demo"))
-    assert "Бесплатная практика" in sender.text_calls[-1][1]
-    assert _button_commands(_attachments(sender)[0]) == ["demo_work", "demo_home", "start"]
-
-    asyncio.run(_dispatch_max(user_id, "demo_work"))
+    asyncio.run(_dispatch_max(user_id, "continue"))
+    assert "Следующая практика" in sender.text_calls[-1][1]
     score_attachment = _attachments(sender)[0]
     assert _button_commands(score_attachment)[:21] == [f"score:{value}" for value in range(-10, 11)]
     assert _button_texts(score_attachment)[:21] == [str(value) for value in range(-10, 11)]
 
-    asyncio.run(_dispatch_max(user_id, "score:-9"))
+    asyncio.run(_dispatch_max(user_id, "-9"))
     assert sender.audio_calls
     external_id, file_path, caption, _ = sender.audio_calls[-1]
     assert external_id == str(user_id)
@@ -136,19 +158,22 @@ def test_max_full_user_journey_score_audio_done_repeat_pay_gift(monkeypatch, tmp
     snapshot = get_progress_snapshot(user_id)
     assert snapshot.pending_item is not None
     assert snapshot.pending_item.anchor == 1
+    assert get_wallet(user_id).used_tokens == 1
 
     asyncio.run(_dispatch_max(user_id, "done"))
     post_score_attachment = _attachments(sender)[0]
     assert "Теперь оцените состояние ПОСЛЕ" in sender.text_calls[-1][1]
     assert _button_commands(post_score_attachment)[:21] == [f"score:{value}" for value in range(-10, 11)]
 
-    asyncio.run(_dispatch_max(user_id, "score:3"))
+    asyncio.run(_dispatch_max(user_id, "3"))
     joined_texts = "\n".join(text for _, text, _ in sender.text_calls[-4:])
     assert "Оценку после прослушивания +3 сохранил" in joined_texts
 
     audio_count_before_repeat = len(sender.audio_calls)
+    wallet_before_repeat = get_wallet(user_id)
     asyncio.run(_dispatch_max(user_id, "repeat"))
     assert len(sender.audio_calls) == audio_count_before_repeat + 1
+    assert get_wallet(user_id) == wallet_before_repeat
     repeat_text = sender.text_calls[-1][1]
     assert "Повторно отправил аудио" in repeat_text
     assert "done" in _button_commands(_attachments(sender)[0])
@@ -159,6 +184,11 @@ def test_max_full_user_journey_score_audio_done_repeat_pay_gift(monkeypatch, tmp
     assert all(str(button.get("url") or "").startswith("https://example.test/") for button in pay_links)
 
     asyncio.run(_dispatch_max(user_id, "gift"))
+    assert "кому" in sender.text_calls[-1][1].casefold()
+    assert not list(sender.text_calls[-1][2].get("attachments") or [])
+
+    asyncio.run(_dispatch_max(user_id, "Анна +79990001122"))
     gift_links = _link_buttons(_attachments(sender)[0])
     assert gift_links
     assert all(str(button.get("url") or "").startswith("https://example.test/") for button in gift_links)
+    assert all("gift=1" in str(button.get("url") or "") for button in gift_links)

@@ -1,71 +1,84 @@
 from __future__ import annotations
+
 import logging
-import sqlite3
-
-from services.sla import record as sla_record
-from services.bg import tm
-from services.fast_send_audio import send_audio_cached
-
 from datetime import timedelta
-from core.time_utils import utc_now
-from services.jobs import add_job, cancel_post_prompt
 
-import asyncio
-
-from aiogram import Router, F
-from aiogram.types import CallbackQuery, BufferedInputFile
-from aiogram.types import FSInputFile
-
-from keyboards.inline import kb_mood_scale, kb_mood_done, kb_body_question, kb_after_post_actions, kb_post_show_chart
-from services.db import mark_delivery_once
-from services.idempotency import wall_key
-from services.idempotency_keys import for_demo_click, for_session
-from services.mood import set_pre, set_post, get_session, mark_audio_sent, last_delta
-from services.events import log_event
-from services.audio_anchor import get_by_anchor
-from services.catalog import AudioCatalog
-# Контракт: запись факта отправки демо живёт в demo_analytics.
-# В старых ветках файл мог называться demo_events — оставляем только корректный импорт.
-from services.demo_analytics import record_demo_sent
-from services.body import pick_body_question, save_body_feedback, technique_for_area
-from services.audio_cache import get_cached_file_id, save_cached_file_id
-from services.support_ai import decide_support_pre
-from services.subscription import register_touch
-
+from aiogram import F, Router
+from aiogram.types import CallbackQuery, Message
 
 from core.callback_utils import safe_answer_callback
+from core.time_utils import utc_now
+from services.db import mark_delivery_once
+from services.events import log_event
+from services.idempotency_keys import for_session
+from services.jobs import add_job, cancel_post_prompt
+from services.messenger.audio_progress import confirm_pending_audio_delivery
+from services.mood import get_session
+
 router = Router()
+log = logging.getLogger(__name__)
+
+
+def _callback_message(cb: CallbackQuery) -> Message | None:
+    return cb.message if isinstance(cb.message, Message) else None
 
 
 @router.callback_query(F.data.regexp(r"^mood:done:\d+$"))
-async def mood_done(cb: CallbackQuery):
-    """Пользователь нажал 'Прослушал'. Пост-оценка всегда через +1 секунду."""
+async def mood_done(cb: CallbackQuery) -> None:
+    """Confirm only the current user's delivered session and schedule POST score."""
+
     await safe_answer_callback(cb)
-    data = (cb.data or "").split(":")
-    if len(data) != 3:
+    message = _callback_message(cb)
+    parts = str(cb.data or "").split(":")
+    if len(parts) != 3:
         return
     try:
-        sid = int(data[2])
-    except (ValueError, RuntimeError):
-        logging.getLogger(__name__).exception("Unhandled exception")
-        return
-    s = get_session(sid)
-    if not s:
+        session_id = int(parts[2])
+    except ValueError:
         return
 
-    # Cancel any previously scheduled post-prompt for this session and schedule a new one (через 1 секунду).
-    cancel_post_prompt(int(cb.from_user.id), sid)
-    run_at_dt = utc_now().replace(microsecond=0) + timedelta(seconds=1)
-    run_at_epoch = int(run_at_dt.timestamp())
-    run_at_iso = run_at_dt.isoformat()
-    # Idempotency: ставим маркер ДО add_job.
-    # Это защищает от дублей при повторном callback/рестарте.
-    if not mark_delivery_once(int(cb.from_user.id), str(s.kind or ""), "post_prompt_schedule", for_session(sid)):
+    user_id = int(cb.from_user.id)
+    session = get_session(session_id)
+    if session is None:
+        if message is not None:
+            await message.answer("ℹ️ Эта кнопка устарела. Откройте текущий маршрут заново.")
         return
-    add_job(
-        int(cb.from_user.id),
-        "post_prompt",
-        run_at_iso,
-        {"session_id": str(sid), "run_at": int(run_at_epoch)},
+    if int(session.user_id) != user_id:
+        log_event(
+            user_id,
+            "foreign_mood_done_rejected",
+            {"session_id": session_id, "owner_user_id": int(session.user_id)},
+        )
+        if message is not None:
+            await message.answer("ℹ️ Эта кнопка относится к другой сессии и не может быть использована.")
+        return
+    if int(session.audio_sent or 0) != 1:
+        if message is not None:
+            await message.answer("ℹ️ Аудио по этой сессии ещё не было отправлено.")
+        return
+
+    sequence_key = "demo" if str(session.source or "") == "demo" else "full_series"
+    confirm_pending_audio_delivery(
+        user_id,
+        platform="telegram",
+        sequence_key=sequence_key,
     )
 
+    cancel_post_prompt(user_id, session_id)
+    run_at_dt = utc_now().replace(microsecond=0) + timedelta(seconds=1)
+    run_at_iso = run_at_dt.isoformat()
+    if not mark_delivery_once(
+        user_id,
+        str(session.kind or ""),
+        "post_prompt_schedule",
+        for_session(session_id),
+    ):
+        return
+
+    add_job(
+        user_id,
+        "post_prompt",
+        run_at_iso,
+        {"session_id": str(session_id), "run_at": int(run_at_dt.timestamp())},
+    )
+    log.debug("post prompt scheduled user_id=%s session_id=%s", user_id, session_id)

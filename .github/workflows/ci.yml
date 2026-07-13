@@ -39,7 +39,7 @@ jobs:
           python scripts/regression_gate.py 2>&1 | tee "$RUNNER_TEMP/regression-contour.log"
 
       - name: Upload regression contour log
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: regression-contour-log

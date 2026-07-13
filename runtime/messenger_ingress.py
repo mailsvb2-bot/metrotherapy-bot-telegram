@@ -9,7 +9,6 @@ from typing import Any
 from aiohttp import web
 
 from config.settings import settings
-from runtime.messenger_senders import MessengerTransportError, VkBotSender
 from runtime.messenger_payloads import (
     extract_max_message,
     extract_vk_message,
@@ -19,17 +18,17 @@ from runtime.messenger_payloads import (
     text_from_vk_payload,
     vk_event_key,
 )
+from runtime.messenger_senders import MessengerTransportError, VkBotSender
 from services.bg import tm as task_manager
 from services.events import log_event
 from services.gift_claims import claim_gift_token, is_gift_token, normalize_gift_token
 from services.messenger.entrypoints import register_user_entry
 from services.messenger.observability import log_action_completed, log_payload_normalized
 from services.messenger.reply_dispatcher import send_reply_bundle
-from services.messenger.text_ui import MessengerReply, handle_incoming_text
+from services.messenger.text_ui_router import MessengerReply, handle_incoming_text
 from services.messenger.webhook_dedupe import register_inbound_event
 
 log = logging.getLogger(__name__)
-
 
 VK_PROCESSABLE_EVENT_TYPES = {"message_new", "message_event"}
 
@@ -46,7 +45,6 @@ def _app_env() -> str:
 
 
 def _allow_insecure_messenger_webhooks() -> bool:
-    # Explicit local/dev escape hatch only. Production/staging messenger webhooks must be authenticated.
     if _app_env() in {"prod", "production", "stage", "staging"}:
         return False
     return _env_bool("ALLOW_INSECURE_MESSENGER_WEBHOOKS", False)
@@ -110,12 +108,15 @@ def _claim_replies_if_needed(*, platform: str, extracted: dict) -> tuple[int, li
         first_name=extracted["first_name"],
         start_payload=token,
     )
-    result = claim_gift_token(gift_token=token, recipient_user_id=int(entry.user_id), platform=platform)
+    result = claim_gift_token(
+        gift_token=token,
+        recipient_user_id=int(entry.user_id),
+        platform=platform,
+    )
     return int(entry.user_id), [MessengerReply(text=result.message)]
 
 
 def _explicit_score_route_text(raw: str | None) -> str | None:
-    """Preserve score callback route, including Telegram-like mood pre/post stage."""
     compact = str(raw or "").strip().casefold().replace("−", "-")
     if compact.startswith("mood:"):
         parts = compact.split(":")
@@ -136,7 +137,6 @@ def _explicit_score_route_text(raw: str | None) -> str | None:
 
 
 def _max_score_route_text(payload: dict[str, Any]) -> str | None:
-    """Preserve MAX score callbacks whose normalized values overlap demo aliases."""
     message = payload.get("message") or {}
     body = message.get("body") if isinstance(message, dict) else {}
     if not isinstance(body, dict):
@@ -164,7 +164,6 @@ def _max_score_route_text(payload: dict[str, Any]) -> str | None:
 
 
 def _vk_score_route_text(payload: dict[str, Any]) -> str | None:
-    """Preserve VK callback scores whose normalized values overlap demo aliases."""
     obj = payload.get("object") or {}
     if not isinstance(obj, dict):
         obj = {}
@@ -217,9 +216,6 @@ def _vk_event_context(payload: dict[str, Any]) -> tuple[str, str, str] | None:
 
 
 async def _ack_vk_message_event(payload: dict[str, Any]) -> None:
-    # VK snackbar acknowledgements show a visible black "Открываю..." toast and
-    # add an extra provider roundtrip before the real bot answer. They are now
-    # disabled by default to keep VK clicks clean and fast.
     if not _env_bool("VK_CALLBACK_SNACKBAR_ENABLED", False):
         return
     context = _vk_event_context(payload)
@@ -245,7 +241,13 @@ async def _send_reply_bundle_logged(
     except MessengerTransportError:
         log.exception("%s send failed", platform.upper())
         log_event(canonical_user_id, f"{platform}_send_failed", {})
-        log_action_completed(platform=platform, user_id=canonical_user_id, action=action, replies=len(replies), status="send_failed")
+        log_action_completed(
+            platform=platform,
+            user_id=canonical_user_id,
+            action=action,
+            replies=len(replies),
+            status="send_failed",
+        )
         return
 
     log.info(
@@ -255,7 +257,13 @@ async def _send_reply_bundle_logged(
         canonical_user_id,
         len(replies),
     )
-    log_action_completed(platform=platform, user_id=canonical_user_id, action=action, replies=len(replies), status="ok")
+    log_action_completed(
+        platform=platform,
+        user_id=canonical_user_id,
+        action=action,
+        replies=len(replies),
+        status="ok",
+    )
 
 
 def _schedule_reply_bundle(
@@ -290,6 +298,7 @@ async def vk_webhook(request: web.Request) -> web.Response:
         return web.Response(text="ok")
     if event_type == "message_event":
         await _ack_vk_message_event(payload)
+
     event_key = _vk_dedupe_key(payload)
     if not register_inbound_event("vk", event_key, payload):
         return web.Response(text="ok")
@@ -307,7 +316,10 @@ async def vk_webhook(request: web.Request) -> web.Response:
         event_key=event_key,
     )
 
-    claim_result = _claim_replies_if_needed(platform="vk", extracted={**extracted, "text": normalized_text})
+    claim_result = _claim_replies_if_needed(
+        platform="vk",
+        extracted={**extracted, "text": normalized_text},
+    )
     if claim_result is not None:
         canonical_user_id, replies = claim_result
         action = "gift_claim"
@@ -331,7 +343,11 @@ async def vk_webhook(request: web.Request) -> web.Response:
         extracted["text"][:120],
         len(replies),
     )
-    log_event(canonical_user_id, "vk_webhook_inbound", {"text": extracted["text"][:120], "replies": len(replies)})
+    log_event(
+        canonical_user_id,
+        "vk_webhook_inbound",
+        {"text": extracted["text"][:120], "replies": len(replies)},
+    )
     _schedule_reply_bundle("vk", extracted["external_user_id"], canonical_user_id, replies, action)
     return web.Response(text="ok")
 
@@ -362,7 +378,10 @@ async def max_webhook(request: web.Request) -> web.Response:
     if not _max_secret_ok(request, payload):
         log.warning("MAX webhook rejected: bad or missing secret")
         return web.json_response({"ok": False, "error": "forbidden"}, status=403)
-    update_type = (payload.get("update_type") or payload.get("type") or payload.get("event_type") or "").strip()
+
+    update_type = (
+        payload.get("update_type") or payload.get("type") or payload.get("event_type") or ""
+    ).strip()
     if update_type not in _MAX_PROCESSABLE_UPDATE_TYPES:
         log.info("MAX webhook ignored: update_type=%r keys=%s", update_type, sorted(payload.keys()))
         return web.json_response({"ok": True})
@@ -394,7 +413,10 @@ async def max_webhook(request: web.Request) -> web.Response:
         event_key=event_key,
     )
 
-    claim_result = _claim_replies_if_needed(platform="max", extracted={**extracted, "text": normalized_text})
+    claim_result = _claim_replies_if_needed(
+        platform="max",
+        extracted={**extracted, "text": normalized_text},
+    )
     if claim_result is not None:
         canonical_user_id, replies = claim_result
         action = "gift_claim"
@@ -418,6 +440,10 @@ async def max_webhook(request: web.Request) -> web.Response:
         extracted["text"][:120],
         len(replies),
     )
-    log_event(canonical_user_id, "max_webhook_inbound", {"text": extracted["text"][:120], "replies": len(replies)})
+    log_event(
+        canonical_user_id,
+        "max_webhook_inbound",
+        {"text": extracted["text"][:120], "replies": len(replies)},
+    )
     _schedule_reply_bundle("max", extracted["external_user_id"], canonical_user_id, replies, action)
     return web.json_response({"ok": True})
