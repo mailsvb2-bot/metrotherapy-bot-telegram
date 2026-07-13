@@ -16,6 +16,25 @@ from services.mood_text_flow_core import *  # noqa: F403
 MoodTextFlowResult = _core.MoodTextFlowResult
 
 
+def _sync_core_hooks() -> None:
+    """Keep dependency injection attached to the public facade.
+
+    The implementation was split into a core module, but callers and focused
+    tests historically patch ``services.mood_text_flow``. Preserve that public
+    injection surface instead of forcing them to know the internal owner.
+    """
+
+    for name in (
+        "get_by_anchor",
+        "pick_demo_file",
+        "ensure_max_opus_file",
+        "ensure_vk_opus_file",
+    ):
+        value = globals().get(name)
+        if value is not None:
+            setattr(_core, name, value)
+
+
 def _idempotency_context(user_id: int, session: Any, session_id: int) -> tuple[str, str, str]:
     is_demo = str(session.source or "") == "demo"
     idem_kind = "demo" if is_demo else str(session.kind or "")
@@ -29,13 +48,19 @@ def _idempotency_context(user_id: int, session: Any, session_id: int) -> tuple[s
 
 
 def _expected_anchor(session: Any) -> int | None:
+    _sync_core_hooks()
     if str(session.source or "") == "demo":
         item = _core._demo_item_for_kind(str(session.kind or "work"))
         return int(item.anchor) if item is not None else None
     return int(session.anchor_id) if session.anchor_id is not None else None
 
 
-def _recover_sent_session_from_pending(user_id: int, session: Any, session_id: int, sequence_key: str) -> bool:
+def _recover_sent_session_from_pending(
+    user_id: int,
+    session: Any,
+    session_id: int,
+    sequence_key: str,
+) -> bool:
     """Close crash window: external send/pending marker succeeded before mood final marker."""
 
     if int(getattr(session, "audio_sent", 0) or 0) == 1:
@@ -64,6 +89,7 @@ async def complete_pre_score_and_send(
     telegram_bot: Any | None = None,
     session_id: int | None = None,
 ) -> MoodTextFlowResult:
+    _sync_core_hooks()
     resolved_session_id = (
         int(session_id)
         if session_id is not None
