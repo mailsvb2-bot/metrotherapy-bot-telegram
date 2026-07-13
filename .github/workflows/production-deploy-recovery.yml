@@ -1,5 +1,6 @@
 name: Production deploy recovery
 
+# Recovery is invoked only by an explicit main-commit marker.
 on:
   push:
     branches:
