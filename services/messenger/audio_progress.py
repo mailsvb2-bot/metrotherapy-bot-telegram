@@ -11,6 +11,44 @@ SEQUENCE_FULL_SERIES = _legacy.SEQUENCE_FULL_SERIES
 AudioProgressItem = _legacy.AudioProgressItem
 AudioProgressSnapshot = _legacy.AudioProgressSnapshot
 
+# Keep these hooks owned by the public facade. Focused tests and dependency
+# injection patch this module; internal legacy implementation details must not be
+# required by callers.
+list_full_series = _legacy.list_full_series
+_can_loop_audio = _legacy._can_loop_audio
+
+
+def get_audio_item_by_anchor(anchor: int) -> AudioProgressItem | None:
+    for item in list_full_series():
+        if int(item.anchor) == int(anchor):
+            return item
+    return None
+
+
+def get_next_audio_item(
+    user_id: int,
+    *,
+    sequence_key: str = SEQUENCE_FULL_SERIES,
+) -> AudioProgressItem | None:
+    if sequence_key != SEQUENCE_FULL_SERIES:
+        return None
+
+    items = list_full_series()
+    if not items:
+        return None
+    last = _legacy.get_last_progress(int(user_id), sequence_key=sequence_key)
+    last_anchor = last.get("last_anchor")
+    if last_anchor is None:
+        return items[0]
+    try:
+        anchor = int(last_anchor)
+    except (TypeError, ValueError):
+        return items[0]
+    for item in items:
+        if int(item.anchor) > anchor:
+            return item
+    return items[0] if _can_loop_audio(int(user_id)) else None
+
 
 def get_pending_audio_item(
     user_id: int,
@@ -35,7 +73,7 @@ def get_pending_audio_item(
         return None
 
     if sequence_key == SEQUENCE_FULL_SERIES:
-        item = _legacy.get_audio_item_by_anchor(anchor)
+        item = get_audio_item_by_anchor(anchor)
         if item is not None:
             return item
 
@@ -93,7 +131,7 @@ def get_progress_snapshot(
     last = _legacy.get_last_progress(int(user_id), sequence_key=sequence_key)
     pending_item = get_pending_audio_item(int(user_id), sequence_key=sequence_key)
     next_item = (
-        pending_item or _legacy.get_next_audio_item(int(user_id), sequence_key=sequence_key)
+        pending_item or get_next_audio_item(int(user_id), sequence_key=sequence_key)
         if sequence_key == SEQUENCE_FULL_SERIES
         else pending_item
     )
