@@ -80,6 +80,30 @@ sync_deploy_webhook_service() {
   fi
 }
 
+require_single_local_main_branch() {
+  local branch
+  local branch_count
+  local branch_list
+
+  echo "=== enforce production git topology: one local main branch ==="
+  while IFS= read -r branch; do
+    [ -n "$branch" ] || continue
+    if [ "$branch" != "main" ]; then
+      echo "=== delete stale local production branch: $branch ==="
+      git branch -D "$branch"
+    fi
+  done < <(git for-each-ref --format='%(refname:short)' refs/heads)
+
+  branch_list="$(git for-each-ref --format='%(refname:short)' refs/heads)"
+  branch_count="$(printf '%s\n' "$branch_list" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if [ "$branch_count" != "1" ] || [ "$branch_list" != "main" ]; then
+    echo "ERROR: production server must have exactly one local branch named main"
+    echo "ERROR: local branch count=$branch_count branches=$branch_list"
+    exit 11
+  fi
+  echo "=== production branch topology OK: count=1 branch=main ==="
+}
+
 require_telegram_polling_contract
 
 OLD_SHA="$(git rev-parse HEAD)"
@@ -128,11 +152,18 @@ if [ -n "$(git status --short)" ]; then
   exit 10
 fi
 
-echo "=== fetch origin/main ==="
-git fetch --prune origin main
+echo "=== checkout production branch main ==="
+git checkout main
+
+echo "=== fetch and prune origin ==="
+git fetch --prune origin
 
 echo "=== fast-forward only ==="
 git merge --ff-only origin/main
+
+require_single_local_main_branch
+
+git remote prune origin
 
 NEW_SHA="$(git rev-parse HEAD)"
 echo "=== new sha: $NEW_SHA ==="

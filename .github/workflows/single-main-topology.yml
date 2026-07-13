@@ -1,0 +1,50 @@
+name: Single main topology cleanup
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: contains(github.event.head_commit.message, '[cleanup-branches]')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Delete non-main branches and verify
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branches = await github.paginate(
+              github.rest.repos.listBranches,
+              { owner, repo, per_page: 100 },
+            );
+
+            for (const branch of branches) {
+              if (branch.name === 'main') continue;
+              core.info(`Deleting non-main branch: ${branch.name}`);
+              await github.rest.git.deleteRef({
+                owner,
+                repo,
+                ref: `heads/${branch.name}`,
+              });
+            }
+
+            const remaining = await github.paginate(
+              github.rest.repos.listBranches,
+              { owner, repo, per_page: 100 },
+            );
+            const names = remaining.map((branch) => branch.name).sort();
+            core.info(`GITHUB_BRANCH_COUNT=${names.length}`);
+            core.info(`GITHUB_BRANCHES=${names.join(',')}`);
+
+            if (names.length !== 1 || names[0] !== 'main') {
+              core.setFailed(
+                `Expected exactly one GitHub branch named main; got ${names.length}: ${names.join(',')}`,
+              );
+            }
