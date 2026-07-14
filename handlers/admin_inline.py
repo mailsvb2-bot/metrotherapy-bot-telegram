@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 
@@ -8,21 +7,25 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 
-from config.settings import settings
+from core.callback_utils import safe_answer_callback
 from handlers import admin_inline_tariffs
-from handlers.admin_inline_common import AdminCtx, admin_nav_back, get_staff_roles, is_superadmin, safe_edit_admin
-from handlers.admin_inline_perms import handle as handle_perms
-from handlers.admin_inline_roles import handle as handle_roles
-from handlers.admin_inline_users import handle as handle_users
-from handlers.admin_inline_reports import handle as handle_reports
+from handlers.admin_inline_common import (
+    AdminCtx,
+    admin_nav_back,
+    get_staff_roles,
+    is_superadmin,
+    safe_edit_admin,
+)
 from handlers.admin_inline_copy import handle as handle_copy
+from handlers.admin_inline_perms import handle as handle_perms
+from handlers.admin_inline_reports import handle as handle_reports
+from handlers.admin_inline_roles import handle as handle_roles
 from handlers.admin_inline_states import AdminManageState
+from handlers.admin_inline_users import handle as handle_users
 from keyboards.inline import kb_staff_menu
 from services.admin import is_admin
 from services.roles import ROLE_ADMIN, ROLE_MARKETING
 
-
-from core.callback_utils import safe_answer_callback
 router = Router()
 
 
@@ -41,7 +44,11 @@ def _load_admin_ctx(uid: int) -> AdminCtx | None:
     if not superadmin:
         allowed = get_allowed_perms(int(uid))
 
-    staff_kb = kb_staff_menu(roles, is_superadmin=superadmin, allowed_perms=allowed)
+    staff_kb = kb_staff_menu(
+        roles,
+        is_superadmin=superadmin,
+        allowed_perms=allowed,
+    )
     can_see_sales = (
         superadmin
         or allowed is None
@@ -59,9 +66,20 @@ def _load_admin_ctx(uid: int) -> AdminCtx | None:
                 break
         staff_kb.inline_keyboard.insert(
             insert_at,
-            [InlineKeyboardButton(text="🧑‍💼 Sales Desk", callback_data="admin:sales")],
+            [
+                InlineKeyboardButton(
+                    text="🧑‍💼 Sales Desk",
+                    callback_data="admin:sales",
+                )
+            ],
         )
-    return AdminCtx(uid=int(uid), roles=roles, staff_kb=staff_kb, is_superadmin=superadmin, allowed_perms=allowed)
+    return AdminCtx(
+        uid=int(uid),
+        roles=roles,
+        staff_kb=staff_kb,
+        is_superadmin=superadmin,
+        allowed_perms=allowed,
+    )
 
 
 def _grant_admin_role_sync(target_id: int) -> None:
@@ -70,10 +88,21 @@ def _grant_admin_role_sync(target_id: int) -> None:
     grant_role(int(target_id), ROLE_ADMIN)
 
 
+async def _admin_ctx_from_message(msg: Message) -> AdminCtx | None:
+    uid = msg.from_user.id if msg.from_user else None
+    if uid is None:
+        return None
+    return await asyncio.to_thread(_load_admin_ctx, int(uid))
+
+
 @router.callback_query(lambda c: (c.data or "").startswith("admin:"))
 async def admin_gate(cb: CallbackQuery, state: FSMContext):
     uid = cb.from_user.id if cb.from_user else None
-    ctx = await asyncio.to_thread(_load_admin_ctx, int(uid)) if uid is not None else None
+    ctx = (
+        await asyncio.to_thread(_load_admin_ctx, int(uid))
+        if uid is not None
+        else None
+    )
     if ctx is None:
         try:
             await safe_answer_callback(cb, "Недоступно.", show_alert=True)
@@ -85,20 +114,22 @@ async def admin_gate(cb: CallbackQuery, state: FSMContext):
     staff_kb = ctx.staff_kb
     data = cb.data or ""
 
-    # Back navigation (single-message admin UI)
     if await admin_nav_back(cb, state):
         return
 
-    # 1) Tariffs (already extracted module)
     tariffs_ctx = admin_inline_tariffs.TariffsCtx(
         is_superadmin=ctx.is_superadmin,
         can_manage_tariffs=(ctx.is_superadmin or ROLE_ADMIN in roles),
         staff_kb=staff_kb,
     )
-    if await admin_inline_tariffs.handle_tariffs_callback(cb, state, data, tariffs_ctx):
+    if await admin_inline_tariffs.handle_tariffs_callback(
+        cb,
+        state,
+        data,
+        tariffs_ctx,
+    ):
         return
 
-    # 2) Other sections
     if await handle_copy(cb, state, data, ctx):
         return
     if await handle_perms(cb, state, data, ctx):
@@ -110,7 +141,6 @@ async def admin_gate(cb: CallbackQuery, state: FSMContext):
     if await handle_reports(cb, state, data, ctx):
         return
 
-    # Menu
     if data == "admin:menu":
         await safe_edit_admin(
             cb,
@@ -127,19 +157,26 @@ async def admin_gate(cb: CallbackQuery, state: FSMContext):
 @router.message(AdminManageState.waiting_tariffs_text)
 async def admin_tariffs_input(msg: Message, state: FSMContext):
     uid = msg.from_user.id if msg.from_user else None
-    await admin_inline_tariffs.admin_tariffs_input(msg, state, admin_id=uid)
+    await admin_inline_tariffs.admin_tariffs_input(
+        msg,
+        state,
+        admin_id=uid,
+    )
 
 
 @router.message(AdminManageState.waiting_tariff_single_price)
 async def admin_tariff_single_price_input(msg: Message, state: FSMContext):
     uid = msg.from_user.id if msg.from_user else None
-    await admin_inline_tariffs.admin_tariff_single_price_input(msg, state, admin_id=uid)
+    await admin_inline_tariffs.admin_tariff_single_price_input(
+        msg,
+        state,
+        admin_id=uid,
+    )
 
 
 @router.message(AdminManageState.waiting_sales_note)
 async def admin_sales_note_input(msg: Message, state: FSMContext):
-    uid = msg.from_user.id if msg.from_user else None
-    ctx = await asyncio.to_thread(_load_admin_ctx, int(uid)) if uid is not None else None
+    ctx = await _admin_ctx_from_message(msg)
     if ctx is None:
         await state.clear()
         await msg.answer("Недоступно.")
@@ -150,12 +187,28 @@ async def admin_sales_note_input(msg: Message, state: FSMContext):
     await sales_desk.handle_note_input(msg, state, ctx)
 
 
+@router.message(AdminManageState.waiting_sales_message)
+async def admin_sales_message_input(msg: Message, state: FSMContext):
+    ctx = await _admin_ctx_from_message(msg)
+    if ctx is None:
+        await state.clear()
+        await msg.answer("Недоступно.")
+        return
+
+    from handlers.admin_reports import sales_desk
+
+    await sales_desk.handle_message_input(msg, state, ctx)
+
+
 @router.message(AdminManageState.waiting_admin_user)
 async def admin_add_admin_input(msg: Message, state: FSMContext):
-    """Add admin by Telegram picker, forwarded message, @username, or numeric user_id."""
+    """Add admin by Telegram picker, forwarded message, username, or user_id."""
     uid = msg.from_user.id if msg.from_user else None
     if uid is None or not is_superadmin(int(uid)):
-        logging.getLogger(__name__).warning("Blocked non-superadmin admin grant state: uid=%s", uid)
+        logging.getLogger(__name__).warning(
+            "Blocked non-superadmin admin grant state: uid=%s",
+            uid,
+        )
         await state.clear()
         return
     text = (msg.text or "").strip()
@@ -167,7 +220,6 @@ async def admin_add_admin_input(msg: Message, state: FSMContext):
 
     target_id: int | None = None
 
-    # 1) Telegram user picker (request_user)
     user_shared = getattr(msg, "user_shared", None)
     if user_shared and getattr(user_shared, "user_id", None):
         try:
@@ -175,27 +227,23 @@ async def admin_add_admin_input(msg: Message, state: FSMContext):
         except (TypeError, ValueError):
             target_id = None
 
-    # 2) Forwarded message
     if target_id is None:
-        fwd = getattr(msg, "forward_from", None)
-        if fwd and getattr(fwd, "id", None):
+        forwarded = getattr(msg, "forward_from", None)
+        if forwarded and getattr(forwarded, "id", None):
             try:
-                target_id = int(fwd.id)
+                target_id = int(forwarded.id)
             except (TypeError, ValueError):
                 target_id = None
 
-    # 3) @username -> resolve via get_chat
     if target_id is None and text.startswith("@") and len(text) > 1:
-        username = text
         try:
-            chat = await msg.bot.get_chat(username)
+            chat = await msg.bot.get_chat(text)
             target_id = int(chat.id)
         except (TelegramAPIError, TelegramBadRequest):
             target_id = None
         except (ValueError, TypeError):
             target_id = None
 
-    # 4) numeric id
     if target_id is None and text:
         try:
             if text.isdigit():
@@ -225,17 +273,35 @@ async def admin_add_admin_input(msg: Message, state: FSMContext):
         logging.getLogger(__name__).exception("Failed to add admin")
     except (ValueError, TypeError):
         logging.getLogger(__name__).exception("Failed to add admin")
-        await msg.answer("Не удалось добавить администратора (ошибка).", reply_markup=ReplyKeyboardRemove())
+        await msg.answer(
+            "Не удалось добавить администратора (ошибка).",
+            reply_markup=ReplyKeyboardRemove(),
+        )
         await state.clear()
         return
 
     await state.clear()
 
-    kb = InlineKeyboardMarkup(
+    keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="👥 Роли команды", callback_data="admin:roles:list")],
-            [InlineKeyboardButton(text="🔐 Доступы админов", callback_data="admin:perms")],
-            [InlineKeyboardButton(text="🏠 Админ-меню", callback_data="admin:menu")],
+            [
+                InlineKeyboardButton(
+                    text="👥 Роли команды",
+                    callback_data="admin:roles:list",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔐 Доступы админов",
+                    callback_data="admin:perms",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🏠 Админ-меню",
+                    callback_data="admin:menu",
+                )
+            ],
         ]
     )
     await msg.answer(
@@ -243,4 +309,4 @@ async def admin_add_admin_input(msg: Message, state: FSMContext):
         "Теперь можно назначить роли и настроить доступы.",
         reply_markup=ReplyKeyboardRemove(),
     )
-    await msg.answer("Куда дальше?", reply_markup=kb)
+    await msg.answer("Куда дальше?", reply_markup=keyboard)
