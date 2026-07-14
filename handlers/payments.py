@@ -10,6 +10,7 @@ path.
 
 import asyncio
 import logging
+import sqlite3
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
@@ -203,7 +204,7 @@ async def _successful_payment(message: Message):
             telegram_charge_id=str(payment.telegram_payment_charge_id or ""),
             provider_charge_id=str(payment.provider_payment_charge_id or ""),
         )
-    except StarsPaymentError:
+    except (StarsPaymentError, ValueError, RuntimeError, OSError, sqlite3.Error):
         log.exception("Telegram Stars payment requires manual recovery")
         await message.answer(
             "Оплата в Stars получена, но автоматическое начисление не завершилось. "
