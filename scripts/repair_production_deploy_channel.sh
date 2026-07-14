@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 APP_DIR="${APP_DIR:-/root/metrotherapy}"
 REPO="${REPO:-mailsvb2-bot/metrotherapy-bot-telegram}"
+ACTIONS_SECRET_NAME="${ACTIONS_SECRET_NAME:-METRO_DEPLOY_WEBHOOK_SECRET}"
 HOOK_URL="${HOOK_URL:-https://metrotherapy-bot.metrotherapy.ru/github-deploy}"
 HOOK_SERVICE="${HOOK_SERVICE:-github-deploy-webhook.service}"
 HOOK_LOCAL_URL="${HOOK_LOCAL_URL:-http://127.0.0.1:9001/github-deploy}"
@@ -43,6 +44,10 @@ done
 [ -f "$HOOK_SOURCE" ] || fail "deploy webhook source not found: $HOOK_SOURCE"
 [ -f "$APP_DIR/deploy.sh" ] || fail "deploy script not found: $APP_DIR/deploy.sh"
 [ -f "$SERVICE_INSTALLER" ] || fail "canonical webhook service installer not found: $SERVICE_INSTALLER"
+
+case "$ACTIONS_SECRET_NAME" in
+  GITHUB_*) fail "GitHub Actions secret names must not start with GITHUB_: $ACTIONS_SECRET_NAME" ;;
+esac
 
 mkdir -p "$BACKUP_DIR"
 chmod 0700 "$BACKUP_DIR"
@@ -129,10 +134,10 @@ ping_response="$(curl -fsS --max-time 10 \
   --data "$ping_payload")"
 [ "$ping_response" = "pong" ] || fail "local signed webhook ping failed: $ping_response"
 
-log "store the same recovery secret in GitHub Actions"
-printf '%s' "$WEBHOOK_SECRET" | gh secret set GITHUB_WEBHOOK_SECRET --repo "$REPO"
-gh secret list --repo "$REPO" | awk '{print $1}' | grep -Fx 'GITHUB_WEBHOOK_SECRET' >/dev/null \
-  || fail "GitHub Actions secret GITHUB_WEBHOOK_SECRET was not created"
+log "store the same recovery secret in GitHub Actions as $ACTIONS_SECRET_NAME"
+printf '%s' "$WEBHOOK_SECRET" | gh secret set "$ACTIONS_SECRET_NAME" --repo "$REPO"
+gh secret list --repo "$REPO" | awk '{print $1}' | grep -Fx "$ACTIONS_SECRET_NAME" >/dev/null \
+  || fail "GitHub Actions secret $ACTIONS_SECRET_NAME was not created"
 
 log "create or update the canonical GitHub repository webhook"
 hooks_file="$(mktemp)"
