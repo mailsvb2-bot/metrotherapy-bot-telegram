@@ -84,6 +84,14 @@ async def _send_stars_from_callback(cb: CallbackQuery, *, as_gift: bool) -> None
         )
 
 
+async def _answer_stars_manual_recovery(message: Message) -> None:
+    log.exception("Telegram Stars payment requires manual recovery")
+    await message.answer(
+        "Оплата в Stars получена, но автоматическое начисление не завершилось. "
+        "Пожалуйста, отправьте /paysupport — платёж сохранён и не потеряется."
+    )
+
+
 @router.message(F.text == "❌ Отмена")
 async def _gift_pick_cancel(message: Message):
     await gift_pick_cancel(message)
@@ -204,12 +212,17 @@ async def _successful_payment(message: Message):
             telegram_charge_id=str(payment.telegram_payment_charge_id or ""),
             provider_charge_id=str(payment.provider_payment_charge_id or ""),
         )
-    except (StarsPaymentError, ValueError, RuntimeError, OSError, sqlite3.Error):
-        log.exception("Telegram Stars payment requires manual recovery")
-        await message.answer(
-            "Оплата в Stars получена, но автоматическое начисление не завершилось. "
-            "Пожалуйста, отправьте /paysupport — платёж сохранён и не потеряется."
-        )
+    except StarsPaymentError:
+        await _answer_stars_manual_recovery(message)
+        return
+    except sqlite3.Error:
+        await _answer_stars_manual_recovery(message)
+        return
+    except (ValueError, RuntimeError):
+        await _answer_stars_manual_recovery(message)
+        return
+    except OSError:
+        await _answer_stars_manual_recovery(message)
         return
 
     if result.duplicate:
