@@ -3,27 +3,31 @@ from __future__ import annotations
 from services.payments.ui import kb_tariffs
 
 
-def _button_texts(markup) -> list[str]:
-    return [button.text for row in markup.inline_keyboard for button in row]
+def _buttons(markup):
+    return [button for row in markup.inline_keyboard for button in row]
 
 
-def _button_urls(markup) -> list[str]:
-    return [button.url for row in markup.inline_keyboard for button in row if button.url]
-
-
-def test_public_tariff_keyboard_uses_canonical_practice_packages(monkeypatch):
+def test_public_tariff_keyboard_uses_stars_and_yookassa(monkeypatch):
     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://bot.example")
+    monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
 
     markup = kb_tariffs(user_id=404)
-    texts = _button_texts(markup)
-    urls = _button_urls(markup)
+    buttons = _buttons(markup)
+    texts = [button.text for button in buttons]
+    urls = [button.url for button in buttons if button.url]
+    callbacks = [button.callback_data for button in buttons if button.callback_data]
 
-    assert "\u0421\u0442\u0430\u0440\u0442\u043e\u0432\u044b\u0439 \u043f\u0430\u043a\u0435\u0442 \u2014 1 900 \u20bd" in texts
-    assert "\u041f\u043e\u043b\u043d\u044b\u0439 \u043c\u0430\u0440\u0448\u0440\u0443\u0442 \u2014 7 900 \u20bd" in texts
-    assert "\u0410\u043d\u0442\u0438\u0441\u0442\u0440\u0435\u0441\u0441-\u0441\u0438\u0441\u0442\u0435\u043c\u0430 \u2014 12 900 \u20bd" in texts
-    assert "\u041f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u044c\u043d\u044b\u0439 \u043c\u0435\u0441\u044f\u0446 \u2014 23 000 \u20bd" in texts
+    assert "⭐ Stars · Стартовый пакет — 1 900 ⭐" in texts
+    assert "⭐ Stars · Полный маршрут — 7 900 ⭐" in texts
+    assert "⭐ Stars · Антистресс-система — 12 900 ⭐" in texts
+    assert "⭐ Stars · Персональный месяц — 23 000 ⭐" in texts
 
-    joined = "\n".join(texts + urls)
+    assert "💳 YooKassa · Стартовый пакет — 1 900 ₽" in texts
+    assert "💳 YooKassa · Полный маршрут — 7 900 ₽" in texts
+    assert "💳 YooKassa · Антистресс-система — 12 900 ₽" in texts
+    assert "💳 YooKassa · Персональный месяц — 23 000 ₽" in texts
+
+    joined = "\n".join(texts + urls + callbacks)
     assert "morning_5" not in joined
     assert "morning_20" not in joined
     assert "evening_5" not in joined
@@ -31,7 +35,23 @@ def test_public_tariff_keyboard_uses_canonical_practice_packages(monkeypatch):
     assert "both_5" not in joined
     assert "both_20" not in joined
 
+    assert "stars:buy:practice_start_7" in callbacks
+    assert "stars:buy:practice_60" in callbacks
+    assert "stars:buy:practice_antistress_60" in callbacks
+    assert "stars:buy:practice_personal_month" in callbacks
+
     assert any("kind=tokens" in url and "package_id=practice_start_7" in url for url in urls)
     assert any("kind=tokens" in url and "package_id=practice_60" in url for url in urls)
     assert any("kind=tokens" in url and "package_id=practice_antistress_60" in url for url in urls)
     assert any("kind=tokens" in url and "package_id=practice_personal_month" in url for url in urls)
+
+
+def test_stars_emergency_switch_does_not_remove_yookassa(monkeypatch):
+    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://bot.example")
+    monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "0")
+
+    buttons = _buttons(kb_tariffs(user_id=405))
+    assert not any((button.callback_data or "").startswith("stars:") for button in buttons)
+    yookassa = [button for button in buttons if button.url]
+    assert len(yookassa) == 4
+    assert all("/pay/yookassa?" in str(button.url) for button in yookassa)

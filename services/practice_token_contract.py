@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 
@@ -13,18 +14,59 @@ class PracticePackage:
     sort_order: int = 100
     public: bool = True
     badge: str = ""
+    price_xtr: int = 0
 
 
 DEFAULT_PRACTICE_PACKAGES: tuple[PracticePackage, ...] = (
-    PracticePackage("practice_start_7", "Стартовый пакет", "7 практик. Мягкий вход и проверка формата.", 7, 1900, 10, True, ""),
-    PracticePackage("practice_60", "Полный маршрут", "60 практик. Базовый месячный маршрут.", 60, 7900, 20, True, ""),
-    PracticePackage("practice_antistress_60", "Антистресс-система", "60 практик + доступ к видеокурсу.", 60, 12900, 30, True, ""),
-    PracticePackage("practice_personal_month", "Персональный месяц", "60 практик + видеокурс + заявка на консультацию.", 60, 23000, 40, True, ""),
+    PracticePackage(
+        "practice_start_7",
+        "Стартовый пакет",
+        "7 практик. Мягкий вход и проверка формата.",
+        7,
+        1900,
+        10,
+        True,
+        "",
+        1900,
+    ),
+    PracticePackage(
+        "practice_60",
+        "Полный маршрут",
+        "60 практик. Базовый месячный маршрут.",
+        60,
+        7900,
+        20,
+        True,
+        "",
+        7900,
+    ),
+    PracticePackage(
+        "practice_antistress_60",
+        "Антистресс-система",
+        "60 практик + доступ к видеокурсу.",
+        60,
+        12900,
+        30,
+        True,
+        "",
+        12900,
+    ),
+    PracticePackage(
+        "practice_personal_month",
+        "Персональный месяц",
+        "60 практик + видеокурс + заявка на консультацию.",
+        60,
+        23000,
+        40,
+        True,
+        "",
+        23000,
+    ),
 )
 
 LEGACY_PRACTICE_PACKAGES: tuple[PracticePackage, ...] = (
-    PracticePackage("practice_5", "5 practices", "Legacy trial package", 5, 990, 900, False, ""),
-    PracticePackage("practice_20", "20 practices", "Legacy base route", 20, 3490, 910, False, ""),
+    PracticePackage("practice_5", "5 practices", "Legacy trial package", 5, 990, 900, False, "", 0),
+    PracticePackage("practice_20", "20 practices", "Legacy base route", 20, 3490, 910, False, "", 0),
 )
 
 ALL_PRACTICE_PACKAGES: tuple[PracticePackage, ...] = DEFAULT_PRACTICE_PACKAGES + LEGACY_PRACTICE_PACKAGES
@@ -95,3 +137,25 @@ def package_by_id(package_id: str | None) -> PracticePackage:
         if package.package_id == wanted:
             return package
     raise ValueError(f"Unknown practice package: {wanted}")
+
+
+def telegram_stars_enabled() -> bool:
+    raw = (os.getenv("TELEGRAM_STARS_ENABLED") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _telegram_stars_env_key(package_id: str) -> str:
+    suffix = "".join(ch if ch.isalnum() else "_" for ch in package_id.upper())
+    return f"TELEGRAM_STARS_PRICE_{suffix}"
+
+
+def telegram_stars_price(package_id: str | None) -> int:
+    package = package_by_id(package_id)
+    raw = (os.getenv(_telegram_stars_env_key(package.package_id)) or "").strip()
+    try:
+        amount = int(raw) if raw else int(package.price_xtr)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid Telegram Stars price for {package.package_id}") from exc
+    if amount <= 0 or amount > 100_000:
+        raise ValueError(f"Telegram Stars price out of range for {package.package_id}")
+    return amount

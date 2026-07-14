@@ -5,7 +5,11 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from services.gift_claims import create_gift_checkout_token
 from services.payments.checkout_intent import add_checkout_intent_to_url
 from services.payments.public_url import payment_public_base_url
-from services.practice_token_contract import public_practice_packages
+from services.practice_token_contract import (
+    public_practice_packages,
+    telegram_stars_enabled,
+    telegram_stars_price,
+)
 from services.practice_tokens import payment_url
 
 try:
@@ -24,6 +28,10 @@ def kb_back(to: str = "menu:main") -> InlineKeyboardMarkup:
 
 def _price_label(price_rub: int) -> str:
     return f"{int(price_rub):,} ₽".replace(",", " ")
+
+
+def _stars_label(price_xtr: int) -> str:
+    return f"{int(price_xtr):,} ⭐".replace(",", " ")
 
 
 def _practice_payment_url(
@@ -70,7 +78,16 @@ def _practice_package_rows(
         return rows
 
     for package in public_practice_packages():
-        label = f"{package.title} — {_price_label(package.price_rub)}"
+        if platform == "telegram" and telegram_stars_enabled():
+            stars_action = "gift" if gift else "buy"
+            rows.append([
+                InlineKeyboardButton(
+                    text=f"⭐ Stars · {package.title} — {_stars_label(telegram_stars_price(package.package_id))}",
+                    callback_data=f"stars:{stars_action}:{package.package_id}",
+                )
+            ])
+
+        yookassa_label = f"💳 YooKassa · {package.title} — {_price_label(package.price_rub)}"
         if base_url:
             gift_token = None
             if gift:
@@ -81,7 +98,7 @@ def _practice_package_rows(
                 )
             rows.append([
                 InlineKeyboardButton(
-                    text=label,
+                    text=yookassa_label,
                     url=_practice_payment_url(
                         base_url=base_url,
                         user_id=user_id,
@@ -94,7 +111,7 @@ def _practice_package_rows(
         else:
             rows.append([
                 InlineKeyboardButton(
-                    text=label,
+                    text=yookassa_label,
                     callback_data="tariffs:public_base_missing",
                 )
             ])
@@ -102,7 +119,7 @@ def _practice_package_rows(
 
 
 def kb_tariffs(user_id: int | None = None) -> InlineKeyboardMarkup:
-    """Public tariff surface: canonical 4-package practice ladder only."""
+    """Public Telegram tariff surface with Stars and the canonical YooKassa checkout."""
     rows = _practice_package_rows(user_id=user_id, platform="telegram")
     rows.append([InlineKeyboardButton(text="🎁 Подарить", callback_data="gift:menu")])
     rows.append([InlineKeyboardButton(text="📣 Посоветовать", callback_data="share:menu")])
