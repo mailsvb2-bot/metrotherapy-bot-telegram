@@ -9,3 +9,4 @@ class AdminManageState(StatesGroup):
     # Ввод одной цены после выбора тарифа кнопкой (ожидаем целое число в рублях)
     waiting_tariff_single_price = State()
     waiting_admin_user = State()
+    waiting_sales_note = State()
