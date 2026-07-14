@@ -54,7 +54,13 @@ def table_columns(conn: Any, table: str) -> set[str]:
 
 
 def ensure_schema(conn: Any) -> None:
-    for table in ("sales_leads", "sales_lead_notes", "sales_lead_audit"):
+    required = (
+        "sales_leads",
+        "sales_lead_notes",
+        "sales_lead_audit",
+        "sales_outbound_messages",
+    )
+    for table in required:
         if not table_exists(conn, table):
             raise SalesDeskUnavailable(f"{table}_schema_not_migrated")
 
