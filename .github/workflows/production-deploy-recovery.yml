@@ -1,5 +1,6 @@
 name: Production deploy recovery
 
+# The GitHub Actions secret uses an allowed METRO_ prefix; server runtime keeps GITHUB_WEBHOOK_SECRET.
 on:
   push:
     branches:
