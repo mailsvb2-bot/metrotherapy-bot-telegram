@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 from aiogram.fsm.context import FSMContext
@@ -12,6 +13,18 @@ from core.callback_utils import safe_answer_callback
 from handlers.admin_inline_common import AdminCtx, safe_edit
 from handlers.admin_inline_states import AdminManageState
 from services.admin_permissions import SALES_DESK_PERMISSION, SALES_WRITE_PERMISSION
+from services.sales_desk import (
+    SalesDeskUnavailable,
+    add_note,
+    claim_lead,
+    format_lead_card,
+    format_lead_history,
+    format_sales_overview,
+    get_lead,
+    sales_desk_snapshot,
+    set_lead_stage,
+    set_next_contact,
+)
 from services.sales_desk_core import SALES_STAGES, can_transition, normalize_filter
 
 log = logging.getLogger(__name__)
@@ -67,11 +80,10 @@ def _lead_id(data: str | None) -> int:
 
 def _filter_from_data(data: str | None) -> str:
     parts = _parts(data)
-    if "list" in parts:
-        index = parts.index("list") + 1
-        if index < len(parts):
-            return normalize_filter(parts[index])
-    return "open"
+    if "list" not in parts:
+        return "open"
+    index = parts.index("list") + 1
+    return normalize_filter(parts[index] if index < len(parts) else "open")
 
 
 def _stage_from_data(data: str | None) -> str:
@@ -79,12 +91,9 @@ def _stage_from_data(data: str | None) -> str:
     if "stage" not in parts:
         raise ValueError("sales_stage_missing")
     index = parts.index("stage") + 1
-    if index >= len(parts):
-        raise ValueError("sales_stage_missing")
-    stage = parts[index]
-    if stage not in SALES_STAGES:
+    if index >= len(parts) or parts[index] not in SALES_STAGES:
         raise ValueError("invalid_sales_stage")
-    return stage
+    return parts[index]
 
 
 def _follow_days(data: str | None) -> int | None:
@@ -125,13 +134,14 @@ def _overview_kb(snapshot: dict[str, Any]) -> InlineKeyboardMarkup:
             )
         rows.append(row)
 
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     for lead in list(snapshot.get("leads") or [])[:12]:
         lead_id = int(lead.get("id") or 0)
         stage = str(lead.get("stage") or "new")
         owner = lead.get("assigned_to")
         overdue = bool(
             lead.get("next_contact_at")
-            and str(lead.get("next_contact_at")) < str(__import__("datetime").datetime.now(__import__("datetime").timezone.utc).replace(microsecond=0).isoformat())
+            and str(lead.get("next_contact_at")) < now
             and stage not in {"won", "lost"}
         )
         marker = "⏰ " if overdue else ""
@@ -161,16 +171,14 @@ def _card_kb(lead: dict[str, Any], *, can_write: bool) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📝 Заметка", callback_data=f"admin:sales:note:{lead_id}"),
             ]
         )
-        stage_buttons: list[InlineKeyboardButton] = []
-        for target in SALES_STAGES:
-            if target == current or not can_transition(current, target):
-                continue
-            stage_buttons.append(
-                InlineKeyboardButton(
-                    text=_STAGE_BUTTONS[target],
-                    callback_data=f"admin:sales:stage:{target}:{lead_id}",
-                )
+        stage_buttons = [
+            InlineKeyboardButton(
+                text=_STAGE_BUTTONS[target],
+                callback_data=f"admin:sales:stage:{target}:{lead_id}",
             )
+            for target in SALES_STAGES
+            if target != current and can_transition(current, target)
+        ]
         for index in range(0, len(stage_buttons), 2):
             rows.append(stage_buttons[index:index + 2])
         if current not in {"won", "lost"}:
@@ -213,8 +221,6 @@ def _note_done_kb(lead_id: int) -> InlineKeyboardMarkup:
 
 
 async def _show_overview(cb: CallbackQuery, ctx: AdminCtx, filter_name: str) -> None:
-    from services.sales_desk import format_sales_overview, sales_desk_snapshot
-
     snapshot = await asyncio.to_thread(
         sales_desk_snapshot,
         filter_name=filter_name,
@@ -224,8 +230,6 @@ async def _show_overview(cb: CallbackQuery, ctx: AdminCtx, filter_name: str) -> 
 
 
 async def _show_card(cb: CallbackQuery, ctx: AdminCtx, lead_id: int) -> None:
-    from services.sales_desk import format_lead_card, get_lead
-
     lead = await asyncio.to_thread(get_lead, int(lead_id))
     await safe_edit(cb, format_lead_card(lead), reply_markup=_card_kb(lead, can_write=_can_write(ctx)))
 
@@ -249,18 +253,17 @@ async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, handler_log) 
         await safe_answer_callback(cb, "Нет доступа к Sales Desk.", show_alert=True)
         return True
 
+    if not data.startswith("admin:sales:note:"):
+        await state.clear()
+
     try:
         if data in {"admin:sales", "admin:sales:list"} or data.startswith("admin:sales:list:"):
             await _show_overview(cb, ctx, _filter_from_data(data))
             return True
-
         if data.startswith("admin:sales:lead:"):
             await _show_card(cb, ctx, _lead_id(data))
             return True
-
         if data.startswith("admin:sales:history:"):
-            from services.sales_desk import format_lead_history, get_lead
-
             lead_id = _lead_id(data)
             lead = await asyncio.to_thread(get_lead, lead_id)
             await safe_edit(cb, format_lead_history(lead), reply_markup=_history_kb(lead_id))
@@ -274,10 +277,8 @@ async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, handler_log) 
             )
             return True
 
+        lead_id = _lead_id(data)
         if data.startswith("admin:sales:claim:"):
-            from services.sales_desk import claim_lead
-
-            lead_id = _lead_id(data)
             await asyncio.to_thread(
                 claim_lead,
                 lead_id=lead_id,
@@ -286,11 +287,7 @@ async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, handler_log) 
             )
             await _show_card(cb, ctx, lead_id)
             return True
-
         if data.startswith("admin:sales:stage:"):
-            from services.sales_desk import set_lead_stage
-
-            lead_id = _lead_id(data)
             await asyncio.to_thread(
                 set_lead_stage,
                 lead_id=lead_id,
@@ -300,11 +297,7 @@ async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, handler_log) 
             )
             await _show_card(cb, ctx, lead_id)
             return True
-
         if data.startswith("admin:sales:follow:"):
-            from services.sales_desk import set_next_contact
-
-            lead_id = _lead_id(data)
             await asyncio.to_thread(
                 set_next_contact,
                 lead_id=lead_id,
@@ -314,9 +307,7 @@ async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, handler_log) 
             )
             await _show_card(cb, ctx, lead_id)
             return True
-
         if data.startswith("admin:sales:note:"):
-            lead_id = _lead_id(data)
             await state.set_state(AdminManageState.waiting_sales_note)
             await state.update_data(sales_lead_id=lead_id)
             message = cb.message
@@ -337,6 +328,9 @@ async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, handler_log) 
     except ValueError as exc:
         await _show_error(cb, exc)
         return True
+    except SalesDeskUnavailable as exc:
+        await _show_error(cb, exc)
+        return True
     except RuntimeError as exc:
         await _show_error(cb, exc)
         return True
@@ -348,7 +342,6 @@ async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, handler_log) 
         log.exception("Sales Desk database action failed")
         await _show_error(cb, exc)
         return True
-
     return False
 
 
@@ -372,8 +365,6 @@ async def handle_note_input(msg: Message, state: FSMContext, ctx: AdminCtx) -> N
         await msg.answer("Заметка отменена.", reply_markup=_note_done_kb(lead_id))
         return
 
-    from services.sales_desk import add_note
-
     try:
         await asyncio.to_thread(
             add_note,
@@ -388,6 +379,10 @@ async def handle_note_input(msg: Message, state: FSMContext, ctx: AdminCtx) -> N
         return
     except ValueError as exc:
         await msg.answer(str(exc))
+        return
+    except SalesDeskUnavailable:
+        log.exception("Sales Desk note schema unavailable")
+        await msg.answer("Sales Desk ещё не готов на сервере. Обновите карточку после миграции.")
         return
     except RuntimeError:
         log.exception("Sales Desk note failed")
