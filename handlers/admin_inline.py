@@ -19,7 +19,7 @@ from handlers.admin_inline_copy import handle as handle_copy
 from handlers.admin_inline_states import AdminManageState
 from keyboards.inline import kb_staff_menu
 from services.admin import is_admin
-from services.roles import ROLE_ADMIN
+from services.roles import ROLE_ADMIN, ROLE_MARKETING
 
 
 from core.callback_utils import safe_answer_callback
@@ -34,14 +34,34 @@ def _load_admin_ctx(uid: int) -> AdminCtx | None:
     if not roles:
         return None
 
-    from services.admin_permissions import get_allowed_perms
+    from services.admin_permissions import SALES_DESK_PERMISSION, get_allowed_perms
 
+    superadmin = is_superadmin(int(uid))
     allowed = None
-    if not is_superadmin(int(uid)):
+    if not superadmin:
         allowed = get_allowed_perms(int(uid))
 
-    staff_kb = kb_staff_menu(roles, is_superadmin=is_superadmin(int(uid)), allowed_perms=allowed)
-    return AdminCtx(uid=int(uid), roles=roles, staff_kb=staff_kb, is_superadmin=is_superadmin(int(uid)), allowed_perms=allowed)
+    staff_kb = kb_staff_menu(roles, is_superadmin=superadmin, allowed_perms=allowed)
+    can_see_sales = (
+        superadmin
+        or allowed is None
+        or SALES_DESK_PERMISSION in allowed
+    ) and (ROLE_MARKETING in roles or ROLE_ADMIN in roles or superadmin)
+    if can_see_sales and not any(
+        button.callback_data == "admin:sales"
+        for row in staff_kb.inline_keyboard
+        for button in row
+    ):
+        insert_at = 0
+        for index, row in enumerate(staff_kb.inline_keyboard):
+            if row and row[0].callback_data == "admin:growth:autopilot":
+                insert_at = index + 1
+                break
+        staff_kb.inline_keyboard.insert(
+            insert_at,
+            [InlineKeyboardButton(text="🧑‍💼 Sales Desk", callback_data="admin:sales")],
+        )
+    return AdminCtx(uid=int(uid), roles=roles, staff_kb=staff_kb, is_superadmin=superadmin, allowed_perms=allowed)
 
 
 def _grant_admin_role_sync(target_id: int) -> None:
