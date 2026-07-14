@@ -50,24 +50,40 @@ def _connection() -> sqlite3.Connection:
 
 
 def _patch_db(monkeypatch: pytest.MonkeyPatch, conn: sqlite3.Connection) -> None:
-    import services.sales_desk as sales_desk
+    import services.sales_desk_repository as repository
+    import services.sales_desk_sync as sync
 
     @contextmanager
     def fake_db():
         yield conn
 
-    monkeypatch.setattr(sales_desk, "db", fake_db)
+    monkeypatch.setattr(repository, "db", fake_db)
+    monkeypatch.setattr(sync, "db", fake_db)
 
 
-def test_sync_discovers_lead_and_verified_payment_promotes_to_won(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sync_discovers_lead_and_verified_payment_promotes_to_won(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import services.sales_desk as sales_desk
 
     conn = _connection()
     _patch_db(monkeypatch, conn)
-    conn.execute("INSERT INTO users(user_id, username, first_name) VALUES(?,?,?)", (101, "anna", "Анна"))
     conn.execute(
-        "INSERT INTO events(user_id, name, created_at, meta, payload) VALUES(?,?,?,?,?)",
-        (101, "sub_menu_open", "2026-07-14T10:00:00+00:00", '{"source":"tgads","campaign":"summer"}', "{}"),
+        "INSERT INTO users(user_id, username, first_name) VALUES(?,?,?)",
+        (101, "anna", "Анна"),
+    )
+    conn.execute(
+        """
+        INSERT INTO events(user_id, name, created_at, meta, payload)
+        VALUES(?,?,?,?,?)
+        """.strip(),
+        (
+            101,
+            "sub_menu_open",
+            "2026-07-14T10:00:00+00:00",
+            '{"source":"tgads","campaign":"summer"}',
+            "{}",
+        ),
     )
     conn.commit()
 
@@ -79,7 +95,11 @@ def test_sync_discovers_lead_and_verified_payment_promotes_to_won(monkeypatch: p
     assert lead["display_name"] == "Анна (@anna)"
 
     conn.execute(
-        "INSERT INTO payments(user_id, amount, currency, provider_status, created_at) VALUES(?,?,?,?,?)",
+        """
+        INSERT INTO payments(
+            user_id, amount, currency, provider_status, created_at
+        ) VALUES(?,?,?,?,?)
+        """.strip(),
         (101, 12900, "RUB", "succeeded", "2026-07-14T11:00:00+00:00"),
     )
     conn.commit()
@@ -88,17 +108,28 @@ def test_sync_discovers_lead_and_verified_payment_promotes_to_won(monkeypatch: p
     won = sales_desk.get_lead(int(lead["id"]))
     assert won["stage"] == "won"
     assert won["revenue_minor"] == 12900
-    assert any(item["event_type"] == "stage_auto_advanced" for item in won["audit"])
+    assert any(
+        item["event_type"] == "stage_auto_advanced"
+        for item in won["audit"]
+    )
 
 
-def test_assignment_stage_follow_up_and_notes_are_audited(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_assignment_stage_follow_up_and_notes_are_audited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import services.sales_desk as sales_desk
 
     conn = _connection()
     _patch_db(monkeypatch, conn)
-    conn.execute("INSERT INTO users(user_id, username, first_name) VALUES(?,?,?)", (202, "ivan", "Иван"))
     conn.execute(
-        "INSERT INTO events(user_id, name, created_at, meta, payload) VALUES(?,?,?,?,?)",
+        "INSERT INTO users(user_id, username, first_name) VALUES(?,?,?)",
+        (202, "ivan", "Иван"),
+    )
+    conn.execute(
+        """
+        INSERT INTO events(user_id, name, created_at, meta, payload)
+        VALUES(?,?,?,?,?)
+        """.strip(),
         (202, "funnel_start_command", "2026-07-14T10:00:00+00:00", "{}", "{}"),
     )
     conn.commit()
@@ -116,7 +147,11 @@ def test_assignment_stage_follow_up_and_notes_are_audited(monkeypatch: pytest.Mo
     assert contacted["stage"] == "contacted"
     assert contacted["stage_source"] == "manual"
 
-    scheduled = sales_desk.set_next_contact(lead_id=lead_id, days=3, actor_id=9001)
+    scheduled = sales_desk.set_next_contact(
+        lead_id=lead_id,
+        days=3,
+        actor_id=9001,
+    )
     assert scheduled["next_contact_at"] is not None
 
     noted = sales_desk.add_note(
@@ -126,14 +161,48 @@ def test_assignment_stage_follow_up_and_notes_are_audited(monkeypatch: pytest.Mo
     )
     assert noted["notes"][0]["note_text"] == "Перезвонить после работы"
     event_types = {item["event_type"] for item in noted["audit"]}
-    assert {"lead_assigned", "stage_changed", "follow_up_changed", "note_added"}.issubset(event_types)
+    assert {
+        "lead_assigned",
+        "stage_changed",
+        "follow_up_changed",
+        "note_added",
+    }.issubset(event_types)
 
-    with pytest.raises(PermissionError, match="sales_lead_owned_by_another_admin"):
+    with pytest.raises(
+        PermissionError,
+        match="sales_lead_owned_by_another_admin",
+    ):
         sales_desk.add_note(
             lead_id=lead_id,
             actor_id=9002,
             note_text="Нельзя тихо перехватить лид",
         )
+
+
+def test_sync_does_not_rewrite_unchanged_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import services.sales_desk as sales_desk
+
+    conn = _connection()
+    _patch_db(monkeypatch, conn)
+    conn.execute(
+        "INSERT INTO users(user_id, username, first_name) VALUES(?,?,?)",
+        (303, "maria", "Мария"),
+    )
+    conn.execute(
+        """
+        INSERT INTO events(user_id, name, created_at, meta, payload)
+        VALUES(?,?,?,?,?)
+        """.strip(),
+        (303, "demo_ack", "2026-07-14T10:00:00+00:00", "{}", "{}"),
+    )
+    conn.commit()
+
+    first = sales_desk.sync_sales_leads()
+    second = sales_desk.sync_sales_leads()
+    assert first["inserted"] == 1
+    assert second == {"inserted": 0, "updated": 0, "promoted": 0}
 
 
 def test_migration_is_idempotent_and_locks_stage_values() -> None:
@@ -157,5 +226,16 @@ def test_migration_is_idempotent_and_locks_stage_values() -> None:
                 revenue_minor, currency, version, created_at, updated_at
             ) VALUES(?,?,?,?,?,?,?,?,?,?)
             """,
-            ("user:2", 2, "Bad", "invented", "auto", 0, "RUB", 1, "now", "now"),
+            (
+                "user:2",
+                2,
+                "Bad",
+                "invented",
+                "auto",
+                0,
+                "RUB",
+                1,
+                "now",
+                "now",
+            ),
         )
