@@ -116,6 +116,20 @@ async def admin_tariff_single_price_input(msg: Message, state: FSMContext):
     await admin_inline_tariffs.admin_tariff_single_price_input(msg, state, admin_id=uid)
 
 
+@router.message(AdminManageState.waiting_sales_note)
+async def admin_sales_note_input(msg: Message, state: FSMContext):
+    uid = msg.from_user.id if msg.from_user else None
+    ctx = await asyncio.to_thread(_load_admin_ctx, int(uid)) if uid is not None else None
+    if ctx is None:
+        await state.clear()
+        await msg.answer("Недоступно.")
+        return
+
+    from handlers.admin_reports import sales_desk
+
+    await sales_desk.handle_note_input(msg, state, ctx)
+
+
 @router.message(AdminManageState.waiting_admin_user)
 async def admin_add_admin_input(msg: Message, state: FSMContext):
     """Add admin by Telegram picker, forwarded message, @username, or numeric user_id."""
