@@ -34,7 +34,9 @@ def _delivered_reservation_ids(user_id: int) -> list[str]:
         try:
             rows = conn.execute(
                 """
-                SELECT DISTINCT r.reservation_id
+                SELECT
+                    r.reservation_id,
+                    MIN(r.created_at) AS first_created_at
                 FROM practice_reservations r
                 LEFT JOIN mood_sessions s ON s.id=r.session_id
                 LEFT JOIN account_audio_progress ap
@@ -48,7 +50,8 @@ def _delivered_reservation_ids(user_id: int) -> list[str]:
                         (r.session_id IS NOT NULL AND COALESCE(s.audio_sent,0)=1)
                      OR (r.audio_anchor IS NOT NULL AND ap.pending_audio_no IS NOT NULL)
                   )
-                ORDER BY r.created_at, r.reservation_id
+                GROUP BY r.reservation_id
+                ORDER BY first_created_at, r.reservation_id
                 """.strip(),
                 (int(user_id),),
             ).fetchall()
@@ -58,13 +61,16 @@ def _delivered_reservation_ids(user_id: int) -> list[str]:
                 raise
             rows = conn.execute(
                 """
-                SELECT DISTINCT r.reservation_id
+                SELECT
+                    r.reservation_id,
+                    MIN(r.created_at) AS first_created_at
                 FROM practice_reservations r
                 JOIN mood_sessions s ON s.id=r.session_id
                 WHERE r.user_id=?
                   AND r.status='reserved'
                   AND COALESCE(s.audio_sent,0)=1
-                ORDER BY r.created_at, r.reservation_id
+                GROUP BY r.reservation_id
+                ORDER BY first_created_at, r.reservation_id
                 """.strip(),
                 (int(user_id),),
             ).fetchall()
