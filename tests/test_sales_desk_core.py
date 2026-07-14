@@ -22,9 +22,13 @@ def test_sales_stage_progression_and_reopen_contract() -> None:
     assert can_transition("checkout", "won") is True
     assert can_transition("lost", "new") is True
     assert can_transition("new", "won") is False
+    assert can_transition("won", "qualified") is False
+    assert can_transition("won", "lost") is False
 
     with pytest.raises(ValueError, match="sales_stage_transition_not_allowed"):
         assert_transition("new", "won")
+    with pytest.raises(ValueError, match="sales_stage_transition_not_allowed"):
+        assert_transition("won", "qualified")
 
 
 def test_event_signals_choose_highest_sales_stage() -> None:
@@ -34,7 +38,14 @@ def test_event_signals_choose_highest_sales_stage() -> None:
 
 
 def test_manual_stage_is_not_silently_overwritten_except_verified_win() -> None:
-    assert should_auto_advance("contacted", "qualified", stage_source="manual") is False
+    assert (
+        should_auto_advance(
+            "contacted",
+            "qualified",
+            stage_source="manual",
+        )
+        is False
+    )
     assert should_auto_advance("lost", "qualified", stage_source="auto") is False
     assert should_auto_advance("lost", "won", stage_source="manual") is True
 
@@ -50,7 +61,14 @@ def test_attribution_and_identity_are_bounded_and_deterministic() -> None:
         "creative": "video-01",
     }
     assert lead_key(123) == "user:123"
-    assert compact_display_name(first_name="Анна", username="anna", user_id=123) == "Анна (@anna)"
+    assert (
+        compact_display_name(
+            first_name="Анна",
+            username="anna",
+            user_id=123,
+        )
+        == "Анна (@anna)"
+    )
 
 
 def test_note_and_filter_normalization() -> None:
