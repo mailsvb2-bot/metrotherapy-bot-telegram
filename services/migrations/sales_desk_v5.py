@@ -105,7 +105,7 @@ def apply(conn: sqlite3.Connection) -> None:
             sent_at TEXT,
             FOREIGN KEY(lead_id) REFERENCES sales_leads(id),
             CHECK (platform IN ('telegram')),
-            CHECK (status IN ('prepared','sent','failed'))
+            CHECK (status IN ('prepared','sent','failed','uncertain'))
         )
         """
     )
