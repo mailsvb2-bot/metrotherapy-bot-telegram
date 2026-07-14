@@ -204,8 +204,10 @@ def mark_sales_message_sent(
             before = lead_snapshot(lead)
             stage = str(lead.get("stage") or "new")
             next_stage = "contacted" if stage == "new" else stage
-            stage_source = "manual" if stage == "new" else str(
-                lead.get("stage_source") or "auto"
+            stage_source = (
+                "manual"
+                if stage == "new"
+                else str(lead.get("stage_source") or "auto")
             )
 
             conn.execute(
@@ -255,7 +257,14 @@ def mark_sales_message_sent(
             )
 
 
-def mark_sales_message_failed(*, outbox_id: int, error_code: str) -> None:
+def _mark_non_sent(
+    *,
+    outbox_id: int,
+    status: str,
+    error_code: str,
+) -> None:
+    if status not in {"failed", "uncertain"}:
+        raise ValueError("invalid_sales_outbound_status")
     now_iso = iso_now()
     with db() as conn:
         ensure_schema(conn)
@@ -275,13 +284,19 @@ def mark_sales_message_failed(*, outbox_id: int, error_code: str) -> None:
                 raise ValueError("sales_outbound_not_found")
             if str(outbox.get("status") or "") != "prepared":
                 return
+            normalized_error = str(error_code or "send_failed")[:160]
             conn.execute(
                 """
                 UPDATE sales_outbound_messages
-                SET status='failed', error_code=?, updated_at=?
+                SET status=?, error_code=?, updated_at=?
                 WHERE id=? AND status='prepared'
                 """.strip(),
-                (str(error_code or "send_failed")[:160], now_iso, int(outbox_id)),
+                (
+                    status,
+                    normalized_error,
+                    now_iso,
+                    int(outbox_id),
+                ),
             )
             if changed_count(conn) != 1:
                 raise RuntimeError("sales_outbound_concurrent_update")
@@ -289,14 +304,30 @@ def mark_sales_message_failed(*, outbox_id: int, error_code: str) -> None:
             audit(
                 conn,
                 lead_id=int(outbox["lead_id"]),
-                event_type="outbound_failed",
+                event_type=f"outbound_{status}",
                 actor_id=int(outbox["actor_id"]),
                 before=lead_snapshot(lead),
                 after=lead_snapshot(lead),
                 details={
                     "outbox_id": int(outbox_id),
                     "platform": "telegram",
-                    "error_code": str(error_code or "send_failed")[:160],
+                    "error_code": normalized_error,
                 },
                 created_at=now_iso,
             )
+
+
+def mark_sales_message_failed(*, outbox_id: int, error_code: str) -> None:
+    _mark_non_sent(
+        outbox_id=int(outbox_id),
+        status="failed",
+        error_code=error_code,
+    )
+
+
+def mark_sales_message_uncertain(*, outbox_id: int, error_code: str) -> None:
+    _mark_non_sent(
+        outbox_id=int(outbox_id),
+        status="uncertain",
+        error_code=error_code,
+    )
