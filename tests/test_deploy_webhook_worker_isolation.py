@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WEBHOOK = ROOT / "ops" / "deploy_webhook.py"
@@ -78,6 +80,23 @@ def test_webhook_queues_deploy_as_independent_transient_systemd_service(monkeypa
     }
 
 
+def test_webhook_maps_systemd_queue_failure_to_one_domain_exception(monkeypatch) -> None:
+    module = _load_webhook_module()
+
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="unit rejected",
+        ),
+    )
+
+    with pytest.raises(module.DeployQueueError, match="unit rejected"):
+        module._run_deploy_background()
+
+
 def test_webhook_no_longer_spawns_deploy_inside_its_own_cgroup() -> None:
     text = WEBHOOK.read_text(encoding="utf-8")
 
@@ -85,4 +104,5 @@ def test_webhook_no_longer_spawns_deploy_inside_its_own_cgroup() -> None:
     assert "start_new_session" not in text
     assert "/usr/bin/systemd-run" in text
     assert "run_deploy_worker.sh" in text
+    assert "except DeployQueueError as exc" in text
     assert "deploy queue failed" in text
