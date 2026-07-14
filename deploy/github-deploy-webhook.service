@@ -1,4 +1,5 @@
 # Canonical production owner for the authenticated GitHub deploy webhook.
+# The repair workflow delegates all service installation to this unit's installer.
 [Unit]
 Description=Metrotherapy GitHub deploy webhook
 After=network-online.target
