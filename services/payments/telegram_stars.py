@@ -40,6 +40,7 @@ class StarsPaymentError(RuntimeError):
 class StarsOrder:
     buyer_user_id: int
     package_id: str
+    amount_xtr: int
     gift_token: str = ""
 
     @property
@@ -69,13 +70,13 @@ def build_stars_payload(*, buyer_user_id: int, package_id: str, gift_token: str 
     package = package_by_id(package_id)
     if not package.public:
         raise ValueError("stars_package_not_public")
-    telegram_stars_price(package.package_id)
+    amount_xtr = telegram_stars_price(package.package_id)
 
     token = normalize_gift_token(gift_token)
     if token and not is_gift_token(token):
         raise ValueError("stars_gift_token_invalid")
     kind = "g" if token else "p"
-    parts = [_PAYLOAD_PREFIX, kind, str(buyer_id), package.package_id]
+    parts = [_PAYLOAD_PREFIX, kind, str(buyer_id), package.package_id, str(amount_xtr)]
     if token:
         parts.append(token)
     payload = ":".join(parts)
@@ -87,28 +88,36 @@ def build_stars_payload(*, buyer_user_id: int, package_id: str, gift_token: str 
 def parse_stars_payload(payload: str | None) -> StarsOrder:
     raw = str(payload or "").strip()
     parts = raw.split(":")
-    if len(parts) not in {5, 6} or parts[0:2] != ["xtr", "v1"]:
+    if len(parts) not in {6, 7} or parts[0:2] != ["xtr", "v1"]:
         raise ValueError("stars_invoice_payload_invalid")
     kind = parts[2]
     if kind not in {"p", "g"}:
         raise ValueError("stars_invoice_kind_invalid")
     try:
         buyer_user_id = int(parts[3])
+        amount_xtr = int(parts[5])
     except (TypeError, ValueError) as exc:
-        raise ValueError("stars_buyer_user_id_invalid") from exc
+        raise ValueError("stars_invoice_numeric_field_invalid") from exc
     if buyer_user_id <= 0:
         raise ValueError("stars_buyer_user_id_invalid")
+    if amount_xtr <= 0 or amount_xtr > 100_000:
+        raise ValueError("stars_amount_invalid")
 
     package = package_by_id(parts[4])
     if not package.public:
         raise ValueError("stars_package_not_public")
-    token = normalize_gift_token(parts[5] if len(parts) == 6 else "")
+    token = normalize_gift_token(parts[6] if len(parts) == 7 else "")
     if kind == "g":
         if not token or not is_gift_token(token):
             raise ValueError("stars_gift_token_invalid")
-    elif token or len(parts) != 5:
+    elif token or len(parts) != 6:
         raise ValueError("stars_invoice_payload_invalid")
-    return StarsOrder(buyer_user_id=buyer_user_id, package_id=package.package_id, gift_token=token)
+    return StarsOrder(
+        buyer_user_id=buyer_user_id,
+        package_id=package.package_id,
+        amount_xtr=amount_xtr,
+        gift_token=token,
+    )
 
 
 def _gift_claim_problem(order: StarsOrder, *, pre_checkout: bool) -> str:
@@ -154,13 +163,14 @@ def validate_stars_order(
     order = parse_stars_payload(payload)
     if int(user_id) != order.buyer_user_id:
         raise ValueError("stars_buyer_mismatch")
-    expected = telegram_stars_price(order.package_id)
     try:
         amount = int(total_amount or 0)
     except (TypeError, ValueError) as exc:
         raise ValueError("stars_amount_invalid") from exc
-    if amount != expected:
+    if amount != order.amount_xtr:
         raise ValueError("stars_amount_mismatch")
+    if pre_checkout and telegram_stars_price(order.package_id) != order.amount_xtr:
+        raise ValueError("stars_invoice_price_stale")
     gift_problem = _gift_claim_problem(order, pre_checkout=pre_checkout)
     if gift_problem:
         raise ValueError(gift_problem)
@@ -215,6 +225,7 @@ async def send_stars_invoice(
         package_id=package.package_id,
         gift_token=gift_token,
     )
+    order = parse_stars_payload(payload)
     description = package.description
     if as_gift:
         description = f"Подарок: {package.description} Получатель активирует пакет по универсальной ссылке."
@@ -225,7 +236,7 @@ async def send_stars_invoice(
         payload=payload,
         provider_token="",
         currency=STARS_CURRENCY,
-        prices=[LabeledPrice(label=package.title[:32], amount=telegram_stars_price(package.package_id))],
+        prices=[LabeledPrice(label=package.title[:32], amount=order.amount_xtr)],
         start_parameter=f"xtr_{package.package_id}"[:64],
     )
     log_event(
@@ -234,7 +245,7 @@ async def send_stars_invoice(
         {
             "package_id": package.package_id,
             "gift": bool(as_gift),
-            "amount_xtr": telegram_stars_price(package.package_id),
+            "amount_xtr": order.amount_xtr,
         },
     )
     return gift_token
@@ -276,13 +287,14 @@ def _record_payment_fact(
     provider_charge_id: str,
     payload: str,
     amount: int,
-) -> bool:
+) -> None:
     now = _utc_iso()
     raw = json.dumps(
         {
             "provider": STARS_PROVIDER,
             "package_id": order.package_id,
             "gift": order.is_gift,
+            "amount_xtr": order.amount_xtr,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -290,7 +302,7 @@ def _record_payment_fact(
     )
     with db() as conn:
         with tx(conn):
-            cursor = conn.execute(
+            conn.execute(
                 """
                 INSERT OR IGNORE INTO payments(
                     user_id, telegram_charge_id, provider_charge_id, payload,
@@ -316,7 +328,6 @@ def _record_payment_fact(
                     "",
                 ),
             )
-            inserted = int(getattr(cursor, "rowcount", 0) or 0) > 0
     row = _payment_row(charge_id)
     if not row:
         raise StarsPaymentError("stars_payment_fact_missing")
@@ -328,7 +339,6 @@ def _record_payment_fact(
         raise StarsPaymentError("stars_payment_amount_conflict")
     if str(row.get("currency") or "").upper() != STARS_CURRENCY:
         raise StarsPaymentError("stars_payment_currency_conflict")
-    return inserted
 
 
 def _mark_payment_done(charge_id: str) -> None:
@@ -375,14 +385,18 @@ def record_successful_stars_payment(
     charge_id = str(telegram_charge_id or "").strip()
     if not charge_id:
         raise StarsPaymentError("stars_charge_id_missing")
-    order = validate_stars_order(
-        payload=payload,
-        user_id=int(user_id),
-        currency=currency,
-        total_amount=total_amount,
-        pre_checkout=False,
-    )
-    inserted_fact = _record_payment_fact(
+    try:
+        order = validate_stars_order(
+            payload=payload,
+            user_id=int(user_id),
+            currency=currency,
+            total_amount=total_amount,
+            pre_checkout=False,
+        )
+    except ValueError as exc:
+        raise StarsPaymentError("stars_successful_payment_validation_failed") from exc
+
+    _record_payment_fact(
         order=order,
         charge_id=charge_id,
         provider_charge_id=str(provider_charge_id or "").strip(),
@@ -448,7 +462,7 @@ def record_successful_stars_payment(
     )
     return StarsPaymentResult(
         completed=True,
-        duplicate=not inserted_fact,
+        duplicate=False,
         package_id=order.package_id,
         gift_token=order.gift_token,
         wallet_balance=wallet_balance,
