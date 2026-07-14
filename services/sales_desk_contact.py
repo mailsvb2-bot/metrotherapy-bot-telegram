@@ -318,10 +318,12 @@ def _mark_non_sent(
 
 
 def mark_sales_message_failed(*, outbox_id: int, error_code: str) -> None:
+    normalized = str(error_code or "send_failed")
+    status = "failed" if normalized.startswith("Telegram") else "uncertain"
     _mark_non_sent(
         outbox_id=int(outbox_id),
-        status="failed",
-        error_code=error_code,
+        status=status,
+        error_code=normalized,
     )
 
 
