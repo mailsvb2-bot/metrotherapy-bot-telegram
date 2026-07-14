@@ -13,7 +13,7 @@ from services.sales_desk_db import (
     lead_snapshot,
     rowdict,
 )
-from services.sales_desk_repository import claim_lead, iso_now
+from services.sales_desk_repository import _claim_for_action, iso_now
 
 
 def sanitize_sales_message(value: str, *, max_length: int = 3500) -> str:
@@ -101,11 +101,6 @@ def prepare_sales_message(
     force_owner: bool = False,
 ) -> dict[str, Any]:
     text = sanitize_sales_message(message_text)
-    claim_lead(
-        lead_id=int(lead_id),
-        actor_id=int(actor_id),
-        force=bool(force_owner),
-    )
     now_iso = iso_now()
     key = f"sales:{uuid.uuid4().hex}"
 
@@ -115,9 +110,14 @@ def prepare_sales_message(
             lead = fetch_lead(conn, int(lead_id))
             if not lead:
                 raise ValueError("sales_lead_not_found")
-            if int(lead.get("assigned_to") or 0) != int(actor_id):
-                raise PermissionError("sales_lead_owned_by_another_admin")
             chat_id = _telegram_target(conn, lead)
+            lead = _claim_for_action(
+                conn,
+                lead,
+                actor_id=int(actor_id),
+                force=bool(force_owner),
+                now_iso=now_iso,
+            )
             conn.execute(
                 """
                 INSERT INTO sales_outbound_messages(
@@ -319,7 +319,12 @@ def _mark_non_sent(
 
 def mark_sales_message_failed(*, outbox_id: int, error_code: str) -> None:
     normalized = str(error_code or "send_failed")
-    status = "failed" if normalized.startswith("Telegram") else "uncertain"
+    known_rejections = (
+        "TelegramBadRequest",
+        "TelegramForbiddenError",
+        "TelegramNotFound",
+    )
+    status = "failed" if normalized.startswith(known_rejections) else "uncertain"
     _mark_non_sent(
         outbox_id=int(outbox_id),
         status=status,
