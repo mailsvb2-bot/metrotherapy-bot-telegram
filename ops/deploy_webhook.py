@@ -3,40 +3,61 @@ import hashlib
 import hmac
 import json
 import os
-# Reviewed: operator-only webhook runner; command body is built from fixed paths.
+# Reviewed: operator-only webhook runner; commands use fixed absolute paths.
 import subprocess  # nosec B404
 from pathlib import Path
+import uuid
 
 HOST = "127.0.0.1"
 PORT = 9001
 SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 APP_DIR = Path("/root/metrotherapy")
-DEPLOY_SH = str(APP_DIR / "deploy.sh")
-LOCK_FILE = APP_DIR / "data/deploy/metrotherapy_deploy.lock"
-LOG_FILE = "/var/log/metrotherapy_deploy.log"
+DEPLOY_WORKER = APP_DIR / "scripts/run_deploy_worker.sh"
+SYSTEMD_RUN = "/usr/bin/systemd-run"
 
 
-def _run_deploy_background():
-    script = f"""
-set -Eeuo pipefail
-mkdir -p {LOCK_FILE.parent}
-if [ -e {LOCK_FILE} ]; then
-  echo "=== deploy skipped: lock exists $(date -Is) ===" >> {LOG_FILE}
-  exit 0
-fi
-touch {LOCK_FILE}
-trap 'rm -f {LOCK_FILE}' EXIT
-echo "=== deploy queued started: $(date -Is) ===" >> {LOG_FILE}
-/usr/bin/bash {DEPLOY_SH} >> {LOG_FILE} 2>&1
-echo "=== deploy queued finished: $(date -Is) ===" >> {LOG_FILE}
-"""
-    # Reviewed: the webhook verifies GitHub HMAC and runs a fixed local deploy script.
-    subprocess.Popen(  # nosec B603
-        ["/usr/bin/bash", "-lc", script],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+class DeployQueueError(RuntimeError):
+    """The authenticated deploy request could not be handed to systemd."""
+
+
+def _run_deploy_background() -> None:
+    """Queue a deploy outside the webhook service cgroup.
+
+    A deploy is allowed to restart ``github-deploy-webhook.service`` while it
+    updates the webhook runtime. Running the deploy as a child of that service
+    would make systemd kill the deploy together with the service restart. A
+    transient service gives the worker an independent lifecycle and guarantees
+    that its EXIT trap can remove the deploy lock.
+    """
+
+    unit_name = f"metrotherapy-deploy-{uuid.uuid4().hex[:12]}"
+    command = [
+        SYSTEMD_RUN,
+        "--unit",
+        unit_name,
+        "--collect",
+        "--no-block",
+        "--property=Type=exec",
+        f"--property=WorkingDirectory={APP_DIR}",
+        "/usr/bin/bash",
+        str(DEPLOY_WORKER),
+    ]
+    try:
+        completed = subprocess.run(  # nosec B603
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except OSError as exc:
+        raise DeployQueueError(f"systemd-run unavailable: {exc}") from exc
+    except subprocess.SubprocessError as exc:
+        raise DeployQueueError(f"systemd-run execution failed: {exc}") from exc
+
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "systemd-run failed").strip()
+        raise DeployQueueError(detail[:500])
 
 
 def _local_branch_topology() -> tuple[list[str], str | None]:
@@ -127,7 +148,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(202, b"not main")
             return
 
-        _run_deploy_background()
+        try:
+            _run_deploy_background()
+        except DeployQueueError as exc:
+            self._send(503, f"deploy queue failed: {exc}".encode("utf-8"))
+            return
         self._send(202, b"deploy queued")
 
     def log_message(self, format, *args):
