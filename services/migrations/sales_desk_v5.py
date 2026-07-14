@@ -87,4 +87,33 @@ def apply(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_sales_lead_audit_lead ON sales_lead_audit(lead_id, id)"
     )
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sales_outbound_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            lead_id BIGINT NOT NULL,
+            actor_id BIGINT NOT NULL,
+            platform TEXT NOT NULL,
+            external_user_id TEXT NOT NULL,
+            message_text TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'prepared',
+            provider_message_id TEXT,
+            error_code TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            sent_at TEXT,
+            FOREIGN KEY(lead_id) REFERENCES sales_leads(id),
+            CHECK (platform IN ('telegram')),
+            CHECK (status IN ('prepared','sent','failed'))
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sales_outbound_lead ON sales_outbound_messages(lead_id, id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sales_outbound_status ON sales_outbound_messages(status, updated_at)"
+    )
+
     mark_migration(conn, MIGRATION_NAME)
