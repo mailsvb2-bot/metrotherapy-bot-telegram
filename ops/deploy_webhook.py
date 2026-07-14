@@ -16,12 +16,16 @@ DEPLOY_WORKER = APP_DIR / "scripts/run_deploy_worker.sh"
 SYSTEMD_RUN = "/usr/bin/systemd-run"
 
 
+class DeployQueueError(RuntimeError):
+    """The authenticated deploy request could not be handed to systemd."""
+
+
 def _run_deploy_background() -> None:
     """Queue a deploy outside the webhook service cgroup.
 
     A deploy is allowed to restart ``github-deploy-webhook.service`` while it
-    updates the webhook runtime.  Running the deploy as a child of that service
-    would make systemd kill the deploy together with the service restart.  A
+    updates the webhook runtime. Running the deploy as a child of that service
+    would make systemd kill the deploy together with the service restart. A
     transient service gives the worker an independent lifecycle and guarantees
     that its EXIT trap can remove the deploy lock.
     """
@@ -38,16 +42,22 @@ def _run_deploy_background() -> None:
         "/usr/bin/bash",
         str(DEPLOY_WORKER),
     ]
-    completed = subprocess.run(  # nosec B603
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
+    try:
+        completed = subprocess.run(  # nosec B603
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except OSError as exc:
+        raise DeployQueueError(f"systemd-run unavailable: {exc}") from exc
+    except subprocess.SubprocessError as exc:
+        raise DeployQueueError(f"systemd-run execution failed: {exc}") from exc
+
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "systemd-run failed").strip()
-        raise RuntimeError(detail[:500])
+        raise DeployQueueError(detail[:500])
 
 
 def _local_branch_topology() -> tuple[list[str], str | None]:
@@ -140,7 +150,7 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             _run_deploy_background()
-        except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+        except DeployQueueError as exc:
             self._send(503, f"deploy queue failed: {exc}".encode("utf-8"))
             return
         self._send(202, b"deploy queued")
