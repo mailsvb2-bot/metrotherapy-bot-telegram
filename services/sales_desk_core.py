@@ -33,7 +33,7 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "contacted": frozenset({"qualified", "checkout", "lost"}),
     "qualified": frozenset({"checkout", "won", "lost"}),
     "checkout": frozenset({"qualified", "won", "lost"}),
-    "won": frozenset({"qualified"}),
+    "won": frozenset(),
     "lost": frozenset({"new"}),
 }
 
