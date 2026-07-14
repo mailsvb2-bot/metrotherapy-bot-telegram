@@ -37,3 +37,14 @@ def test_production_deploy_repair_script_keeps_secrets_out_of_output() -> None:
     assert "printf '%s' \"$WEBHOOK_SECRET\" | gh secret set" in text
     assert "SERVER_LOCAL_BRANCH_COUNT=" in text
     assert "GITHUB_BRANCH_COUNT=" in text
+
+
+def test_repair_delegates_webhook_service_ownership_to_canonical_installer() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'SERVICE_INSTALLER="$APP_DIR/scripts/install_github_deploy_webhook_service.sh"' in text
+    assert 'bash "$SERVICE_INSTALLER"' in text
+    assert "install canonical webhook runtime and systemd service" in text
+    assert 'systemctl restart "$HOOK_SERVICE"' not in text
+    assert 'cat > "$HOOK_DROPIN_FILE"' not in text
+    assert "50-webhook-secret.conf" not in text
