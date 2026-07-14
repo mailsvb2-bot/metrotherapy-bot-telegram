@@ -10,8 +10,8 @@ HOOK_SOURCE="$APP_DIR/ops/deploy_webhook.py"
 HOOK_TARGET="/root/deploy_webhook.py"
 HOOK_ENV_DIR="/etc/metrotherapy"
 HOOK_ENV_FILE="$HOOK_ENV_DIR/github-deploy-webhook.env"
-HOOK_DROPIN_DIR="/etc/systemd/system/$HOOK_SERVICE.d"
-HOOK_DROPIN_FILE="$HOOK_DROPIN_DIR/50-webhook-secret.conf"
+HOOK_UNIT_FILE="/etc/systemd/system/$HOOK_SERVICE"
+SERVICE_INSTALLER="$APP_DIR/scripts/install_github_deploy_webhook_service.sh"
 DEPLOY_LOCK="$APP_DIR/data/deploy/metrotherapy_deploy.lock"
 DEPLOY_LOG="/var/log/metrotherapy_deploy.log"
 PUBLIC_HEALTH_URL="https://metrotherapy-bot.metrotherapy.ru/healthz"
@@ -42,14 +42,15 @@ done
 [ -d "$APP_DIR/.git" ] || fail "git repository not found: $APP_DIR"
 [ -f "$HOOK_SOURCE" ] || fail "deploy webhook source not found: $HOOK_SOURCE"
 [ -f "$APP_DIR/deploy.sh" ] || fail "deploy script not found: $APP_DIR/deploy.sh"
+[ -f "$SERVICE_INSTALLER" ] || fail "canonical webhook service installer not found: $SERVICE_INSTALLER"
 
 mkdir -p "$BACKUP_DIR"
 chmod 0700 "$BACKUP_DIR"
 if [ -f "$HOOK_ENV_FILE" ]; then
   cp -a "$HOOK_ENV_FILE" "$BACKUP_DIR/github-deploy-webhook.env.before"
 fi
-if [ -f "$HOOK_DROPIN_FILE" ]; then
-  cp -a "$HOOK_DROPIN_FILE" "$BACKUP_DIR/50-webhook-secret.conf.before"
+if [ -f "$HOOK_UNIT_FILE" ]; then
+  cp -a "$HOOK_UNIT_FILE" "$BACKUP_DIR/github-deploy-webhook.service.before"
 fi
 if [ -f "$HOOK_TARGET" ]; then
   cp -a "$HOOK_TARGET" "$BACKUP_DIR/deploy_webhook.py.before"
@@ -102,17 +103,11 @@ printf 'GITHUB_WEBHOOK_SECRET=%s\n' "$WEBHOOK_SECRET" > "$temporary_env"
 install -m 0600 "$temporary_env" "$HOOK_ENV_FILE"
 rm -f "$temporary_env"
 
-log "install current webhook runtime and protected systemd environment"
-install -m 0644 "$HOOK_SOURCE" "$HOOK_TARGET"
-install -d -m 0755 "$HOOK_DROPIN_DIR"
-cat > "$HOOK_DROPIN_FILE" <<EOF
-[Service]
-EnvironmentFile=$HOOK_ENV_FILE
-EOF
-chmod 0644 "$HOOK_DROPIN_FILE"
-systemctl daemon-reload
-systemctl restart "$HOOK_SERVICE"
-systemctl is-active --quiet "$HOOK_SERVICE" || fail "$HOOK_SERVICE is not active"
+log "install canonical webhook runtime and systemd service"
+APP_DIR="$APP_DIR" \
+HOOK_SERVICE="$HOOK_SERVICE" \
+HOOK_LOCAL_URL="$HOOK_LOCAL_URL" \
+  bash "$SERVICE_INSTALLER"
 
 log "verify server and webhook share the rotated secret"
 ping_payload='{}'
