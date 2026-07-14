@@ -22,6 +22,7 @@ from services.audio_anchor import pick_for_slot
 from services.db import db, mark_delivery_once, was_delivered
 from services.idempotency_keys import for_pre_score
 from services.mood import create_session, get_session
+from services.practice_tokens import grant_tokens, token_access_authoritative
 from services.probe_ledger import assert_synthetic_user_id, finish_probe_run, start_probe_run
 from services.schema import init_db
 from services.subscription import grant, has_access
@@ -29,6 +30,7 @@ from services.subscription import grant, has_access
 DEFAULT_PROBE_USER_ID = -910_000_201
 DEFAULT_SLOT = "morning"
 PROBE_SOURCE = "auto_audio_dry_run_probe"
+PROBE_TOKEN_PACKAGE = "probe_auto_audio_single"
 
 
 @dataclass(frozen=True)
@@ -46,13 +48,23 @@ def _kind_for_slot(slot: str) -> str:
 
 
 def _cleanup_probe_rows(*, user_id: int) -> int:
+    """Remove every durable row the synthetic paid-access probe can create."""
+
     touched = 0
+    uid = int(user_id)
     with db() as conn:
         for sql, params in (
-            ("DELETE FROM mood_sessions WHERE user_id=? AND source=?", (int(user_id), PROBE_SOURCE)),
-            ("DELETE FROM subscriptions WHERE user_id=?", (int(user_id),)),
-            ("DELETE FROM idempotency WHERE user_id=?", (int(user_id),)),
-            ("DELETE FROM users WHERE user_id=?", (int(user_id),)),
+            ("DELETE FROM practice_reservations WHERE user_id=?", (uid,)),
+            ("DELETE FROM payment_token_grants WHERE user_id=?", (uid,)),
+            ("DELETE FROM practice_ledger WHERE user_id=?", (uid,)),
+            ("DELETE FROM user_practice_preferences WHERE user_id=?", (uid,)),
+            ("DELETE FROM practice_wallets WHERE user_id=?", (uid,)),
+            ("DELETE FROM mood_sessions WHERE user_id=? AND source=?", (uid, PROBE_SOURCE)),
+            ("DELETE FROM subscriptions WHERE user_id=?", (uid,)),
+            ("DELETE FROM idempotency WHERE user_id=?", (uid,)),
+            ("DELETE FROM account_channel_identities WHERE account_id=?", (uid,)),
+            ("DELETE FROM accounts WHERE account_id=?", (uid,)),
+            ("DELETE FROM users WHERE user_id=?", (uid,)),
         ):
             cur = conn.execute(sql, params)
             touched += max(int(getattr(cur, "rowcount", 0) or 0), 0)
@@ -71,14 +83,44 @@ def _ensure_probe_user(*, user_id: int) -> None:
         )
 
 
-def _record_failure(*, run_id: str, rows_touched: int, keep_artifacts: bool, error: BaseException, slot: str) -> None:
+def _grant_probe_access(*, user_id: int, run_id: str) -> str:
+    """Grant access through the authority currently used by production."""
+
+    uid = int(user_id)
+    if token_access_authoritative():
+        inserted, wallet, _ = grant_tokens(
+            uid,
+            package_id=PROBE_TOKEN_PACKAGE,
+            amount=1,
+            provider="probe",
+            provider_payment_id=run_id,
+            source=PROBE_SOURCE,
+            idempotency_key=f"probe:auto_audio:{run_id}",
+        )
+        if not inserted or int(wallet.available_tokens) < 1:
+            raise SystemExit("AUTO_AUDIO_DRY_RUN_FAILED canonical token grant was not persisted")
+        return "practice_tokens"
+
+    grant(uid, "both", 1, source=PROBE_SOURCE)
+    return "legacy_subscription"
+
+
+def _record_failure(
+    *,
+    run_id: str,
+    rows_touched: int,
+    keep_artifacts: bool,
+    error: BaseException,
+    slot: str,
+    access_backend: str,
+) -> None:
     finish_probe_run(
         run_id=run_id,
         status="failed",
         cleanup_status="failed" if keep_artifacts else "unknown",
         rows_touched=rows_touched,
         error=str(error),
-        evidence={"slot": slot},
+        evidence={"slot": slot, "access_backend": access_backend},
     )
 
 
@@ -99,6 +141,7 @@ def run_probe(
     run_id = uuid.uuid4().hex
     start_probe_run(probe_type=PROBE_SOURCE, user_id=int(user_id), run_id=run_id, evidence={"slot": slot})
     rows_touched = 0
+    access_backend = "not_granted"
 
     try:
         rows_touched += _cleanup_probe_rows(user_id=int(user_id))
@@ -106,10 +149,12 @@ def run_probe(
         _ensure_probe_user(user_id=int(user_id))
         rows_touched += 1
 
-        grant(int(user_id), "both", 1, source=PROBE_SOURCE)
+        access_backend = _grant_probe_access(user_id=int(user_id), run_id=run_id)
         rows_touched += 1
         if not has_access(int(user_id), slot):
-            raise SystemExit("AUTO_AUDIO_DRY_RUN_FAILED synthetic subscription did not grant access")
+            raise SystemExit(
+                f"AUTO_AUDIO_DRY_RUN_FAILED paid access was not visible backend={access_backend}"
+            )
 
         audio = pick_for_slot(slot, 0)
         if audio is None:
@@ -155,7 +200,12 @@ def run_probe(
             status="ok",
             cleanup_status=cleanup_status,
             rows_touched=rows_touched,
-            evidence={"slot": slot, "session_id": int(session_id), "anchor_id": int(audio.anchor)},
+            evidence={
+                "slot": slot,
+                "session_id": int(session_id),
+                "anchor_id": int(audio.anchor),
+                "access_backend": access_backend,
+            },
         )
         return AutoAudioProbeResult(
             user_id=int(user_id),
@@ -166,7 +216,14 @@ def run_probe(
             rows_touched=rows_touched,
         )
     except SystemExit as exc:
-        _record_failure(run_id=run_id, rows_touched=rows_touched, keep_artifacts=keep_artifacts, error=exc, slot=slot)
+        _record_failure(
+            run_id=run_id,
+            rows_touched=rows_touched,
+            keep_artifacts=keep_artifacts,
+            error=exc,
+            slot=slot,
+            access_backend=access_backend,
+        )
         raise
 
 
