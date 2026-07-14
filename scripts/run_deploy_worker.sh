@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Runs in an independent transient systemd service, outside the webhook cgroup.
 APP_DIR="${APP_DIR:-/root/metrotherapy}"
 DEPLOY_SH="${DEPLOY_SH:-$APP_DIR/deploy.sh}"
 LOCK_FILE="${LOCK_FILE:-$APP_DIR/data/deploy/metrotherapy_deploy.lock}"
