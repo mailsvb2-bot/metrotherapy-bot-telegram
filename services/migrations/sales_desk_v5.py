@@ -16,8 +16,8 @@ def apply(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS sales_leads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             lead_key TEXT NOT NULL UNIQUE,
-            user_id INTEGER UNIQUE,
-            account_id INTEGER,
+            user_id BIGINT UNIQUE,
+            account_id BIGINT,
             display_name TEXT NOT NULL,
             username TEXT,
             source TEXT NOT NULL DEFAULT 'organic',
@@ -25,11 +25,11 @@ def apply(conn: sqlite3.Connection) -> None:
             creative TEXT,
             stage TEXT NOT NULL DEFAULT 'new',
             stage_source TEXT NOT NULL DEFAULT 'auto',
-            assigned_to INTEGER,
+            assigned_to BIGINT,
             next_contact_at TEXT,
             last_contact_at TEXT,
             last_activity_at TEXT,
-            revenue_minor INTEGER NOT NULL DEFAULT 0,
+            revenue_minor BIGINT NOT NULL DEFAULT 0,
             currency TEXT NOT NULL DEFAULT 'RUB',
             closed_reason TEXT,
             version INTEGER NOT NULL DEFAULT 1,
@@ -56,8 +56,8 @@ def apply(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS sales_lead_notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            lead_id INTEGER NOT NULL,
-            author_id INTEGER NOT NULL,
+            lead_id BIGINT NOT NULL,
+            author_id BIGINT NOT NULL,
             note_text TEXT NOT NULL,
             created_at TEXT NOT NULL,
             FOREIGN KEY(lead_id) REFERENCES sales_leads(id)
@@ -72,9 +72,9 @@ def apply(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS sales_lead_audit (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            lead_id INTEGER NOT NULL,
+            lead_id BIGINT NOT NULL,
             event_type TEXT NOT NULL,
-            actor_id INTEGER NOT NULL,
+            actor_id BIGINT NOT NULL,
             before_json TEXT NOT NULL,
             after_json TEXT NOT NULL,
             details_json TEXT NOT NULL,
