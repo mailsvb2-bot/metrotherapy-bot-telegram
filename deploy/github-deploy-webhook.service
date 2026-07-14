@@ -1,0 +1,21 @@
+[Unit]
+Description=Metrotherapy GitHub deploy webhook
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/metrotherapy
+EnvironmentFile=/etc/metrotherapy/github-deploy-webhook.env
+ExecStart=/root/metrotherapy/.venv/bin/python /root/deploy_webhook.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=full
+ReadWritePaths=/root/metrotherapy/data /var/log /run
+
+[Install]
+WantedBy=multi-user.target
