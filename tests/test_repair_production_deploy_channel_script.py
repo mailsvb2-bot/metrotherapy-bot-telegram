@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# This contract also protects the one-main cleanup path used after repair PRs.
 import shutil
 import subprocess
 from pathlib import Path
