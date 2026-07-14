@@ -3,24 +3,32 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from datetime import datetime, timezone
-from typing import Any
 
-from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, Message
 
 from core.callback_utils import safe_answer_callback
 from handlers.admin_inline_common import AdminCtx, safe_edit
 from handlers.admin_inline_states import AdminManageState
-from services.admin_permissions import (
-    SALES_DESK_PERMISSION,
-    SALES_MESSAGE_PERMISSION,
-    SALES_WRITE_PERMISSION,
+from handlers.admin_reports.sales_desk_inputs import (
+    handle_message_input,
+    handle_note_input,
+)
+from handlers.admin_reports.sales_desk_ui import (
+    can_message,
+    can_read,
+    can_write,
+    cancel_input_keyboard,
+    card_keyboard,
+    filter_from_callback,
+    follow_days_from_callback,
+    history_keyboard,
+    lead_id_from_callback,
+    overview_keyboard,
+    stage_from_callback,
 )
 from services.sales_desk import (
     SalesDeskUnavailable,
-    add_note,
     claim_lead,
     format_lead_card,
     format_lead_history,
@@ -30,307 +38,8 @@ from services.sales_desk import (
     set_lead_stage,
     set_next_contact,
 )
-from services.sales_desk_contact import (
-    mark_sales_message_failed,
-    mark_sales_message_sent,
-    prepare_sales_message,
-)
-from services.sales_desk_core import SALES_STAGES, can_transition, normalize_filter
 
 log = logging.getLogger(__name__)
-
-_FILTER_LABELS = (
-    ("open", "Открытые"),
-    ("overdue", "Просроченные"),
-    ("mine", "Мои"),
-    ("unassigned", "Без ответственного"),
-    ("new", "Новые"),
-    ("contacted", "Связались"),
-    ("qualified", "Заинтересованы"),
-    ("checkout", "Оплата"),
-    ("won", "Оплатили"),
-    ("lost", "Отказы"),
-)
-
-_STAGE_BUTTONS = {
-    "new": "Новый",
-    "contacted": "Связались",
-    "qualified": "Заинтересован",
-    "checkout": "Начал оплату",
-    "won": "Оплатил",
-    "lost": "Отказ",
-}
-
-
-def _can_read(ctx: AdminCtx) -> bool:
-    if ctx.is_superadmin:
-        return True
-    if ctx.allowed_perms is None:
-        return True
-    return SALES_DESK_PERMISSION in ctx.allowed_perms
-
-
-def _can_write(ctx: AdminCtx) -> bool:
-    if ctx.is_superadmin:
-        return True
-    return (
-        ctx.allowed_perms is not None
-        and SALES_WRITE_PERMISSION in ctx.allowed_perms
-    )
-
-
-def _can_message(ctx: AdminCtx) -> bool:
-    if ctx.is_superadmin:
-        return True
-    return (
-        _can_write(ctx)
-        and ctx.allowed_perms is not None
-        and SALES_MESSAGE_PERMISSION in ctx.allowed_perms
-    )
-
-
-def _parts(data: str | None) -> list[str]:
-    return [part for part in str(data or "").split(":") if part]
-
-
-def _lead_id(data: str | None) -> int:
-    parts = _parts(data)
-    try:
-        return int(parts[-1])
-    except (IndexError, TypeError, ValueError) as exc:
-        raise ValueError("sales_lead_id_missing") from exc
-
-
-def _filter_from_data(data: str | None) -> str:
-    parts = _parts(data)
-    if "list" not in parts:
-        return "open"
-    index = parts.index("list") + 1
-    return normalize_filter(parts[index] if index < len(parts) else "open")
-
-
-def _stage_from_data(data: str | None) -> str:
-    parts = _parts(data)
-    if "stage" not in parts:
-        raise ValueError("sales_stage_missing")
-    index = parts.index("stage") + 1
-    if index >= len(parts) or parts[index] not in SALES_STAGES:
-        raise ValueError("invalid_sales_stage")
-    return parts[index]
-
-
-def _follow_days(data: str | None) -> int | None:
-    parts = _parts(data)
-    if "follow" not in parts:
-        raise ValueError("sales_follow_up_missing")
-    index = parts.index("follow") + 1
-    if index >= len(parts):
-        raise ValueError("sales_follow_up_missing")
-    value = parts[index]
-    if value == "clear":
-        return None
-    try:
-        days = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("invalid_sales_follow_up_days") from exc
-    if days not in {1, 3, 7}:
-        raise ValueError("invalid_sales_follow_up_days")
-    return days
-
-
-def _home_row() -> list[InlineKeyboardButton]:
-    return [InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")]
-
-
-def _overview_kb(snapshot: dict[str, Any]) -> InlineKeyboardMarkup:
-    selected = normalize_filter(str(snapshot.get("filter") or "open"))
-    keyboard_rows: list[list[InlineKeyboardButton]] = []
-    for index in range(0, len(_FILTER_LABELS), 2):
-        row: list[InlineKeyboardButton] = []
-        for key, title in _FILTER_LABELS[index:index + 2]:
-            prefix = "✅ " if key == selected else ""
-            row.append(
-                InlineKeyboardButton(
-                    text=f"{prefix}{title}",
-                    callback_data=f"admin:sales:list:{key}",
-                )
-            )
-        keyboard_rows.append(row)
-
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    for lead in list(snapshot.get("leads") or [])[:12]:
-        lead_id = int(lead.get("id") or 0)
-        stage = str(lead.get("stage") or "new")
-        owner = lead.get("assigned_to")
-        overdue = bool(
-            lead.get("next_contact_at")
-            and str(lead.get("next_contact_at")) < now
-            and stage not in {"won", "lost"}
-        )
-        marker = "⏰ " if overdue else ""
-        owner_text = (
-            f" · {owner}"
-            if owner is not None
-            else " · без ответственного"
-        )
-        keyboard_rows.append(
-            [
-                InlineKeyboardButton(
-                    text=(
-                        f"{marker}#{lead_id} "
-                        f"{str(lead.get('display_name') or 'Лид')[:28]}"
-                        f"{owner_text}"
-                    ),
-                    callback_data=f"admin:sales:lead:{lead_id}",
-                )
-            ]
-        )
-    keyboard_rows.append(
-        [
-            InlineKeyboardButton(
-                text="🔄 Обновить",
-                callback_data=f"admin:sales:list:{selected}",
-            )
-        ]
-    )
-    keyboard_rows.append(
-        [
-            InlineKeyboardButton(
-                text="🤖 Growth Autopilot",
-                callback_data="admin:growth:autopilot",
-            )
-        ]
-    )
-    keyboard_rows.append(_home_row())
-    return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
-
-
-def _card_kb(
-    lead: dict[str, Any],
-    *,
-    can_write: bool,
-    can_message: bool,
-) -> InlineKeyboardMarkup:
-    lead_id = int(lead.get("id") or 0)
-    current = str(lead.get("stage") or "new")
-    keyboard_rows: list[list[InlineKeyboardButton]] = []
-    if can_write:
-        keyboard_rows.append(
-            [
-                InlineKeyboardButton(
-                    text="🙋 Взять лид",
-                    callback_data=f"admin:sales:claim:{lead_id}",
-                ),
-                InlineKeyboardButton(
-                    text="📝 Заметка",
-                    callback_data=f"admin:sales:note:{lead_id}",
-                ),
-            ]
-        )
-        if can_message:
-            keyboard_rows.append(
-                [
-                    InlineKeyboardButton(
-                        text="✉️ Написать лиду",
-                        callback_data=f"admin:sales:message:{lead_id}",
-                    )
-                ]
-            )
-        stage_buttons = [
-            InlineKeyboardButton(
-                text=_STAGE_BUTTONS[target],
-                callback_data=f"admin:sales:stage:{target}:{lead_id}",
-            )
-            for target in SALES_STAGES
-            if target != current and can_transition(current, target)
-        ]
-        for index in range(0, len(stage_buttons), 2):
-            keyboard_rows.append(stage_buttons[index:index + 2])
-        if current not in {"won", "lost"}:
-            keyboard_rows.append(
-                [
-                    InlineKeyboardButton(
-                        text="⏰ +1 день",
-                        callback_data=f"admin:sales:follow:1:{lead_id}",
-                    ),
-                    InlineKeyboardButton(
-                        text="⏰ +3 дня",
-                        callback_data=f"admin:sales:follow:3:{lead_id}",
-                    ),
-                ]
-            )
-            follow_row = [
-                InlineKeyboardButton(
-                    text="⏰ +7 дней",
-                    callback_data=f"admin:sales:follow:7:{lead_id}",
-                )
-            ]
-            if lead.get("next_contact_at"):
-                follow_row.append(
-                    InlineKeyboardButton(
-                        text="Убрать follow-up",
-                        callback_data=f"admin:sales:follow:clear:{lead_id}",
-                    )
-                )
-            keyboard_rows.append(follow_row)
-    keyboard_rows.append(
-        [
-            InlineKeyboardButton(
-                text="🧾 История",
-                callback_data=f"admin:sales:history:{lead_id}",
-            )
-        ]
-    )
-    keyboard_rows.append(
-        [
-            InlineKeyboardButton(
-                text="⬅️ К лидам",
-                callback_data="admin:sales:list:open",
-            )
-        ]
-    )
-    keyboard_rows.append(_home_row())
-    return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
-
-
-def _history_kb(lead_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="⬅️ К карточке",
-                    callback_data=f"admin:sales:lead:{int(lead_id)}",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⬅️ К лидам",
-                    callback_data="admin:sales:list:open",
-                )
-            ],
-            _home_row(),
-        ]
-    )
-
-
-def _input_done_kb(lead_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Открыть карточку",
-                    callback_data=f"admin:sales:lead:{int(lead_id)}",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⬅️ К лидам",
-                    callback_data="admin:sales:list:open",
-                )
-            ],
-            _home_row(),
-        ]
-    )
 
 
 async def _show_overview(
@@ -346,7 +55,7 @@ async def _show_overview(
     await safe_edit(
         cb,
         format_sales_overview(snapshot),
-        reply_markup=_overview_kb(snapshot),
+        reply_markup=overview_keyboard(snapshot),
     )
 
 
@@ -355,10 +64,10 @@ async def _show_card(cb: CallbackQuery, ctx: AdminCtx, lead_id: int) -> None:
     await safe_edit(
         cb,
         format_lead_card(lead),
-        reply_markup=_card_kb(
+        reply_markup=card_keyboard(
             lead,
-            can_write=_can_write(ctx),
-            can_message=_can_message(ctx),
+            write_allowed=can_write(ctx),
+            message_allowed=can_message(ctx),
         ),
     )
 
@@ -374,9 +83,144 @@ async def _show_error(cb: CallbackQuery, exc: BaseException) -> None:
         "sales_telegram_identity_missing": (
             "У лида не найдена Telegram-идентичность."
         ),
+        "sales_follow_up_closed_lead": (
+            "Для закрытого лида нельзя назначить следующий контакт."
+        ),
+        "sales_lead_concurrent_update": (
+            "Карточка уже изменилась. Откройте её заново."
+        ),
     }
     text = mapping.get(str(exc), str(exc) or type(exc).__name__)
     await safe_answer_callback(cb, text, show_alert=True)
+
+
+async def _begin_text_input(
+    cb: CallbackQuery,
+    state: FSMContext,
+    *,
+    lead_id: int,
+    mode: str,
+) -> None:
+    message = cb.message
+    if mode == "note":
+        await state.set_state(AdminManageState.waiting_sales_note)
+        prompt = (
+            f"📝 Заметка для лида #{lead_id}\n\n"
+            "Отправьте текст одним сообщением. "
+            "Для отмены напишите «Отмена»."
+        )
+        callback_text = "Жду текст заметки."
+    elif mode == "message":
+        await state.set_state(AdminManageState.waiting_sales_message)
+        prompt = (
+            f"✉️ Сообщение лиду #{lead_id}\n\n"
+            "Отправьте текст одним сообщением. Он будет доставлен "
+            "в Telegram и записан в аудит. Для отмены напишите «Отмена»."
+        )
+        callback_text = "Жду текст сообщения."
+    else:
+        raise ValueError("invalid_sales_input_mode")
+
+    await state.update_data(sales_lead_id=int(lead_id))
+    if isinstance(message, Message):
+        await message.answer(
+            prompt,
+            reply_markup=cancel_input_keyboard(lead_id),
+        )
+    await safe_answer_callback(
+        cb,
+        callback_text,
+        show_alert=False,
+    )
+
+
+async def _run_read_action(
+    cb: CallbackQuery,
+    state: FSMContext,
+    ctx: AdminCtx,
+    data: str,
+) -> bool:
+    if data in {"admin:sales", "admin:sales:list"} or data.startswith(
+        "admin:sales:list:"
+    ):
+        await _show_overview(cb, ctx, filter_from_callback(data))
+        return True
+    if data.startswith("admin:sales:lead:"):
+        await _show_card(cb, ctx, lead_id_from_callback(data))
+        return True
+    if data.startswith("admin:sales:history:"):
+        lead_id = lead_id_from_callback(data)
+        lead = await asyncio.to_thread(get_lead, lead_id)
+        await safe_edit(
+            cb,
+            format_lead_history(lead),
+            reply_markup=history_keyboard(lead_id),
+        )
+        return True
+    del state
+    return False
+
+
+async def _run_write_action(
+    cb: CallbackQuery,
+    state: FSMContext,
+    ctx: AdminCtx,
+    data: str,
+) -> bool:
+    lead_id = lead_id_from_callback(data)
+    if data.startswith("admin:sales:claim:"):
+        await asyncio.to_thread(
+            claim_lead,
+            lead_id=lead_id,
+            actor_id=ctx.uid,
+            force=ctx.is_superadmin,
+        )
+        await _show_card(cb, ctx, lead_id)
+        return True
+    if data.startswith("admin:sales:stage:"):
+        await asyncio.to_thread(
+            set_lead_stage,
+            lead_id=lead_id,
+            target_stage=stage_from_callback(data),
+            actor_id=ctx.uid,
+            force_owner=ctx.is_superadmin,
+        )
+        await _show_card(cb, ctx, lead_id)
+        return True
+    if data.startswith("admin:sales:follow:"):
+        await asyncio.to_thread(
+            set_next_contact,
+            lead_id=lead_id,
+            days=follow_days_from_callback(data),
+            actor_id=ctx.uid,
+            force_owner=ctx.is_superadmin,
+        )
+        await _show_card(cb, ctx, lead_id)
+        return True
+    if data.startswith("admin:sales:note:"):
+        await _begin_text_input(
+            cb,
+            state,
+            lead_id=lead_id,
+            mode="note",
+        )
+        return True
+    if data.startswith("admin:sales:message:"):
+        if not can_message(ctx):
+            await safe_answer_callback(
+                cb,
+                "Нужен отдельный доступ на сообщения лидам.",
+                show_alert=True,
+            )
+            return True
+        await _begin_text_input(
+            cb,
+            state,
+            lead_id=lead_id,
+            mode="message",
+        )
+        return True
+    return False
 
 
 async def run(
@@ -389,7 +233,7 @@ async def run(
     data = str(getattr(cb, "data", "") or "")
     if not (data == "admin:sales" or data.startswith("admin:sales:")):
         return False
-    if not _can_read(ctx):
+    if not can_read(ctx):
         await safe_answer_callback(
             cb,
             "Нет доступа к Sales Desk.",
@@ -405,121 +249,16 @@ async def run(
         await state.clear()
 
     try:
-        if data in {"admin:sales", "admin:sales:list"} or data.startswith(
-            "admin:sales:list:"
-        ):
-            await _show_overview(cb, ctx, _filter_from_data(data))
+        if await _run_read_action(cb, state, ctx, data):
             return True
-        if data.startswith("admin:sales:lead:"):
-            await _show_card(cb, ctx, _lead_id(data))
-            return True
-        if data.startswith("admin:sales:history:"):
-            lead_id = _lead_id(data)
-            lead = await asyncio.to_thread(get_lead, lead_id)
-            await safe_edit(
-                cb,
-                format_lead_history(lead),
-                reply_markup=_history_kb(lead_id),
-            )
-            return True
-
-        if not _can_write(ctx):
+        if not can_write(ctx):
             await safe_answer_callback(
                 cb,
                 "Нужен отдельный доступ на изменение Sales Desk.",
                 show_alert=True,
             )
             return True
-
-        lead_id = _lead_id(data)
-        if data.startswith("admin:sales:claim:"):
-            await asyncio.to_thread(
-                claim_lead,
-                lead_id=lead_id,
-                actor_id=ctx.uid,
-                force=ctx.is_superadmin,
-            )
-            await _show_card(cb, ctx, lead_id)
-            return True
-        if data.startswith("admin:sales:stage:"):
-            await asyncio.to_thread(
-                set_lead_stage,
-                lead_id=lead_id,
-                target_stage=_stage_from_data(data),
-                actor_id=ctx.uid,
-                force_owner=ctx.is_superadmin,
-            )
-            await _show_card(cb, ctx, lead_id)
-            return True
-        if data.startswith("admin:sales:follow:"):
-            await asyncio.to_thread(
-                set_next_contact,
-                lead_id=lead_id,
-                days=_follow_days(data),
-                actor_id=ctx.uid,
-                force_owner=ctx.is_superadmin,
-            )
-            await _show_card(cb, ctx, lead_id)
-            return True
-        if data.startswith("admin:sales:note:"):
-            await state.set_state(AdminManageState.waiting_sales_note)
-            await state.update_data(sales_lead_id=lead_id)
-            message = cb.message
-            if isinstance(message, Message):
-                await message.answer(
-                    f"📝 Заметка для лида #{lead_id}\n\n"
-                    "Отправьте текст одним сообщением. "
-                    "Для отмены напишите «Отмена».",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text="Отмена",
-                                    callback_data=f"admin:sales:lead:{lead_id}",
-                                )
-                            ]
-                        ]
-                    ),
-                )
-            await safe_answer_callback(
-                cb,
-                "Жду текст заметки.",
-                show_alert=False,
-            )
-            return True
-        if data.startswith("admin:sales:message:"):
-            if not _can_message(ctx):
-                await safe_answer_callback(
-                    cb,
-                    "Нужен отдельный доступ на сообщения лидам.",
-                    show_alert=True,
-                )
-                return True
-            await state.set_state(AdminManageState.waiting_sales_message)
-            await state.update_data(sales_lead_id=lead_id)
-            message = cb.message
-            if isinstance(message, Message):
-                await message.answer(
-                    f"✉️ Сообщение лиду #{lead_id}\n\n"
-                    "Отправьте текст одним сообщением. Он будет доставлен "
-                    "в Telegram и записан в аудит. Для отмены напишите «Отмена».",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text="Отмена",
-                                    callback_data=f"admin:sales:lead:{lead_id}",
-                                )
-                            ]
-                        ]
-                    ),
-                )
-            await safe_answer_callback(
-                cb,
-                "Жду текст сообщения.",
-                show_alert=False,
-            )
-            return True
+        return await _run_write_action(cb, state, ctx, data)
     except PermissionError as exc:
         await _show_error(cb, exc)
         return True
@@ -540,260 +279,10 @@ async def run(
         log.exception("Sales Desk database action failed")
         await _show_error(cb, exc)
         return True
-    return False
 
 
-async def handle_note_input(
-    msg: Message,
-    state: FSMContext,
-    ctx: AdminCtx,
-) -> None:
-    if not _can_read(ctx) or not _can_write(ctx):
-        await state.clear()
-        await msg.answer("Нет доступа на изменение Sales Desk.")
-        return
-
-    text = str(msg.text or "").strip()
-    state_data = await state.get_data()
-    try:
-        lead_id = int(state_data.get("sales_lead_id"))
-    except (TypeError, ValueError):
-        await state.clear()
-        await msg.answer("Карточка лида потеряна. Откройте Sales Desk ещё раз.")
-        return
-
-    if text.lower() in {"отмена", "cancel", "/cancel"}:
-        await state.clear()
-        await msg.answer(
-            "Заметка отменена.",
-            reply_markup=_input_done_kb(lead_id),
-        )
-        return
-
-    try:
-        await asyncio.to_thread(
-            add_note,
-            lead_id=lead_id,
-            actor_id=ctx.uid,
-            note_text=text,
-            force_owner=ctx.is_superadmin,
-        )
-    except PermissionError:
-        await state.clear()
-        await msg.answer(
-            "Лид уже назначен другому менеджеру.",
-            reply_markup=_input_done_kb(lead_id),
-        )
-        return
-    except ValueError as exc:
-        await msg.answer(str(exc))
-        return
-    except SalesDeskUnavailable:
-        log.exception("Sales Desk note schema unavailable")
-        await msg.answer(
-            "Sales Desk ещё не готов на сервере. "
-            "Обновите карточку после миграции."
-        )
-        return
-    except RuntimeError:
-        log.exception("Sales Desk note failed")
-        await msg.answer(
-            "Не удалось сохранить заметку. "
-            "Попробуйте открыть карточку ещё раз."
-        )
-        return
-    except OSError:
-        log.exception("Sales Desk note failed")
-        await msg.answer(
-            "Не удалось сохранить заметку. "
-            "Попробуйте открыть карточку ещё раз."
-        )
-        return
-    except sqlite3.Error:
-        log.exception("Sales Desk note failed")
-        await msg.answer(
-            "Не удалось сохранить заметку. "
-            "Попробуйте открыть карточку ещё раз."
-        )
-        return
-
-    await state.clear()
-    await msg.answer(
-        "✅ Заметка сохранена.",
-        reply_markup=_input_done_kb(lead_id),
-    )
-
-
-async def _mark_message_failed_best_effort(
-    outbox_id: int,
-    error_code: str,
-) -> None:
-    try:
-        await asyncio.to_thread(
-            mark_sales_message_failed,
-            outbox_id=int(outbox_id),
-            error_code=str(error_code),
-        )
-    except sqlite3.Error:
-        log.exception("Sales Desk failed-message audit update failed")
-    except RuntimeError:
-        log.exception("Sales Desk failed-message audit update failed")
-    except OSError:
-        log.exception("Sales Desk failed-message audit update failed")
-    except ValueError:
-        log.exception("Sales Desk failed-message audit update failed")
-
-
-async def handle_message_input(
-    msg: Message,
-    state: FSMContext,
-    ctx: AdminCtx,
-) -> None:
-    if not _can_read(ctx) or not _can_message(ctx):
-        await state.clear()
-        await msg.answer("Нет доступа на сообщения лидам.")
-        return
-
-    text = str(msg.text or "").strip()
-    state_data = await state.get_data()
-    try:
-        lead_id = int(state_data.get("sales_lead_id"))
-    except (TypeError, ValueError):
-        await state.clear()
-        await msg.answer("Карточка лида потеряна. Откройте Sales Desk ещё раз.")
-        return
-
-    if text.lower() in {"отмена", "cancel", "/cancel"}:
-        await state.clear()
-        await msg.answer(
-            "Сообщение отменено.",
-            reply_markup=_input_done_kb(lead_id),
-        )
-        return
-
-    try:
-        prepared = await asyncio.to_thread(
-            prepare_sales_message,
-            lead_id=lead_id,
-            actor_id=ctx.uid,
-            message_text=text,
-            force_owner=ctx.is_superadmin,
-        )
-    except PermissionError:
-        await state.clear()
-        await msg.answer(
-            "Лид уже назначен другому менеджеру.",
-            reply_markup=_input_done_kb(lead_id),
-        )
-        return
-    except ValueError as exc:
-        mapping = {
-            "sales_message_empty": "Сообщение не может быть пустым.",
-            "sales_telegram_identity_missing": (
-                "У лида не найдена Telegram-идентичность."
-            ),
-        }
-        await msg.answer(mapping.get(str(exc), str(exc)))
-        return
-    except SalesDeskUnavailable:
-        log.exception("Sales Desk message schema unavailable")
-        await msg.answer(
-            "Sales Desk ещё не готов на сервере. "
-            "Обновите карточку после миграции."
-        )
-        return
-    except RuntimeError:
-        log.exception("Sales Desk message preparation failed")
-        await msg.answer("Не удалось подготовить сообщение.")
-        return
-    except OSError:
-        log.exception("Sales Desk message preparation failed")
-        await msg.answer("Не удалось подготовить сообщение.")
-        return
-    except sqlite3.Error:
-        log.exception("Sales Desk message preparation failed")
-        await msg.answer("Не удалось подготовить сообщение.")
-        return
-
-    outbox_id = int(prepared["outbox_id"])
-    try:
-        delivered = await msg.bot.send_message(
-            chat_id=int(prepared["chat_id"]),
-            text=str(prepared["message_text"]),
-        )
-    except TelegramAPIError as exc:
-        await _mark_message_failed_best_effort(outbox_id, type(exc).__name__)
-        await state.clear()
-        await msg.answer(
-            "Telegram не доставил сообщение. "
-            "Ошибка записана в историю лида.",
-            reply_markup=_input_done_kb(lead_id),
-        )
-        return
-    except asyncio.TimeoutError:
-        await _mark_message_failed_best_effort(outbox_id, "TimeoutError")
-        await state.clear()
-        await msg.answer(
-            "Telegram не подтвердил доставку вовремя. "
-            "Ошибка записана в историю лида.",
-            reply_markup=_input_done_kb(lead_id),
-        )
-        return
-    except OSError as exc:
-        await _mark_message_failed_best_effort(outbox_id, type(exc).__name__)
-        await state.clear()
-        await msg.answer(
-            "Не удалось доставить сообщение. "
-            "Ошибка записана в историю лида.",
-            reply_markup=_input_done_kb(lead_id),
-        )
-        return
-
-    try:
-        await asyncio.to_thread(
-            mark_sales_message_sent,
-            outbox_id=outbox_id,
-            provider_message_id=int(delivered.message_id),
-        )
-    except sqlite3.Error:
-        log.exception("Sales Desk sent-message audit finalization failed")
-        await state.clear()
-        await msg.answer(
-            "Сообщение отправлено, но журнал не подтвердил запись. "
-            "Не отправляйте его повторно.",
-            reply_markup=_input_done_kb(lead_id),
-        )
-        return
-    except RuntimeError:
-        log.exception("Sales Desk sent-message audit finalization failed")
-        await state.clear()
-        await msg.answer(
-            "Сообщение отправлено, но журнал не подтвердил запись. "
-            "Не отправляйте его повторно.",
-            reply_markup=_input_done_kb(lead_id),
-        )
-        return
-    except OSError:
-        log.exception("Sales Desk sent-message audit finalization failed")
-        await state.clear()
-        await msg.answer(
-            "Сообщение отправлено, но журнал не подтвердил запись. "
-            "Не отправляйте его повторно.",
-            reply_markup=_input_done_kb(lead_id),
-        )
-        return
-    except ValueError:
-        log.exception("Sales Desk sent-message audit finalization failed")
-        await state.clear()
-        await msg.answer(
-            "Сообщение отправлено, но журнал не подтвердил запись. "
-            "Не отправляйте его повторно.",
-            reply_markup=_input_done_kb(lead_id),
-        )
-        return
-
-    await state.clear()
-    await msg.answer(
-        "✅ Сообщение отправлено и записано в историю лида.",
-        reply_markup=_input_done_kb(lead_id),
-    )
+__all__ = [
+    "handle_message_input",
+    "handle_note_input",
+    "run",
+]
