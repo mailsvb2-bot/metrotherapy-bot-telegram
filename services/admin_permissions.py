@@ -9,6 +9,7 @@ from services.db import db
 GROWTH_APPLY_REVIEW_PERMISSION = "admin:growth:apply:review"
 SALES_DESK_PERMISSION = "admin:sales"
 SALES_WRITE_PERMISSION = "admin:sales:write"
+SALES_MESSAGE_PERMISSION = "admin:sales:message"
 
 
 # Права храним как строки. Чтобы не усложнять UX —
@@ -122,6 +123,7 @@ PERMS: list[PermItem] = [
     PermItem(GROWTH_APPLY_REVIEW_PERMISSION, "🛡 Review Growth Apply"),
     PermItem(SALES_DESK_PERMISSION, "🧑‍💼 Sales Desk (просмотр)"),
     PermItem(SALES_WRITE_PERMISSION, "✍️ Sales Desk (изменение)"),
+    PermItem(SALES_MESSAGE_PERMISSION, "✉️ Sales Desk (сообщения)"),
     PermItem("admin:funnel", "📉 Воронка"),
     PermItem("admin:money:today", "💰 Деньги и клиенты"),
     PermItem("admin:conversion", "💰 Конверсия"),
