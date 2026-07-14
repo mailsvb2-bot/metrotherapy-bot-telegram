@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sqlite3
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from services.db import db, tx
 from services.migrations._helpers import table_exists
 from services.sales_desk_core import (
-    OPEN_STAGES,
     SALES_STAGES,
     assert_transition,
     compact_display_name,
@@ -35,6 +35,11 @@ _SALES_EVENT_NAMES = (
     "payment_success",
     "gift_paid",
 )
+
+_OPEN_STAGE_SQL = "'new','contacted','qualified','checkout'"
+_SYNC_INTERVAL_SECONDS = 30.0
+_SYNC_LOCK = threading.Lock()
+_LAST_SYNC_MONOTONIC = 0.0
 
 _STAGE_TITLES = {
     "new": "Новый",
@@ -73,25 +78,27 @@ def _rows(rows: Any) -> list[dict[str, Any]]:
 
 
 def _stable_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _clean_text(value: Any, *, limit: int, fallback: str | None = None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    return text[: max(1, int(limit))]
 
 
 def _table_columns(conn: Any, table: str) -> set[str]:
-    if os.getenv("METRO_DB_ENGINE", "").strip().lower() == "postgres":
-        rows = conn.execute(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema='public' AND table_name=?
-            """.strip(),
-            (str(table),),
-        ).fetchall()
-        return {
-            str(_rowdict(row).get("column_name") or "")
-            for row in rows
-            if str(_rowdict(row).get("column_name") or "")
-        }
-    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    return {
+        str(row[1])
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
 
 
 def ensure_schema(conn: Any) -> None:
@@ -126,7 +133,8 @@ def _audit(
     conn.execute(
         """
         INSERT INTO sales_lead_audit(
-            lead_id, event_type, actor_id, before_json, after_json, details_json, created_at
+            lead_id, event_type, actor_id, before_json, after_json,
+            details_json, created_at
         ) VALUES(?,?,?,?,?,?,?)
         """.strip(),
         (
@@ -141,6 +149,20 @@ def _audit(
     )
 
 
+def _changed_count(conn: Any) -> int:
+    row = _rowdict(conn.execute("SELECT changes() AS n").fetchone())
+    return int(row.get("n") or row.get("c") or 0)
+
+
+def _fetch_lead(conn: Any, lead_id: int) -> dict[str, Any]:
+    return _rowdict(
+        conn.execute(
+            "SELECT * FROM sales_leads WHERE id=? LIMIT 1",
+            (int(lead_id),),
+        ).fetchone()
+    )
+
+
 def _event_rows(conn: Any, *, limit: int) -> list[dict[str, Any]]:
     if not table_exists(conn, "events"):
         return []
@@ -150,26 +172,32 @@ def _event_rows(conn: Any, *, limit: int) -> list[dict[str, Any]]:
 
     select = ["e.user_id", "e.name"]
     for column in ("created_at", "meta", "payload"):
-        select.append(f"e.{column}" if column in event_columns else f"NULL AS {column}")
+        selected = f"e.{column}" if column in event_columns else f"NULL AS {column}"
+        select.append(selected)
 
     join = ""
     if table_exists(conn, "users"):
         user_columns = _table_columns(conn, "users")
         join = " LEFT JOIN users u ON u.user_id=e.user_id"
-        select.append("u.username" if "username" in user_columns else "NULL AS username")
-        select.append("u.first_name" if "first_name" in user_columns else "NULL AS first_name")
+        select.append(
+            "u.username" if "username" in user_columns else "NULL AS username"
+        )
+        select.append(
+            "u.first_name" if "first_name" in user_columns else "NULL AS first_name"
+        )
     else:
         select.extend(["NULL AS username", "NULL AS first_name"])
 
     placeholders = ",".join("?" for _ in _SALES_EVENT_NAMES)
-    order = "e.created_at" if "created_at" in event_columns else "e.user_id"
+    order_column = "e.created_at" if "created_at" in event_columns else "e.user_id"
     return _rows(
         conn.execute(
             f"""
             SELECT {', '.join(select)}
             FROM events e{join}
-            WHERE e.user_id IS NOT NULL AND e.name IN ({placeholders})
-            ORDER BY {order} ASC
+            WHERE e.user_id IS NOT NULL
+              AND e.name IN ({placeholders})
+            ORDER BY {order_column} DESC
             LIMIT ?
             """.strip(),
             (*_SALES_EVENT_NAMES, max(1, min(int(limit), 20000))),
@@ -184,18 +212,36 @@ def _payment_rows(conn: Any) -> list[dict[str, Any]]:
     if "user_id" not in columns:
         return []
 
-    status_column = "provider_status" if "provider_status" in columns else ("status" if "status" in columns else "")
-    amount_column = "amount" if "amount" in columns else ("amount_minor" if "amount_minor" in columns else "")
+    status_column = (
+        "provider_status"
+        if "provider_status" in columns
+        else ("status" if "status" in columns else "")
+    )
+    amount_column = (
+        "amount"
+        if "amount" in columns
+        else ("amount_minor" if "amount_minor" in columns else "")
+    )
     currency_column = "currency" if "currency" in columns else ""
-    created_column = "created_at" if "created_at" in columns else ("paid_at" if "paid_at" in columns else "")
+    created_column = (
+        "created_at"
+        if "created_at" in columns
+        else ("paid_at" if "paid_at" in columns else "")
+    )
 
     conditions = ["user_id IS NOT NULL"]
-    params: list[Any] = []
     if status_column:
-        conditions.append(f"COALESCE({status_column}, 'succeeded') IN ('succeeded','paid','success','captured')")
+        conditions.append(
+            f"COALESCE({status_column}, 'succeeded') "
+            "IN ('succeeded','paid','success','captured')"
+        )
 
     amount_expression = f"COALESCE({amount_column}, 0)" if amount_column else "0"
-    currency_expression = f"COALESCE(MAX({currency_column}), 'RUB')" if currency_column else "'RUB'"
+    currency_expression = (
+        f"COALESCE(MAX({currency_column}), 'RUB')"
+        if currency_column
+        else "'RUB'"
+    )
     paid_expression = f"MAX({created_column})" if created_column else "NULL"
     return _rows(
         conn.execute(
@@ -207,10 +253,26 @@ def _payment_rows(conn: Any) -> list[dict[str, Any]]:
             FROM payments
             WHERE {' AND '.join(conditions)}
             GROUP BY user_id
-            """.strip(),
-            tuple(params),
+            """.strip()
         ).fetchall()
     )
+
+
+def _new_candidate(user_id: int, activity_at: Any) -> dict[str, Any]:
+    timestamp = str(activity_at or _iso())
+    return {
+        "user_id": int(user_id),
+        "event_names": [],
+        "first_name": None,
+        "username": None,
+        "source": "organic",
+        "campaign": "",
+        "creative": "",
+        "first_activity_at": timestamp,
+        "last_activity_at": timestamp,
+        "revenue_minor": 0,
+        "currency": "RUB",
+    }
 
 
 def _candidate_map(conn: Any, *, limit: int) -> dict[int, dict[str, Any]]:
@@ -220,35 +282,30 @@ def _candidate_map(conn: Any, *, limit: int) -> dict[int, dict[str, Any]]:
             user_id = int(row.get("user_id"))
         except (TypeError, ValueError):
             continue
+
         item = candidates.setdefault(
             user_id,
-            {
-                "user_id": user_id,
-                "event_names": [],
-                "first_name": row.get("first_name"),
-                "username": row.get("username"),
-                "source": "organic",
-                "campaign": "",
-                "creative": "",
-                "first_activity_at": row.get("created_at") or _iso(),
-                "last_activity_at": row.get("created_at") or _iso(),
-                "revenue_minor": 0,
-                "currency": "RUB",
-            },
+            _new_candidate(user_id, row.get("created_at")),
         )
         item["event_names"].append(str(row.get("name") or ""))
-        if row.get("first_name"):
+        if row.get("first_name") and not item.get("first_name"):
             item["first_name"] = row.get("first_name")
-        if row.get("username"):
+        if row.get("username") and not item.get("username"):
             item["username"] = row.get("username")
+
         created_at = str(row.get("created_at") or "")
         if created_at:
-            if created_at < str(item.get("first_activity_at") or created_at):
-                item["first_activity_at"] = created_at
-            if created_at > str(item.get("last_activity_at") or ""):
-                item["last_activity_at"] = created_at
+            item["first_activity_at"] = min(
+                str(item.get("first_activity_at") or created_at),
+                created_at,
+            )
+            item["last_activity_at"] = max(
+                str(item.get("last_activity_at") or created_at),
+                created_at,
+            )
+
         attribution = extract_attribution(row.get("meta"), row.get("payload"))
-        if attribution["source"] != "organic" or item["source"] == "organic":
+        if item.get("source") == "organic" and attribution["source"] != "organic":
             item.update(attribution)
 
     for payment in _payment_rows(conn):
@@ -258,29 +315,160 @@ def _candidate_map(conn: Any, *, limit: int) -> dict[int, dict[str, Any]]:
             continue
         item = candidates.setdefault(
             user_id,
-            {
-                "user_id": user_id,
-                "event_names": [],
-                "first_name": None,
-                "username": None,
-                "source": "organic",
-                "campaign": "",
-                "creative": "",
-                "first_activity_at": payment.get("paid_at") or _iso(),
-                "last_activity_at": payment.get("paid_at") or _iso(),
-                "revenue_minor": 0,
-                "currency": "RUB",
-            },
+            _new_candidate(user_id, payment.get("paid_at")),
         )
         item["event_names"].append("payment_success")
-        item["revenue_minor"] = max(0, int(payment.get("revenue_minor") or 0))
-        item["currency"] = str(payment.get("currency") or "RUB")[:12]
+        item["revenue_minor"] = max(
+            0,
+            int(payment.get("revenue_minor") or 0),
+        )
+        item["currency"] = _clean_text(
+            payment.get("currency"),
+            limit=12,
+            fallback="RUB",
+        )
         if payment.get("paid_at"):
             item["last_activity_at"] = max(
                 str(item.get("last_activity_at") or ""),
                 str(payment.get("paid_at") or ""),
             )
     return candidates
+
+
+def _candidate_projection(
+    existing: dict[str, Any],
+    candidate: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    incoming_stage = stage_from_event_names(candidate["event_names"])
+    current_stage = normalize_stage(str(existing.get("stage") or "new"))
+    auto_promoted = should_auto_advance(
+        current_stage,
+        incoming_stage,
+        stage_source=str(existing.get("stage_source") or "auto"),
+    )
+    target_stage = incoming_stage if auto_promoted else current_stage
+    target_stage_source = (
+        "auto" if auto_promoted else str(existing.get("stage_source") or "auto")
+    )
+
+    incoming_revenue = max(0, int(candidate.get("revenue_minor") or 0))
+    existing_revenue = max(0, int(existing.get("revenue_minor") or 0))
+    revenue_minor = max(existing_revenue, incoming_revenue)
+    currency = (
+        _clean_text(candidate.get("currency"), limit=12, fallback="RUB")
+        if incoming_revenue >= existing_revenue
+        else _clean_text(existing.get("currency"), limit=12, fallback="RUB")
+    )
+
+    projection = {
+        "display_name": compact_display_name(
+            first_name=candidate.get("first_name"),
+            username=candidate.get("username"),
+            user_id=candidate.get("user_id"),
+        ),
+        "username": _clean_text(
+            candidate.get("username"),
+            limit=100,
+            fallback=_clean_text(existing.get("username"), limit=100),
+        ),
+        "source": _clean_text(
+            candidate.get("source"),
+            limit=100,
+            fallback=_clean_text(existing.get("source"), limit=100, fallback="organic"),
+        ),
+        "campaign": _clean_text(
+            candidate.get("campaign"),
+            limit=160,
+            fallback=_clean_text(existing.get("campaign"), limit=160),
+        ),
+        "creative": _clean_text(
+            candidate.get("creative"),
+            limit=160,
+            fallback=_clean_text(existing.get("creative"), limit=160),
+        ),
+        "stage": target_stage,
+        "stage_source": target_stage_source,
+        "last_activity_at": max(
+            str(existing.get("last_activity_at") or ""),
+            str(candidate.get("last_activity_at") or ""),
+        )
+        or None,
+        "revenue_minor": revenue_minor,
+        "currency": currency or "RUB",
+    }
+    return projection, auto_promoted
+
+
+def _projection_changed(
+    existing: dict[str, Any],
+    projection: dict[str, Any],
+) -> bool:
+    for key, value in projection.items():
+        current = existing.get(key)
+        if key == "revenue_minor":
+            if int(current or 0) != int(value or 0):
+                return True
+            continue
+        if (current or None) != (value or None):
+            return True
+    return False
+
+
+def _insert_candidate(conn: Any, candidate: dict[str, Any]) -> dict[str, Any]:
+    user_id = int(candidate["user_id"])
+    created_at = str(candidate.get("first_activity_at") or _iso())
+    stage = stage_from_event_names(candidate["event_names"])
+    conn.execute(
+        """
+        INSERT INTO sales_leads(
+            lead_key, user_id, display_name, username, source, campaign,
+            creative, stage, stage_source, last_activity_at,
+            revenue_minor, currency, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """.strip(),
+        (
+            lead_key(user_id),
+            user_id,
+            compact_display_name(
+                first_name=candidate.get("first_name"),
+                username=candidate.get("username"),
+                user_id=user_id,
+            ),
+            _clean_text(candidate.get("username"), limit=100),
+            _clean_text(
+                candidate.get("source"),
+                limit=100,
+                fallback="organic",
+            ),
+            _clean_text(candidate.get("campaign"), limit=160),
+            _clean_text(candidate.get("creative"), limit=160),
+            stage,
+            "auto",
+            str(candidate.get("last_activity_at") or created_at),
+            max(0, int(candidate.get("revenue_minor") or 0)),
+            _clean_text(candidate.get("currency"), limit=12, fallback="RUB"),
+            created_at,
+            _iso(),
+        ),
+    )
+    created = _rowdict(
+        conn.execute(
+            "SELECT * FROM sales_leads WHERE lead_key=? LIMIT 1",
+            (lead_key(user_id),),
+        ).fetchone()
+    )
+    if not created:
+        raise RuntimeError("sales_lead_insert_failed")
+    _audit(
+        conn,
+        lead_id=int(created["id"]),
+        event_type="lead_discovered",
+        actor_id=0,
+        before=None,
+        after=_snapshot(created),
+        details={"events": sorted(set(candidate["event_names"]))},
+    )
+    return created
 
 
 def sync_sales_leads(*, limit: int = 5000) -> dict[str, int]:
@@ -294,95 +482,53 @@ def sync_sales_leads(*, limit: int = 5000) -> dict[str, int]:
             for user_id, candidate in candidates.items():
                 key = lead_key(user_id)
                 existing = _rowdict(
-                    conn.execute("SELECT * FROM sales_leads WHERE lead_key=? LIMIT 1", (key,)).fetchone()
-                )
-                incoming_stage = stage_from_event_names(candidate["event_names"])
-                display_name = compact_display_name(
-                    first_name=candidate.get("first_name"),
-                    username=candidate.get("username"),
-                    user_id=user_id,
+                    conn.execute(
+                        "SELECT * FROM sales_leads WHERE lead_key=? LIMIT 1",
+                        (key,),
+                    ).fetchone()
                 )
                 if not existing:
-                    created_at = str(candidate.get("first_activity_at") or _iso())
-                    conn.execute(
-                        """
-                        INSERT INTO sales_leads(
-                            lead_key, user_id, display_name, username, source, campaign, creative,
-                            stage, stage_source, last_activity_at, revenue_minor, currency,
-                            created_at, updated_at
-                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                        """.strip(),
-                        (
-                            key,
-                            user_id,
-                            display_name,
-                            str(candidate.get("username") or "")[:100] or None,
-                            str(candidate.get("source") or "organic")[:100],
-                            str(candidate.get("campaign") or "")[:160] or None,
-                            str(candidate.get("creative") or "")[:160] or None,
-                            incoming_stage,
-                            "auto",
-                            str(candidate.get("last_activity_at") or created_at),
-                            max(0, int(candidate.get("revenue_minor") or 0)),
-                            str(candidate.get("currency") or "RUB")[:12],
-                            created_at,
-                            _iso(),
-                        ),
-                    )
-                    created = _rowdict(
-                        conn.execute("SELECT * FROM sales_leads WHERE lead_key=? LIMIT 1", (key,)).fetchone()
-                    )
-                    _audit(
-                        conn,
-                        lead_id=int(created["id"]),
-                        event_type="lead_discovered",
-                        actor_id=0,
-                        before=None,
-                        after=_snapshot(created),
-                        details={"events": sorted(set(candidate["event_names"]))},
-                    )
+                    _insert_candidate(conn, candidate)
                     inserted += 1
                     continue
 
+                projection, auto_promoted = _candidate_projection(existing, candidate)
+                if not _projection_changed(existing, projection):
+                    continue
+
                 before = _snapshot(existing)
-                target_stage = str(existing.get("stage") or "new")
-                auto_promoted = should_auto_advance(
-                    target_stage,
-                    incoming_stage,
-                    stage_source=str(existing.get("stage_source") or "auto"),
-                )
-                if auto_promoted:
-                    target_stage = incoming_stage
                 conn.execute(
                     """
                     UPDATE sales_leads
-                    SET display_name=?, username=?, source=?, campaign=?, creative=?,
-                        stage=?, stage_source=?, last_activity_at=?, revenue_minor=?, currency=?,
-                        updated_at=?, version=version+1
-                    WHERE id=?
+                    SET display_name=?, username=?, source=?, campaign=?,
+                        creative=?, stage=?, stage_source=?, last_activity_at=?,
+                        revenue_minor=?, currency=?, updated_at=?, version=version+1
+                    WHERE id=? AND version=?
                     """.strip(),
                     (
-                        display_name,
-                        str(candidate.get("username") or existing.get("username") or "")[:100] or None,
-                        str(candidate.get("source") or existing.get("source") or "organic")[:100],
-                        str(candidate.get("campaign") or existing.get("campaign") or "")[:160] or None,
-                        str(candidate.get("creative") or existing.get("creative") or "")[:160] or None,
-                        target_stage,
-                        "auto" if auto_promoted else str(existing.get("stage_source") or "auto"),
-                        max(
-                            str(existing.get("last_activity_at") or ""),
-                            str(candidate.get("last_activity_at") or ""),
-                        ) or None,
-                        max(
-                            int(existing.get("revenue_minor") or 0),
-                            int(candidate.get("revenue_minor") or 0),
-                        ),
-                        str(candidate.get("currency") or existing.get("currency") or "RUB")[:12],
+                        projection["display_name"],
+                        projection["username"],
+                        projection["source"],
+                        projection["campaign"],
+                        projection["creative"],
+                        projection["stage"],
+                        projection["stage_source"],
+                        projection["last_activity_at"],
+                        projection["revenue_minor"],
+                        projection["currency"],
                         _iso(),
                         int(existing["id"]),
+                        int(existing.get("version") or 1),
                     ),
                 )
-                after = _rowdict(conn.execute("SELECT * FROM sales_leads WHERE id=?", (int(existing["id"]),)).fetchone())
+                if _changed_count(conn) != 1:
+                    log.info(
+                        "Sales lead sync skipped concurrent update: lead_id=%s",
+                        existing.get("id"),
+                    )
+                    continue
+
+                after = _fetch_lead(conn, int(existing["id"]))
                 if auto_promoted:
                     _audit(
                         conn,
@@ -391,24 +537,53 @@ def sync_sales_leads(*, limit: int = 5000) -> dict[str, int]:
                         actor_id=0,
                         before=before,
                         after=_snapshot(after),
-                        details={"incoming_stage": incoming_stage},
+                        details={"incoming_stage": projection["stage"]},
                     )
                     promoted += 1
                 updated += 1
     return {"inserted": inserted, "updated": updated, "promoted": promoted}
 
 
-def _filter_sql(filter_name: str, *, admin_id: int | None) -> tuple[str, tuple[Any, ...]]:
+def _sync_if_due() -> None:
+    global _LAST_SYNC_MONOTONIC
+
+    now = time.monotonic()
+    if now - _LAST_SYNC_MONOTONIC < _SYNC_INTERVAL_SECONDS:
+        return
+    if not _SYNC_LOCK.acquire(blocking=False):
+        return
+    try:
+        now = time.monotonic()
+        if now - _LAST_SYNC_MONOTONIC < _SYNC_INTERVAL_SECONDS:
+            return
+        sync_sales_leads()
+        _LAST_SYNC_MONOTONIC = time.monotonic()
+    finally:
+        _SYNC_LOCK.release()
+
+
+def _filter_sql(
+    filter_name: str,
+    *,
+    admin_id: int | None,
+) -> tuple[str, tuple[Any, ...]]:
     selected = normalize_filter(filter_name)
     if selected in SALES_STAGES:
         return "stage=?", (selected,)
     if selected == "overdue":
-        return "stage IN ('new','contacted','qualified','checkout') AND next_contact_at IS NOT NULL AND next_contact_at < ?", (_iso(),)
+        return (
+            f"stage IN ({_OPEN_STAGE_SQL}) "
+            "AND next_contact_at IS NOT NULL AND next_contact_at < ?",
+            (_iso(),),
+        )
     if selected == "mine":
-        return "assigned_to=? AND stage IN ('new','contacted','qualified','checkout')", (int(admin_id or 0),)
+        return (
+            f"assigned_to=? AND stage IN ({_OPEN_STAGE_SQL})",
+            (int(admin_id or 0),),
+        )
     if selected == "unassigned":
-        return "assigned_to IS NULL AND stage IN ('new','contacted','qualified','checkout')", ()
-    return "stage IN ('new','contacted','qualified','checkout')", ()
+        return f"assigned_to IS NULL AND stage IN ({_OPEN_STAGE_SQL})", ()
+    return f"stage IN ({_OPEN_STAGE_SQL})", ()
 
 
 def sales_desk_snapshot(
@@ -420,11 +595,19 @@ def sales_desk_snapshot(
 ) -> dict[str, Any]:
     if sync:
         try:
-            sync_sales_leads()
+            _sync_if_due()
         except SalesDeskUnavailable:
             raise
-        except (sqlite3.Error, OSError, RuntimeError, TypeError, ValueError):
-            log.warning("Sales Desk source sync degraded", exc_info=True)
+        except sqlite3.Error:
+            log.warning("Sales Desk source sync database failure", exc_info=True)
+        except OSError:
+            log.warning("Sales Desk source sync operating failure", exc_info=True)
+        except RuntimeError:
+            log.warning("Sales Desk source sync runtime failure", exc_info=True)
+        except TypeError:
+            log.warning("Sales Desk source sync type failure", exc_info=True)
+        except ValueError:
+            log.warning("Sales Desk source sync value failure", exc_info=True)
 
     selected = normalize_filter(filter_name)
     where, params = _filter_sql(selected, admin_id=admin_id)
@@ -434,11 +617,19 @@ def sales_desk_snapshot(
             conn.execute(
                 f"""
                 SELECT l.*,
-                       (SELECT COUNT(*) FROM sales_lead_notes n WHERE n.lead_id=l.id) AS note_count
+                       (
+                           SELECT COUNT(*)
+                           FROM sales_lead_notes n
+                           WHERE n.lead_id=l.id
+                       ) AS note_count
                 FROM sales_leads l
                 WHERE {where}
                 ORDER BY
-                    CASE WHEN next_contact_at IS NOT NULL AND next_contact_at < ? THEN 0 ELSE 1 END,
+                    CASE
+                        WHEN next_contact_at IS NOT NULL
+                         AND next_contact_at < ? THEN 0
+                        ELSE 1
+                    END,
                     CASE stage
                         WHEN 'checkout' THEN 0
                         WHEN 'qualified' THEN 1
@@ -454,22 +645,44 @@ def sales_desk_snapshot(
                 (*params, _iso(), max(1, min(int(limit), 50))),
             ).fetchall()
         )
-        count_rows = _rows(conn.execute("SELECT stage, COUNT(*) AS n FROM sales_leads GROUP BY stage").fetchall())
+        count_rows = _rows(
+            conn.execute(
+                "SELECT stage, COUNT(*) AS n FROM sales_leads GROUP BY stage"
+            ).fetchall()
+        )
         operational = _rowdict(
             conn.execute(
-                """
+                f"""
                 SELECT
-                    SUM(CASE WHEN assigned_to IS NULL AND stage IN ('new','contacted','qualified','checkout') THEN 1 ELSE 0 END) AS unassigned,
-                    SUM(CASE WHEN next_contact_at IS NOT NULL AND next_contact_at < ? AND stage IN ('new','contacted','qualified','checkout') THEN 1 ELSE 0 END) AS overdue,
-                    SUM(CASE WHEN stage='won' THEN revenue_minor ELSE 0 END) AS won_revenue_minor
+                    SUM(
+                        CASE
+                            WHEN assigned_to IS NULL
+                             AND stage IN ({_OPEN_STAGE_SQL}) THEN 1
+                            ELSE 0
+                        END
+                    ) AS unassigned,
+                    SUM(
+                        CASE
+                            WHEN next_contact_at IS NOT NULL
+                             AND next_contact_at < ?
+                             AND stage IN ({_OPEN_STAGE_SQL}) THEN 1
+                            ELSE 0
+                        END
+                    ) AS overdue,
+                    SUM(
+                        CASE WHEN stage='won' THEN revenue_minor ELSE 0 END
+                    ) AS won_revenue_minor
                 FROM sales_leads
                 """.strip(),
                 (_iso(),),
             ).fetchone()
         )
+
     counts = {stage: 0 for stage in SALES_STAGES}
     for row in count_rows:
-        counts[normalize_stage(str(row.get("stage") or "new"))] = int(row.get("n") or 0)
+        counts[normalize_stage(str(row.get("stage") or "new"))] = int(
+            row.get("n") or 0
+        )
     return {
         "ok": True,
         "filter": selected,
@@ -484,25 +697,37 @@ def sales_desk_snapshot(
 def get_lead(lead_id: int) -> dict[str, Any]:
     with db() as conn:
         ensure_schema(conn)
-        lead = _rowdict(conn.execute("SELECT * FROM sales_leads WHERE id=? LIMIT 1", (int(lead_id),)).fetchone())
+        lead = _fetch_lead(conn, int(lead_id))
         if not lead:
             raise ValueError("sales_lead_not_found")
         lead["notes"] = _rows(
             conn.execute(
-                "SELECT id, author_id, note_text, created_at FROM sales_lead_notes WHERE lead_id=? ORDER BY id DESC LIMIT 5",
+                """
+                SELECT id, author_id, note_text, created_at
+                FROM sales_lead_notes
+                WHERE lead_id=?
+                ORDER BY id DESC
+                LIMIT 5
+                """.strip(),
                 (int(lead_id),),
             ).fetchall()
         )
         lead["audit"] = _rows(
             conn.execute(
-                "SELECT id, event_type, actor_id, details_json, created_at FROM sales_lead_audit WHERE lead_id=? ORDER BY id DESC LIMIT 10",
+                """
+                SELECT id, event_type, actor_id, details_json, created_at
+                FROM sales_lead_audit
+                WHERE lead_id=?
+                ORDER BY id DESC
+                LIMIT 10
+                """.strip(),
                 (int(lead_id),),
             ).fetchall()
         )
     return lead
 
 
-def _owned_or_claimed(
+def _claim_for_action(
     conn: Any,
     lead: dict[str, Any],
     *,
@@ -512,36 +737,71 @@ def _owned_or_claimed(
     owner = lead.get("assigned_to")
     if owner is not None and int(owner) != int(actor_id) and not force:
         raise PermissionError("sales_lead_owned_by_another_admin")
-    if owner is None or (force and int(owner or 0) != int(actor_id)):
-        conn.execute(
-            "UPDATE sales_leads SET assigned_to=?, updated_at=?, version=version+1 WHERE id=?",
-            (int(actor_id), _iso(), int(lead["id"])),
-        )
-        lead = _rowdict(conn.execute("SELECT * FROM sales_leads WHERE id=?", (int(lead["id"]),)).fetchone())
-    return lead
+    if owner is not None and int(owner) == int(actor_id):
+        return lead
+
+    before = _snapshot(lead)
+    conn.execute(
+        """
+        UPDATE sales_leads
+        SET assigned_to=?, updated_at=?, version=version+1
+        WHERE id=? AND version=?
+        """.strip(),
+        (
+            int(actor_id),
+            _iso(),
+            int(lead["id"]),
+            int(lead.get("version") or 1),
+        ),
+    )
+    if _changed_count(conn) != 1:
+        current = _fetch_lead(conn, int(lead["id"]))
+        current_owner = current.get("assigned_to")
+        if current_owner is not None and int(current_owner) != int(actor_id):
+            raise PermissionError("sales_lead_owned_by_another_admin")
+        raise RuntimeError("sales_lead_concurrent_update")
+
+    changed = _fetch_lead(conn, int(lead["id"]))
+    _audit(
+        conn,
+        lead_id=int(lead["id"]),
+        event_type="lead_assigned",
+        actor_id=int(actor_id),
+        before=before,
+        after=_snapshot(changed),
+        details={"force": bool(force), "previous_owner": owner},
+    )
+    return changed
 
 
 def claim_lead(*, lead_id: int, actor_id: int, force: bool = False) -> dict[str, Any]:
     with db() as conn:
         ensure_schema(conn)
         with tx(conn):
-            lead = _rowdict(conn.execute("SELECT * FROM sales_leads WHERE id=? LIMIT 1", (int(lead_id),)).fetchone())
+            lead = _fetch_lead(conn, int(lead_id))
             if not lead:
                 raise ValueError("sales_lead_not_found")
-            before = _snapshot(lead)
-            lead = _owned_or_claimed(conn, lead, actor_id=int(actor_id), force=bool(force))
-            after = _snapshot(lead)
-            if before != after:
-                _audit(
-                    conn,
-                    lead_id=int(lead_id),
-                    event_type="lead_assigned",
-                    actor_id=int(actor_id),
-                    before=before,
-                    after=after,
-                    details={"force": bool(force)},
-                )
+            _claim_for_action(
+                conn,
+                lead,
+                actor_id=int(actor_id),
+                force=bool(force),
+            )
     return get_lead(int(lead_id))
+
+
+def _versioned_update(
+    conn: Any,
+    *,
+    lead_id: int,
+    version: int,
+    sql: str,
+    params: tuple[Any, ...],
+) -> dict[str, Any]:
+    conn.execute(sql, (*params, int(lead_id), int(version)))
+    if _changed_count(conn) != 1:
+        raise RuntimeError("sales_lead_concurrent_update")
+    return _fetch_lead(conn, int(lead_id))
 
 
 def set_lead_stage(
@@ -556,28 +816,51 @@ def set_lead_stage(
     with db() as conn:
         ensure_schema(conn)
         with tx(conn):
-            lead = _rowdict(conn.execute("SELECT * FROM sales_leads WHERE id=? LIMIT 1", (int(lead_id),)).fetchone())
+            lead = _fetch_lead(conn, int(lead_id))
             if not lead:
                 raise ValueError("sales_lead_not_found")
-            lead = _owned_or_claimed(conn, lead, actor_id=int(actor_id), force=bool(force_owner))
+            lead = _claim_for_action(
+                conn,
+                lead,
+                actor_id=int(actor_id),
+                force=bool(force_owner),
+            )
             current = normalize_stage(str(lead.get("stage") or "new"))
             if current == target:
-                return lead
+                return get_lead(int(lead_id))
             assert_transition(current, target)
+
             before = _snapshot(lead)
             now = _iso()
-            conn.execute(
-                """
-                UPDATE sales_leads
-                SET stage=?, stage_source='manual', last_contact_at=?,
-                    next_contact_at=CASE WHEN ? IN ('won','lost') THEN NULL ELSE next_contact_at END,
-                    closed_reason=CASE WHEN ?='lost' THEN ? WHEN ?='won' THEN NULL ELSE closed_reason END,
-                    updated_at=?, version=version+1
-                WHERE id=?
+            changed = _versioned_update(
+                conn,
+                lead_id=int(lead_id),
+                version=int(lead.get("version") or 1),
+                sql="""
+                    UPDATE sales_leads
+                    SET stage=?, stage_source='manual', last_contact_at=?,
+                        next_contact_at=CASE
+                            WHEN ? IN ('won','lost') THEN NULL
+                            ELSE next_contact_at
+                        END,
+                        closed_reason=CASE
+                            WHEN ?='lost' THEN ?
+                            WHEN ?='won' THEN NULL
+                            ELSE closed_reason
+                        END,
+                        updated_at=?, version=version+1
+                    WHERE id=? AND version=?
                 """.strip(),
-                (target, now, target, target, str(reason or "")[:500] or None, target, now, int(lead_id)),
+                params=(
+                    target,
+                    now,
+                    target,
+                    target,
+                    _clean_text(reason, limit=500),
+                    target,
+                    now,
+                ),
             )
-            changed = _rowdict(conn.execute("SELECT * FROM sales_leads WHERE id=?", (int(lead_id),)).fetchone())
             _audit(
                 conn,
                 lead_id=int(lead_id),
@@ -585,7 +868,11 @@ def set_lead_stage(
                 actor_id=int(actor_id),
                 before=before,
                 after=_snapshot(changed),
-                details={"from": current, "to": target, "reason": str(reason or "")[:500]},
+                details={
+                    "from": current,
+                    "to": target,
+                    "reason": _clean_text(reason, limit=500),
+                },
             )
     return get_lead(int(lead_id))
 
@@ -599,20 +886,42 @@ def set_next_contact(
 ) -> dict[str, Any]:
     if days is not None and int(days) not in {1, 3, 7}:
         raise ValueError("invalid_sales_follow_up_days")
+
     with db() as conn:
         ensure_schema(conn)
         with tx(conn):
-            lead = _rowdict(conn.execute("SELECT * FROM sales_leads WHERE id=? LIMIT 1", (int(lead_id),)).fetchone())
+            lead = _fetch_lead(conn, int(lead_id))
             if not lead:
                 raise ValueError("sales_lead_not_found")
-            lead = _owned_or_claimed(conn, lead, actor_id=int(actor_id), force=bool(force_owner))
-            before = _snapshot(lead)
-            target = None if days is None else _iso(_utc_now() + timedelta(days=int(days)))
-            conn.execute(
-                "UPDATE sales_leads SET next_contact_at=?, updated_at=?, version=version+1 WHERE id=?",
-                (target, _iso(), int(lead_id)),
+            lead = _claim_for_action(
+                conn,
+                lead,
+                actor_id=int(actor_id),
+                force=bool(force_owner),
             )
-            changed = _rowdict(conn.execute("SELECT * FROM sales_leads WHERE id=?", (int(lead_id),)).fetchone())
+            if normalize_stage(str(lead.get("stage") or "new")) in {"won", "lost"}:
+                raise ValueError("sales_follow_up_closed_lead")
+
+            target = (
+                None
+                if days is None
+                else _iso(_utc_now() + timedelta(days=int(days)))
+            )
+            if (lead.get("next_contact_at") or None) == target:
+                return get_lead(int(lead_id))
+
+            before = _snapshot(lead)
+            changed = _versioned_update(
+                conn,
+                lead_id=int(lead_id),
+                version=int(lead.get("version") or 1),
+                sql="""
+                    UPDATE sales_leads
+                    SET next_contact_at=?, updated_at=?, version=version+1
+                    WHERE id=? AND version=?
+                """.strip(),
+                params=(target, _iso()),
+            )
             _audit(
                 conn,
                 lead_id=int(lead_id),
@@ -636,20 +945,36 @@ def add_note(
     with db() as conn:
         ensure_schema(conn)
         with tx(conn):
-            lead = _rowdict(conn.execute("SELECT * FROM sales_leads WHERE id=? LIMIT 1", (int(lead_id),)).fetchone())
+            lead = _fetch_lead(conn, int(lead_id))
             if not lead:
                 raise ValueError("sales_lead_not_found")
-            lead = _owned_or_claimed(conn, lead, actor_id=int(actor_id), force=bool(force_owner))
+            lead = _claim_for_action(
+                conn,
+                lead,
+                actor_id=int(actor_id),
+                force=bool(force_owner),
+            )
             before = _snapshot(lead)
+            now = _iso()
             conn.execute(
-                "INSERT INTO sales_lead_notes(lead_id, author_id, note_text, created_at) VALUES(?,?,?,?)",
-                (int(lead_id), int(actor_id), note, _iso()),
+                """
+                INSERT INTO sales_lead_notes(
+                    lead_id, author_id, note_text, created_at
+                ) VALUES(?,?,?,?)
+                """.strip(),
+                (int(lead_id), int(actor_id), note, now),
             )
-            conn.execute(
-                "UPDATE sales_leads SET last_contact_at=?, updated_at=?, version=version+1 WHERE id=?",
-                (_iso(), _iso(), int(lead_id)),
+            changed = _versioned_update(
+                conn,
+                lead_id=int(lead_id),
+                version=int(lead.get("version") or 1),
+                sql="""
+                    UPDATE sales_leads
+                    SET last_contact_at=?, updated_at=?, version=version+1
+                    WHERE id=? AND version=?
+                """.strip(),
+                params=(now, now),
             )
-            changed = _rowdict(conn.execute("SELECT * FROM sales_leads WHERE id=?", (int(lead_id),)).fetchone())
             _audit(
                 conn,
                 lead_id=int(lead_id),
@@ -668,9 +993,10 @@ def stage_title(stage: str | None) -> str:
 
 def format_money(amount_minor: int, currency: str = "RUB") -> str:
     amount = max(0, int(amount_minor or 0))
-    if str(currency or "RUB").upper() == "RUB":
+    normalized_currency = str(currency or "RUB").upper()
+    if normalized_currency == "RUB":
         return f"{amount / 100:.2f} ₽"
-    return f"{amount / 100:.2f} {str(currency or '').upper()}".strip()
+    return f"{amount / 100:.2f} {normalized_currency}".strip()
 
 
 def format_sales_overview(snapshot: dict[str, Any]) -> str:
@@ -690,7 +1016,8 @@ def format_sales_overview(snapshot: dict[str, Any]) -> str:
             "",
             f"Без ответственного: {int(snapshot.get('unassigned') or 0)}",
             f"Просрочен следующий контакт: {int(snapshot.get('overdue') or 0)}",
-            f"Выручка выигранных лидов: {format_money(int(snapshot.get('won_revenue_minor') or 0))}",
+            "Выручка выигранных лидов: "
+            f"{format_money(int(snapshot.get('won_revenue_minor') or 0))}",
         ]
     )
 
@@ -707,7 +1034,8 @@ def format_lead_card(lead: dict[str, Any]) -> str:
         f"Источник: {str(lead.get('source') or 'organic')}",
         f"Кампания: {str(lead.get('campaign') or '—')}",
         f"Креатив: {str(lead.get('creative') or '—')}",
-        f"Выручка: {format_money(int(lead.get('revenue_minor') or 0), str(lead.get('currency') or 'RUB'))}",
+        "Выручка: "
+        f"{format_money(int(lead.get('revenue_minor') or 0), str(lead.get('currency') or 'RUB'))}",
         f"Последняя активность: {str(lead.get('last_activity_at') or '—')}",
         f"Следующий контакт: {str(lead.get('next_contact_at') or 'не назначен')}",
     ]
@@ -716,7 +1044,8 @@ def format_lead_card(lead: dict[str, Any]) -> str:
         lines.extend(["", "Последние заметки:"])
         for note in notes[:3]:
             lines.append(
-                f"• {str(note.get('note_text') or '')[:180]} — admin {note.get('author_id')}"
+                f"• {str(note.get('note_text') or '')[:180]} "
+                f"— admin {note.get('author_id')}"
             )
     return "\n".join(lines)
 
@@ -729,6 +1058,8 @@ def format_lead_history(lead: dict[str, Any]) -> str:
         return "\n".join(lines)
     for event in audit[:10]:
         lines.append(
-            f"• {str(event.get('created_at') or '—')} · {str(event.get('event_type') or 'event')} · actor {event.get('actor_id')}"
+            f"• {str(event.get('created_at') or '—')} · "
+            f"{str(event.get('event_type') or 'event')} · "
+            f"actor {event.get('actor_id')}"
         )
     return "\n".join(lines)
