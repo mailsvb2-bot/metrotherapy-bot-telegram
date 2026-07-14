@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from handlers import payments as payment_handler
 from services.db import db
 from services.gift_claims import claim_gift_token, create_gift_checkout_token
 from services.payments import telegram_stars
@@ -44,6 +45,11 @@ def test_stars_payload_is_user_bound_and_amount_checked() -> None:
         currency="XTR",
         total_amount=1,
     )
+
+
+def test_stars_price_can_be_changed_without_changing_ruble_price(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_STARS_PRICE_PRACTICE_START_7", "1777")
+    assert telegram_stars_price("practice_start_7") == 1777
 
 
 def test_successful_stars_payment_grants_once_and_records_charge(monkeypatch) -> None:
@@ -148,3 +154,30 @@ async def test_invoice_uses_xtr_and_empty_provider_token(monkeypatch) -> None:
     assert len(captured["prices"]) == 1
     assert captured["prices"][0].amount == telegram_stars_price("practice_start_7")
     assert parse_stars_payload(captured["payload"]).buyer_user_id == 781031
+
+
+@pytest.mark.asyncio
+async def test_non_xtr_pre_checkout_stays_on_legacy_path(monkeypatch) -> None:
+    calls = []
+
+    async def fake_legacy(pre):
+        calls.append(pre)
+
+    monkeypatch.setattr(payment_handler, "legacy_pre_checkout", fake_legacy)
+    pre = SimpleNamespace(currency="RUB")
+    await payment_handler._pre_checkout(pre)  # noqa: SLF001
+    assert calls == [pre]
+
+
+@pytest.mark.asyncio
+async def test_non_xtr_successful_payment_stays_on_legacy_path(monkeypatch) -> None:
+    calls = []
+
+    async def fake_legacy(message):
+        calls.append(message)
+
+    monkeypatch.setattr(payment_handler, "legacy_successful_payment", fake_legacy)
+    payment = SimpleNamespace(currency="RUB")
+    message = SimpleNamespace(successful_payment=payment)
+    await payment_handler._successful_payment(message)  # noqa: SLF001
+    assert calls == [message]
