@@ -23,6 +23,7 @@ from handlers.admin_reports import (
     messenger_overview,
     payment_problems,
     money_clients,
+    sales_desk,
     system_checks,
 )
 
@@ -46,6 +47,7 @@ _HANDLERS = {
     "admin:funnel2": funnel2.run,
     "admin:giftshare": giftshare.run,
     "admin:growth:autopilot": _run_growth_autopilot,
+    "admin:sales": sales_desk.run,
     "admin:segments": segments.run,
     "admin:behavior": behavior.run,
     "admin:retention": retention.run,
@@ -68,6 +70,8 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
         return await ad_links.run(cb, state, ctx, log)
     if data.startswith("admin:growth:autopilot:"):
         return await _run_growth_autopilot(cb, state, ctx, log)
+    if data.startswith("admin:sales:"):
+        return await sales_desk.run(cb, state, ctx, log)
     fn = _HANDLERS.get(data)
     if not fn:
         return False
