@@ -16,7 +16,7 @@ from services.payments.checkout_intent import (
 from services.payments.terms import payment_terms_html
 from services.payments.verified_reconciliation import record_verified_yookassa_webhook
 from services.payments.yookassa_checkout import YooKassaCheckoutError, create_yookassa_confirmation_url
-from services.practice_token_contract import package_by_id, telegram_yookassa_enabled
+from services.practice_token_contract import package_by_id
 
 log = logging.getLogger(__name__)
 
@@ -163,6 +163,9 @@ def _checkout_intent_error_response(
     user_id: str,
     package_id: str,
     kind: str,
+    source: str,
+    amount_minor: int,
+    currency: str,
     gift_token: str,
 ) -> web.Response | None:
     if not (checkout_intent_required() or str(intent or "").strip()):
@@ -173,6 +176,9 @@ def _checkout_intent_error_response(
             expected_user_id=user_id,
             expected_package_id=package_id,
             expected_kind=kind,
+            expected_source=source,
+            expected_amount_minor=amount_minor,
+            expected_currency=currency,
             expected_gift_token=gift_token or None,
         )
     except CheckoutIntentError as exc:
@@ -193,10 +199,10 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
     intent = (request.query.get("intent") or "").strip()
     kind = _normalize_payment_kind(request.query.get("kind"), package_id)
 
-    if source.casefold() == "telegram" and kind in _TOKEN_PAYMENT_KINDS and not telegram_yookassa_enabled():
+    if source.casefold() == "telegram" and kind in _TOKEN_PAYMENT_KINDS:
         return web.Response(
             status=410,
-            text="Оплата через YooKassa для Telegram временно отключена.",
+            text="Цифровые пакеты в Telegram оплачиваются только Telegram Stars.",
             content_type="text/plain",
         )
 
@@ -211,11 +217,17 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
         package_error = _package_error_response(package_id)
         if package_error is not None:
             return package_error
+        package = package_by_id(package_id)
+        amount_minor = int(package.price_rub) * 100
+        currency = "RUB"
         intent_error = _checkout_intent_error_response(
             intent=intent,
             user_id=user_id,
             package_id=package_id,
             kind=kind,
+            source=source,
+            amount_minor=amount_minor,
+            currency=currency,
             gift_token=gift_token,
         )
         if intent_error is not None:

@@ -9,6 +9,7 @@ from typing import Any
 from config.settings import settings
 from runtime import messenger_max_ui as max_ui
 from runtime.messenger_payloads import normalise_messenger_text
+from services.accounts.identity import resolve_account_for_identity
 from services.messenger.audio_progress import AudioProgressItem, get_progress_snapshot
 from services.messenger.reply_dispatcher import send_reply_bundle
 from services.messenger.text_ui import MessengerReply
@@ -128,16 +129,19 @@ def test_max_full_user_journey_score_audio_done_repeat_pay_gift(monkeypatch, tmp
     monkeypatch.setattr("services.messenger.reply_dispatcher.MaxBotSender", lambda: sender)
     monkeypatch.setattr("services.messenger.reply_dispatcher.build_vk_mood_progress_chart_path", lambda uid: None)
 
+    asyncio.run(_dispatch_max(user_id, "start"))
+    canonical_user_id = resolve_account_for_identity(
+        "max", str(user_id), allow_create=False
+    )
+    assert canonical_user_id is not None
     grant_tokens(
-        user_id,
+        canonical_user_id,
         package_id="practice_start_7",
         amount=3,
         provider="test",
         provider_payment_id=f"max-e2e-{user_id}",
         idempotency_key=f"grant:test:max-e2e:{user_id}",
     )
-
-    asyncio.run(_dispatch_max(user_id, "start"))
     assert "Главное меню" in sender.text_calls[-1][1]
     assert _button_commands(_attachments(sender)[0])
 
@@ -155,10 +159,10 @@ def test_max_full_user_journey_score_audio_done_repeat_pay_gift(monkeypatch, tmp
     assert "Ваш аудиотранс" in (caption or "")
     post_audio_attachment = _attachments(sender)[0]
     assert "done" in _button_commands(post_audio_attachment)
-    snapshot = get_progress_snapshot(user_id)
+    snapshot = get_progress_snapshot(canonical_user_id)
     assert snapshot.pending_item is not None
     assert snapshot.pending_item.anchor == 1
-    assert get_wallet(user_id).used_tokens == 1
+    assert get_wallet(canonical_user_id).used_tokens == 1
 
     asyncio.run(_dispatch_max(user_id, "done"))
     post_score_attachment = _attachments(sender)[0]
@@ -170,10 +174,10 @@ def test_max_full_user_journey_score_audio_done_repeat_pay_gift(monkeypatch, tmp
     assert "Оценку после прослушивания +3 сохранил" in joined_texts
 
     audio_count_before_repeat = len(sender.audio_calls)
-    wallet_before_repeat = get_wallet(user_id)
+    wallet_before_repeat = get_wallet(canonical_user_id)
     asyncio.run(_dispatch_max(user_id, "repeat"))
     assert len(sender.audio_calls) == audio_count_before_repeat + 1
-    assert get_wallet(user_id) == wallet_before_repeat
+    assert get_wallet(canonical_user_id) == wallet_before_repeat
     repeat_text = sender.text_calls[-1][1]
     assert "Повторно отправил аудио" in repeat_text
     assert "done" in _button_commands(_attachments(sender)[0])

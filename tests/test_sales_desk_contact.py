@@ -6,12 +6,14 @@ from contextlib import contextmanager
 import pytest
 
 from services.migrations.sales_desk_v5 import apply as apply_sales_desk_migration
+from services.migrations.sales_desk_revenue_v6 import apply as apply_sales_revenue_migration
 
 
 def _connection(*, with_identities: bool = False) -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     apply_sales_desk_migration(conn)
+    apply_sales_revenue_migration(conn)
     if with_identities:
         conn.execute(
             """

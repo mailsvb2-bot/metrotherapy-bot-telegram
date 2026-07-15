@@ -223,6 +223,26 @@ def test_payment_url_uses_external_user_id():
     assert url == "https://bot.example/pay/yookassa?source=vk&user_id=777&kind=tokens&package_id=practice_personal_month"
 
 
+def test_same_numeric_external_ids_keep_separate_wallets_without_bridge():
+    telegram = register_user_entry(777001, platform="telegram", external_user_id="777001")
+    vk = register_user_entry(777001, platform="vk", external_user_id="777001")
+
+    assert telegram.user_id == 777001
+    assert vk.user_id != telegram.user_id
+
+    inserted, telegram_wallet, _ = grant_tokens(
+        telegram.user_id,
+        package_id="practice_start_7",
+        amount=2,
+        provider="test",
+        provider_payment_id="same-number-telegram",
+        idempotency_key="grant:test:same-number-telegram",
+    )
+    assert inserted is True
+    assert telegram_wallet.available_tokens == 2
+    assert get_wallet(vk.user_id).available_tokens == 0
+
+
 def test_practice_wallet_is_account_native_across_linked_messengers():
     token = issue_bridge_token(910010, target_platform="vk")
     linked = register_user_entry(
@@ -244,11 +264,11 @@ def test_practice_wallet_is_account_native_across_linked_messengers():
     assert inserted is True
     assert wallet.available_tokens == 3
 
-    vk_wallet = get_wallet(920020)
+    vk_wallet = get_wallet(linked.user_id)
     assert vk_wallet.user_id == 910010
     assert vk_wallet.available_tokens == 3
 
-    ok, wallet_after_reserve, reservation_id = reserve_practice(920020, session_id=1, audio_anchor=1)
+    ok, wallet_after_reserve, reservation_id = reserve_practice(linked.user_id, session_id=1, audio_anchor=1)
     assert ok is True
     assert reservation_id
     assert wallet_after_reserve.user_id == 910010
@@ -256,7 +276,7 @@ def test_practice_wallet_is_account_native_across_linked_messengers():
     assert wallet_after_reserve.reserved_tokens == 1
 
     finalize_audio_access(
-        check_and_reserve_for_audio(920020, is_demo=False, session_id=2, audio_anchor=2),
+        check_and_reserve_for_audio(linked.user_id, is_demo=False, session_id=2, audio_anchor=2),
         delivered=False,
     )
 
@@ -279,7 +299,7 @@ def test_payment_grant_to_linked_external_identity_credits_account_wallet():
     inserted, wallet, _ = grant_tokens_for_payment(
         provider="yookassa",
         provider_payment_id="pay-account-wallet-cross-channel",
-        user_id=930030,
+        user_id=linked.user_id,
         package_id="practice_start_7",
     )
 
@@ -287,7 +307,6 @@ def test_payment_grant_to_linked_external_identity_credits_account_wallet():
     assert wallet.user_id == 910011
     assert wallet.available_tokens == 7
     assert get_wallet(910011).available_tokens == 7
-    assert get_wallet(930030).available_tokens == 7
 
 
 def test_delivery_mode_is_account_native_across_linked_messengers():
@@ -300,6 +319,5 @@ def test_delivery_mode_is_account_native_across_linked_messengers():
     )
     assert linked.user_id == 910012
 
-    assert set_delivery_mode(940040, "both") == "both"
+    assert set_delivery_mode(linked.user_id, "both") == "both"
     assert get_delivery_mode(910012) == "both"
-    assert get_delivery_mode(940040) == "both"

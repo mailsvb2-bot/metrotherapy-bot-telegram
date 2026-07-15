@@ -10,6 +10,7 @@ from typing import Any
 from config.settings import settings
 from runtime.messenger_vk_sender import _callback_keyboard_json
 from runtime.messenger_vk_ui import prepare_vk_keyboard_json
+from services.accounts.identity import resolve_account_for_identity
 from services.messenger.audio_progress import AudioProgressItem, get_pending_audio_token, get_progress_snapshot
 from services.messenger.reply_dispatcher import send_reply_bundle
 from services.messenger.text_ui import MessengerReply
@@ -102,7 +103,7 @@ async def _dispatch_vk(user_id: int, text: str) -> list[MessengerReply]:
     return replies
 
 
-def _prepare_paid_route(monkeypatch, *, user_id: int, item: AudioProgressItem, anchored: _AnchoredAudio, sender: _FakeVkSender) -> None:
+def _prepare_paid_route(monkeypatch, *, item: AudioProgressItem, anchored: _AnchoredAudio, sender: _FakeVkSender) -> None:
     monkeypatch.setenv("TOKEN_ENFORCEMENT_MODE", "hard")
     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://example.test")
     monkeypatch.setattr(settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test", raising=False)
@@ -112,14 +113,7 @@ def _prepare_paid_route(monkeypatch, *, user_id: int, item: AudioProgressItem, a
         lambda anchor: anchored if int(anchor) == int(anchored.anchor) else None,
     )
     monkeypatch.setattr("services.messenger.reply_dispatcher.VkBotSender", lambda: sender)
-    grant_tokens(
-        user_id,
-        package_id="practice_start_7",
-        amount=3,
-        provider="test",
-        provider_payment_id=f"vk-e2e-{user_id}",
-        idempotency_key=f"grant:test:vk-e2e:{user_id}",
-    )
+
 
 
 def test_vk_audio_rejection_uses_link_fallback(monkeypatch, tmp_path):
@@ -130,9 +124,19 @@ def test_vk_audio_rejection_uses_link_fallback(monkeypatch, tmp_path):
     anchored = _AnchoredAudio(anchor=1, clean_title="Morning Route", path=audio_path)
 
     sender = _FakeVkSender(fail_audio=True)
-    _prepare_paid_route(monkeypatch, user_id=user_id, item=item, anchored=anchored, sender=sender)
+    _prepare_paid_route(monkeypatch, item=item, anchored=anchored, sender=sender)
 
     asyncio.run(_dispatch_vk(user_id, "start"))
+    canonical_user_id = resolve_account_for_identity("vk", str(user_id), allow_create=False)
+    assert canonical_user_id is not None
+    grant_tokens(
+        canonical_user_id,
+        package_id="practice_start_7",
+        amount=3,
+        provider="test",
+        provider_payment_id=f"vk-e2e-{user_id}",
+        idempotency_key=f"grant:test:vk-e2e:{user_id}",
+    )
     asyncio.run(_dispatch_vk(user_id, "continue"))
     score_keyboard = _latest_keyboard(sender)
     assert json.loads(score_keyboard)["inline"] is False
@@ -143,8 +147,8 @@ def test_vk_audio_rejection_uses_link_fallback(monkeypatch, tmp_path):
     asyncio.run(_dispatch_vk(user_id, "-9"))
     assert sender.audio_calls
     assert any("media/audio/access" in text for _, text, _ in sender.text_calls)
-    assert get_pending_audio_token(user_id)
-    assert get_wallet(user_id).used_tokens == 1
+    assert get_pending_audio_token(canonical_user_id)
+    assert get_wallet(canonical_user_id).used_tokens == 1
 
 
 def test_vk_native_audio_success_is_not_rolled_back_when_notice_fails(monkeypatch, tmp_path):
@@ -155,9 +159,19 @@ def test_vk_native_audio_success_is_not_rolled_back_when_notice_fails(monkeypatc
     anchored = _AnchoredAudio(anchor=1, clean_title="Morning Route", path=audio_path)
 
     sender = _FakeVkSender(fail_audio=False)
-    _prepare_paid_route(monkeypatch, user_id=user_id, item=item, anchored=anchored, sender=sender)
+    _prepare_paid_route(monkeypatch, item=item, anchored=anchored, sender=sender)
 
     asyncio.run(_dispatch_vk(user_id, "start"))
+    canonical_user_id = resolve_account_for_identity("vk", str(user_id), allow_create=False)
+    assert canonical_user_id is not None
+    grant_tokens(
+        canonical_user_id,
+        package_id="practice_start_7",
+        amount=3,
+        provider="test",
+        provider_payment_id=f"vk-e2e-{user_id}",
+        idempotency_key=f"grant:test:vk-e2e:{user_id}",
+    )
     asyncio.run(_dispatch_vk(user_id, "continue"))
 
     sender.fail_next_text = True
@@ -165,11 +179,11 @@ def test_vk_native_audio_success_is_not_rolled_back_when_notice_fails(monkeypatc
     asyncio.run(_dispatch_vk(user_id, "-4"))
 
     assert sender.audio_calls
-    assert get_pending_audio_token(user_id) is None
-    snapshot = get_progress_snapshot(user_id)
+    assert get_pending_audio_token(canonical_user_id) is None
+    snapshot = get_progress_snapshot(canonical_user_id)
     assert snapshot.pending_item is not None
     assert snapshot.pending_item.anchor == 1
-    assert get_wallet(user_id).used_tokens == 1
+    assert get_wallet(canonical_user_id).used_tokens == 1
     new_texts = "\n".join(text for _, text, _ in sender.text_calls[before_texts:])
     assert "media/audio/access" not in new_texts
 
@@ -182,9 +196,19 @@ def test_vk_post_score_does_not_start_new_audio(monkeypatch, tmp_path):
     anchored = _AnchoredAudio(anchor=1, clean_title="Morning Route", path=audio_path)
 
     sender = _FakeVkSender(fail_audio=False)
-    _prepare_paid_route(monkeypatch, user_id=user_id, item=item, anchored=anchored, sender=sender)
+    _prepare_paid_route(monkeypatch, item=item, anchored=anchored, sender=sender)
 
     asyncio.run(_dispatch_vk(user_id, "start"))
+    canonical_user_id = resolve_account_for_identity("vk", str(user_id), allow_create=False)
+    assert canonical_user_id is not None
+    grant_tokens(
+        canonical_user_id,
+        package_id="practice_start_7",
+        amount=3,
+        provider="test",
+        provider_payment_id=f"vk-e2e-{user_id}",
+        idempotency_key=f"grant:test:vk-e2e:{user_id}",
+    )
     asyncio.run(_dispatch_vk(user_id, "continue"))
     asyncio.run(_dispatch_vk(user_id, "-4"))
 

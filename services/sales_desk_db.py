@@ -59,6 +59,7 @@ def ensure_schema(conn: Any) -> None:
         "sales_lead_notes",
         "sales_lead_audit",
         "sales_outbound_messages",
+        "sales_lead_revenue",
     )
     for table in required:
         if not table_exists(conn, table):

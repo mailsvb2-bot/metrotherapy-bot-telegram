@@ -15,31 +15,13 @@ def _request() -> web.Request:
 
 
 @pytest.mark.asyncio
-async def test_telegram_yookassa_kill_switch_rejects_existing_links(monkeypatch) -> None:
-    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
-
-    def unexpected_checkout(**_kwargs):
-        raise AssertionError("provider checkout must not be called")
-
-    monkeypatch.setattr(payment_http, "_create_yookassa_payment", unexpected_checkout)
-
-    response = await payment_http.pay_yookassa_web(_request())
-
-    assert response.status == 410
-    assert "временно отключена" in response.text
-
-
-@pytest.mark.asyncio
-async def test_telegram_yookassa_enabled_reaches_provider(monkeypatch) -> None:
-    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
-    monkeypatch.setenv("PAYMENT_CHECKOUT_INTENT_REQUIRED", "0")
+@pytest.mark.parametrize("legacy_switch", ["0", "1"])
+async def test_telegram_yookassa_is_rejected_even_if_legacy_switch_is_enabled(monkeypatch, legacy_switch) -> None:
+    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", legacy_switch)
     monkeypatch.setattr(
-        payment_http,
-        "_create_yookassa_payment",
-        lambda **_kwargs: "https://yookassa.example/confirmation",
+        payment_http, "_create_yookassa_payment",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("provider checkout must not be called")),
     )
-
-    with pytest.raises(web.HTTPFound) as redirect:
-        await payment_http.pay_yookassa_web(_request())
-
-    assert redirect.value.location == "https://yookassa.example/confirmation"
+    response = await payment_http.pay_yookassa_web(_request())
+    assert response.status == 410
+    assert "только Telegram Stars" in response.text

@@ -6,7 +6,6 @@ import os
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.payments.public_url import payment_public_base_url
-from services.practice_token_contract import telegram_yookassa_enabled
 
 
 def payment_terms_url() -> str:
@@ -31,17 +30,10 @@ def payment_terms_text() -> str:
     support = payment_support_contact()
     url = payment_terms_url()
     terms_line = f"• Полные условия: {url}\n" if url else ""
-    payment_methods = (
-        "• Можно выбрать оплату звёздами Telegram либо банковской картой через ЮKassa.\n"
-        "• Счёт в звёздах оплачивается внутри Telegram; ЮKassa открывается на внешней "
-        "защищённой странице в браузере.\n"
-        if telegram_yookassa_enabled()
-        else "• Оплата проводится звёздами Telegram.\n"
-    )
     return (
         "📜 Условия оплаты\n\n"
         "• Вы приобретаете цифровой пакет практик Метротерапии.\n"
-        f"{payment_methods}"
+        "• В Telegram цифровой пакет оплачивается звёздами Telegram.\n"
         "• Одна Telegram Star не равна одному рублю: стоимость Stars в обычной валюте "
         "определяет Telegram и она может отличаться в зависимости от страны и способа покупки.\n"
         "• Количество практик и состав пакета указаны до подтверждения платежа.\n"
@@ -58,11 +50,9 @@ def payment_terms_html() -> str:
     merchant = html.escape(payment_merchant_name())
     support = html.escape(payment_support_contact())
     payment_methods = (
-        "<p>Пользователь может выбрать оплату звёздами Telegram либо банковскую карту через ЮKassa. "
-        "Счёт в звёздах оплачивается внутри Telegram. При выборе ЮKassa пользователь переходит на "
-        "внешнюю защищённую страницу платёжного провайдера.</p>"
-        if telegram_yookassa_enabled()
-        else "<p>Оплата проводится звёздами Telegram.</p>"
+        "<p>В Telegram цифровые пакеты оплачиваются звёздами Telegram. "
+        "На внешних поверхностях сервиса (VK, MAX и web) банковская карта может "
+        "обрабатываться ЮKassa на защищённой странице платёжного провайдера.</p>"
     )
     return f"""<!doctype html>
 <html lang="ru">

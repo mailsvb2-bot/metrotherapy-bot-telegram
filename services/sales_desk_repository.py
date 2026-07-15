@@ -22,8 +22,6 @@ from services.sales_desk_db import (
     rows,
 )
 
-_OPEN_STAGE_SQL = "'new','contacted','qualified','checkout'"
-
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
@@ -33,29 +31,37 @@ def iso_now() -> str:
     return utc_now().isoformat()
 
 
-def _filter_sql(
+def _sales_filter_parameters(
     filter_name: str,
     *,
     admin_id: int | None,
     now_iso: str,
-) -> tuple[str, tuple[Any, ...]]:
+) -> tuple[Any, ...]:
     selected = normalize_filter(filter_name)
-    if selected in SALES_STAGES:
-        return "stage=?", (selected,)
-    if selected == "overdue":
-        return (
-            f"stage IN ({_OPEN_STAGE_SQL}) "
-            "AND next_contact_at IS NOT NULL AND next_contact_at < ?",
-            (now_iso,),
-        )
-    if selected == "mine":
-        return (
-            f"assigned_to=? AND stage IN ({_OPEN_STAGE_SQL})",
-            (int(admin_id or 0),),
-        )
-    if selected == "unassigned":
-        return f"assigned_to IS NULL AND stage IN ({_OPEN_STAGE_SQL})", ()
-    return f"stage IN ({_OPEN_STAGE_SQL})", ()
+    stage = selected if selected in SALES_STAGES else ""
+    return (
+        stage,
+        stage,
+        selected,
+        now_iso,
+        selected,
+        int(admin_id or 0),
+        selected,
+        selected,
+    )
+
+
+def _revenue_map(conn: Any, user_ids: list[int] | None = None) -> dict[int, dict[str, int]]:
+    sql = "SELECT user_id, currency, amount_units FROM sales_lead_revenue"
+    params: tuple[Any, ...] = ()
+    if user_ids:
+        placeholders = ",".join("?" for _ in user_ids)
+        sql += f" WHERE user_id IN ({placeholders})"
+        params = tuple(int(item) for item in user_ids)
+    result: dict[int, dict[str, int]] = {}
+    for row in rows(conn.execute(sql, params).fetchall()):
+        result.setdefault(int(row.get("user_id") or 0), {})[str(row.get("currency") or "RUB").upper()] = int(row.get("amount_units") or 0)
+    return result
 
 
 def read_sales_snapshot(
@@ -66,7 +72,7 @@ def read_sales_snapshot(
     now_iso: str,
 ) -> dict[str, Any]:
     selected = normalize_filter(filter_name)
-    where, params = _filter_sql(
+    filter_params = _sales_filter_parameters(
         selected,
         admin_id=admin_id,
         now_iso=now_iso,
@@ -75,7 +81,7 @@ def read_sales_snapshot(
         ensure_schema(conn)
         lead_rows = rows(
             conn.execute(
-                f"""
+                """
                 SELECT l.*,
                        (
                            SELECT COUNT(*)
@@ -83,7 +89,28 @@ def read_sales_snapshot(
                            WHERE n.lead_id=l.id
                        ) AS note_count
                 FROM sales_leads l
-                WHERE {where}
+                WHERE
+                    (? <> '' AND l.stage=?)
+                    OR (
+                        ?='overdue'
+                        AND l.stage IN ('new','contacted','qualified','checkout')
+                        AND l.next_contact_at IS NOT NULL
+                        AND l.next_contact_at < ?
+                    )
+                    OR (
+                        ?='mine'
+                        AND l.assigned_to=?
+                        AND l.stage IN ('new','contacted','qualified','checkout')
+                    )
+                    OR (
+                        ?='unassigned'
+                        AND l.assigned_to IS NULL
+                        AND l.stage IN ('new','contacted','qualified','checkout')
+                    )
+                    OR (
+                        ?='open'
+                        AND l.stage IN ('new','contacted','qualified','checkout')
+                    )
                 ORDER BY
                     CASE
                         WHEN next_contact_at IS NOT NULL
@@ -102,7 +129,7 @@ def read_sales_snapshot(
                     id DESC
                 LIMIT ?
                 """.strip(),
-                (*params, now_iso, max(1, min(int(limit), 50))),
+                (*filter_params, now_iso, max(1, min(int(limit), 50))),
             ).fetchall()
         )
         count_rows = rows(
@@ -112,12 +139,12 @@ def read_sales_snapshot(
         )
         operational = rowdict(
             conn.execute(
-                f"""
+                """
                 SELECT
                     SUM(
                         CASE
                             WHEN assigned_to IS NULL
-                             AND stage IN ({_OPEN_STAGE_SQL}) THEN 1
+                             AND stage IN ('new','contacted','qualified','checkout') THEN 1
                             ELSE 0
                         END
                     ) AS unassigned,
@@ -125,19 +152,32 @@ def read_sales_snapshot(
                         CASE
                             WHEN next_contact_at IS NOT NULL
                              AND next_contact_at < ?
-                             AND stage IN ({_OPEN_STAGE_SQL}) THEN 1
+                             AND stage IN ('new','contacted','qualified','checkout') THEN 1
                             ELSE 0
                         END
                     ) AS overdue,
-                    SUM(
-                        CASE WHEN stage='won' THEN revenue_minor ELSE 0 END
-                    ) AS won_revenue_minor
+                    SUM(CASE WHEN stage='won' THEN revenue_minor ELSE 0 END) AS won_revenue_minor
                 FROM sales_leads
                 """.strip(),
                 (now_iso,),
             ).fetchone()
         )
+        lead_revenue = _revenue_map(conn, [int(item.get("user_id") or 0) for item in lead_rows])
+        won_currency_rows = rows(
+            conn.execute(
+                """
+                SELECT r.currency, SUM(r.amount_units) AS amount_units
+                FROM sales_lead_revenue r
+                JOIN sales_leads l ON l.user_id=r.user_id
+                WHERE l.stage='won'
+                GROUP BY r.currency
+                """
+            ).fetchall()
+        )
 
+    for lead in lead_rows:
+        lead["revenue_by_currency"] = lead_revenue.get(int(lead.get("user_id") or 0), {})
+    won_revenue_by_currency = {str(item.get("currency") or "RUB"): int(item.get("amount_units") or 0) for item in won_currency_rows}
     counts = {stage: 0 for stage in SALES_STAGES}
     for item in count_rows:
         counts[normalize_stage(str(item.get("stage") or "new"))] = int(
@@ -149,7 +189,8 @@ def read_sales_snapshot(
         "counts": counts,
         "unassigned": int(operational.get("unassigned") or 0),
         "overdue": int(operational.get("overdue") or 0),
-        "won_revenue_minor": int(operational.get("won_revenue_minor") or 0),
+        "won_revenue_minor": int(won_revenue_by_currency.get("RUB") or 0),
+        "won_revenue_by_currency": won_revenue_by_currency,
         "leads": lead_rows,
     }
 
@@ -160,6 +201,7 @@ def get_lead(lead_id: int) -> dict[str, Any]:
         lead = fetch_lead(conn, int(lead_id))
         if not lead:
             raise ValueError("sales_lead_not_found")
+        lead["revenue_by_currency"] = _revenue_map(conn, [int(lead.get("user_id") or 0)]).get(int(lead.get("user_id") or 0), {})
         lead["notes"] = rows(
             conn.execute(
                 """

@@ -276,3 +276,25 @@ def test_already_refunded_provider_error_accepts_bot_api_code() -> None:
     exc = RuntimeError("Bad Request: PAYMENT_ALREADY_REFUNDED")
 
     assert payment_handler._already_refunded_error(exc) is True
+
+
+def test_refund_cannot_use_tokens_from_a_later_purchase(monkeypatch) -> None:
+    user_id = 782071
+    first_charge = _charge("first-used")
+    second_charge = _charge("second-intact")
+    _pay(monkeypatch, user_id=user_id, package_id="practice_start_7", charge_id=first_charge)
+
+    reserved, _wallet, reservation_id = reserve_practice(user_id, audio_anchor=991071)
+    assert reserved is True
+    assert reservation_id
+    # A later package restores the aggregate wallet above the first grant size.
+    # Refundability must still be decided from the exact first payment lot.
+    _pay(monkeypatch, user_id=user_id, package_id="practice_start_7", charge_id=second_charge)
+    assert get_wallet(user_id).available_tokens >= 7
+
+    first = preview_stars_refund(first_charge)
+    second = preview_stars_refund(second_charge)
+
+    assert first.refundable is False
+    assert first.reason == "purchased_practices_already_used_or_reserved"
+    assert second.refundable is True

@@ -10,15 +10,15 @@ def setup_module(module):
 
 def test_platform_command_updates_preference():
     canonical_user_id, replies = handle_incoming_text(901001, platform='vk', external_user_id='901001', text='/platform max')
-    assert canonical_user_id == 901001
+    assert canonical_user_id != 901001
     assert replies
-    snapshot = get_channel_snapshot(901001)
+    snapshot = get_channel_snapshot(canonical_user_id)
     assert snapshot['preferred_platform'] == 'max'
 
 
 def test_share_command_returns_targets_text():
     canonical_user_id, replies = handle_incoming_text(901002, platform='max', external_user_id='901002', text='share')
-    assert canonical_user_id == 901002
+    assert canonical_user_id != 901002
     assert replies
     assert 'Поделиться' in replies[0].text or 'пока не настроены' in replies[0].text
 

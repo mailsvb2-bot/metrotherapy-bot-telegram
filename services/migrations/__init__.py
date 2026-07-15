@@ -25,8 +25,10 @@ from services.migrations.growth_conversion_bridge_state_v2 import apply as _appl
 from services.migrations.growth_apply_gateway_v3 import apply as _apply_growth_apply_gateway_v3
 from services.migrations.growth_apply_review_confirmations_v4 import apply as _apply_growth_apply_review_confirmations_v4
 from services.migrations.sales_desk_v5 import apply as _apply_sales_desk_v5
+from services.migrations.sales_desk_revenue_v6 import apply as _apply_sales_desk_revenue_v6
 from services.migrations.practice_token_economy_v1 import apply as _apply_practice_token_economy_v1
 from services.migrations.practice_token_audit_v2 import apply as _apply_practice_token_audit_v2
+from services.migrations.practice_token_lots_v4 import apply as _apply_practice_token_lots_v4
 from services.migrations.practice_journey_consistency_v3 import apply as _apply_practice_journey_consistency_v3
 from services.migrations.premium_entitlements_v1 import apply as _apply_premium_entitlements_v1
 from services.migrations.gift_claims_v1 import apply as _apply_gift_claims_v1
@@ -61,8 +63,10 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_growth_apply_gateway_v3(conn)
     _apply_growth_apply_review_confirmations_v4(conn)
     _apply_sales_desk_v5(conn)
+    _apply_sales_desk_revenue_v6(conn)
     _apply_practice_token_economy_v1(conn)
     _apply_practice_token_audit_v2(conn)
+    _apply_practice_token_lots_v4(conn)
     _apply_practice_journey_consistency_v3(conn)
     _apply_premium_entitlements_v1(conn)
     _apply_gift_claims_v1(conn)

@@ -50,30 +50,33 @@ def package_entitlement_types(package_id: str) -> tuple[str, ...]:
     return tuple(out)
 
 
-def _canonical_premium_user_id(user_id: int) -> int:
-    uid = int(user_id)
-    external = str(uid)
-    with db() as conn:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT account_id
-            FROM account_channel_identities
-            WHERE external_user_id=?
-            ORDER BY account_id
-            """.strip(),
-            (external,),
-        ).fetchall()
-        account_ids = [int(row["account_id"]) for row in rows]
-        if len(account_ids) == 1:
-            return account_ids[0]
+def _canonical_premium_user_id(user_id: int, *, platform: str | None = None) -> int:
+    """Resolve either a canonical id or an exact platform-scoped identity.
 
+    A bare external number is never searched across all messengers. Callers that
+    still receive a transport id must supply its platform, which makes the
+    lookup unambiguous.
+    """
+
+    uid = int(user_id)
+    norm = normalize_platform(platform) if platform else None
+    with db() as conn:
+        if norm:
+            row = conn.execute(
+                """
+                SELECT account_id FROM account_channel_identities
+                WHERE platform=? AND external_user_id=? LIMIT 1
+                """.strip(),
+                (norm, str(uid)),
+            ).fetchone()
+            if row is not None:
+                return int(row["account_id"])
         row = conn.execute(
             "SELECT account_id FROM accounts WHERE account_id=? LIMIT 1",
             (uid,),
         ).fetchone()
         if row is not None:
             return int(row["account_id"])
-
     return ensure_account(uid)
 
 
@@ -239,7 +242,7 @@ def grant_premium_entitlements_for_payment(
     source: str = "webhook",
     fallback_platform: str = MessengerPlatform.TELEGRAM.value,
 ) -> PremiumGrantResult:
-    uid = _canonical_premium_user_id(int(user_id))
+    uid = _canonical_premium_user_id(int(user_id), platform=fallback_platform)
     package = package_by_id(package_id)
     entitlement_types = package_entitlement_types(package.package_id)
     if not entitlement_types:

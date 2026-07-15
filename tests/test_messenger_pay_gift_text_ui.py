@@ -62,7 +62,7 @@ def test_vk_pay_command_returns_canonical_package_payment_text():
         text="💳 Тарифы",
     )
 
-    assert user_id == 902001
+    assert user_id >= (1 << 62)
     assert replies
     assert replies[0].kind == "text"
     _assert_canonical_package_payment_text(replies[0].text, source="vk")
@@ -76,7 +76,7 @@ def test_max_pay_command_returns_canonical_package_payment_text():
         text="pay",
     )
 
-    assert user_id == 902002
+    assert user_id >= (1 << 62)
     assert replies
     assert replies[0].kind == "text"
     _assert_canonical_package_payment_text(replies[0].text, source="max")
@@ -90,7 +90,7 @@ def test_vk_gift_command_asks_recipient_before_payment_links():
         text="🎁 Подарить",
     )
 
-    assert user_id == 902003
+    assert user_id >= (1 << 62)
     assert replies
     assert replies[0].kind == "text"
     assert "Кому подарить" in replies[0].text
@@ -112,7 +112,7 @@ def test_vk_gift_recipient_then_returns_canonical_package_gift_text():
         text="Иван Петров vk.com/id12345",
     )
 
-    assert user_id == 902033
+    assert user_id >= (1 << 62)
     assert replies
     assert replies[0].kind == "text"
     assert "Получатель: Иван Петров vk.com/id12345" in replies[0].text
@@ -127,7 +127,7 @@ def test_max_gift_command_asks_recipient_before_payment_links():
         text="gift",
     )
 
-    assert user_id == 902004
+    assert user_id >= (1 << 62)
     assert replies
     assert replies[0].kind == "text"
     assert "Кому подарить" in replies[0].text
@@ -142,19 +142,22 @@ def test_max_payment_link_uses_canonical_user_id_and_preserves_external_id():
         text="pay",
     )
 
-    assert user_id == 902002
+    assert user_id >= (1 << 62)
     url = _payment_urls(replies[0].text)[0]
     query = _query(url)
-    assert query["user_id"] == "902002"
+    assert query["user_id"] == str(user_id)
     assert query["external_user_id"] == "mx902002"
     assert query["source"] == "max"
     assert query["kind"] == "tokens"
     assert query["package_id"] in EXPECTED_PACKAGE_IDS
     verify_checkout_intent(
         query["intent"],
-        expected_user_id="902002",
+        expected_user_id=str(user_id),
         expected_package_id=query["package_id"],
         expected_kind="tokens",
+        expected_source="max",
+        expected_amount_minor=int(query["amount_minor"]),
+        expected_currency=query["currency"],
     )
 
 
@@ -172,10 +175,10 @@ def test_max_gift_link_uses_reserved_gift_token_and_canonical_intent():
         text="Мария из MAX",
     )
 
-    assert user_id == 902044
+    assert user_id >= (1 << 62)
     url = _payment_urls(replies[0].text)[0]
     query = _query(url)
-    assert query["user_id"] == "902044"
+    assert query["user_id"] == str(user_id)
     assert query["external_user_id"] == "mx902044"
     assert query["source"] == "max"
     assert query["kind"] == "tokens"
@@ -183,8 +186,11 @@ def test_max_gift_link_uses_reserved_gift_token_and_canonical_intent():
     assert query["gift_token"].startswith("gift_")
     verify_checkout_intent(
         query["intent"],
-        expected_user_id="902044",
+        expected_user_id=str(user_id),
         expected_package_id=query["package_id"],
         expected_kind="tokens",
+        expected_source="max",
+        expected_amount_minor=int(query["amount_minor"]),
+        expected_currency=query["currency"],
         expected_gift_token=query["gift_token"],
     )

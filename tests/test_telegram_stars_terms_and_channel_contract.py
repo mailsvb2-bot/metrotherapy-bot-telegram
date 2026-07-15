@@ -22,10 +22,9 @@ def test_terms_surface_requires_explicit_acceptance(monkeypatch) -> None:
     buttons = _buttons(markup)
 
     assert "звёздами Telegram" in text
-    assert "ЮKassa" in text
+    assert "ЮKassa" not in text
     assert "XTR" not in text
     assert "RUB" not in text
-    assert "внешней" in text
     assert "не равна одному рублю" in text
     assert "/paysupport" in text
     assert "@support_example" in text
@@ -77,7 +76,7 @@ def test_telegram_tariffs_use_intermediate_payment_method_step(monkeypatch) -> N
         )
     )
     assert any(button.callback_data == "stars:terms:practice_start_7" for button in methods)
-    assert any(button.url and "/pay/yookassa?" in str(button.url) for button in methods)
+    assert not any(button.url for button in methods)
 
 
 def test_vk_and_max_keep_yookassa_checkout(monkeypatch) -> None:
@@ -98,6 +97,7 @@ def test_payment_router_has_terms_and_explicit_payment_method_choice() -> None:
     assert 'Command("paysupport")' in source
     assert "pay:gift_methods:" in source
     assert "pay:methods:" in source
-    assert "yookassa:gift:" in source
+    assert "telegram_digital_yookassa_disabled" not in source
+    assert "старый способ оплаты цифрового пакета" in source
     assert "stars:gift_terms:" in source
     assert "stars:terms:" in source

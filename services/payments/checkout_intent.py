@@ -65,6 +65,46 @@ def _canonical_kind(kind: str | None, package_id: str | None = None) -> str:
     return "tokens"
 
 
+def _canonical_source(source: str | None) -> str:
+    normalized = str(source or "unknown").strip().casefold()
+    aliases = {"vkontakte": "vk", "вконтакте": "vk", "website": "web", "site": "web"}
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {"telegram", "vk", "max", "web"}:
+        return "unknown"
+    return normalized
+
+
+def _canonical_currency(currency: str | None) -> str:
+    value = str(currency or "RUB").strip().upper()
+    if not value or len(value) > 12 or not value.isascii() or not value.isalnum():
+        raise CheckoutIntentError("invalid_checkout_currency")
+    return value
+
+
+def _package_amount(package_id: str | None) -> tuple[int, str]:
+    package = str(package_id or "").strip()
+    if not package:
+        return 0, "RUB"
+    try:
+        from services.practice_token_contract import package_by_id
+
+        return int(package_by_id(package).price_rub) * 100, "RUB"
+    except (ImportError, ValueError):
+        return 0, "RUB"
+
+
+def _canonical_amount(
+    package_id: str | None,
+    amount_minor: int | str | None,
+    currency: str | None,
+) -> tuple[int, str]:
+    derived_amount, derived_currency = _package_amount(package_id)
+    amount = derived_amount if amount_minor is None else int(amount_minor)
+    if amount < 0:
+        raise CheckoutIntentError("invalid_checkout_amount")
+    return amount, _canonical_currency(currency or derived_currency)
+
+
 def _signature(signing_input: str) -> str:
     digest = hmac.new(_key_for_signing().encode("utf-8"), signing_input.encode("ascii"), hashlib.sha256).digest()
     return _b64e(digest)
@@ -77,17 +117,22 @@ def sign_checkout_intent(
     kind: str = "tokens",
     source: str = "telegram",
     gift_token: str | None = None,
+    amount_minor: int | str | None = None,
+    currency: str | None = None,
     ttl_sec: int | None = None,
 ) -> str:
     now = int(time.time())
     ttl = int(ttl_sec or int(os.getenv("PAYMENT_CHECKOUT_INTENT_TTL_SEC", "900") or "900"))
     ttl = max(60, min(ttl, 24 * 60 * 60))
+    canonical_amount, canonical_currency = _canonical_amount(package_id, amount_minor, currency)
     payload: dict[str, Any] = {
-        "v": 1,
+        "v": 2,
         "sub": str(user_id),
         "package_id": str(package_id or ""),
         "kind": _canonical_kind(kind, package_id),
-        "source": str(source or "unknown")[:32],
+        "source": _canonical_source(source),
+        "amount_minor": canonical_amount,
+        "currency": canonical_currency,
         "gift_token": str(gift_token or ""),
         "iat": now,
         "exp": now + ttl,
@@ -103,6 +148,9 @@ def verify_checkout_intent(
     expected_user_id: int | str,
     expected_package_id: str,
     expected_kind: str = "tokens",
+    expected_source: str | None = None,
+    expected_amount_minor: int | str | None = None,
+    expected_currency: str | None = None,
     expected_gift_token: str | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
@@ -122,6 +170,8 @@ def verify_checkout_intent(
         raise CheckoutIntentError("bad_checkout_intent_payload") from exc
     if not isinstance(payload, dict):
         raise CheckoutIntentError("bad_checkout_intent_payload")
+    if int(payload.get("v") or 0) != 2:
+        raise CheckoutIntentError("unsupported_checkout_intent_version")
 
     ts = int(now if now is not None else time.time())
     exp = int(payload.get("exp") or 0)
@@ -137,8 +187,21 @@ def verify_checkout_intent(
         "kind": _canonical_kind(expected_kind, expected_package_id),
         "gift_token": str(expected_gift_token or ""),
     }
+    if expected_source is not None:
+        checks["source"] = _canonical_source(expected_source)
+    expected_amount, expected_currency_value = _canonical_amount(
+        expected_package_id,
+        expected_amount_minor,
+        expected_currency,
+    )
+    # Known public packages always bind price and currency. Test/legacy fake ids
+    # may explicitly pass an amount when they need the same guarantee.
+    if expected_amount_minor is not None or expected_amount > 0:
+        checks["amount_minor"] = str(expected_amount)
+        checks["currency"] = expected_currency_value
+
     for key, expected in checks.items():
-        if str(payload.get(key) or "") != expected:
+        if str(payload.get(key) if payload.get(key) is not None else "") != str(expected):
             raise CheckoutIntentError(f"checkout_intent_{key}_mismatch")
     return payload
 
@@ -151,14 +214,22 @@ def add_checkout_intent_to_url(
     kind: str = "tokens",
     source: str = "telegram",
     gift_token: str | None = None,
+    amount_minor: int | str | None = None,
+    currency: str | None = None,
 ) -> str:
     parts = urlsplit(str(url))
     params = dict(parse_qsl(parts.query, keep_blank_values=True))
+    canonical_amount, canonical_currency = _canonical_amount(package_id, amount_minor, currency)
     params["intent"] = sign_checkout_intent(
         user_id=user_id,
         package_id=package_id,
         kind=kind,
         source=source,
         gift_token=gift_token,
+        amount_minor=canonical_amount,
+        currency=canonical_currency,
     )
+    if canonical_amount > 0:
+        params["amount_minor"] = str(canonical_amount)
+        params["currency"] = canonical_currency
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), parts.fragment))
