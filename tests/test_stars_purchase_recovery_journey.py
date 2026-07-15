@@ -3,14 +3,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
 from handlers import payments as payment_handlers
 from services.payments.stars_invoice_transport import _invoice_keyboard, _invoice_message_text
 from services.payments.terms import payment_terms_keyboard
 from services.payments.ui import kb_tariffs, kb_telegram_payment_methods
 
 
-TOPUP_URL = "tg://stars_topup?balance=1226&purpose=metrotherapy_practice_start_7"
+TOPUP_URL = "tg://stars_topup?balance=1500&purpose=metrotherapy_practice_start_7"
 
 
 def _buttons(markup):
@@ -28,6 +27,7 @@ def _callback(markup, prefix: str) -> str:
 def test_personal_purchase_journey_keeps_package_context_through_stars_recovery(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
     monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     package_id = "practice_start_7"
 
     tariffs = kb_tariffs(user_id=730001)
@@ -41,7 +41,7 @@ def test_personal_purchase_journey_keeps_package_context_through_stars_recovery(
 
     invoice = _invoice_keyboard(
         url="https://t.me/$invoice-personal",
-        amount_xtr=1226,
+        amount_xtr=1500,
         package_id=package_id,
         as_gift=False,
     )
@@ -52,7 +52,7 @@ def test_personal_purchase_journey_keeps_package_context_through_stars_recovery(
     assert buttons[3].callback_data == f"pay:methods:{package_id}"
     assert all("PremiumBot" not in str(button.url or "") for button in buttons)
 
-    help_text = _invoice_message_text(amount_xtr=1226)
+    help_text = _invoice_message_text(amount_xtr=1500)
     assert "нажмите кнопку «Купить Stars»" in help_text
     assert "Telegram откроет штатное окно пополнения" in help_text
     assert "Настройки → Ваши Stars" in help_text
@@ -62,6 +62,7 @@ def test_personal_purchase_journey_keeps_package_context_through_stars_recovery(
 def test_gift_purchase_journey_keeps_gift_context_through_stars_recovery(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
     monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     package_id = "practice_start_7"
 
     methods = kb_telegram_payment_methods(user_id=730002, package_id=package_id, gift=True)
@@ -72,7 +73,7 @@ def test_gift_purchase_journey_keeps_gift_context_through_stars_recovery(monkeyp
 
     invoice = _invoice_keyboard(
         url="https://t.me/$invoice-gift",
-        amount_xtr=1226,
+        amount_xtr=1500,
         package_id=package_id,
         as_gift=True,
     )
