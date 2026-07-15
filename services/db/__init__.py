@@ -8,25 +8,59 @@ We now also need a *package* ``services/db/`` to host the schema split:
 Python resolves ``import services.db`` to the *package* when it exists, so we
 must keep the old public API available from this package.
 
-The canonical implementation of the DB helpers lives in :mod:`services.db.core`.
+The canonical implementation of the connection helpers lives in
+:mod:`services.db.core`. Public convenience helpers that materialize query
+results live here so callers never receive a cursor backed by a closed
+connection.
 """
 
 import time
-from typing import Any
+from typing import Any, Sequence
 
 
-# Re-export the public DB helpers expected across the codebase.
+# Re-export the public connection helpers expected across the codebase.
 from services.db.core import (
     DB_PATH,
     PROJECT_ROOT,
     db,
-    execute,
     get_connection,
     get_db,
     get_db_ro,
     tx,
     write,
 )
+
+
+def execute(
+    sql: str,
+    params: Sequence[Any] = (),
+    *,
+    fetchone: bool = False,
+    fetchall: bool = False,
+):
+    """Execute one statement and return a value that survives connection close.
+
+    The old package re-exported ``services.db.core.execute`` which returned a raw
+    cursor from inside ``with db()``. That cursor was already detached from a
+    closed/returned connection, and legacy callers also passed ``fetchone=True``
+    even though the core helper did not accept it. Materialize reads before the
+    context exits and return rowcount for writes.
+    """
+
+    if fetchone and fetchall:
+        raise ValueError("execute accepts only one of fetchone/fetchall")
+    with db() as conn:
+        cursor = conn.execute(sql, tuple(params))
+        if fetchone:
+            return cursor.fetchone()
+        if fetchall:
+            return cursor.fetchall()
+        if getattr(cursor, "description", None) is not None:
+            return cursor.fetchall()
+        try:
+            return int(getattr(cursor, "rowcount", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
 
 
 def _delivery_key(*parts: Any) -> str:

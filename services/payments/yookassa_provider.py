@@ -15,7 +15,7 @@ _GRANT_KINDS = {"tokens", "practices", "practice_package"}
 
 
 class YooKassaProviderVerificationError(RuntimeError):
-    """Raised when a grant-producing YooKassa webhook cannot be verified."""
+    """Raised when a YooKassa webhook cannot be verified as a provider fact."""
 
 
 def _is_prod() -> bool:
@@ -24,10 +24,6 @@ def _is_prod() -> bool:
 
 def _truthy(raw: str | None) -> bool:
     return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _falsy(raw: str | None) -> bool:
-    return str(raw or "").strip().lower() in {"0", "false", "no", "off"}
 
 
 def provider_verification_required() -> bool:
@@ -101,7 +97,7 @@ def _metadata(payload: dict[str, Any]) -> dict[str, Any]:
     return meta if isinstance(meta, dict) else {}
 
 
-def webhook_requires_provider_verification(payload: dict[str, Any]) -> bool:
+def _grant_candidate(payload: dict[str, Any]) -> bool:
     obj = _object(payload)
     status = str(obj.get("status") or payload.get("status") or "").strip().lower()
     event = str(payload.get("event") or "").strip().lower()
@@ -111,17 +107,32 @@ def webhook_requires_provider_verification(payload: dict[str, Any]) -> bool:
     return (event == "payment.succeeded" or status == "succeeded") and (kind in _GRANT_KINDS or bool(package_id))
 
 
-def verify_yookassa_webhook_with_provider(payload: dict[str, Any]) -> None:
-    """Verify a grant-producing webhook against YooKassa's source of truth.
+def webhook_requires_provider_verification(payload: dict[str, Any]) -> bool:
+    """Every persisted payment webhook must be authenticated in production.
 
-    Only payment.succeeded/package grants require the network check. Non-granting
-    statuses can still be recorded as provider facts without spending a provider
-    request on every pending/canceled notification.
+    Previously only grant-producing success events were checked against YooKassa.
+    Anyone could therefore submit a forged pending/canceled/non-package event and
+    pollute payment status, support reports and conversion analytics. A payment id
+    is enough to query the provider source of truth, so all payment facts use the
+    same verification boundary.
     """
-    if not webhook_requires_provider_verification(payload):
-        return
+
+    obj = _object(payload)
+    return bool(str(obj.get("id") or payload.get("id") or "").strip())
+
+
+def verify_yookassa_webhook_with_provider(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Verify a webhook and return the canonical provider payment object.
+
+    The caller must persist the returned object rather than the untrusted webhook
+    object. This also handles stale webhook delivery safely: current provider
+    status wins instead of accepting a forged or outdated event/status pair.
+    """
+
     if not provider_verification_required():
-        return
+        return None
+    if not webhook_requires_provider_verification(payload):
+        raise YooKassaProviderVerificationError("missing_provider_payment_id")
 
     obj = _object(payload)
     payment_id = str(obj.get("id") or payload.get("id") or "").strip()
@@ -129,7 +140,7 @@ def verify_yookassa_webhook_with_provider(payload: dict[str, Any]) -> None:
 
     if str(provider.get("id") or "").strip() != payment_id:
         raise YooKassaProviderVerificationError("provider_id_mismatch")
-    if str(provider.get("status") or "").strip().lower() != "succeeded":
+    if _grant_candidate(payload) and str(provider.get("status") or "").strip().lower() != "succeeded":
         raise YooKassaProviderVerificationError("provider_status_not_succeeded")
 
     webhook_amount = _amount(obj)
@@ -146,3 +157,4 @@ def verify_yookassa_webhook_with_provider(payload: dict[str, Any]) -> None:
         right = str(provider_meta.get(key) or "").strip()
         if left != right:
             raise YooKassaProviderVerificationError(f"provider_metadata_{key}_mismatch")
+    return provider
