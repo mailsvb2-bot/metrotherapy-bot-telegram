@@ -2,3 +2,4 @@ trigger runtime hardening patch
 probe branch workflow execution
 collect workflow run diagnostics
 extract failed patch tail
+run structural patch v2
