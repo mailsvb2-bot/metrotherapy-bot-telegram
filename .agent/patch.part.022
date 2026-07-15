@@ -1,0 +1,132 @@
++    assert "1 900.00 ₽" in card
++    assert "1226 ⭐" in card
++
++
++def test_refund_reduces_sales_revenue_instead_of_preserving_historical_max(monkeypatch: pytest.MonkeyPatch) -> None:
++    import services.sales_desk as sales_desk
++
++    conn = _connection()
++    _patch_db(monkeypatch, conn)
++    conn.execute("INSERT INTO users(user_id, username, first_name) VALUES(?,?,?)", (505, "refund", "Возврат"))
++    conn.execute("INSERT INTO events(user_id, name, created_at, meta, payload) VALUES(?,?,?,?,?)", (505, "payment_success", "2026-07-14T10:00:00+00:00", "{}", "{}"))
++    conn.execute("INSERT INTO payments(user_id, amount, currency, provider_status, created_at) VALUES(?,?,?,?,?)", (505, 790000, "RUB", "succeeded", "2026-07-14T11:00:00+00:00"))
++    conn.commit()
++    sales_desk.sync_sales_leads()
++    assert sales_desk.get_lead(1)["revenue_by_currency"] == {"RUB": 790000}
++
++    conn.execute("UPDATE payments SET provider_status='refunded' WHERE user_id=505")
++    conn.commit()
++    sales_desk.sync_sales_leads()
++    lead = sales_desk.get_lead(1)
++    assert lead["revenue_by_currency"] == {}
++    assert int(lead["revenue_minor"]) == 0
++
++
++def test_revenue_reset_does_not_overwrite_manual_stage_or_attribution(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    import services.sales_desk as sales_desk
++
++    conn = _connection()
++    _patch_db(monkeypatch, conn)
++    conn.execute(
++        "INSERT INTO users(user_id, username, first_name) VALUES(?,?,?)",
++        (606, "preserve", "Сохранить"),
++    )
++    conn.execute(
++        """
++        INSERT INTO events(user_id, name, created_at, meta, payload)
++        VALUES(?,?,?,?,?)
++        """.strip(),
++        (
++            606,
++            "payment_success",
++            "2026-07-14T10:00:00+00:00",
++            '{"source":"vkads","campaign":"protected"}',
++            "{}",
++        ),
++    )
++    conn.execute(
++        """
++        INSERT INTO payments(user_id, amount, currency, provider_status, created_at)
++        VALUES(?,?,?,?,?)
++        """.strip(),
++        (606, 190000, "RUB", "succeeded", "2026-07-14T11:00:00+00:00"),
++    )
++    conn.commit()
++    sales_desk.sync_sales_leads()
++
++    conn.execute(
++        """
++        UPDATE sales_leads
++        SET stage='contacted', stage_source='manual', assigned_to=9001
++        WHERE user_id=606
++        """.strip()
++    )
++    conn.execute("DELETE FROM events WHERE user_id=606")
++    conn.execute("UPDATE payments SET provider_status='refunded' WHERE user_id=606")
++    conn.commit()
++
++    sales_desk.sync_sales_leads()
++    lead = sales_desk.get_lead(1)
++    assert lead["revenue_by_currency"] == {}
++    assert int(lead["revenue_minor"]) == 0
++    assert lead["source"] == "vkads"
++    assert lead["campaign"] == "protected"
++    assert lead["stage"] == "contacted"
++    assert lead["stage_source"] == "manual"
++    assert int(lead["assigned_to"]) == 9001
+diff --git a/tests/test_telegram_stars_refunds.py b/tests/test_telegram_stars_refunds.py
+index 80b4bb9..ca7628c 100644
+--- a/tests/test_telegram_stars_refunds.py
++++ b/tests/test_telegram_stars_refunds.py
+@@ -276,3 +276,25 @@ def test_already_refunded_provider_error_accepts_bot_api_code() -> None:
+     exc = RuntimeError("Bad Request: PAYMENT_ALREADY_REFUNDED")
+ 
+     assert payment_handler._already_refunded_error(exc) is True
++
++
++def test_refund_cannot_use_tokens_from_a_later_purchase(monkeypatch) -> None:
++    user_id = 782071
++    first_charge = _charge("first-used")
++    second_charge = _charge("second-intact")
++    _pay(monkeypatch, user_id=user_id, package_id="practice_start_7", charge_id=first_charge)
++
++    reserved, _wallet, reservation_id = reserve_practice(user_id, audio_anchor=991071)
++    assert reserved is True
++    assert reservation_id
++    # A later package restores the aggregate wallet above the first grant size.
++    # Refundability must still be decided from the exact first payment lot.
++    _pay(monkeypatch, user_id=user_id, package_id="practice_start_7", charge_id=second_charge)
++    assert get_wallet(user_id).available_tokens >= 7
++
++    first = preview_stars_refund(first_charge)
++    second = preview_stars_refund(second_charge)
++
++    assert first.refundable is False
++    assert first.reason == "purchased_practices_already_used_or_reserved"
++    assert second.refundable is True
+diff --git a/tests/test_telegram_stars_terms_and_channel_contract.py b/tests/test_telegram_stars_terms_and_channel_contract.py
+index 3ec203f..5c13d01 100644
+--- a/tests/test_telegram_stars_terms_and_channel_contract.py
++++ b/tests/test_telegram_stars_terms_and_channel_contract.py
+@@ -22,10 +22,9 @@ def test_terms_surface_requires_explicit_acceptance(monkeypatch) -> None:
+     buttons = _buttons(markup)
+ 
+     assert "звёздами Telegram" in text
+-    assert "ЮKassa" in text
++    assert "ЮKassa" not in text
+     assert "XTR" not in text
+     assert "RUB" not in text
+-    assert "внешней" in text
+     assert "не равна одному рублю" in text
+     assert "/paysupport" in text
+     assert "@support_example" in text
+@@ -77,7 +76,7 @@ def test_telegram_tariffs_use_intermediate_payment_method_step(monkeypatch) -> N
+         )
+     )
+     assert any(button.callback_data == "stars:terms:practice_start_7" for button in methods)
+-    assert any(button.url and "/pay/yookassa?" in str(button.url) for button in methods)
++    assert not any(button.url for button in methods)
+ 
+ 

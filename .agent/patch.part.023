@@ -1,0 +1,112 @@
+ def test_vk_and_max_keep_yookassa_checkout(monkeypatch) -> None:
+@@ -98,6 +97,7 @@ def test_payment_router_has_terms_and_explicit_payment_method_choice() -> None:
+     assert 'Command("paysupport")' in source
+     assert "pay:gift_methods:" in source
+     assert "pay:methods:" in source
+-    assert "yookassa:gift:" in source
++    assert "telegram_digital_yookassa_disabled" not in source
++    assert "старый способ оплаты цифрового пакета" in source
+     assert "stars:gift_terms:" in source
+     assert "stars:terms:" in source
+diff --git a/tests/test_telegram_yookassa_checkout.py b/tests/test_telegram_yookassa_checkout.py
+index 1d0c176..deedf25 100644
+--- a/tests/test_telegram_yookassa_checkout.py
++++ b/tests/test_telegram_yookassa_checkout.py
+@@ -15,31 +15,13 @@ def _request() -> web.Request:
+ 
+ 
+ @pytest.mark.asyncio
+-async def test_telegram_yookassa_kill_switch_rejects_existing_links(monkeypatch) -> None:
+-    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
+-
+-    def unexpected_checkout(**_kwargs):
+-        raise AssertionError("provider checkout must not be called")
+-
+-    monkeypatch.setattr(payment_http, "_create_yookassa_payment", unexpected_checkout)
+-
+-    response = await payment_http.pay_yookassa_web(_request())
+-
+-    assert response.status == 410
+-    assert "временно отключена" in response.text
+-
+-
+-@pytest.mark.asyncio
+-async def test_telegram_yookassa_enabled_reaches_provider(monkeypatch) -> None:
+-    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
+-    monkeypatch.setenv("PAYMENT_CHECKOUT_INTENT_REQUIRED", "0")
++@pytest.mark.parametrize("legacy_switch", ["0", "1"])
++async def test_telegram_yookassa_is_rejected_even_if_legacy_switch_is_enabled(monkeypatch, legacy_switch) -> None:
++    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", legacy_switch)
+     monkeypatch.setattr(
+-        payment_http,
+-        "_create_yookassa_payment",
+-        lambda **_kwargs: "https://yookassa.example/confirmation",
++        payment_http, "_create_yookassa_payment",
++        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("provider checkout must not be called")),
+     )
+-
+-    with pytest.raises(web.HTTPFound) as redirect:
+-        await payment_http.pay_yookassa_web(_request())
+-
+-    assert redirect.value.location == "https://yookassa.example/confirmation"
++    response = await payment_http.pay_yookassa_web(_request())
++    assert response.status == 410
++    assert "только Telegram Stars" in response.text
+diff --git a/tests/test_vk_user_journey_e2e.py b/tests/test_vk_user_journey_e2e.py
+index a0b6e95..920065f 100644
+--- a/tests/test_vk_user_journey_e2e.py
++++ b/tests/test_vk_user_journey_e2e.py
+@@ -10,6 +10,7 @@ from typing import Any
+ from config.settings import settings
+ from runtime.messenger_vk_sender import _callback_keyboard_json
+ from runtime.messenger_vk_ui import prepare_vk_keyboard_json
++from services.accounts.identity import resolve_account_for_identity
+ from services.messenger.audio_progress import AudioProgressItem, get_pending_audio_token, get_progress_snapshot
+ from services.messenger.reply_dispatcher import send_reply_bundle
+ from services.messenger.text_ui import MessengerReply
+@@ -102,7 +103,7 @@ async def _dispatch_vk(user_id: int, text: str) -> list[MessengerReply]:
+     return replies
+ 
+ 
+-def _prepare_paid_route(monkeypatch, *, user_id: int, item: AudioProgressItem, anchored: _AnchoredAudio, sender: _FakeVkSender) -> None:
++def _prepare_paid_route(monkeypatch, *, item: AudioProgressItem, anchored: _AnchoredAudio, sender: _FakeVkSender) -> None:
+     monkeypatch.setenv("TOKEN_ENFORCEMENT_MODE", "hard")
+     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://example.test")
+     monkeypatch.setattr(settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test", raising=False)
+@@ -112,14 +113,7 @@ def _prepare_paid_route(monkeypatch, *, user_id: int, item: AudioProgressItem, a
+         lambda anchor: anchored if int(anchor) == int(anchored.anchor) else None,
+     )
+     monkeypatch.setattr("services.messenger.reply_dispatcher.VkBotSender", lambda: sender)
+-    grant_tokens(
+-        user_id,
+-        package_id="practice_start_7",
+-        amount=3,
+-        provider="test",
+-        provider_payment_id=f"vk-e2e-{user_id}",
+-        idempotency_key=f"grant:test:vk-e2e:{user_id}",
+-    )
++
+ 
+ 
+ def test_vk_audio_rejection_uses_link_fallback(monkeypatch, tmp_path):
+@@ -130,9 +124,19 @@ def test_vk_audio_rejection_uses_link_fallback(monkeypatch, tmp_path):
+     anchored = _AnchoredAudio(anchor=1, clean_title="Morning Route", path=audio_path)
+ 
+     sender = _FakeVkSender(fail_audio=True)
+-    _prepare_paid_route(monkeypatch, user_id=user_id, item=item, anchored=anchored, sender=sender)
++    _prepare_paid_route(monkeypatch, item=item, anchored=anchored, sender=sender)
+ 
+     asyncio.run(_dispatch_vk(user_id, "start"))
++    canonical_user_id = resolve_account_for_identity("vk", str(user_id), allow_create=False)
++    assert canonical_user_id is not None
++    grant_tokens(
++        canonical_user_id,
++        package_id="practice_start_7",
++        amount=3,
++        provider="test",
++        provider_payment_id=f"vk-e2e-{user_id}",
++        idempotency_key=f"grant:test:vk-e2e:{user_id}",
++    )
+     asyncio.run(_dispatch_vk(user_id, "continue"))
+     score_keyboard = _latest_keyboard(sender)
+     assert json.loads(score_keyboard)["inline"] is False

@@ -1,0 +1,123 @@
++    assert query["user_id"] == str(user_id)
+     assert query["external_user_id"] == "mx902002"
+     assert query["source"] == "max"
+     assert query["kind"] == "tokens"
+     assert query["package_id"] in EXPECTED_PACKAGE_IDS
+     verify_checkout_intent(
+         query["intent"],
+-        expected_user_id="902002",
++        expected_user_id=str(user_id),
+         expected_package_id=query["package_id"],
+         expected_kind="tokens",
++        expected_source="max",
++        expected_amount_minor=int(query["amount_minor"]),
++        expected_currency=query["currency"],
+     )
+ 
+ 
+@@ -172,10 +175,10 @@ def test_max_gift_link_uses_reserved_gift_token_and_canonical_intent():
+         text="Мария из MAX",
+     )
+ 
+-    assert user_id == 902044
++    assert user_id >= (1 << 62)
+     url = _payment_urls(replies[0].text)[0]
+     query = _query(url)
+-    assert query["user_id"] == "902044"
++    assert query["user_id"] == str(user_id)
+     assert query["external_user_id"] == "mx902044"
+     assert query["source"] == "max"
+     assert query["kind"] == "tokens"
+@@ -183,8 +186,11 @@ def test_max_gift_link_uses_reserved_gift_token_and_canonical_intent():
+     assert query["gift_token"].startswith("gift_")
+     verify_checkout_intent(
+         query["intent"],
+-        expected_user_id="902044",
++        expected_user_id=str(user_id),
+         expected_package_id=query["package_id"],
+         expected_kind="tokens",
++        expected_source="max",
++        expected_amount_minor=int(query["amount_minor"]),
++        expected_currency=query["currency"],
+         expected_gift_token=query["gift_token"],
+     )
+diff --git a/tests/test_messenger_post_score_flow.py b/tests/test_messenger_post_score_flow.py
+index bc53449..feac48a 100644
+--- a/tests/test_messenger_post_score_flow.py
++++ b/tests/test_messenger_post_score_flow.py
+@@ -3,6 +3,7 @@ from pathlib import Path
+ from services.schema import init_db
+ from services.mood import create_session, set_pre, mark_audio_sent
+ from services.messenger.audio_progress import AudioProgressItem, mark_pending_audio_delivery
++from services.messenger.entrypoints import register_user_entry
+ from services.messenger.text_ui import handle_incoming_text
+ 
+ 
+@@ -11,26 +12,34 @@ def setup_module(module):
+ 
+ 
+ def test_done_with_pending_post_requests_post_score_in_text_channels():
+-    sid = create_session(930001, kind='work', source='auto', day='2026-04-16', slot='morning', anchor_id=11)
++    raw_user_id = 930001
++    account_id = register_user_entry(
++        raw_user_id, platform='max', external_user_id=str(raw_user_id)
++    ).user_id
++    sid = create_session(account_id, kind='work', source='auto', day='2026-04-16', slot='morning', anchor_id=11)
+     assert set_pre(sid, 3)
+     mark_audio_sent(sid)
+     item = AudioProgressItem(ordinal=1, anchor=11, title='A11', path=Path('audio/full/a11.opus'))
+-    mark_pending_audio_delivery(930001, item=item, platform='max', token=None)
++    mark_pending_audio_delivery(account_id, item=item, platform='max', token=None)
+ 
+-    canonical_user_id, replies = handle_incoming_text(930001, platform='max', external_user_id='930001', text='done')
++    canonical_user_id, replies = handle_incoming_text(raw_user_id, platform='max', external_user_id=str(raw_user_id), text='done')
+ 
+-    assert canonical_user_id == 930001
++    assert canonical_user_id == account_id
+     assert len(replies) == 1
+     assert 'оцените состояние после прослушивания' in replies[0].text.lower()
+ 
+ 
+ def test_numeric_reply_routes_to_post_score_when_post_is_pending():
+-    sid = create_session(930002, kind='home', source='auto', day='2026-04-16', slot='evening', anchor_id=12)
++    raw_user_id = 930002
++    account_id = register_user_entry(
++        raw_user_id, platform='vk', external_user_id=str(raw_user_id)
++    ).user_id
++    sid = create_session(account_id, kind='home', source='auto', day='2026-04-16', slot='evening', anchor_id=12)
+     assert set_pre(sid, -1)
+     mark_audio_sent(sid)
+ 
+-    canonical_user_id, replies = handle_incoming_text(930002, platform='vk', external_user_id='930002', text='4')
++    canonical_user_id, replies = handle_incoming_text(raw_user_id, platform='vk', external_user_id=str(raw_user_id), text='4')
+ 
+-    assert canonical_user_id == 930002
++    assert canonical_user_id == account_id
+     assert replies[0].kind == 'auto_post_score'
+     assert replies[0].meta['score'] == '4'
+diff --git a/tests/test_messenger_state_transition_contract.py b/tests/test_messenger_state_transition_contract.py
+index b89f6e0..55f24b1 100644
+--- a/tests/test_messenger_state_transition_contract.py
++++ b/tests/test_messenger_state_transition_contract.py
+@@ -6,7 +6,7 @@ from services.mood import create_session
+ from services.mood_text_flow import find_pending_pre_session_id
+ 
+ 
+-def _new_user(seed: int, *, platform: str = "vk") -> int:
++def _new_user(seed: int, *, platform: str = "vk") -> tuple[int, str]:
+     entry = register_user_entry(
+         seed,
+         platform=platform,
+@@ -16,7 +16,7 @@ def _new_user(seed: int, *, platform: str = "vk") -> int:
+         first_name=None,
+         start_payload="",
+     )
+-    return int(entry.user_id)
++    return int(entry.user_id), str(seed)
+ 
+ 
+ def test_admin_panel_is_not_exposed_in_vk_or_max_menu_text():
+@@ -36,7 +36,7 @@ def test_admin_panel_is_not_exposed_in_vk_or_max_menu_text():
+ 
+ 
+ def test_vk_pending_pre_score_treats_plus_one_as_score_not_demo_alias():

@@ -1,0 +1,109 @@
++    buttons = _buttons(kb_telegram_payment_methods(user_id=404, package_id="practice_start_7"))
+     callbacks = [str(button.callback_data) for button in buttons if button.callback_data]
+-    urls = [str(button.url) for button in buttons if button.url]
++    texts = [button.text for button in buttons]
+ 
+     assert "stars:terms:practice_start_7" in callbacks
+-    assert len(urls) == 1
+-    params = parse_qs(urlsplit(urls[0]).query)
+-    assert params["source"] == ["telegram"]
+-    assert params["user_id"] == ["404"]
+-    assert params["package_id"] == ["practice_start_7"]
+-    verify_checkout_intent(
+-        params["intent"][0],
+-        expected_user_id=404,
+-        expected_package_id="practice_start_7",
+-    )
+-
+-    texts = [button.text for button in buttons]
++    assert not any(button.url for button in buttons)
+     assert "⭐ Звёздами Telegram — 1 226 звёзд" in texts
+-    assert "💳 Картой через ЮKassa — 1 900 ₽" in texts
+-
+     text = telegram_payment_method_text("practice_start_7")
+-    assert "Это две готовые цены одного пакета — пересчитывать ничего не нужно" in text
+-    assert "Звёздами Telegram — 1 226 звёзд" in text
+-    assert "Картой через ЮKassa — 1 900 ₽" in text
+-    assert "PROVIDER_ACCOUNT_INVALID" not in text
+-    assert "XTR" not in text
+-    assert "RUB" not in text
++    assert "проводится звёздами Telegram" in text
++    assert "1 226 звёзд" in text
++    assert "ЮKassa" not in text
+ 
+ 
+-def test_stars_emergency_switch_keeps_yookassa_available(monkeypatch):
+-    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://bot.example")
+-    monkeypatch.setenv("PAYMENT_CHECKOUT_SIGNING_KEY", "unit-test-checkout-key")
++def test_stars_emergency_switch_does_not_fall_back_to_external_checkout(monkeypatch):
+     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "0")
+-
+-    buttons = _buttons(
+-        kb_telegram_payment_methods(
+-            user_id=405,
+-            package_id="practice_start_7",
+-        )
+-    )
++    buttons = _buttons(kb_telegram_payment_methods(user_id=405, package_id="practice_start_7"))
+     texts = [button.text for button in buttons]
+     callbacks = [button.callback_data for button in buttons if button.callback_data]
+ 
+-    assert not any((callback or "").startswith("stars:terms:") for callback in callbacks)
+-    assert any(button.url and "/pay/yookassa?" in str(button.url) for button in buttons)
++    assert not any(button.url for button in buttons)
+     assert "⭐ Оплата звёздами временно недоступна" in texts
+     assert "tariffs:stars_disabled" in callbacks
+-    assert any("ЮKassa" in text for text in texts)
++    assert "временно недоступна" in telegram_payment_method_text("practice_start_7")
+ 
+ 
+-def test_telegram_yookassa_switch_removes_external_url(monkeypatch):
+-    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://bot.example")
++def test_legacy_telegram_yookassa_env_cannot_reenable_external_checkout(monkeypatch):
+     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
+-    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
+-
+-    buttons = _buttons(
+-        kb_telegram_payment_methods(
+-            user_id=406,
+-            package_id="practice_start_7",
+-        )
+-    )
+-    callbacks = [button.callback_data for button in buttons if button.callback_data]
+-
++    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
++    buttons = _buttons(kb_telegram_payment_methods(user_id=406, package_id="practice_start_7"))
+     assert not any(button.url for button in buttons)
+-    assert "stars:terms:practice_start_7" in callbacks
+-    assert "tariffs:yookassa_disabled" in callbacks
+-    assert "Оплата картой через ЮKassa временно недоступна" in telegram_payment_method_text("practice_start_7")
++    assert not any("ЮKassa" in button.text for button in buttons)
+diff --git a/tests/test_practice_token_contract.py b/tests/test_practice_token_contract.py
+index e9cb6f6..94d271c 100644
+--- a/tests/test_practice_token_contract.py
++++ b/tests/test_practice_token_contract.py
+@@ -54,11 +54,11 @@ def test_explicit_stars_price_requires_explicit_mode(monkeypatch):
+     assert telegram_stars_price("practice_start_7") == 1700
+ 
+ 
+-def test_telegram_yookassa_switch_defaults_on_and_can_be_disabled(monkeypatch):
++def test_telegram_yookassa_is_permanently_disabled_for_digital_packages(monkeypatch):
+     monkeypatch.delenv("TELEGRAM_YOOKASSA_ENABLED", raising=False)
+-    assert telegram_yookassa_enabled() is True
++    assert telegram_yookassa_enabled() is False
+ 
+-    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
++    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
+     assert telegram_yookassa_enabled() is False
+ 
+ 
+diff --git a/tests/test_practice_token_lifecycle.py b/tests/test_practice_token_lifecycle.py
+index dd60038..2ec9c33 100644
+--- a/tests/test_practice_token_lifecycle.py
++++ b/tests/test_practice_token_lifecycle.py
+@@ -223,6 +223,26 @@ def test_payment_url_uses_external_user_id():
+     assert url == "https://bot.example/pay/yookassa?source=vk&user_id=777&kind=tokens&package_id=practice_personal_month"
+ 
+ 
++def test_same_numeric_external_ids_keep_separate_wallets_without_bridge():
++    telegram = register_user_entry(777001, platform="telegram", external_user_id="777001")

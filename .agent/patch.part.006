@@ -1,0 +1,256 @@
++        (str(reservation_id),),
++    ).fetchall()
++    if not rows:
++        raise RuntimeError("practice_reservation_lot_missing")
++    for row in rows:
++        lot_id, amount = int(row["lot_id"]), int(row["amount"])
++        cursor = conn.execute(
++            """
++            UPDATE practice_token_lots
++            SET reserved_tokens=reserved_tokens-?, available_tokens=available_tokens+?, updated_at=CURRENT_TIMESTAMP
++            WHERE id=? AND reserved_tokens>=?
++            """.strip(),
++            (amount, amount, lot_id, amount),
++        )
++        if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
++            raise RuntimeError("practice_lot_release_mismatch")
++    conn.execute(
++        "UPDATE practice_reservation_lots SET status='released', updated_at=CURRENT_TIMESTAMP WHERE reservation_id=? AND status='reserved'",
++        (str(reservation_id),),
++    )
++
++
++def payment_lot(conn: Any, *, provider: str, provider_payment_id: str) -> dict[str, Any]:
++    ensure_lot_schema(conn)
++    row = conn.execute(
++        """
++        SELECT id, user_id, package_id, granted_tokens, available_tokens,
++               reserved_tokens, used_tokens, refund_held_tokens, refunded_tokens, refundable
++        FROM practice_token_lots
++        WHERE provider=? AND provider_payment_id=?
++        LIMIT 1
++        """.strip(),
++        (str(provider), str(provider_payment_id)),
++    ).fetchone()
++    return {str(key): row[key] for key in row.keys()} if row is not None else {}
++
++
++def hold_payment_lot_for_refund(conn: Any, *, provider: str, provider_payment_id: str, amount: int) -> None:
++    cursor = conn.execute(
++        """
++        UPDATE practice_token_lots
++        SET available_tokens=available_tokens-?, refund_held_tokens=refund_held_tokens+?, updated_at=CURRENT_TIMESTAMP
++        WHERE provider=? AND provider_payment_id=? AND refundable=1
++          AND granted_tokens=? AND available_tokens=? AND reserved_tokens=0
++          AND used_tokens=0 AND refund_held_tokens=0 AND refunded_tokens=0
++        """.strip(),
++        (int(amount), int(amount), str(provider), str(provider_payment_id), int(amount), int(amount)),
++    )
++    if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
++        raise RuntimeError("payment_token_lot_not_fully_refundable")
++
++
++def release_payment_lot_refund_hold(conn: Any, *, provider: str, provider_payment_id: str, amount: int) -> None:
++    cursor = conn.execute(
++        """
++        UPDATE practice_token_lots
++        SET refund_held_tokens=refund_held_tokens-?, available_tokens=available_tokens+?, updated_at=CURRENT_TIMESTAMP
++        WHERE provider=? AND provider_payment_id=? AND refund_held_tokens=?
++        """.strip(),
++        (int(amount), int(amount), str(provider), str(provider_payment_id), int(amount)),
++    )
++    if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
++        raise RuntimeError("payment_token_refund_hold_missing")
++
++
++def finalize_payment_lot_refund(conn: Any, *, provider: str, provider_payment_id: str, amount: int) -> None:
++    cursor = conn.execute(
++        """
++        UPDATE practice_token_lots
++        SET refund_held_tokens=refund_held_tokens-?, refunded_tokens=refunded_tokens+?, updated_at=CURRENT_TIMESTAMP
++        WHERE provider=? AND provider_payment_id=? AND refund_held_tokens=?
++        """.strip(),
++        (int(amount), int(amount), str(provider), str(provider_payment_id), int(amount)),
++    )
++    if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
++        raise RuntimeError("payment_token_refund_hold_missing")
+diff --git a/services/practice_tokens_access_core.py b/services/practice_tokens_access_core.py
+index 88b2974..dc98e1d 100644
+--- a/services/practice_tokens_access_core.py
++++ b/services/practice_tokens_access_core.py
+@@ -5,6 +5,11 @@ import uuid
+ from typing import Any
+ 
+ from services.db import db, tx
++from services.practice_token_lots import (
++    consume_lot_reservation,
++    release_lot_reservation,
++    reserve_from_lots,
++)
+ from services.practice_tokens_wallet import (
+     EMPTY_BALANCE_MESSAGE,
+     RESERVE_FAILED_MESSAGE,
+@@ -180,6 +185,7 @@ def reserve_practice(
+                 )
+                 return False, get_wallet_in_conn(conn, uid), None
+ 
++            reserve_from_lots(conn, user_id=uid, reservation_id=reservation_id, amount=1)
+             wallet_after = get_wallet_in_conn(conn, uid)
+             insert_ledger(
+                 conn,
+@@ -230,6 +236,7 @@ def consume_reservation(reservation_id: str, *, reason: str = "audio_delivery_su
+ 
+             user_id = int(row["user_id"])
+             amount = int(row["amount"])
++            consume_lot_reservation(conn, raw)
+             conn.execute(
+                 """
+                 UPDATE practice_wallets
+@@ -283,6 +290,7 @@ def release_reservation(reservation_id: str, *, reason: str = "audio_delivery_fa
+ 
+             user_id = int(row["user_id"])
+             amount = int(row["amount"])
++            release_lot_reservation(conn, raw)
+             conn.execute(
+                 """
+                 UPDATE practice_wallets
+diff --git a/services/practice_tokens_wallet.py b/services/practice_tokens_wallet.py
+index c5311ec..f6a29eb 100644
+--- a/services/practice_tokens_wallet.py
++++ b/services/practice_tokens_wallet.py
+@@ -6,6 +6,7 @@ from typing import Any
+ 
+ from services.accounts.identity import ensure_account
+ from services.db import db, tx
++from services.practice_token_lots import create_lot_in_conn
+ from services.practice_token_contract import (
+     PracticePackage,
+     normalize_delivery_mode,
+@@ -19,6 +20,8 @@ _REQUIRED_SCHEMA_TABLES = frozenset({
+     "payment_token_grants",
+     "user_practice_preferences",
+     "practice_reservations",
++    "practice_token_lots",
++    "practice_reservation_lots",
+ })
+ 
+ EMPTY_BALANCE_MESSAGE = (
+@@ -85,21 +88,15 @@ def get_package(package_id: str | None) -> PracticePackage:
+ 
+ 
+ def canonical_practice_user_id(user_id: int) -> int:
++    """Resolve an already-canonical id without cross-platform guessing.
++
++    Entry points are responsible for resolving (platform, external_user_id) to a
++    canonical account.  Looking up a bare number across all messenger platforms
++    is unsafe because identical numbers can belong to different people.
++    """
++
+     uid = int(user_id)
+-    external = str(uid)
+     with db() as conn:
+-        rows = conn.execute(
+-            """
+-            SELECT DISTINCT account_id
+-            FROM account_channel_identities
+-            WHERE external_user_id=?
+-            ORDER BY account_id
+-            """.strip(),
+-            (external,),
+-        ).fetchall()
+-        account_ids = [int(row["account_id"]) for row in rows]
+-        if len(account_ids) == 1:
+-            return account_ids[0]
+         row = conn.execute(
+             "SELECT account_id FROM accounts WHERE account_id=? LIMIT 1",
+             (uid,),
+@@ -184,34 +181,31 @@ def grant_tokens(
+     idempotency_key: str | None = None,
+ ) -> tuple[bool, PracticeWallet, int | None]:
+     uid = canonical_practice_user_id(int(user_id))
+-    key = idempotency_key or f"grant:{provider}:{provider_payment_id}:{uid}:{package_id}:{amount}"
++    tokens = int(amount)
++    if tokens <= 0:
++        raise ValueError("practice_grant_amount_must_be_positive")
++    key = idempotency_key or f"grant:{provider}:{provider_payment_id}:{uid}:{package_id}:{tokens}"
+     with db() as conn:
+         with tx(conn):
+             ensure_wallet(conn, uid)
+-            existing = conn.execute(
+-                "SELECT id FROM practice_ledger WHERE idempotency_key=?",
+-                (key,),
+-            ).fetchone()
++            existing = conn.execute("SELECT id FROM practice_ledger WHERE idempotency_key=?", (key,)).fetchone()
+             if existing:
+                 return False, get_wallet_in_conn(conn, uid), int(existing["id"])
+             wallet = get_wallet_in_conn(conn, uid)
+-            balance = int(wallet.available_tokens) + int(amount)
++            balance = int(wallet.available_tokens) + tokens
+             conn.execute(
+                 "UPDATE practice_wallets SET available_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+                 (balance, uid),
+             )
+             ledger_id = insert_ledger(
+-                conn,
+-                user_id=uid,
+-                event_type="grant",
+-                amount=int(amount),
+-                balance_after=balance,
+-                reason="payment_succeeded",
+-                source=source,
+-                package_id=package_id,
+-                provider=provider,
+-                provider_payment_id=provider_payment_id,
+-                idempotency_key=key,
++                conn, user_id=uid, event_type="grant", amount=tokens, balance_after=balance,
++                reason="payment_succeeded", source=source, package_id=package_id,
++                provider=provider, provider_payment_id=provider_payment_id, idempotency_key=key,
++            )
++            create_lot_in_conn(
++                conn, lot_key=key, user_id=uid, provider=provider,
++                provider_payment_id=provider_payment_id, package_id=package_id,
++                amount=tokens, refundable=bool(provider_payment_id and provider != "manual"),
+             )
+             wallet_after = get_wallet_in_conn(conn, uid)
+     return True, wallet_after, ledger_id
+@@ -227,37 +221,172 @@ def grant_tokens_for_payment(
+ ) -> tuple[bool, PracticeWallet, int | None]:
+     uid = canonical_practice_user_id(int(user_id))
+     package = get_package(package_id)
++    key = f"payment_grant:{provider}:{provider_payment_id}"
++
++    def _validated_existing(row: Any) -> int | None:
++        if (
++            int(row["user_id"]) != uid
++            or str(row["package_id"]) != package.package_id
++            or int(row["tokens_granted"]) != int(package.tokens)
++        ):
++            raise RuntimeError("payment_token_grant_idempotency_conflict")
++        ledger_value = row["ledger_id"]
++        if ledger_value is None:
++            raise RuntimeError("payment_token_grant_partial_state")
++        return int(ledger_value)
++
+     with db() as conn:
+         with tx(conn):
+             ensure_wallet(conn, uid)
+             existing = conn.execute(
+-                "SELECT ledger_id FROM payment_token_grants WHERE provider=? AND provider_payment_id=?",
++                """
++                SELECT user_id, package_id, tokens_granted, ledger_id
++                FROM payment_token_grants
++                WHERE provider=? AND provider_payment_id=?
++                LIMIT 1
++                """.strip(),
+                 (provider, provider_payment_id),
+             ).fetchone()
+             if existing:
+-                return False, get_wallet_in_conn(conn, uid), int(existing["ledger_id"] or 0)
+-
+-    inserted, wallet, ledger_id = grant_tokens(
+-        uid,
+-        package_id=package.package_id,
+-        amount=package.tokens,
+-        provider=provider,
+-        provider_payment_id=provider_payment_id,
+-        source=source,

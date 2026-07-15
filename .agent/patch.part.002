@@ -1,0 +1,249 @@
+-    raise ValueError("proposed_user_id is required for first-time nonnumeric messenger identities")
++    if norm == "telegram":
++        if proposed_user_id is not None:
++            return int(proposed_user_id)
++        if raw.isdigit():
++            return int(raw)
++        raise ValueError("proposed_user_id is required for first-time Telegram identities")
++    if not raw:
++        raise ValueError("external_user_id is required for first-time non-Telegram identities")
++    return _platform_scoped_account_id(norm, raw)
+ 
+ 
+ def link_channel_to_account(
+@@ -153,7 +183,7 @@ def resolve_account_for_identity(
+             return aid
+     if not allow_create:
+         return None
+-    aid = _proposed_account_id(proposed_user_id, ext)
++    aid = _proposed_account_id(norm, proposed_user_id, ext)
+     return link_channel_to_account(
+         aid,
+         norm,
+diff --git a/services/messenger/text_ui.py b/services/messenger/text_ui.py
+index ab0f98f..316fd89 100644
+--- a/services/messenger/text_ui.py
++++ b/services/messenger/text_ui.py
+@@ -653,7 +653,7 @@ def _kind_for_audio_item(item: object | None) -> str:
+         return "home"
+ 
+     try:
+-        if int(anchor) % 2 == 0:
++        if int(str(anchor)) % 2 == 0:
+             return "home"
+     except Exception:
+         pass
+@@ -718,12 +718,23 @@ def handle_incoming_text(
+     action, value = _parse_command(text)
+     norm_platform = normalize_platform(platform)
+     raw_lower = (text or "").strip().lower()
++    payload = value if action == "start" else None
++    entry = register_user_entry(
++        int(user_id),
++        platform=platform,
++        external_user_id=external_user_id,
++        username=username,
++        display_name=display_name,
++        first_name=first_name,
++        start_payload=payload,
++    )
++    canonical_user_id = int(entry.user_id)
+ 
+     if raw_lower in {"pay", "/pay", "оплата", "оплатить", "тарифы", "💳 тарифы"}:
+-        return int(user_id), [
++        return canonical_user_id, [
+             MessengerReply(
+                 text=_payment_text(
+-                    int(user_id),
++                    canonical_user_id,
+                     platform=norm_platform,
+                     external_user_id=external_user_id,
+                 )
+@@ -731,22 +742,22 @@ def handle_incoming_text(
+         ]
+ 
+     if action == "continue" and norm_platform == "telegram":
+-        return int(user_id), [MessengerReply(kind="next_audio")]
++        return canonical_user_id, [MessengerReply(kind="next_audio")]
+ 
+     if action == "done" and norm_platform == "telegram":
+         try:
+-            confirmed = confirm_pending_audio_delivery(int(user_id), platform=norm_platform)
++            confirmed = confirm_pending_audio_delivery(canonical_user_id, platform=norm_platform)
+         except TypeError:
+-            confirmed = confirm_pending_audio_delivery(int(user_id))
++            confirmed = confirm_pending_audio_delivery(canonical_user_id)
+ 
+         if confirmed is None:
+-            return int(user_id), [
++            return canonical_user_id, [
+                 MessengerReply(
+                     text="Сейчас нет аудио, которое ожидает подтверждения. Нажмите «🎧 Получить аудио» или отправьте continue."
+                 )
+             ]
+ 
+-        replies = [
++        done_replies = [
+             MessengerReply(
+                 text=(
+                     f"✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\n\n"
+@@ -757,20 +768,10 @@ def handle_incoming_text(
+             )
+         ]
+         if norm_platform == "telegram":
+-            replies.append(MessengerReply(kind="next_audio"))
+-        return int(user_id), replies
++            done_replies.append(MessengerReply(kind="next_audio"))
++        return canonical_user_id, done_replies
++
+ 
+-    payload = value if action == "start" else None
+-    entry = register_user_entry(
+-        int(user_id),
+-        platform=platform,
+-        external_user_id=external_user_id,
+-        username=username,
+-        display_name=display_name,
+-        first_name=first_name,
+-        start_payload=payload,
+-    )
+-    canonical_user_id = int(entry.user_id)
+ 
+     if score_value is not None and action == "menu":
+         # Telegram has explicit mood:post callbacks. VK regular keyboards may
+@@ -855,20 +856,28 @@ def handle_incoming_text(
+     norm_platform = normalize_platform(platform)
+ 
+     if action == "pay":
+-        return int(user_id), [MessengerReply(text=_payment_text(int(user_id), platform=norm_platform, external_user_id=external_user_id))]
++        return canonical_user_id, [
++            MessengerReply(
++                text=_payment_text(
++                    canonical_user_id,
++                    platform=norm_platform,
++                    external_user_id=external_user_id,
++                )
++            )
++        ]
+ 
+     if action == "gift":
+         return canonical_user_id, [_start_gift_recipient_flow(canonical_user_id)]
+ 
+     if action in {"start", "menu"}:
+-        replies: list[MessengerReply] = []
++        menu_replies: list[MessengerReply] = []
+         if entry.linked_via_bridge:
+-            replies.append(MessengerReply(text=_bridge_linked_text(canonical_user_id, platform)))
++            menu_replies.append(MessengerReply(text=_bridge_linked_text(canonical_user_id, platform)))
+             if _should_auto_resume_after_bridge(canonical_user_id):
+-                replies.append(MessengerReply(kind='next_audio'))
+-                return canonical_user_id, replies
+-        replies.append(MessengerReply(text=_menu_text(canonical_user_id)))
+-        return canonical_user_id, replies
++                menu_replies.append(MessengerReply(kind='next_audio'))
++                return canonical_user_id, menu_replies
++        menu_replies.append(MessengerReply(text=_menu_text(canonical_user_id)))
++        return canonical_user_id, menu_replies
+     if action == "help":
+         return canonical_user_id, [MessengerReply(text=_help_text())]
+     if action == "settings":
+diff --git a/services/migrations/__init__.py b/services/migrations/__init__.py
+index 92096eb..4563c68 100644
+--- a/services/migrations/__init__.py
++++ b/services/migrations/__init__.py
+@@ -25,8 +25,10 @@ from services.migrations.growth_conversion_bridge_state_v2 import apply as _appl
+ from services.migrations.growth_apply_gateway_v3 import apply as _apply_growth_apply_gateway_v3
+ from services.migrations.growth_apply_review_confirmations_v4 import apply as _apply_growth_apply_review_confirmations_v4
+ from services.migrations.sales_desk_v5 import apply as _apply_sales_desk_v5
++from services.migrations.sales_desk_revenue_v6 import apply as _apply_sales_desk_revenue_v6
+ from services.migrations.practice_token_economy_v1 import apply as _apply_practice_token_economy_v1
+ from services.migrations.practice_token_audit_v2 import apply as _apply_practice_token_audit_v2
++from services.migrations.practice_token_lots_v4 import apply as _apply_practice_token_lots_v4
+ from services.migrations.practice_journey_consistency_v3 import apply as _apply_practice_journey_consistency_v3
+ from services.migrations.premium_entitlements_v1 import apply as _apply_premium_entitlements_v1
+ from services.migrations.gift_claims_v1 import apply as _apply_gift_claims_v1
+@@ -61,8 +63,10 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
+     _apply_growth_apply_gateway_v3(conn)
+     _apply_growth_apply_review_confirmations_v4(conn)
+     _apply_sales_desk_v5(conn)
++    _apply_sales_desk_revenue_v6(conn)
+     _apply_practice_token_economy_v1(conn)
+     _apply_practice_token_audit_v2(conn)
++    _apply_practice_token_lots_v4(conn)
+     _apply_practice_journey_consistency_v3(conn)
+     _apply_premium_entitlements_v1(conn)
+     _apply_gift_claims_v1(conn)
+diff --git a/services/migrations/practice_token_lots_v4.py b/services/migrations/practice_token_lots_v4.py
+new file mode 100644
+index 0000000..dfbd183
+--- /dev/null
++++ b/services/migrations/practice_token_lots_v4.py
+@@ -0,0 +1,97 @@
++from __future__ import annotations
++
++import sqlite3
++
++from services.migrations._helpers import mark_migration, migration_applied
++
++NAME = "practice_token_lots_v4"
++
++
++def apply(conn: sqlite3.Connection) -> None:
++    if migration_applied(conn, NAME):
++        return
++    conn.execute(
++        """
++        CREATE TABLE IF NOT EXISTS practice_token_lots(
++            id INTEGER PRIMARY KEY AUTOINCREMENT,
++            lot_key TEXT NOT NULL UNIQUE,
++            user_id BIGINT NOT NULL,
++            provider TEXT NOT NULL DEFAULT '',
++            provider_payment_id TEXT NOT NULL DEFAULT '',
++            package_id TEXT NOT NULL DEFAULT '',
++            granted_tokens INTEGER NOT NULL,
++            available_tokens INTEGER NOT NULL,
++            reserved_tokens INTEGER NOT NULL DEFAULT 0,
++            used_tokens INTEGER NOT NULL DEFAULT 0,
++            refund_held_tokens INTEGER NOT NULL DEFAULT 0,
++            refunded_tokens INTEGER NOT NULL DEFAULT 0,
++            refundable INTEGER NOT NULL DEFAULT 0,
++            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
++            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
++            CHECK(granted_tokens >= 0),
++            CHECK(available_tokens >= 0),
++            CHECK(reserved_tokens >= 0),
++            CHECK(used_tokens >= 0),
++            CHECK(refund_held_tokens >= 0),
++            CHECK(refunded_tokens >= 0),
++            CHECK(available_tokens + reserved_tokens + used_tokens + refund_held_tokens + refunded_tokens = granted_tokens)
++        )
++        """
++    )
++    conn.execute(
++        "CREATE INDEX IF NOT EXISTS idx_practice_token_lots_user_available ON practice_token_lots(user_id, available_tokens, id)"
++    )
++    conn.execute(
++        "CREATE UNIQUE INDEX IF NOT EXISTS idx_practice_token_lots_payment ON practice_token_lots(provider, provider_payment_id) WHERE provider_payment_id <> ''"
++    )
++    conn.execute(
++        """
++        CREATE TABLE IF NOT EXISTS practice_reservation_lots(
++            reservation_id TEXT NOT NULL,
++            lot_id BIGINT NOT NULL,
++            amount INTEGER NOT NULL,
++            status TEXT NOT NULL,
++            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
++            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
++            PRIMARY KEY(reservation_id, lot_id),
++            FOREIGN KEY(lot_id) REFERENCES practice_token_lots(id),
++            CHECK(amount > 0),
++            CHECK(status IN ('reserved','consumed','released'))
++        )
++        """
++    )
++    conn.execute(
++        "CREATE INDEX IF NOT EXISTS idx_practice_reservation_lots_lot ON practice_reservation_lots(lot_id, status)"
++    )
++
++    # Existing aggregate wallets have no trustworthy payment provenance. Keep
++    # them usable in an explicit non-refundable legacy lot rather than guessing

@@ -1,0 +1,251 @@
+-        idempotency_key=f"payment_grant:{provider}:{provider_payment_id}",
+-    )
+-    with db() as conn:
+-        with tx(conn):
+-            ensure_schema(conn)
++                ledger_id = _validated_existing(existing)
++                return False, get_wallet_in_conn(conn, uid), ledger_id
++
++            ledger = conn.execute(
++                """
++                SELECT id, user_id, amount, package_id, provider, provider_payment_id
++                FROM practice_ledger
++                WHERE idempotency_key=?
++                LIMIT 1
++                """.strip(),
++                (key,),
++            ).fetchone()
++            lot = conn.execute(
++                """
++                SELECT id, user_id, package_id, granted_tokens
++                FROM practice_token_lots
++                WHERE lot_key=?
++                LIMIT 1
++                """.strip(),
++                (key,),
++            ).fetchone()
++
++            # A process may have committed the atomic wallet/ledger/lot grant but
++            # lost only the denormalized payment marker in a later repair or
++            # manual operation. Recreate that marker without granting again.
++            if ledger is not None or lot is not None:
++                if ledger is None or lot is None:
++                    raise RuntimeError("payment_token_grant_partial_state")
++                matches = (
++                    int(ledger["user_id"]) == uid
++                    and int(ledger["amount"]) == int(package.tokens)
++                    and str(ledger["package_id"] or "") == package.package_id
++                    and str(ledger["provider"] or "") == str(provider)
++                    and str(ledger["provider_payment_id"] or "") == str(provider_payment_id)
++                    and int(lot["user_id"]) == uid
++                    and str(lot["package_id"] or "") == package.package_id
++                    and int(lot["granted_tokens"]) == int(package.tokens)
++                )
++                if not matches:
++                    raise RuntimeError("payment_token_grant_idempotency_conflict")
++                ledger_id = int(ledger["id"])
++                conn.execute(
++                    """
++                    INSERT INTO payment_token_grants(
++                        provider, provider_payment_id, user_id, package_id,
++                        tokens_granted, ledger_id
++                    ) VALUES(?,?,?,?,?,?)
++                    ON CONFLICT(provider, provider_payment_id) DO NOTHING
++                    """.strip(),
++                    (
++                        provider,
++                        provider_payment_id,
++                        uid,
++                        package.package_id,
++                        package.tokens,
++                        ledger_id,
++                    ),
++                )
++                restored = conn.execute(
++                    """
++                    SELECT user_id, package_id, tokens_granted, ledger_id
++                    FROM payment_token_grants
++                    WHERE provider=? AND provider_payment_id=?
++                    LIMIT 1
++                    """.strip(),
++                    (provider, provider_payment_id),
++                ).fetchone()
++                if restored is None:
++                    raise RuntimeError("payment_token_grant_marker_restore_failed")
++                return False, get_wallet_in_conn(conn, uid), _validated_existing(restored)
++
++            # Claim the provider payment inside the same transaction before any
++            # wallet mutation. A concurrent duplicate blocks on the unique key
++            # and then observes the completed marker instead of granting twice.
++            claimed = conn.execute(
++                """
++                INSERT INTO payment_token_grants(
++                    provider, provider_payment_id, user_id, package_id,
++                    tokens_granted, ledger_id
++                ) VALUES(?,?,?,?,?,NULL)
++                ON CONFLICT(provider, provider_payment_id) DO NOTHING
++                """.strip(),
++                (provider, provider_payment_id, uid, package.package_id, package.tokens),
++            )
++            if int(getattr(claimed, "rowcount", 0) or 0) <= 0:
++                concurrent = conn.execute(
++                    """
++                    SELECT user_id, package_id, tokens_granted, ledger_id
++                    FROM payment_token_grants
++                    WHERE provider=? AND provider_payment_id=?
++                    LIMIT 1
++                    """.strip(),
++                    (provider, provider_payment_id),
++                ).fetchone()
++                if concurrent is None:
++                    raise RuntimeError("payment_token_grant_claim_failed")
++                return False, get_wallet_in_conn(conn, uid), _validated_existing(concurrent)
++
++            wallet = get_wallet_in_conn(conn, uid)
++            balance = int(wallet.available_tokens) + int(package.tokens)
+             conn.execute(
++                "UPDATE practice_wallets SET available_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
++                (balance, uid),
++            )
++            ledger_id = insert_ledger(
++                conn,
++                user_id=uid,
++                event_type="grant",
++                amount=package.tokens,
++                balance_after=balance,
++                reason="payment_succeeded",
++                source=source,
++                package_id=package.package_id,
++                provider=provider,
++                provider_payment_id=provider_payment_id,
++                idempotency_key=key,
++            )
++            create_lot_in_conn(
++                conn,
++                lot_key=key,
++                user_id=uid,
++                provider=provider,
++                provider_payment_id=provider_payment_id,
++                package_id=package.package_id,
++                amount=package.tokens,
++                refundable=True,
++            )
++            updated = conn.execute(
+                 """
+-                INSERT OR IGNORE INTO payment_token_grants(
+-                    provider, provider_payment_id, user_id, package_id, tokens_granted, ledger_id
+-                ) VALUES(?,?,?,?,?,?)
++                UPDATE payment_token_grants
++                SET ledger_id=?
++                WHERE provider=? AND provider_payment_id=? AND ledger_id IS NULL
+                 """.strip(),
+-                (provider, provider_payment_id, uid, package.package_id, package.tokens, ledger_id),
++                (ledger_id, provider, provider_payment_id),
+             )
+-    return inserted, wallet, ledger_id
++            if int(getattr(updated, "rowcount", 0) or 0) <= 0:
++                raise RuntimeError("payment_token_grant_finalize_failed")
++            wallet_after = get_wallet_in_conn(conn, uid)
++    return True, wallet_after, ledger_id
+ 
+ 
+ def get_delivery_mode(user_id: int) -> str:
+diff --git a/services/premium_entitlements.py b/services/premium_entitlements.py
+index e8bf441..20b0f73 100644
+--- a/services/premium_entitlements.py
++++ b/services/premium_entitlements.py
+@@ -50,30 +50,33 @@ def package_entitlement_types(package_id: str) -> tuple[str, ...]:
+     return tuple(out)
+ 
+ 
+-def _canonical_premium_user_id(user_id: int) -> int:
++def _canonical_premium_user_id(user_id: int, *, platform: str | None = None) -> int:
++    """Resolve either a canonical id or an exact platform-scoped identity.
++
++    A bare external number is never searched across all messengers. Callers that
++    still receive a transport id must supply its platform, which makes the
++    lookup unambiguous.
++    """
++
+     uid = int(user_id)
+-    external = str(uid)
++    norm = normalize_platform(platform) if platform else None
+     with db() as conn:
+-        rows = conn.execute(
+-            """
+-            SELECT DISTINCT account_id
+-            FROM account_channel_identities
+-            WHERE external_user_id=?
+-            ORDER BY account_id
+-            """.strip(),
+-            (external,),
+-        ).fetchall()
+-        account_ids = [int(row["account_id"]) for row in rows]
+-        if len(account_ids) == 1:
+-            return account_ids[0]
+-
++        if norm:
++            row = conn.execute(
++                """
++                SELECT account_id FROM account_channel_identities
++                WHERE platform=? AND external_user_id=? LIMIT 1
++                """.strip(),
++                (norm, str(uid)),
++            ).fetchone()
++            if row is not None:
++                return int(row["account_id"])
+         row = conn.execute(
+             "SELECT account_id FROM accounts WHERE account_id=? LIMIT 1",
+             (uid,),
+         ).fetchone()
+         if row is not None:
+             return int(row["account_id"])
+-
+     return ensure_account(uid)
+ 
+ 
+@@ -239,7 +242,7 @@ def grant_premium_entitlements_for_payment(
+     source: str = "webhook",
+     fallback_platform: str = MessengerPlatform.TELEGRAM.value,
+ ) -> PremiumGrantResult:
+-    uid = _canonical_premium_user_id(int(user_id))
++    uid = _canonical_premium_user_id(int(user_id), platform=fallback_platform)
+     package = package_by_id(package_id)
+     entitlement_types = package_entitlement_types(package.package_id)
+     if not entitlement_types:
+diff --git a/services/sales_desk.py b/services/sales_desk.py
+index e56a52e..49b6dc3 100644
+--- a/services/sales_desk.py
++++ b/services/sales_desk.py
+@@ -96,8 +96,10 @@ def format_money(amount_minor: int, currency: str = "RUB") -> str:
+     amount = max(0, int(amount_minor or 0))
+     normalized_currency = str(currency or "RUB").upper()
+     if normalized_currency == "RUB":
+-        return f"{amount / 100:.2f} ₽"
+-    return f"{amount / 100:.2f} {normalized_currency}".strip()
++        return f"{amount / 100:,.2f} ₽".replace(",", " ")
++    if normalized_currency == "XTR":
++        return f"{amount} ⭐"
++    return f"{amount} {normalized_currency}".strip()
+ 
+ 
+ def format_sales_overview(snapshot: dict[str, Any]) -> str:
+@@ -118,7 +120,13 @@ def format_sales_overview(snapshot: dict[str, Any]) -> str:
+             f"Без ответственного: {int(snapshot.get('unassigned') or 0)}",
+             f"Просрочен следующий контакт: {int(snapshot.get('overdue') or 0)}",
+             "Выручка выигранных лидов: "
+-            f"{format_money(int(snapshot.get('won_revenue_minor') or 0))}",
++            + (
++                ", ".join(
++                    format_money(int(amount), str(currency))
++                    for currency, amount in sorted(dict(snapshot.get("won_revenue_by_currency") or {}).items())
++                )
++                or format_money(0)
++            ),
+         ]
+     )
+ 
+@@ -136,7 +144,13 @@ def format_lead_card(lead: dict[str, Any]) -> str:
+         f"Кампания: {str(lead.get('campaign') or '—')}",
+         f"Креатив: {str(lead.get('creative') or '—')}",
+         "Выручка: "

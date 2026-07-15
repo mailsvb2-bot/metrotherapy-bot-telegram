@@ -1,0 +1,279 @@
++            "Оплата цифровых пакетов в Telegram временно недоступна. "
++            "Попробуйте позже или обратитесь в /paysupport."
++        )
+     return (
+         f"{package.title}\n"
+         f"{package.description}\n\n"
+-        "Это две готовые цены одного пакета — пересчитывать ничего не нужно.\n"
+-        "Выберите удобный способ оплаты:\n\n"
+-        f"⭐ Звёздами Telegram — {_stars_label(telegram_stars_price(package.package_id))}\n"
+-        "Нативная оплата внутри Telegram.\n\n"
+-        f"{yookassa}"
++        "Оплата цифрового пакета в Telegram проводится звёздами Telegram.\n\n"
++        f"⭐ Стоимость — {_stars_label(telegram_stars_price(package.package_id))}\n"
++        "Нативная оплата внутри Telegram."
+     )
+ 
+ 
+@@ -108,8 +103,7 @@ def kb_telegram_payment_methods(
+     package = package_by_id(package_id)
+     if not package.public:
+         raise ValueError("payment_package_not_public")
+-    buyer_id = int(user_id)
+-    if buyer_id <= 0:
++    if int(user_id) <= 0:
+         raise ValueError("payment_buyer_required")
+ 
+     rows: list[list[InlineKeyboardButton]] = []
+@@ -128,42 +122,6 @@ def kb_telegram_payment_methods(
+                 callback_data="tariffs:stars_disabled",
+             )
+         ])
+-
+-    base_url = payment_public_base_url()
+-    yookassa_label = f"💳 Картой через ЮKassa — {_price_label(package.price_rub)}"
+-    if not telegram_yookassa_enabled():
+-        rows.append([
+-            InlineKeyboardButton(
+-                text="💳 Оплата картой временно недоступна",
+-                callback_data="tariffs:yookassa_disabled",
+-            )
+-        ])
+-    elif not base_url:
+-        rows.append([
+-            InlineKeyboardButton(
+-                text=yookassa_label,
+-                callback_data="tariffs:public_base_missing",
+-            )
+-        ])
+-    elif gift:
+-        rows.append([
+-            InlineKeyboardButton(
+-                text=yookassa_label,
+-                callback_data=f"yookassa:gift:{package.package_id}",
+-            )
+-        ])
+-    elif base_url:
+-        rows.append([
+-            InlineKeyboardButton(
+-                text=yookassa_label,
+-                url=_practice_payment_url(
+-                    base_url=base_url,
+-                    user_id=buyer_id,
+-                    platform="telegram",
+-                    package_id=package.package_id,
+-                ),
+-            )
+-        ])
+     rows.append([InlineKeyboardButton(text="📜 Условия оплаты", callback_data="stars:terms")])
+     rows.append([
+         InlineKeyboardButton(
+@@ -175,33 +133,7 @@ def kb_telegram_payment_methods(
+ 
+ 
+ def kb_telegram_gift_yookassa_checkout(*, user_id: int, package_id: str) -> InlineKeyboardMarkup:
+-    package = package_by_id(package_id)
+-    if not package.public:
+-        raise ValueError("payment_package_not_public")
+-    buyer_id = int(user_id)
+-    if buyer_id <= 0:
+-        raise ValueError("payment_buyer_required")
+-    if not telegram_yookassa_enabled():
+-        raise ValueError("telegram_yookassa_disabled")
+-    base_url = payment_public_base_url()
+-    if not base_url:
+-        raise ValueError("payment_public_base_missing")
+-    gift_token = create_gift_checkout_token(
+-        buyer_user_id=buyer_id,
+-        package_id=package.package_id,
+-        source_platform="telegram",
+-    )
+-    url = _practice_payment_url(
+-        base_url=base_url,
+-        user_id=buyer_id,
+-        platform="telegram",
+-        package_id=package.package_id,
+-        gift_token=gift_token,
+-    )
+-    return kb([
+-        [InlineKeyboardButton(text=f"💳 Оплатить картой через ЮKassa — {_price_label(package.price_rub)}", url=url)],
+-        [InlineKeyboardButton(text="⬅️ К способам оплаты", callback_data=f"pay:gift_methods:{package.package_id}")],
+-    ])
++    raise ValueError("telegram_digital_yookassa_disabled")
+ 
+ 
+ def _external_package_rows(
+diff --git a/services/payments/verified_reconciliation.py b/services/payments/verified_reconciliation.py
+index bebe241..fd1e55a 100644
+--- a/services/payments/verified_reconciliation.py
++++ b/services/payments/verified_reconciliation.py
+@@ -66,7 +66,8 @@ def _record_verified_conversion_dry_run(payload: dict[str, Any], result: Reconci
+         return
+ 
+     meta = _metadata(obj)
+-    amount = obj.get("amount") if isinstance(obj.get("amount"), dict) else {}
++    amount_value = obj.get("amount")
++    amount: dict[str, Any] = amount_value if isinstance(amount_value, dict) else {}
+     payment_id = str(obj.get("id") or result.provider_payment_id or "").strip()
+     if not payment_id:
+         return
+diff --git a/services/practice_token_contract.py b/services/practice_token_contract.py
+index 48da1d1..e9da6ff 100644
+--- a/services/practice_token_contract.py
++++ b/services/practice_token_contract.py
+@@ -148,15 +148,15 @@ def telegram_stars_enabled() -> bool:
+ 
+ 
+ def telegram_yookassa_enabled() -> bool:
+-    """Allow the external-browser YooKassa choice on Telegram surfaces.
++    """Digital packages sold inside Telegram are Stars-only.
+ 
+-    The switch is independent from the shared YooKassa runtime used by VK, MAX
+-    and web, so the Telegram button can be disabled immediately without taking
+-    the other payment channels offline.
++    YooKassa remains available for VK, MAX and web, but must not be exposed as
++    an alternative checkout from a Telegram bot surface.  The old environment
++    switch is intentionally ignored so production cannot drift back into a
++    non-compliant dual-payment state.
+     """
+ 
+-    raw = (os.getenv("TELEGRAM_YOOKASSA_ENABLED") or "1").strip().lower()
+-    return raw not in {"0", "false", "no", "off"}
++    return False
+ 
+ 
+ def _telegram_stars_env_key(package_id: str) -> str:
+diff --git a/services/practice_token_lots.py b/services/practice_token_lots.py
+new file mode 100644
+index 0000000..7635414
+--- /dev/null
++++ b/services/practice_token_lots.py
+@@ -0,0 +1,204 @@
++from __future__ import annotations
++
++from typing import Any
++
++_REQUIRED = frozenset({"practice_token_lots", "practice_reservation_lots"})
++
++
++def ensure_lot_schema(conn: Any) -> None:
++    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
++    existing = {str(row["name"] if hasattr(row, "keys") else row[0]) for row in rows}
++    missing = sorted(_REQUIRED - existing)
++    if missing:
++        raise RuntimeError(f"practice_token_lot_schema_not_migrated:{','.join(missing)}")
++
++
++def create_lot_in_conn(
++    conn: Any,
++    *,
++    lot_key: str,
++    user_id: int,
++    provider: str,
++    provider_payment_id: str,
++    package_id: str,
++    amount: int,
++    refundable: bool,
++) -> int:
++    ensure_lot_schema(conn)
++    tokens = int(amount)
++    if tokens <= 0:
++        raise ValueError("practice_lot_amount_must_be_positive")
++    conn.execute(
++        """
++        INSERT OR IGNORE INTO practice_token_lots(
++            lot_key, user_id, provider, provider_payment_id, package_id,
++            granted_tokens, available_tokens, refundable
++        ) VALUES(?,?,?,?,?,?,?,?)
++        """.strip(),
++        (
++            str(lot_key), int(user_id), str(provider or ""),
++            str(provider_payment_id or ""), str(package_id or ""),
++            tokens, tokens, 1 if refundable else 0,
++        ),
++    )
++    row = conn.execute(
++        "SELECT id, user_id, granted_tokens FROM practice_token_lots WHERE lot_key=? LIMIT 1",
++        (str(lot_key),),
++    ).fetchone()
++    if row is None or int(row["user_id"]) != int(user_id) or int(row["granted_tokens"]) != tokens:
++        raise RuntimeError("practice_lot_idempotency_conflict")
++    return int(row["id"])
++
++
++def reserve_from_lots(conn: Any, *, user_id: int, reservation_id: str, amount: int) -> None:
++    ensure_lot_schema(conn)
++    remaining = int(amount)
++    if remaining <= 0:
++        raise ValueError("practice_reservation_amount_invalid")
++    rows = conn.execute(
++        """
++        SELECT id, available_tokens
++        FROM practice_token_lots
++        WHERE user_id=? AND available_tokens > 0
++        ORDER BY id ASC
++        """.strip(),
++        (int(user_id),),
++    ).fetchall()
++    allocations: list[tuple[int, int]] = []
++    for row in rows:
++        take = min(remaining, int(row["available_tokens"]))
++        if take <= 0:
++            continue
++        allocations.append((int(row["id"]), take))
++        remaining -= take
++        if remaining == 0:
++            break
++    if remaining:
++        raise RuntimeError("practice_lot_balance_mismatch")
++    for lot_id, take in allocations:
++        cursor = conn.execute(
++            """
++            UPDATE practice_token_lots
++            SET available_tokens=available_tokens-?, reserved_tokens=reserved_tokens+?,
++                updated_at=CURRENT_TIMESTAMP
++            WHERE id=? AND available_tokens>=?
++            """.strip(),
++            (take, take, lot_id, take),
++        )
++        if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
++            raise RuntimeError("practice_lot_reserve_race")
++        conn.execute(
++            """
++            INSERT INTO practice_reservation_lots(reservation_id, lot_id, amount, status)
++            VALUES(?,?,?,'reserved')
++            """.strip(),
++            (str(reservation_id), lot_id, take),
++        )
++
++
++def consume_lot_reservation(conn: Any, reservation_id: str) -> None:
++    ensure_lot_schema(conn)
++    rows = conn.execute(
++        "SELECT lot_id, amount FROM practice_reservation_lots WHERE reservation_id=? AND status='reserved'",
++        (str(reservation_id),),
++    ).fetchall()
++    if not rows:
++        raise RuntimeError("practice_reservation_lot_missing")
++    for row in rows:
++        lot_id, amount = int(row["lot_id"]), int(row["amount"])
++        cursor = conn.execute(
++            """
++            UPDATE practice_token_lots
++            SET reserved_tokens=reserved_tokens-?, used_tokens=used_tokens+?, updated_at=CURRENT_TIMESTAMP
++            WHERE id=? AND reserved_tokens>=?
++            """.strip(),
++            (amount, amount, lot_id, amount),
++        )
++        if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
++            raise RuntimeError("practice_lot_consume_mismatch")
++    conn.execute(
++        "UPDATE practice_reservation_lots SET status='consumed', updated_at=CURRENT_TIMESTAMP WHERE reservation_id=? AND status='reserved'",
++        (str(reservation_id),),
++    )
++
++
++def release_lot_reservation(conn: Any, reservation_id: str) -> None:
++    ensure_lot_schema(conn)
++    rows = conn.execute(
++        "SELECT lot_id, amount FROM practice_reservation_lots WHERE reservation_id=? AND status='reserved'",
