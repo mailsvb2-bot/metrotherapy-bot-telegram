@@ -53,8 +53,9 @@ publish_stars_provider_audit_if_requested() {
     # shellcheck disable=SC1090
     . "$ENV_FILE"
     set +a
-    audit_code=0
-    if ! audit_output="$("$PYTHON" "$APP_DIR/scripts/telegram_stars_provider_audit.py" 2>&1)"; then
+    if audit_output="$("$PYTHON" "$APP_DIR/scripts/telegram_stars_provider_audit.py" 2>&1)"; then
+      audit_code=0
+    else
       audit_code="$?"
     fi
   fi
