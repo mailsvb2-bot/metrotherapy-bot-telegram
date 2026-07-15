@@ -4,6 +4,7 @@ set -Eeuo pipefail
 # Runs in an independent transient systemd service, outside the webhook cgroup.
 APP_DIR="${APP_DIR:-/root/metrotherapy}"
 DEPLOY_SH="${DEPLOY_SH:-$APP_DIR/deploy.sh}"
+PYTHON="${PYTHON:-$APP_DIR/.venv/bin/python}"
 LOCK_FILE="${LOCK_FILE:-$APP_DIR/data/deploy/metrotherapy_deploy.lock}"
 LOG_FILE="${LOG_FILE:-/var/log/metrotherapy_deploy.log}"
 ENV_FILE="${ENV_FILE:-/etc/metrotherapy/metrotherapy.env}"
@@ -31,6 +32,45 @@ cleanup() {
   rm -f "$LOCK_FILE"
 }
 trap cleanup EXIT INT TERM HUP
+
+publish_stars_provider_audit_if_requested() {
+  local request_message
+  local audit_output
+  local audit_code
+  local audit_message
+
+  request_message="$(git -C "$APP_DIR" log -1 --pretty=%B)"
+  case "$request_message" in
+    *"[stars-provider-audit-request]"*) ;;
+    *) return 0 ;;
+  esac
+
+  if [ ! -f "$ENV_FILE" ]; then
+    audit_output="status=error stage=config bot=unknown code=0 error=ENV_FILE_MISSING"
+    audit_code=2
+  else
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
+    audit_code=0
+    if ! audit_output="$("$PYTHON" "$APP_DIR/scripts/telegram_stars_provider_audit.py" 2>&1)"; then
+      audit_code="$?"
+    fi
+  fi
+
+  audit_output="$(printf '%s' "$audit_output" | tr '\r\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g' | cut -c1-180)"
+  if [ -z "$audit_output" ]; then
+    audit_output="status=error stage=runner bot=unknown code=$audit_code error=EMPTY_AUDIT_RESULT"
+  fi
+  audit_message="[stars-provider-audit-result] $audit_output"
+
+  git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Audit" \
+      -c user.email="deploy-audit@metrotherapy.local" \
+      commit --allow-empty -m "$audit_message"
+  git -C "$APP_DIR" push origin main
+  printf '=== %s ===\n' "$audit_message" >> "$LOG_FILE"
+}
 
 mkdir -p "$MIGRATION_DIR"
 if [ ! -e "$YOOKASSA_MIGRATION_MARKER" ]; then
@@ -75,3 +115,5 @@ if [ "$MIGRATION_PENDING" = "1" ]; then
   MIGRATION_PENDING=0
   printf '=== Telegram YooKassa env migration committed: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 fi
+
+publish_stars_provider_audit_if_requested
