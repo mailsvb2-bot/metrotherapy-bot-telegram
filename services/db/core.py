@@ -362,8 +362,19 @@ def _pg_connection_max_age_sec() -> float:
 
 
 def _raw_pg_connection_is_usable(conn: Any) -> bool:
+    """Prove that a cached Postgres connection is alive before reuse.
+
+    PostgreSQL, a proxy or the network can sever an idle socket while psycopg
+    still reports ``closed == False``. A lightweight pre-ping plus rollback
+    prevents the next business operation from inheriting a dead or ping-opened
+    transaction.
+    """
     try:
-        return not bool(getattr(conn, "closed", False))
+        if bool(getattr(conn, "closed", False)):
+            return False
+        conn.execute("SELECT 1")
+        conn.rollback()
+        return True
     except Exception:  # validator: allow-wide-except
         return False
 
@@ -501,9 +512,28 @@ def write(sql: str, params: tuple[Any, ...] = ()) -> int:
             return 0
 
 
-def execute(sql: str, params: tuple[Any, ...] = ()): 
+def execute(
+    sql: str,
+    params: Sequence[Any] = (),
+    *,
+    fetchone: bool = False,
+    fetchall: bool = False,
+):
+    """Execute one statement and materialize results before close."""
+    if fetchone and fetchall:
+        raise ValueError("execute accepts only one of fetchone/fetchall")
     with db() as conn:
-        return conn.execute(sql, params)
+        cursor = conn.execute(sql, tuple(params))
+        if fetchone:
+            return cursor.fetchone()
+        if fetchall:
+            return cursor.fetchall()
+        if getattr(cursor, "description", None) is not None:
+            return cursor.fetchall()
+        try:
+            return int(getattr(cursor, "rowcount", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
 
 
 @contextmanager
@@ -519,25 +549,41 @@ def tx(conn):
     yield conn
 
 
-def was_delivered(user_id: int, key: str) -> bool:
+def _delivery_key(*parts: Any) -> str:
+    cleaned = [str(part).strip() for part in parts if str(part).strip()]
+    if not cleaned:
+        raise ValueError("delivery idempotency key must not be empty")
+    return ":".join(cleaned)
+
+
+def _is_deferred_engine_job_marker(*parts: Any) -> bool:
+    return len(parts) >= 3 and str(parts[0]).strip() == "job"
+
+
+def was_delivered(user_id: int, *key_parts: Any) -> bool:
+    key = _delivery_key(*key_parts)
     with db() as conn:
         row = conn.execute(
             "SELECT 1 FROM idempotency WHERE user_id=? AND key=? LIMIT 1",
-            (user_id, key),
+            (int(user_id), key),
         ).fetchone()
         return bool(row)
 
 
-def mark_delivery_once(user_id: int, key: str) -> bool:
+def mark_delivery_once(user_id: int, *key_parts: Any) -> bool:
+    key = _delivery_key(*key_parts)
+    if _is_deferred_engine_job_marker(*key_parts):
+        return True
     with db() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO idempotency(user_id, key, created_at) VALUES(?,?,?)",
-            (user_id, key, int(time.time())),
+            (int(user_id), key, int(time.time())),
         )
         row = conn.execute("SELECT changes() AS c").fetchone()
         return int(row["c"] if hasattr(row, "keys") else row[0]) == 1
 
 
-def unmark_delivery(user_id: int, key: str) -> None:
+def unmark_delivery(user_id: int, *key_parts: Any) -> None:
+    key = _delivery_key(*key_parts)
     with db() as conn:
-        conn.execute("DELETE FROM idempotency WHERE user_id=? AND key=?", (user_id, key))
+        conn.execute("DELETE FROM idempotency WHERE user_id=? AND key=?", (int(user_id), key))

@@ -22,6 +22,72 @@ from core.telegram_bot import build_bot
 
 log = logging.getLogger(__name__)
 
+
+def _runtime_int(name: str, default: int, *, minimum: int | None = None) -> int:
+    raw = (os.getenv(name) or str(default)).strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        log.warning("Invalid %s=%r; using %s", name, raw, default)
+        return default
+    if minimum is not None and value < minimum:
+        log.warning("Out-of-range %s=%r; using %s", name, raw, default)
+        return default
+    return value
+
+
+def _runtime_float(
+    name: str,
+    default: float,
+    *,
+    fallback_name: str = "",
+    minimum: float | None = None,
+) -> float:
+    raw = os.getenv(name)
+    if raw in (None, "") and fallback_name:
+        raw = os.getenv(fallback_name)
+    raw = str(default) if raw in (None, "") else str(raw).strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        log.warning("Invalid %s=%r; using %s", name, raw, default)
+        return default
+    if minimum is not None and value < minimum:
+        log.warning("Out-of-range %s=%r; using %s", name, raw, default)
+        return default
+    return value
+
+
+async def _rollback_partial_startup(
+    *,
+    webhook_runtime,
+    health_runtime,
+    scheduler_started: bool,
+    db_writer_started: bool,
+) -> None:
+    """Best-effort reverse-order rollback without masking startup failure."""
+    if health_runtime is not None:
+        try:
+            await health_runtime.stop()
+        except Exception:  # validator: allow-wide-except
+            log.exception("Partial-startup health rollback failed")
+    if webhook_runtime is not None:
+        try:
+            await webhook_runtime.stop()
+        except Exception:  # validator: allow-wide-except
+            log.exception("Partial-startup webhook rollback failed")
+    if scheduler_started:
+        try:
+            await stop_scheduler()
+        except Exception:  # validator: allow-wide-except
+            log.exception("Partial-startup scheduler rollback failed")
+    if db_writer_started:
+        try:
+            await stop_db_writer(drain=False)
+        except Exception:  # validator: allow-wide-except
+            log.exception("Partial-startup DB writer rollback failed")
+
+
 async def _safe_answer_callback(cb, *args, **kwargs) -> None:
     """Best-effort callback acknowledgement.
 
@@ -99,8 +165,11 @@ from handlers import (
 async def create_application():
     webhook_runtime = None
     health_runtime = None
+    scheduler_started = False
+    db_writer_started = False
 
     async def _on_startup(bot: Bot):
+        nonlocal webhook_runtime, health_runtime, scheduler_started, db_writer_started
         app_env = os.getenv("APP_ENV", "dev").lower()
         strict_env = os.getenv("VALIDATOR_STRICT")
         strict = (app_env == "prod") if strict_env is None else (strict_env.strip() in {"1","true","yes","on"})
@@ -118,57 +187,66 @@ async def create_application():
             log.warning('Messenger setup incomplete: %s', ', '.join(messenger_setup.missing))
         if messenger_setup.warnings:
             log.warning('Messenger setup warnings: %s', ' | '.join(messenger_setup.warnings))
-        start_db_writer()
-        nonlocal webhook_runtime
-        start_scheduler(bot)
         try:
-            webhook_runtime = await start_messenger_webhook_runtime(bot=bot, dispatcher=dp)
-        except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
+            start_db_writer()
+            db_writer_started = True
+            start_scheduler(bot)
+            scheduler_started = True
+            try:
+                webhook_runtime = await start_messenger_webhook_runtime(bot=bot, dispatcher=dp)
+            except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
+                webhook_runtime = None
+                selected_transport = telegram_transport()
+                log.exception('Messenger/Telegram webhook runtime failed to start')
+                if selected_transport == 'webhook' or app_env == 'prod':
+                    raise
+                log.warning('Continuing without optional messenger webhook runtime in non-prod polling mode')
+
+            try:
+                health_runtime = await start_health_runtime()
+            except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
+                health_runtime = None
+                log.exception('Health runtime failed to start')
+                if app_env == 'prod':
+                    raise
+                log.warning('Continuing without health endpoint in non-prod mode')
+
+            try:
+                await prewarm_audio_cache(bot)
+            except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
+                log.exception("Prewarm audio cache failed")
+
+            try:
+                await prewarm_matplotlib_cache()
+            except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
+                log.exception("Prewarm matplotlib cache failed")
+        except BaseException:  # validator: allow-wide-except
+            await _rollback_partial_startup(
+                webhook_runtime=webhook_runtime,
+                health_runtime=health_runtime,
+                scheduler_started=scheduler_started,
+                db_writer_started=db_writer_started,
+            )
             webhook_runtime = None
-            selected_transport = telegram_transport()
-            log.exception('Messenger/Telegram webhook runtime failed to start')
-            # Canonical safety rule:
-            # - if Telegram is configured for webhook, there is no polling fallback here;
-            #   continuing would leave the process alive but unreachable.
-            # - in prod, a failed ingress runtime is an unhealthy deployment and must
-            #   be fixed explicitly instead of hidden behind a degraded boot.
-            if selected_transport == 'webhook' or app_env == 'prod':
-                raise
-            log.warning('Continuing without optional messenger webhook runtime in non-prod polling mode')
-
-        nonlocal health_runtime
-        try:
-            health_runtime = await start_health_runtime()
-        except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
             health_runtime = None
-            log.exception('Health runtime failed to start')
-            # In production, readiness/health is part of the deployment contract.
-            # Continuing without it makes server mixups and port conflicts invisible.
-            if app_env == 'prod':
-                raise
-            log.warning('Continuing without health endpoint in non-prod mode')
-
-        # Prewarm caches (best-effort). These are one-off startup tasks and should not crash the bot.
-        try:
-            await prewarm_audio_cache(bot)
-        except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
-            log.exception("Prewarm audio cache failed")
-
-        try:
-            await prewarm_matplotlib_cache()
-        except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
-            log.exception("Prewarm matplotlib cache failed")
+            scheduler_started = False
+            db_writer_started = False
+            raise
 
     async def _on_shutdown(bot: Bot):
-        nonlocal webhook_runtime, health_runtime
+        nonlocal webhook_runtime, health_runtime, scheduler_started, db_writer_started
         if webhook_runtime is not None:
             await webhook_runtime.stop()
             webhook_runtime = None
         if health_runtime is not None:
             await health_runtime.stop()
             health_runtime = None
-        await stop_scheduler()
-        await stop_db_writer(drain=True)
+        if scheduler_started:
+            await stop_scheduler()
+            scheduler_started = False
+        if db_writer_started:
+            await stop_db_writer(drain=True)
+            db_writer_started = False
         await tm.shutdown()
 
     token = (settings.BOT_TOKEN or "").strip()
@@ -196,7 +274,7 @@ async def create_application():
     # 2) журнал состояния пользователя (диагностика/аналитика)
     # 0.2 сек — достаточно, чтобы убрать "дубль-клики", но не создаёт ощущение "тормозов".
     # Perf diagnostics (does not change UX): logs slow updates.
-    thr_ms = int(os.getenv("SLOW_HANDLER_MS", "700"))
+    thr_ms = _runtime_int("SLOW_HANDLER_MS", 700, minimum=1)
     dp.update.middleware(SlowHandlerLogMiddleware(threshold_ms=thr_ms))
 
     # Make inline buttons feel instant (spinner disappears immediately).
@@ -208,11 +286,11 @@ async def create_application():
     dp.update.middleware(quick_ack)
     dp.callback_query.middleware(quick_ack)
 
-    callback_interval_sec = float(
-        os.getenv("SOFT_CALLBACK_RATE_LIMIT_SEC", os.getenv("SOFT_RATE_LIMIT_SEC", "0.05")) or "0.05"
+    callback_interval_sec = _runtime_float(
+        "SOFT_CALLBACK_RATE_LIMIT_SEC", 0.05, fallback_name="SOFT_RATE_LIMIT_SEC", minimum=0.0
     )
-    message_interval_sec = float(
-        os.getenv("SOFT_MESSAGE_RATE_LIMIT_SEC", os.getenv("SOFT_RATE_LIMIT_SEC", "0.05")) or "0.05"
+    message_interval_sec = _runtime_float(
+        "SOFT_MESSAGE_RATE_LIMIT_SEC", 0.05, fallback_name="SOFT_RATE_LIMIT_SEC", minimum=0.0
     )
     dp.update.middleware(
         SoftRateLimitMiddleware(
@@ -274,7 +352,7 @@ async def create_application():
     # captive portal, ISP blocks, etc.). aiogram may raise TelegramNetworkError during the
     # initial getMe() call while starting polling. We retry with backoff, but not forever.
     backoff = 2
-    max_retries = max(1, int(os.getenv('STARTUP_NETWORK_RETRIES', '5')))
+    max_retries = _runtime_int("STARTUP_NETWORK_RETRIES", 5, minimum=1)
     attempt = 0
     try:
         while True:

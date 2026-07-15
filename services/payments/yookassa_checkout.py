@@ -234,7 +234,10 @@ def create_yookassa_confirmation_url(
     confirmation = data.get("confirmation") or {}
     confirmation_url = confirmation.get("confirmation_url") or confirmation.get("url")
     if not confirmation_url:
-        log.error("YooKassa payment response without confirmation_url: %s", data)
+        log.error(
+            "YooKassa payment response without confirmation_url: %s",
+            _provider_error_body_for_log(raw),
+        )
         raise YooKassaCheckoutError("YooKassa response without confirmation_url")
 
     log.info(
