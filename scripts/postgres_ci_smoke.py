@@ -3,12 +3,14 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from services.accounts.identity import ensure_account
 from services.db import db
 from services.db.runtime import CONFIG
 from services.payments.telegram_stars import (
@@ -21,7 +23,7 @@ from services.payments.telegram_stars_refunds import (
     preview_stars_refund,
 )
 from services.practice_token_contract import package_by_id, telegram_stars_price
-from services.practice_tokens import get_wallet
+from services.practice_tokens import get_wallet, grant_tokens_for_payment
 from services.schema import init_db
 
 
@@ -78,6 +80,47 @@ def _exercise_payment_and_refund() -> tuple[int, str]:
     return user_id, charge_id
 
 
+
+def _exercise_concurrent_payment_grant() -> None:
+    user_id = 8_500_000_000 + (uuid.uuid4().int % 1_000_000_000)
+    payment_id = f"postgres-ci-concurrent-{uuid.uuid4().hex}"
+    package_id = "practice_start_7"
+    package = package_by_id(package_id)
+    ensure_account(user_id)
+
+    def grant_once() -> bool:
+        inserted, _wallet, _ledger_id = grant_tokens_for_payment(
+            provider="postgres_ci",
+            provider_payment_id=payment_id,
+            user_id=user_id,
+            package_id=package_id,
+            source="postgres_concurrency_probe",
+        )
+        return bool(inserted)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        inserted_flags = list(pool.map(lambda _: grant_once(), range(4)))
+
+    if sum(1 for item in inserted_flags if item) != 1:
+        raise SystemExit("POSTGRES_CI_SMOKE_FAILED concurrent payment claim contract")
+    if get_wallet(user_id).available_tokens != package.tokens:
+        raise SystemExit("POSTGRES_CI_SMOKE_FAILED concurrent payment wallet contract")
+    with db() as conn:
+        grant_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM payment_token_grants WHERE provider=? AND provider_payment_id=?",
+                ("postgres_ci", payment_id),
+            ).fetchone()["n"]
+        )
+        lot_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM practice_token_lots WHERE provider=? AND provider_payment_id=?",
+                ("postgres_ci", payment_id),
+            ).fetchone()["n"]
+        )
+    if grant_count != 1 or lot_count != 1:
+        raise SystemExit("POSTGRES_CI_SMOKE_FAILED concurrent payment provenance contract")
+
 def _assert_ledgers(charge_id: str) -> None:
     with db() as conn:
         payment = conn.execute(
@@ -99,6 +142,7 @@ def main() -> int:
     init_db()
     _, charge_id = _exercise_payment_and_refund()
     _assert_ledgers(charge_id)
+    _exercise_concurrent_payment_grant()
     print("POSTGRES_CI_SMOKE_OK")
     return 0
 

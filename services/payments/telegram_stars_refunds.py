@@ -6,6 +6,12 @@ from typing import Any
 from core.time_utils import utc_now
 from services.db import db, tx
 from services.payments.telegram_stars import STARS_CURRENCY, STARS_PROVIDER, parse_stars_payload
+from services.practice_token_lots import (
+    finalize_payment_lot_refund,
+    hold_payment_lot_for_refund,
+    payment_lot,
+    release_payment_lot_refund_hold,
+)
 from services.practice_tokens_wallet import get_wallet_in_conn, insert_ledger
 
 
@@ -170,56 +176,54 @@ def _token_refund_plan(
         grant = _dict(
             conn.execute(
                 """
-            SELECT user_id, package_id, tokens_granted
-            FROM payment_token_grants
-            WHERE provider=? AND provider_payment_id=?
-            LIMIT 1
-            """.strip(),
+                SELECT user_id, package_id, tokens_granted
+                FROM payment_token_grants
+                WHERE provider=? AND provider_payment_id=?
+                LIMIT 1
+                """.strip(),
                 (STARS_PROVIDER, charge_id),
             ).fetchone()
         )
+        lot = payment_lot(conn, provider=STARS_PROVIDER, provider_payment_id=charge_id)
 
     if not grant:
         return StarsRefundPlan(
-            charge_id,
-            payment_user_id=payment_user_id,
-            package_id=package_id,
+            charge_id, payment_user_id=payment_user_id, package_id=package_id,
             refundable=processing_status == "action_required",
-            reason=(
-                "charged_without_entitlement"
-                if processing_status == "action_required"
-                else "payment_entitlement_not_settled"
-            ),
+            reason="charged_without_entitlement" if processing_status == "action_required" else "payment_entitlement_not_settled",
         )
 
     beneficiary_user_id = int(grant.get("user_id") or 0)
     tokens = int(grant.get("tokens_granted") or 0)
     package_id = str(grant.get("package_id") or package_id)
-    with db() as conn:
-        wallet = _dict(
-            conn.execute(
-                "SELECT available_tokens FROM practice_wallets WHERE user_id=? LIMIT 1",
-                (beneficiary_user_id,),
-            ).fetchone()
-        )
-    if int(wallet.get("available_tokens") or 0) < tokens:
+    if not lot:
         return StarsRefundPlan(
-            charge_id,
-            payment_user_id=payment_user_id,
-            beneficiary_user_id=beneficiary_user_id,
-            package_id=package_id,
-            tokens=tokens,
-            reason="purchased_practices_already_used_or_reserved",
+            charge_id, payment_user_id=payment_user_id, beneficiary_user_id=beneficiary_user_id,
+            package_id=package_id, tokens=tokens, reason="payment_token_provenance_unavailable",
+        )
+    lot_matches = (
+        int(lot.get("user_id") or 0) == beneficiary_user_id
+        and str(lot.get("package_id") or "") == package_id
+        and int(lot.get("granted_tokens") or 0) == tokens
+    )
+    fully_available = (
+        int(lot.get("refundable") or 0) == 1
+        and int(lot.get("available_tokens") or 0) == tokens
+        and int(lot.get("reserved_tokens") or 0) == 0
+        and int(lot.get("used_tokens") or 0) == 0
+        and int(lot.get("refund_held_tokens") or 0) == 0
+        and int(lot.get("refunded_tokens") or 0) == 0
+    )
+    if not lot_matches or not fully_available:
+        return StarsRefundPlan(
+            charge_id, payment_user_id=payment_user_id, beneficiary_user_id=beneficiary_user_id,
+            package_id=package_id, tokens=tokens, reason="purchased_practices_already_used_or_reserved",
         )
 
     premium_problem = _premium_refund_problem(user_id=beneficiary_user_id, charge_id=charge_id)
     return StarsRefundPlan(
-        charge_id,
-        payment_user_id=payment_user_id,
-        beneficiary_user_id=beneficiary_user_id,
-        package_id=package_id,
-        tokens=tokens,
-        refundable=not premium_problem,
+        charge_id, payment_user_id=payment_user_id, beneficiary_user_id=beneficiary_user_id,
+        package_id=package_id, tokens=tokens, refundable=not premium_problem,
         reason=premium_problem or "ready",
     )
 
@@ -344,6 +348,12 @@ def prepare_stars_refund(telegram_charge_id: str, *, requested_by: int) -> Stars
                 )
                 if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
                     raise StarsRefundError("refund_token_hold_failed")
+                try:
+                    hold_payment_lot_for_refund(
+                        conn, provider=STARS_PROVIDER, provider_payment_id=charge_id, amount=plan.tokens
+                    )
+                except RuntimeError as exc:
+                    raise StarsRefundError("refund_token_provenance_hold_failed") from exc
                 wallet = get_wallet_in_conn(conn, plan.beneficiary_user_id)
                 insert_ledger(
                     conn,
@@ -424,6 +434,12 @@ def cancel_prepared_stars_refund(telegram_charge_id: str, *, error: str) -> Star
                     """.strip(),
                     (tokens, user_id),
                 )
+                try:
+                    release_payment_lot_refund_hold(
+                        conn, provider=STARS_PROVIDER, provider_payment_id=charge_id, amount=tokens
+                    )
+                except RuntimeError as exc:
+                    raise StarsRefundError("refund_token_provenance_release_failed") from exc
                 wallet = get_wallet_in_conn(conn, user_id)
                 insert_ledger(
                     conn,
@@ -517,6 +533,12 @@ def complete_stars_refund(telegram_charge_id: str) -> StarsRefundPlan:
                     """.strip(),
                     (tokens, user_id),
                 )
+                try:
+                    finalize_payment_lot_refund(
+                        conn, provider=STARS_PROVIDER, provider_payment_id=charge_id, amount=tokens
+                    )
+                except RuntimeError as exc:
+                    raise StarsRefundError("refund_token_provenance_finalize_failed") from exc
                 wallet = get_wallet_in_conn(conn, user_id)
                 insert_ledger(
                     conn,
@@ -582,7 +604,8 @@ def refund_plan_text(plan: StarsRefundPlan) -> str:
         "gift_already_claimed": "подарок уже активирован",
         "gift_not_refundable": "подарок нельзя вернуть автоматически",
         "payment_entitlement_not_settled": "начисление платежа ещё не завершено",
-        "purchased_practices_already_used_or_reserved": "часть купленных практик уже использована или зарезервирована",
+        "purchased_practices_already_used_or_reserved": "часть именно этого пакета уже использована или зарезервирована",
+        "payment_token_provenance_unavailable": "для старого платежа нет доказуемого происхождения практик; нужна ручная проверка",
         "premium_content_already_delivered": "премиальный материал уже доставлен",
         "consultation_already_in_progress": "заявка на консультацию уже обрабатывается",
     }

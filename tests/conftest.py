@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,3 +54,23 @@ for name in (
 from services.schema import init_db
 
 init_db()
+SCHEMA_TEMPLATE_PATH = TEST_ROOT / f"pytest_schema_{os.getpid()}.db"
+shutil.copy2(TEST_DB_PATH, SCHEMA_TEMPLATE_PATH)
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolated_default_database():
+    """Give every test a fresh canonical database snapshot.
+
+    Application services open independent connections, so transaction rollback
+    cannot isolate them. Copying a schema-only SQLite snapshot is both honest
+    and fast: state can never leak between tests, while migrations are not rerun
+    hundreds of times.
+    """
+
+    for suffix in ("", "-wal", "-shm"):
+        Path(f"{TEST_DB_PATH}{suffix}").unlink(missing_ok=True)
+    shutil.copy2(SCHEMA_TEMPLATE_PATH, TEST_DB_PATH)
+    yield

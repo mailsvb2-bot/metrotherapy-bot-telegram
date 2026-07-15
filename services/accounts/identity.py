@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from typing import Any
 
 from core.time_utils import utc_now
@@ -56,13 +57,42 @@ def _identity_row(platform: str, external_user_id: str):
         ).fetchone()
 
 
-def _proposed_account_id(proposed_user_id: int | None, external_user_id: str | None) -> int:
-    if proposed_user_id is not None:
-        return int(proposed_user_id)
+def _platform_scoped_account_id(platform: str, external_user_id: str) -> int:
+    """Return a stable platform-scoped id for a non-Telegram identity.
+
+    Messenger user identifiers are only unique inside their own platform.  They
+    must never be reused as global account identifiers, otherwise a VK user and
+    a MAX/Telegram user with the same numeric id can be silently merged.  A
+    high, platform-scoped digest keeps the legacy Telegram id namespace intact
+    while making accidental cross-platform equality impossible.
+    """
+
+    raw = f"{platform}:{external_user_id}".encode("utf-8")
+    value = int.from_bytes(hashlib.blake2b(raw, digest_size=8).digest(), "big")
+    # Telegram identifiers fit within 52 significant bits.  Reserve the high
+    # positive BIGINT range for internal accounts so existing code that requires
+    # positive user ids remains valid without sharing Telegram's namespace.
+    return (1 << 62) | (value & ((1 << 61) - 1))
+
+
+def _proposed_account_id(
+    platform: str,
+    proposed_user_id: int | None,
+    external_user_id: str | None,
+) -> int:
+    norm = parse_platform(platform)
+    if norm is None:
+        raise ValueError("invalid platform")
     raw = (external_user_id or "").strip()
-    if raw.isdigit():
-        return int(raw)
-    raise ValueError("proposed_user_id is required for first-time nonnumeric messenger identities")
+    if norm == "telegram":
+        if proposed_user_id is not None:
+            return int(proposed_user_id)
+        if raw.isdigit():
+            return int(raw)
+        raise ValueError("proposed_user_id is required for first-time Telegram identities")
+    if not raw:
+        raise ValueError("external_user_id is required for first-time non-Telegram identities")
+    return _platform_scoped_account_id(norm, raw)
 
 
 def link_channel_to_account(
@@ -153,7 +183,7 @@ def resolve_account_for_identity(
             return aid
     if not allow_create:
         return None
-    aid = _proposed_account_id(proposed_user_id, ext)
+    aid = _proposed_account_id(norm, proposed_user_id, ext)
     return link_channel_to_account(
         aid,
         norm,

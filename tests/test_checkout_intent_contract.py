@@ -21,11 +21,14 @@ def test_checkout_intent_roundtrip(monkeypatch):
         expected_user_id=123,
         expected_package_id="p10",
         expected_kind="tokens",
+        expected_source="telegram",
     )
 
     assert payload["sub"] == "123"
     assert payload["package_id"] == "p10"
     assert payload["kind"] == "tokens"
+    assert payload["source"] == "telegram"
+    assert payload["v"] == 2
 
 
 def test_checkout_intent_rejects_package_mismatch(monkeypatch):
@@ -79,3 +82,27 @@ def test_checkout_intent_required_defaults_to_prod(monkeypatch):
     monkeypatch.delenv("ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD", raising=False)
 
     assert checkout_intent_required() is True
+
+
+def test_checkout_intent_rejects_source_mismatch(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "dev")
+    token = sign_checkout_intent(
+        user_id=123, package_id="practice_start_7", source="vk", ttl_sec=600
+    )
+    with pytest.raises(CheckoutIntentError, match="source_mismatch"):
+        verify_checkout_intent(
+            token, expected_user_id=123, expected_package_id="practice_start_7",
+            expected_source="max", expected_amount_minor=190000, expected_currency="RUB",
+        )
+
+
+def test_checkout_intent_rejects_price_mismatch(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "dev")
+    token = sign_checkout_intent(
+        user_id=123, package_id="practice_start_7", source="vk", ttl_sec=600
+    )
+    with pytest.raises(CheckoutIntentError, match="amount_minor_mismatch"):
+        verify_checkout_intent(
+            token, expected_user_id=123, expected_package_id="practice_start_7",
+            expected_source="vk", expected_amount_minor=1, expected_currency="RUB",
+        )

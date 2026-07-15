@@ -96,8 +96,10 @@ def format_money(amount_minor: int, currency: str = "RUB") -> str:
     amount = max(0, int(amount_minor or 0))
     normalized_currency = str(currency or "RUB").upper()
     if normalized_currency == "RUB":
-        return f"{amount / 100:.2f} ₽"
-    return f"{amount / 100:.2f} {normalized_currency}".strip()
+        return f"{amount / 100:,.2f} ₽".replace(",", " ")
+    if normalized_currency == "XTR":
+        return f"{amount} ⭐"
+    return f"{amount} {normalized_currency}".strip()
 
 
 def format_sales_overview(snapshot: dict[str, Any]) -> str:
@@ -118,7 +120,13 @@ def format_sales_overview(snapshot: dict[str, Any]) -> str:
             f"Без ответственного: {int(snapshot.get('unassigned') or 0)}",
             f"Просрочен следующий контакт: {int(snapshot.get('overdue') or 0)}",
             "Выручка выигранных лидов: "
-            f"{format_money(int(snapshot.get('won_revenue_minor') or 0))}",
+            + (
+                ", ".join(
+                    format_money(int(amount), str(currency))
+                    for currency, amount in sorted(dict(snapshot.get("won_revenue_by_currency") or {}).items())
+                )
+                or format_money(0)
+            ),
         ]
     )
 
@@ -136,7 +144,13 @@ def format_lead_card(lead: dict[str, Any]) -> str:
         f"Кампания: {str(lead.get('campaign') or '—')}",
         f"Креатив: {str(lead.get('creative') or '—')}",
         "Выручка: "
-        f"{format_money(int(lead.get('revenue_minor') or 0), str(lead.get('currency') or 'RUB'))}",
+        + (
+            ", ".join(
+                format_money(int(amount), str(currency))
+                for currency, amount in sorted(dict(lead.get("revenue_by_currency") or {}).items())
+            )
+            or format_money(0)
+        ),
         f"Последняя активность: {str(lead.get('last_activity_at') or '—')}",
         f"Следующий контакт: {str(lead.get('next_contact_at') or 'не назначен')}",
     ]

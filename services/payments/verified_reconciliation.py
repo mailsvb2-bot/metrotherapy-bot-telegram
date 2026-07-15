@@ -66,7 +66,8 @@ def _record_verified_conversion_dry_run(payload: dict[str, Any], result: Reconci
         return
 
     meta = _metadata(obj)
-    amount = obj.get("amount") if isinstance(obj.get("amount"), dict) else {}
+    amount_value = obj.get("amount")
+    amount: dict[str, Any] = amount_value if isinstance(amount_value, dict) else {}
     payment_id = str(obj.get("id") or result.provider_payment_id or "").strip()
     if not payment_id:
         return

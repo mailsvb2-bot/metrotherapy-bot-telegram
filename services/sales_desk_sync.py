@@ -46,39 +46,63 @@ def _event_rows(conn: Any, *, limit: int) -> list[dict[str, Any]]:
     if not {"user_id", "name"}.issubset(event_columns):
         return []
 
-    select = ["e.user_id", "e.name"]
-    for column in ("created_at", "meta", "payload"):
-        selected = f"e.{column}" if column in event_columns else f"NULL AS {column}"
-        select.append(selected)
-
-    join = ""
+    joined_username = False
+    joined_first_name = False
     if table_exists(conn, "users"):
         user_columns = table_columns(conn, "users")
-        join = " LEFT JOIN users u ON u.user_id=e.user_id"
-        select.append(
-            "u.username" if "username" in user_columns else "NULL AS username"
-        )
-        select.append(
-            "u.first_name" if "first_name" in user_columns else "NULL AS first_name"
-        )
-    else:
-        select.extend(["NULL AS username", "NULL AS first_name"])
+        joined_username = "username" in user_columns
+        joined_first_name = "first_name" in user_columns
 
-    placeholders = ",".join("?" for _ in _SALES_EVENT_NAMES)
-    order_column = "e.created_at" if "created_at" in event_columns else "e.user_id"
-    return rows(
+    if joined_username and joined_first_name:
+        select_sql = """
+            SELECT e.*, u.username AS joined_username,
+                   u.first_name AS joined_first_name
+            FROM events e
+            LEFT JOIN users u ON u.user_id=e.user_id
+        """
+    elif joined_username:
+        select_sql = """
+            SELECT e.*, u.username AS joined_username,
+                   NULL AS joined_first_name
+            FROM events e
+            LEFT JOIN users u ON u.user_id=e.user_id
+        """
+    elif joined_first_name:
+        select_sql = """
+            SELECT e.*, NULL AS joined_username,
+                   u.first_name AS joined_first_name
+            FROM events e
+            LEFT JOIN users u ON u.user_id=e.user_id
+        """
+    else:
+        select_sql = """
+            SELECT e.*, NULL AS joined_username,
+                   NULL AS joined_first_name
+            FROM events e
+        """
+
+    # The four SELECT prefixes above are fixed project SQL. Appending one of two
+    # fixed order clauses avoids interpolating schema identifiers or user input.
+    if "created_at" in event_columns:
+        order_sql = " ORDER BY e.created_at DESC LIMIT ?"
+    else:
+        order_sql = " ORDER BY e.user_id DESC LIMIT ?"
+    query = (
+        select_sql
+        + " WHERE e.user_id IS NOT NULL "
+        + "AND e.name IN (?,?,?,?,?,?,?,?)"
+        + order_sql
+    )
+    result = rows(
         conn.execute(
-            f"""
-            SELECT {', '.join(select)}
-            FROM events e{join}
-            WHERE e.user_id IS NOT NULL
-              AND e.name IN ({placeholders})
-            ORDER BY {order_column} DESC
-            LIMIT ?
-            """.strip(),
+            query,
             (*_SALES_EVENT_NAMES, max(1, min(int(limit), 20000))),
         ).fetchall()
     )
+    for item in result:
+        item["username"] = item.pop("joined_username", None)
+        item["first_name"] = item.pop("joined_first_name", None)
+    return result
 
 
 def _payment_rows(conn: Any) -> list[dict[str, Any]]:
@@ -88,50 +112,51 @@ def _payment_rows(conn: Any) -> list[dict[str, Any]]:
     if "user_id" not in columns:
         return []
 
-    status_column = (
-        "provider_status"
-        if "provider_status" in columns
-        else ("status" if "status" in columns else "")
-    )
-    amount_column = (
-        "amount"
-        if "amount" in columns
-        else ("amount_minor" if "amount_minor" in columns else "")
-    )
-    currency_column = "currency" if "currency" in columns else ""
-    created_column = (
-        "created_at"
-        if "created_at" in columns
-        else ("paid_at" if "paid_at" in columns else "")
-    )
-
-    conditions = ["user_id IS NOT NULL"]
-    if status_column:
-        conditions.append(
-            f"COALESCE({status_column}, 'succeeded') "
-            "IN ('succeeded','paid','success','captured')"
+    canonical = {"provider_status", "amount", "currency", "created_at"}.issubset(columns)
+    if canonical:
+        return rows(
+            conn.execute(
+                """
+                SELECT user_id,
+                       SUM(COALESCE(amount, 0)) AS amount_units,
+                       UPPER(COALESCE(currency, 'RUB')) AS currency,
+                       MAX(created_at) AS paid_at
+                FROM payments
+                WHERE user_id IS NOT NULL
+                  AND COALESCE(provider_status, 'succeeded')
+                      IN ('succeeded','paid','success','captured')
+                GROUP BY user_id, UPPER(COALESCE(currency, 'RUB'))
+                """.strip()
+            ).fetchall()
         )
 
-    amount_expression = f"COALESCE({amount_column}, 0)" if amount_column else "0"
-    currency_expression = (
-        f"COALESCE(MAX({currency_column}), 'RUB')"
-        if currency_column
-        else "'RUB'"
+    # Compatibility path for historical/minimal schemas. Aggregation happens in
+    # Python so no column identifiers are interpolated into SQL.
+    raw_rows = rows(
+        conn.execute("SELECT * FROM payments WHERE user_id IS NOT NULL").fetchall()
     )
-    paid_expression = f"MAX({created_column})" if created_column else "NULL"
-    return rows(
-        conn.execute(
-            f"""
-            SELECT user_id,
-                   SUM({amount_expression}) AS revenue_minor,
-                   {currency_expression} AS currency,
-                   {paid_expression} AS paid_at
-            FROM payments
-            WHERE {' AND '.join(conditions)}
-            GROUP BY user_id
-            """.strip()
-        ).fetchall()
-    )
+    status_column = "provider_status" if "provider_status" in columns else ("status" if "status" in columns else "")
+    amount_column = "amount" if "amount" in columns else ("amount_minor" if "amount_minor" in columns else "")
+    currency_column = "currency" if "currency" in columns else ""
+    created_column = "created_at" if "created_at" in columns else ("paid_at" if "paid_at" in columns else "")
+    successful = {"succeeded", "paid", "success", "captured"}
+    aggregated: dict[tuple[int, str], dict[str, Any]] = {}
+    for row in raw_rows:
+        status = str(row.get(status_column) or "succeeded").strip().lower() if status_column else "succeeded"
+        if status not in successful:
+            continue
+        user_id = int(row.get("user_id") or 0)
+        currency = str(row.get(currency_column) or "RUB").strip().upper() if currency_column else "RUB"
+        key = (user_id, currency)
+        item = aggregated.setdefault(
+            key,
+            {"user_id": user_id, "amount_units": 0, "currency": currency, "paid_at": None},
+        )
+        item["amount_units"] += int(row.get(amount_column) or 0) if amount_column else 0
+        paid_at = str(row.get(created_column) or "") if created_column else ""
+        if paid_at:
+            item["paid_at"] = max(str(item.get("paid_at") or ""), paid_at)
+    return list(aggregated.values())
 
 
 def _new_candidate(user_id: int, activity_at: Any, *, now_iso: str) -> dict[str, Any]:
@@ -146,8 +171,7 @@ def _new_candidate(user_id: int, activity_at: Any, *, now_iso: str) -> dict[str,
         "creative": "",
         "first_activity_at": timestamp,
         "last_activity_at": timestamp,
-        "revenue_minor": 0,
-        "currency": "RUB",
+        "revenue_by_currency": {},
     }
 
 
@@ -160,7 +184,7 @@ def _candidate_map(
     candidates: dict[int, dict[str, Any]] = {}
     for row in _event_rows(conn, limit=limit):
         try:
-            user_id = int(row.get("user_id"))
+            user_id = int(row.get("user_id") or 0)
         except (TypeError, ValueError):
             continue
 
@@ -191,7 +215,7 @@ def _candidate_map(
 
     for payment in _payment_rows(conn):
         try:
-            user_id = int(payment.get("user_id"))
+            user_id = int(payment.get("user_id") or 0)
         except (TypeError, ValueError):
             continue
         item = candidates.setdefault(
@@ -199,15 +223,8 @@ def _candidate_map(
             _new_candidate(user_id, payment.get("paid_at"), now_iso=now_iso),
         )
         item["event_names"].append("payment_success")
-        item["revenue_minor"] = max(
-            0,
-            int(payment.get("revenue_minor") or 0),
-        )
-        item["currency"] = clean_text(
-            payment.get("currency"),
-            limit=12,
-            fallback="RUB",
-        )
+        currency = str(clean_text(payment.get("currency"), limit=12, fallback="RUB") or "RUB").upper()
+        item["revenue_by_currency"][currency] = max(0, int(payment.get("amount_units") or 0))
         if payment.get("paid_at"):
             item["last_activity_at"] = max(
                 str(item.get("last_activity_at") or ""),
@@ -232,14 +249,12 @@ def _candidate_projection(
         "auto" if auto_promoted else str(existing.get("stage_source") or "auto")
     )
 
-    incoming_revenue = max(0, int(candidate.get("revenue_minor") or 0))
-    existing_revenue = max(0, int(existing.get("revenue_minor") or 0))
-    revenue_minor = max(existing_revenue, incoming_revenue)
-    currency = (
-        clean_text(candidate.get("currency"), limit=12, fallback="RUB")
-        if incoming_revenue >= existing_revenue
-        else clean_text(existing.get("currency"), limit=12, fallback="RUB")
-    )
+    revenue_by_currency = dict(candidate.get("revenue_by_currency") or {})
+    # Keep the legacy columns as a RUB-only compatibility mirror.  All real
+    # multi-currency reporting reads sales_lead_revenue.
+    revenue_minor = max(0, int(revenue_by_currency.get("RUB") or 0))
+    currency = "RUB"
+
 
     projection = {
         "display_name": compact_display_name(
@@ -335,8 +350,8 @@ def _insert_candidate(
             stage,
             "auto",
             str(candidate.get("last_activity_at") or created_at),
-            max(0, int(candidate.get("revenue_minor") or 0)),
-            clean_text(candidate.get("currency"), limit=12, fallback="RUB"),
+            max(0, int((candidate.get("revenue_by_currency") or {}).get("RUB") or 0)),
+            "RUB",
             created_at,
             now_iso,
         ),
@@ -362,6 +377,20 @@ def _insert_candidate(
     return created
 
 
+def _replace_revenue_rows(conn: Any, *, user_id: int, revenue_by_currency: dict[str, int], now_iso: str) -> None:
+    normalized = {
+        str(currency).upper(): max(0, int(amount or 0))
+        for currency, amount in dict(revenue_by_currency or {}).items()
+        if str(currency).strip() and int(amount or 0) > 0
+    }
+    conn.execute("DELETE FROM sales_lead_revenue WHERE user_id=?", (int(user_id),))
+    for currency, amount in sorted(normalized.items()):
+        conn.execute(
+            "INSERT INTO sales_lead_revenue(user_id, currency, amount_units, updated_at) VALUES(?,?,?,?)",
+            (int(user_id), currency[:12], amount, now_iso),
+        )
+
+
 def sync_sales_leads(
     *,
     limit: int = 5000,
@@ -373,6 +402,12 @@ def sync_sales_leads(
     with db() as conn:
         ensure_schema(conn)
         candidates = _candidate_map(conn, limit=limit, now_iso=now_iso)
+        existing_user_ids = {
+            int(row["user_id"] if hasattr(row, "keys") else row[0])
+            for row in conn.execute(
+                "SELECT user_id FROM sales_leads WHERE user_id IS NOT NULL"
+            ).fetchall()
+        }
         with tx(conn):
             for user_id, candidate in candidates.items():
                 key = lead_key(user_id)
@@ -384,9 +419,19 @@ def sync_sales_leads(
                 )
                 if not existing:
                     _insert_candidate(conn, candidate, now_iso=now_iso)
+                    _replace_revenue_rows(
+                        conn, user_id=user_id,
+                        revenue_by_currency=dict(candidate.get("revenue_by_currency") or {}),
+                        now_iso=now_iso,
+                    )
                     inserted += 1
                     continue
 
+                _replace_revenue_rows(
+                    conn, user_id=user_id,
+                    revenue_by_currency=dict(candidate.get("revenue_by_currency") or {}),
+                    now_iso=now_iso,
+                )
                 projection, auto_promoted = _candidate_projection(existing, candidate)
                 if not _projection_changed(existing, projection):
                     continue
@@ -437,4 +482,24 @@ def sync_sales_leads(
                     )
                     promoted += 1
                 updated += 1
+
+            # Leads with no current successful payment still need their revenue
+            # projection cleared after a refund/cancellation. Do not synthesize a
+            # candidate for them: that would overwrite attribution or manual stage
+            # fields with default values.
+            for user_id in sorted(existing_user_ids - set(candidates)):
+                _replace_revenue_rows(
+                    conn,
+                    user_id=user_id,
+                    revenue_by_currency={},
+                    now_iso=now_iso,
+                )
+                conn.execute(
+                    """
+                    UPDATE sales_leads
+                    SET revenue_minor=0, currency='RUB', updated_at=?
+                    WHERE user_id=? AND revenue_minor<>0
+                    """.strip(),
+                    (now_iso, user_id),
+                )
     return {"inserted": inserted, "updated": updated, "promoted": promoted}

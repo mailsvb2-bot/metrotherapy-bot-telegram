@@ -5,6 +5,11 @@ import uuid
 from typing import Any
 
 from services.db import db, tx
+from services.practice_token_lots import (
+    consume_lot_reservation,
+    release_lot_reservation,
+    reserve_from_lots,
+)
 from services.practice_tokens_wallet import (
     EMPTY_BALANCE_MESSAGE,
     RESERVE_FAILED_MESSAGE,
@@ -180,6 +185,7 @@ def reserve_practice(
                 )
                 return False, get_wallet_in_conn(conn, uid), None
 
+            reserve_from_lots(conn, user_id=uid, reservation_id=reservation_id, amount=1)
             wallet_after = get_wallet_in_conn(conn, uid)
             insert_ledger(
                 conn,
@@ -230,6 +236,7 @@ def consume_reservation(reservation_id: str, *, reason: str = "audio_delivery_su
 
             user_id = int(row["user_id"])
             amount = int(row["amount"])
+            consume_lot_reservation(conn, raw)
             conn.execute(
                 """
                 UPDATE practice_wallets
@@ -283,6 +290,7 @@ def release_reservation(reservation_id: str, *, reason: str = "audio_delivery_fa
 
             user_id = int(row["user_id"])
             amount = int(row["amount"])
+            release_lot_reservation(conn, raw)
             conn.execute(
                 """
                 UPDATE practice_wallets

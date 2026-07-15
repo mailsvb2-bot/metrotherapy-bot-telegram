@@ -6,6 +6,7 @@ from typing import Any
 
 from services.accounts.identity import ensure_account
 from services.db import db, tx
+from services.practice_token_lots import create_lot_in_conn
 from services.practice_token_contract import (
     PracticePackage,
     normalize_delivery_mode,
@@ -19,6 +20,8 @@ _REQUIRED_SCHEMA_TABLES = frozenset({
     "payment_token_grants",
     "user_practice_preferences",
     "practice_reservations",
+    "practice_token_lots",
+    "practice_reservation_lots",
 })
 
 EMPTY_BALANCE_MESSAGE = (
@@ -85,21 +88,15 @@ def get_package(package_id: str | None) -> PracticePackage:
 
 
 def canonical_practice_user_id(user_id: int) -> int:
+    """Resolve an already-canonical id without cross-platform guessing.
+
+    Entry points are responsible for resolving (platform, external_user_id) to a
+    canonical account.  Looking up a bare number across all messenger platforms
+    is unsafe because identical numbers can belong to different people.
+    """
+
     uid = int(user_id)
-    external = str(uid)
     with db() as conn:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT account_id
-            FROM account_channel_identities
-            WHERE external_user_id=?
-            ORDER BY account_id
-            """.strip(),
-            (external,),
-        ).fetchall()
-        account_ids = [int(row["account_id"]) for row in rows]
-        if len(account_ids) == 1:
-            return account_ids[0]
         row = conn.execute(
             "SELECT account_id FROM accounts WHERE account_id=? LIMIT 1",
             (uid,),
@@ -184,34 +181,31 @@ def grant_tokens(
     idempotency_key: str | None = None,
 ) -> tuple[bool, PracticeWallet, int | None]:
     uid = canonical_practice_user_id(int(user_id))
-    key = idempotency_key or f"grant:{provider}:{provider_payment_id}:{uid}:{package_id}:{amount}"
+    tokens = int(amount)
+    if tokens <= 0:
+        raise ValueError("practice_grant_amount_must_be_positive")
+    key = idempotency_key or f"grant:{provider}:{provider_payment_id}:{uid}:{package_id}:{tokens}"
     with db() as conn:
         with tx(conn):
             ensure_wallet(conn, uid)
-            existing = conn.execute(
-                "SELECT id FROM practice_ledger WHERE idempotency_key=?",
-                (key,),
-            ).fetchone()
+            existing = conn.execute("SELECT id FROM practice_ledger WHERE idempotency_key=?", (key,)).fetchone()
             if existing:
                 return False, get_wallet_in_conn(conn, uid), int(existing["id"])
             wallet = get_wallet_in_conn(conn, uid)
-            balance = int(wallet.available_tokens) + int(amount)
+            balance = int(wallet.available_tokens) + tokens
             conn.execute(
                 "UPDATE practice_wallets SET available_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
                 (balance, uid),
             )
             ledger_id = insert_ledger(
-                conn,
-                user_id=uid,
-                event_type="grant",
-                amount=int(amount),
-                balance_after=balance,
-                reason="payment_succeeded",
-                source=source,
-                package_id=package_id,
-                provider=provider,
-                provider_payment_id=provider_payment_id,
-                idempotency_key=key,
+                conn, user_id=uid, event_type="grant", amount=tokens, balance_after=balance,
+                reason="payment_succeeded", source=source, package_id=package_id,
+                provider=provider, provider_payment_id=provider_payment_id, idempotency_key=key,
+            )
+            create_lot_in_conn(
+                conn, lot_key=key, user_id=uid, provider=provider,
+                provider_payment_id=provider_payment_id, package_id=package_id,
+                amount=tokens, refundable=bool(provider_payment_id and provider != "manual"),
             )
             wallet_after = get_wallet_in_conn(conn, uid)
     return True, wallet_after, ledger_id
@@ -227,37 +221,172 @@ def grant_tokens_for_payment(
 ) -> tuple[bool, PracticeWallet, int | None]:
     uid = canonical_practice_user_id(int(user_id))
     package = get_package(package_id)
+    key = f"payment_grant:{provider}:{provider_payment_id}"
+
+    def _validated_existing(row: Any) -> int | None:
+        if (
+            int(row["user_id"]) != uid
+            or str(row["package_id"]) != package.package_id
+            or int(row["tokens_granted"]) != int(package.tokens)
+        ):
+            raise RuntimeError("payment_token_grant_idempotency_conflict")
+        ledger_value = row["ledger_id"]
+        if ledger_value is None:
+            raise RuntimeError("payment_token_grant_partial_state")
+        return int(ledger_value)
+
     with db() as conn:
         with tx(conn):
             ensure_wallet(conn, uid)
             existing = conn.execute(
-                "SELECT ledger_id FROM payment_token_grants WHERE provider=? AND provider_payment_id=?",
+                """
+                SELECT user_id, package_id, tokens_granted, ledger_id
+                FROM payment_token_grants
+                WHERE provider=? AND provider_payment_id=?
+                LIMIT 1
+                """.strip(),
                 (provider, provider_payment_id),
             ).fetchone()
             if existing:
-                return False, get_wallet_in_conn(conn, uid), int(existing["ledger_id"] or 0)
+                ledger_id = _validated_existing(existing)
+                return False, get_wallet_in_conn(conn, uid), ledger_id
 
-    inserted, wallet, ledger_id = grant_tokens(
-        uid,
-        package_id=package.package_id,
-        amount=package.tokens,
-        provider=provider,
-        provider_payment_id=provider_payment_id,
-        source=source,
-        idempotency_key=f"payment_grant:{provider}:{provider_payment_id}",
-    )
-    with db() as conn:
-        with tx(conn):
-            ensure_schema(conn)
-            conn.execute(
+            ledger = conn.execute(
                 """
-                INSERT OR IGNORE INTO payment_token_grants(
-                    provider, provider_payment_id, user_id, package_id, tokens_granted, ledger_id
-                ) VALUES(?,?,?,?,?,?)
+                SELECT id, user_id, amount, package_id, provider, provider_payment_id
+                FROM practice_ledger
+                WHERE idempotency_key=?
+                LIMIT 1
                 """.strip(),
-                (provider, provider_payment_id, uid, package.package_id, package.tokens, ledger_id),
+                (key,),
+            ).fetchone()
+            lot = conn.execute(
+                """
+                SELECT id, user_id, package_id, granted_tokens
+                FROM practice_token_lots
+                WHERE lot_key=?
+                LIMIT 1
+                """.strip(),
+                (key,),
+            ).fetchone()
+
+            # A process may have committed the atomic wallet/ledger/lot grant but
+            # lost only the denormalized payment marker in a later repair or
+            # manual operation. Recreate that marker without granting again.
+            if ledger is not None or lot is not None:
+                if ledger is None or lot is None:
+                    raise RuntimeError("payment_token_grant_partial_state")
+                matches = (
+                    int(ledger["user_id"]) == uid
+                    and int(ledger["amount"]) == int(package.tokens)
+                    and str(ledger["package_id"] or "") == package.package_id
+                    and str(ledger["provider"] or "") == str(provider)
+                    and str(ledger["provider_payment_id"] or "") == str(provider_payment_id)
+                    and int(lot["user_id"]) == uid
+                    and str(lot["package_id"] or "") == package.package_id
+                    and int(lot["granted_tokens"]) == int(package.tokens)
+                )
+                if not matches:
+                    raise RuntimeError("payment_token_grant_idempotency_conflict")
+                ledger_id = int(ledger["id"])
+                conn.execute(
+                    """
+                    INSERT INTO payment_token_grants(
+                        provider, provider_payment_id, user_id, package_id,
+                        tokens_granted, ledger_id
+                    ) VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(provider, provider_payment_id) DO NOTHING
+                    """.strip(),
+                    (
+                        provider,
+                        provider_payment_id,
+                        uid,
+                        package.package_id,
+                        package.tokens,
+                        ledger_id,
+                    ),
+                )
+                restored = conn.execute(
+                    """
+                    SELECT user_id, package_id, tokens_granted, ledger_id
+                    FROM payment_token_grants
+                    WHERE provider=? AND provider_payment_id=?
+                    LIMIT 1
+                    """.strip(),
+                    (provider, provider_payment_id),
+                ).fetchone()
+                if restored is None:
+                    raise RuntimeError("payment_token_grant_marker_restore_failed")
+                return False, get_wallet_in_conn(conn, uid), _validated_existing(restored)
+
+            # Claim the provider payment inside the same transaction before any
+            # wallet mutation. A concurrent duplicate blocks on the unique key
+            # and then observes the completed marker instead of granting twice.
+            claimed = conn.execute(
+                """
+                INSERT INTO payment_token_grants(
+                    provider, provider_payment_id, user_id, package_id,
+                    tokens_granted, ledger_id
+                ) VALUES(?,?,?,?,?,NULL)
+                ON CONFLICT(provider, provider_payment_id) DO NOTHING
+                """.strip(),
+                (provider, provider_payment_id, uid, package.package_id, package.tokens),
             )
-    return inserted, wallet, ledger_id
+            if int(getattr(claimed, "rowcount", 0) or 0) <= 0:
+                concurrent = conn.execute(
+                    """
+                    SELECT user_id, package_id, tokens_granted, ledger_id
+                    FROM payment_token_grants
+                    WHERE provider=? AND provider_payment_id=?
+                    LIMIT 1
+                    """.strip(),
+                    (provider, provider_payment_id),
+                ).fetchone()
+                if concurrent is None:
+                    raise RuntimeError("payment_token_grant_claim_failed")
+                return False, get_wallet_in_conn(conn, uid), _validated_existing(concurrent)
+
+            wallet = get_wallet_in_conn(conn, uid)
+            balance = int(wallet.available_tokens) + int(package.tokens)
+            conn.execute(
+                "UPDATE practice_wallets SET available_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+                (balance, uid),
+            )
+            ledger_id = insert_ledger(
+                conn,
+                user_id=uid,
+                event_type="grant",
+                amount=package.tokens,
+                balance_after=balance,
+                reason="payment_succeeded",
+                source=source,
+                package_id=package.package_id,
+                provider=provider,
+                provider_payment_id=provider_payment_id,
+                idempotency_key=key,
+            )
+            create_lot_in_conn(
+                conn,
+                lot_key=key,
+                user_id=uid,
+                provider=provider,
+                provider_payment_id=provider_payment_id,
+                package_id=package.package_id,
+                amount=package.tokens,
+                refundable=True,
+            )
+            updated = conn.execute(
+                """
+                UPDATE payment_token_grants
+                SET ledger_id=?
+                WHERE provider=? AND provider_payment_id=? AND ledger_id IS NULL
+                """.strip(),
+                (ledger_id, provider, provider_payment_id),
+            )
+            if int(getattr(updated, "rowcount", 0) or 0) <= 0:
+                raise RuntimeError("payment_token_grant_finalize_failed")
+            wallet_after = get_wallet_in_conn(conn, uid)
+    return True, wallet_after, ledger_id
 
 
 def get_delivery_mode(user_id: int) -> str:

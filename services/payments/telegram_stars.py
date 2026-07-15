@@ -238,7 +238,8 @@ async def send_stars_invoice(
         title=package.title[:32],
         description=description[:255],
         payload=payload,
-        provider_token="",
+        # Telegram Stars requires an empty provider token by API contract.
+        provider_token="",  # nosec B106
         currency=STARS_CURRENCY,
         prices=[LabeledPrice(label=package.title[:32], amount=order.amount_xtr)],
         start_parameter=f"xtr_{package.package_id}"[:64],

@@ -653,7 +653,7 @@ def _kind_for_audio_item(item: object | None) -> str:
         return "home"
 
     try:
-        if int(anchor) % 2 == 0:
+        if int(str(anchor)) % 2 == 0:
             return "home"
     except Exception:
         pass
@@ -718,48 +718,6 @@ def handle_incoming_text(
     action, value = _parse_command(text)
     norm_platform = normalize_platform(platform)
     raw_lower = (text or "").strip().lower()
-
-    if raw_lower in {"pay", "/pay", "оплата", "оплатить", "тарифы", "💳 тарифы"}:
-        return int(user_id), [
-            MessengerReply(
-                text=_payment_text(
-                    int(user_id),
-                    platform=norm_platform,
-                    external_user_id=external_user_id,
-                )
-            )
-        ]
-
-    if action == "continue" and norm_platform == "telegram":
-        return int(user_id), [MessengerReply(kind="next_audio")]
-
-    if action == "done" and norm_platform == "telegram":
-        try:
-            confirmed = confirm_pending_audio_delivery(int(user_id), platform=norm_platform)
-        except TypeError:
-            confirmed = confirm_pending_audio_delivery(int(user_id))
-
-        if confirmed is None:
-            return int(user_id), [
-                MessengerReply(
-                    text="Сейчас нет аудио, которое ожидает подтверждения. Нажмите «🎧 Получить аудио» или отправьте continue."
-                )
-            ]
-
-        replies = [
-            MessengerReply(
-                text=(
-                    f"✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\\n\\n"
-                    "Теперь оцените состояние ПОСЛЕ прослушивания.\\n"
-                    f"{_score_scale_text()}"
-                ),
-                meta={"vk_keyboard": "score_scale"},
-            )
-        ]
-        if norm_platform == "telegram":
-            replies.append(MessengerReply(kind="next_audio"))
-        return int(user_id), replies
-
     payload = value if action == "start" else None
     entry = register_user_entry(
         int(user_id),
@@ -771,6 +729,49 @@ def handle_incoming_text(
         start_payload=payload,
     )
     canonical_user_id = int(entry.user_id)
+
+    if raw_lower in {"pay", "/pay", "оплата", "оплатить", "тарифы", "💳 тарифы"}:
+        return canonical_user_id, [
+            MessengerReply(
+                text=_payment_text(
+                    canonical_user_id,
+                    platform=norm_platform,
+                    external_user_id=external_user_id,
+                )
+            )
+        ]
+
+    if action == "continue" and norm_platform == "telegram":
+        return canonical_user_id, [MessengerReply(kind="next_audio")]
+
+    if action == "done" and norm_platform == "telegram":
+        try:
+            confirmed = confirm_pending_audio_delivery(canonical_user_id, platform=norm_platform)
+        except TypeError:
+            confirmed = confirm_pending_audio_delivery(canonical_user_id)
+
+        if confirmed is None:
+            return canonical_user_id, [
+                MessengerReply(
+                    text="Сейчас нет аудио, которое ожидает подтверждения. Нажмите «🎧 Получить аудио» или отправьте continue."
+                )
+            ]
+
+        done_replies = [
+            MessengerReply(
+                text=(
+                    f"✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\\n\\n"
+                    "Теперь оцените состояние ПОСЛЕ прослушивания.\\n"
+                    f"{_score_scale_text()}"
+                ),
+                meta={"vk_keyboard": "score_scale"},
+            )
+        ]
+        if norm_platform == "telegram":
+            done_replies.append(MessengerReply(kind="next_audio"))
+        return canonical_user_id, done_replies
+
+
 
     if score_value is not None and action == "menu":
         # Telegram has explicit mood:post callbacks. VK regular keyboards may
@@ -855,20 +856,28 @@ def handle_incoming_text(
     norm_platform = normalize_platform(platform)
 
     if action == "pay":
-        return int(user_id), [MessengerReply(text=_payment_text(int(user_id), platform=norm_platform, external_user_id=external_user_id))]
+        return canonical_user_id, [
+            MessengerReply(
+                text=_payment_text(
+                    canonical_user_id,
+                    platform=norm_platform,
+                    external_user_id=external_user_id,
+                )
+            )
+        ]
 
     if action == "gift":
         return canonical_user_id, [_start_gift_recipient_flow(canonical_user_id)]
 
     if action in {"start", "menu"}:
-        replies: list[MessengerReply] = []
+        menu_replies: list[MessengerReply] = []
         if entry.linked_via_bridge:
-            replies.append(MessengerReply(text=_bridge_linked_text(canonical_user_id, platform)))
+            menu_replies.append(MessengerReply(text=_bridge_linked_text(canonical_user_id, platform)))
             if _should_auto_resume_after_bridge(canonical_user_id):
-                replies.append(MessengerReply(kind='next_audio'))
-                return canonical_user_id, replies
-        replies.append(MessengerReply(text=_menu_text(canonical_user_id)))
-        return canonical_user_id, replies
+                menu_replies.append(MessengerReply(kind='next_audio'))
+                return canonical_user_id, menu_replies
+        menu_replies.append(MessengerReply(text=_menu_text(canonical_user_id)))
+        return canonical_user_id, menu_replies
     if action == "help":
         return canonical_user_id, [MessengerReply(text=_help_text())]
     if action == "settings":

@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import pytest
 
 from services.migrations.sales_desk_v5 import apply as apply_sales_desk_migration
+from services.migrations.sales_desk_revenue_v6 import apply as apply_sales_revenue_migration
 
 
 def _connection() -> sqlite3.Connection:
@@ -45,6 +46,7 @@ def _connection() -> sqlite3.Connection:
         """
     )
     apply_sales_desk_migration(conn)
+    apply_sales_revenue_migration(conn)
     conn.commit()
     return conn
 
@@ -239,3 +241,98 @@ def test_migration_is_idempotent_and_locks_stage_values() -> None:
                 "now",
             ),
         )
+
+
+def test_mixed_rub_and_stars_revenue_is_kept_in_separate_currencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    import services.sales_desk as sales_desk
+
+    conn = _connection()
+    _patch_db(monkeypatch, conn)
+    conn.execute("INSERT INTO users(user_id, username, first_name) VALUES(?,?,?)", (404, "mix", "Микс"))
+    conn.execute("INSERT INTO events(user_id, name, created_at, meta, payload) VALUES(?,?,?,?,?)", (404, "payment_success", "2026-07-14T10:00:00+00:00", "{}", "{}"))
+    conn.execute("INSERT INTO payments(user_id, amount, currency, provider_status, created_at) VALUES(?,?,?,?,?)", (404, 190000, "RUB", "succeeded", "2026-07-14T11:00:00+00:00"))
+    conn.execute("INSERT INTO payments(user_id, amount, currency, provider_status, created_at) VALUES(?,?,?,?,?)", (404, 1226, "XTR", "succeeded", "2026-07-14T12:00:00+00:00"))
+    conn.commit()
+
+    sales_desk.sync_sales_leads()
+    lead = sales_desk.sales_desk_snapshot(filter_name="won", sync=False)["leads"][0]
+    assert lead["revenue_by_currency"] == {"RUB": 190000, "XTR": 1226}
+    card = sales_desk.format_lead_card(lead)
+    assert "1 900.00 ₽" in card
+    assert "1226 ⭐" in card
+
+
+def test_refund_reduces_sales_revenue_instead_of_preserving_historical_max(monkeypatch: pytest.MonkeyPatch) -> None:
+    import services.sales_desk as sales_desk
+
+    conn = _connection()
+    _patch_db(monkeypatch, conn)
+    conn.execute("INSERT INTO users(user_id, username, first_name) VALUES(?,?,?)", (505, "refund", "Возврат"))
+    conn.execute("INSERT INTO events(user_id, name, created_at, meta, payload) VALUES(?,?,?,?,?)", (505, "payment_success", "2026-07-14T10:00:00+00:00", "{}", "{}"))
+    conn.execute("INSERT INTO payments(user_id, amount, currency, provider_status, created_at) VALUES(?,?,?,?,?)", (505, 790000, "RUB", "succeeded", "2026-07-14T11:00:00+00:00"))
+    conn.commit()
+    sales_desk.sync_sales_leads()
+    assert sales_desk.get_lead(1)["revenue_by_currency"] == {"RUB": 790000}
+
+    conn.execute("UPDATE payments SET provider_status='refunded' WHERE user_id=505")
+    conn.commit()
+    sales_desk.sync_sales_leads()
+    lead = sales_desk.get_lead(1)
+    assert lead["revenue_by_currency"] == {}
+    assert int(lead["revenue_minor"]) == 0
+
+
+def test_revenue_reset_does_not_overwrite_manual_stage_or_attribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import services.sales_desk as sales_desk
+
+    conn = _connection()
+    _patch_db(monkeypatch, conn)
+    conn.execute(
+        "INSERT INTO users(user_id, username, first_name) VALUES(?,?,?)",
+        (606, "preserve", "Сохранить"),
+    )
+    conn.execute(
+        """
+        INSERT INTO events(user_id, name, created_at, meta, payload)
+        VALUES(?,?,?,?,?)
+        """.strip(),
+        (
+            606,
+            "payment_success",
+            "2026-07-14T10:00:00+00:00",
+            '{"source":"vkads","campaign":"protected"}',
+            "{}",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO payments(user_id, amount, currency, provider_status, created_at)
+        VALUES(?,?,?,?,?)
+        """.strip(),
+        (606, 190000, "RUB", "succeeded", "2026-07-14T11:00:00+00:00"),
+    )
+    conn.commit()
+    sales_desk.sync_sales_leads()
+
+    conn.execute(
+        """
+        UPDATE sales_leads
+        SET stage='contacted', stage_source='manual', assigned_to=9001
+        WHERE user_id=606
+        """.strip()
+    )
+    conn.execute("DELETE FROM events WHERE user_id=606")
+    conn.execute("UPDATE payments SET provider_status='refunded' WHERE user_id=606")
+    conn.commit()
+
+    sales_desk.sync_sales_leads()
+    lead = sales_desk.get_lead(1)
+    assert lead["revenue_by_currency"] == {}
+    assert int(lead["revenue_minor"]) == 0
+    assert lead["source"] == "vkads"
+    assert lead["campaign"] == "protected"
+    assert lead["stage"] == "contacted"
+    assert lead["stage_source"] == "manual"
+    assert int(lead["assigned_to"]) == 9001

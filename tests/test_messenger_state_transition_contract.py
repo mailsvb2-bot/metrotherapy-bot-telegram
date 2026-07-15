@@ -6,7 +6,7 @@ from services.mood import create_session
 from services.mood_text_flow import find_pending_pre_session_id
 
 
-def _new_user(seed: int, *, platform: str = "vk") -> int:
+def _new_user(seed: int, *, platform: str = "vk") -> tuple[int, str]:
     entry = register_user_entry(
         seed,
         platform=platform,
@@ -16,7 +16,7 @@ def _new_user(seed: int, *, platform: str = "vk") -> int:
         first_name=None,
         start_payload="",
     )
-    return int(entry.user_id)
+    return int(entry.user_id), str(seed)
 
 
 def test_admin_panel_is_not_exposed_in_vk_or_max_menu_text():
@@ -36,7 +36,7 @@ def test_admin_panel_is_not_exposed_in_vk_or_max_menu_text():
 
 
 def test_vk_pending_pre_score_treats_plus_one_as_score_not_demo_alias():
-    user_id = _new_user(-930101, platform="vk")
+    user_id, external_user_id = _new_user(-930101, platform="vk")
     session_id = create_session(
         user_id,
         kind="work",
@@ -52,7 +52,7 @@ def test_vk_pending_pre_score_treats_plus_one_as_score_not_demo_alias():
     canonical_user_id, replies = handle_incoming_text(
         user_id,
         platform="vk",
-        external_user_id=str(user_id),
+        external_user_id=external_user_id,
         text="+1",
     )
 
@@ -63,7 +63,7 @@ def test_vk_pending_pre_score_treats_plus_one_as_score_not_demo_alias():
 
 
 def test_max_score_payload_value_reaches_pre_score_transition():
-    user_id = _new_user(-930201, platform="max")
+    user_id, external_user_id = _new_user(-930201, platform="max")
     session_id = create_session(
         user_id,
         kind="home",
@@ -79,7 +79,7 @@ def test_max_score_payload_value_reaches_pre_score_transition():
     canonical_user_id, replies = handle_incoming_text(
         user_id,
         platform="max",
-        external_user_id=str(user_id),
+        external_user_id=external_user_id,
         text="+1",
     )
 
@@ -90,12 +90,12 @@ def test_max_score_payload_value_reaches_pre_score_transition():
 
 
 def test_weather_city_pending_allows_back_navigation_without_saving_city():
-    user_id = _new_user(-930401, platform="max")
+    user_id, external_user_id = _new_user(-930401, platform="max")
 
     canonical_user_id, replies = handle_incoming_text(
         user_id,
         platform="max",
-        external_user_id=str(user_id),
+        external_user_id=external_user_id,
         text="weather_city",
     )
     assert canonical_user_id == user_id
@@ -104,7 +104,7 @@ def test_weather_city_pending_allows_back_navigation_without_saving_city():
     canonical_user_id, replies = handle_incoming_text(
         user_id,
         platform="max",
-        external_user_id=str(user_id),
+        external_user_id=external_user_id,
         text="⬅️ Меню",
     )
 

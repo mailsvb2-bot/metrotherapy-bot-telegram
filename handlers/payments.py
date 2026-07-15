@@ -52,7 +52,6 @@ from services.payments.terms import (
 from services.payments.ui import (
     kb_after_paid,
     kb_back,
-    kb_telegram_gift_yookassa_checkout,
     kb_telegram_payment_methods,
     telegram_payment_method_text,
 )
@@ -401,32 +400,10 @@ async def _stars_gift(cb: CallbackQuery):
 
 @router.callback_query(F.data.regexp(r"^yookassa:gift:[a-z0-9_]+$"))
 async def _yookassa_gift(cb: CallbackQuery):
-    await safe_answer_callback(cb)
-    message = _callback_message(cb)
-    if message is None:
-        return
-    try:
-        package_id = _package_id(cb.data, "yookassa:gift:")
-        user_id = int(cb.from_user.id)
-        markup = kb_telegram_gift_yookassa_checkout(
-            user_id=user_id,
-            package_id=package_id,
-        )
-    except (sqlite3.Error, TypeError, ValueError):
-        log.exception("YooKassa gift checkout creation failed")
-        await message.answer(
-            "Не удалось подготовить оплату подарка через ЮKassa. Попробуйте позже.",
-            reply_markup=kb_back("gift:menu"),
-        )
-        return
-    log_event(
-        user_id,
-        "yookassa_gift_checkout_created",
-        {"package_id": package_id, "surface": "telegram_external"},
-    )
-    await message.answer(
-        "Ссылка на оплату подарка подготовлена. ЮKassa откроется во внешнем браузере.",
-        reply_markup=markup,
+    await safe_answer_callback(
+        cb,
+        "Этот старый способ оплаты цифрового пакета в Telegram отключён. Выберите оплату Stars.",
+        show_alert=True,
     )
 
 

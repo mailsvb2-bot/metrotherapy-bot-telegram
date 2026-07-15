@@ -130,10 +130,11 @@ def test_bridge_token_rejects_wrong_target_platform(tmp_path, monkeypatch):
         start_payload=f"bridge_{token}",
     )
 
-    assert result.user_id == 30003
+    assert result.user_id != 30003
+    assert result.user_id >= (1 << 62)
     assert result.linked_via_bridge is False
     assert {row["platform"] for row in identity.get_account_snapshot(10001)["identities"]} == {"telegram"}
-    assert {row["platform"] for row in identity.get_account_snapshot(30003)["identities"]} == {"max"}
+    assert {row["platform"] for row in identity.get_account_snapshot(result.user_id)["identities"]} == {"max"}
 
 
 def test_identity_conflict_blocks_unconfirmed_account_merge(tmp_path, monkeypatch):
@@ -189,3 +190,30 @@ def test_account_audio_progress_is_channel_independent(tmp_path, monkeypatch):
 
     state = audio.mark_audio_completed(account_id, 4, platform="vk")
     assert state.next_audio_no == 5
+
+
+def test_same_numeric_id_on_three_platforms_creates_three_accounts(tmp_path, monkeypatch):
+    modules = _fresh_modules(tmp_path, monkeypatch)
+    entrypoints = modules["services.messenger.entrypoints"]
+
+    telegram = entrypoints.register_user_entry(777, platform="telegram", external_user_id="777")
+    vk = entrypoints.register_user_entry(777, platform="vk", external_user_id="777")
+    max_user = entrypoints.register_user_entry(777, platform="max", external_user_id="777")
+
+    assert telegram.user_id == 777
+    assert vk.user_id != telegram.user_id
+    assert max_user.user_id not in {telegram.user_id, vk.user_id}
+    assert vk.user_id >= (1 << 62)
+    assert max_user.user_id >= (1 << 62)
+
+
+def test_same_numeric_id_is_separate_when_non_telegram_arrives_first(tmp_path, monkeypatch):
+    modules = _fresh_modules(tmp_path, monkeypatch)
+    entrypoints = modules["services.messenger.entrypoints"]
+
+    vk = entrypoints.register_user_entry(888, platform="vk", external_user_id="888")
+    telegram = entrypoints.register_user_entry(888, platform="telegram", external_user_id="888")
+
+    assert vk.user_id >= (1 << 62)
+    assert telegram.user_id == 888
+    assert telegram.user_id != vk.user_id
