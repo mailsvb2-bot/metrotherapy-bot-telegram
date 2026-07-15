@@ -10,7 +10,7 @@ def test_yookassa_source_metadata_controls_premium_delivery_fallback_platform():
         "object": {
             "id": "pay-vk-source-fallback-main-1",
             "status": "succeeded",
-            "amount": {"value": "12900.00", "currency": "RUB"},
+            "amount": {"value": "8290.00", "currency": "RUB"},
             "metadata": {
                 "user_id": "90808",
                 "external_user_id": "90808",
