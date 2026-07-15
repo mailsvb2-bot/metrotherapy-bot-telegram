@@ -14,7 +14,7 @@ def test_amount_to_minor_units_uses_decimal_rounding():
 def test_practice_package_webhook_amount_must_match_contract():
     assert _practice_package_payment_problem(
         package_id="practice_personal_month",
-        amount_minor=2300000,
+        amount_minor=2487000,
         currency="RUB",
     ) == ""
     assert _practice_package_payment_problem(
@@ -35,7 +35,7 @@ def test_legacy_practice_package_webhook_amount_remains_supported():
 def test_practice_package_webhook_currency_must_be_rub():
     assert _practice_package_payment_problem(
         package_id="practice_personal_month",
-        amount_minor=2300000,
+        amount_minor=2487000,
         currency="USD",
     ) == "currency_mismatch_for_practice_grant"
 
@@ -69,7 +69,7 @@ def test_successful_repeat_webhook_replaces_stale_problem_and_grants_premium(mon
         "object": {
             "id": payment_id,
             "status": "succeeded",
-            "amount": {"value": "23000.00", "currency": "RUB"},
+            "amount": {"value": "24870.00", "currency": "RUB"},
             "metadata": {
                 "user_id": "707",
                 "kind": "tokens",
