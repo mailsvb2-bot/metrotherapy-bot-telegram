@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from scripts import telegram_stars_provider_audit as audit
@@ -7,6 +10,7 @@ from scripts import telegram_stars_provider_audit as audit
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "scripts" / "run_deploy_worker.sh"
+AUDIT_SCRIPT = ROOT / "scripts" / "telegram_stars_provider_audit.py"
 
 
 def _explicit_prices(monkeypatch) -> None:
@@ -77,6 +81,25 @@ def test_provider_audit_fails_closed_on_invalid_price_ladder(monkeypatch) -> Non
 
     assert code == 6
     assert message == "status=error stage=prices bot=unknown code=0 error=INVALID_PRICE_LADDER"
+
+
+def test_provider_audit_runs_by_absolute_path_outside_repo() -> None:
+    env = os.environ.copy()
+    env.pop("BOT_TOKEN", None)
+
+    result = subprocess.run(
+        [sys.executable, str(AUDIT_SCRIPT)],
+        cwd="/tmp",
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout.strip() == "status=error stage=config bot=unknown code=0 error=BOT_TOKEN_MISSING"
+    assert result.stderr == ""
 
 
 def test_deploy_worker_publishes_sanitized_provider_audit_result() -> None:
