@@ -148,15 +148,15 @@ def telegram_stars_enabled() -> bool:
 
 
 def telegram_yookassa_enabled() -> bool:
-    """Digital packages sold inside Telegram are Stars-only.
+    """Allow the signed external-browser YooKassa choice on Telegram surfaces.
 
-    YooKassa remains available for VK, MAX and web, but must not be exposed as
-    an alternative checkout from a Telegram bot surface.  The old environment
-    switch is intentionally ignored so production cannot drift back into a
-    non-compliant dual-payment state.
+    The switch is independent from the shared YooKassa runtime used by VK, MAX
+    and web, so the Telegram button can be disabled immediately without taking
+    the other payment channels offline.
     """
 
-    return False
+    raw = (os.getenv("TELEGRAM_YOOKASSA_ENABLED") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
 
 
 def _telegram_stars_env_key(package_id: str) -> str:
