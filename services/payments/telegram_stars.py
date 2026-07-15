@@ -238,8 +238,8 @@ async def send_stars_invoice(
         title=package.title[:32],
         description=description[:255],
         payload=payload,
-        # Telegram Stars requires an empty provider token by API contract.
-        provider_token="",  # nosec B106
+        # Native Stars invoices must not carry an external provider account.
+        # Omitting the optional field matches aiogram's reference Stars flow.
         currency=STARS_CURRENCY,
         prices=[LabeledPrice(label=package.title[:32], amount=order.amount_xtr)],
         start_parameter=f"xtr_{package.package_id}"[:64],

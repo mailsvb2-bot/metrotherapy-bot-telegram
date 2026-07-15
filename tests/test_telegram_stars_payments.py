@@ -137,8 +137,9 @@ def test_stars_gift_marks_claim_without_crediting_buyer(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_invoice_uses_xtr_and_empty_provider_token(monkeypatch) -> None:
+async def test_invoice_uses_xtr_without_external_provider_token(monkeypatch) -> None:
     monkeypatch.setattr(telegram_stars, "log_event", lambda *args, **kwargs: None)
+    monkeypatch.setenv("PAY_PROVIDER_TOKEN", "TEST:legacy-provider-must-not-leak")
     captured = {}
 
     class FakeMessage:
@@ -155,7 +156,7 @@ async def test_invoice_uses_xtr_and_empty_provider_token(monkeypatch) -> None:
 
     assert token == ""
     assert captured["currency"] == "XTR"
-    assert captured["provider_token"] == ""
+    assert "provider_token" not in captured
     assert len(captured["prices"]) == 1
     assert captured["prices"][0].amount == telegram_stars_price("practice_start_7")
     assert parse_stars_payload(captured["payload"]).buyer_user_id == 781031
