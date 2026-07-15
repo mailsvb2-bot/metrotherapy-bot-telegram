@@ -58,11 +58,12 @@ async def test_runtime_stars_transport_uses_audited_invoice_link_with_recovery(m
 
 @pytest.mark.asyncio
 async def test_gift_recovery_preserves_gift_callbacks(monkeypatch) -> None:
+    gift_token = "gift_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     monkeypatch.setattr(stars_invoice_transport, "log_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         stars_invoice_transport,
         "create_gift_checkout_token",
-        lambda **_kwargs: "gift_test_recovery_token",
+        lambda **_kwargs: gift_token,
     )
     captured_answer: dict = {}
 
@@ -87,7 +88,7 @@ async def test_gift_recovery_preserves_gift_callbacks(monkeypatch) -> None:
         as_gift=True,
     )
 
-    assert token == "gift_test_recovery_token"
+    assert token == gift_token
     buttons = [button for row in captured_answer["reply_markup"].inline_keyboard for button in row]
     assert buttons[2].callback_data == "stars:gift:practice_start_7"
     assert buttons[3].callback_data == "pay:gift_methods:practice_start_7"
