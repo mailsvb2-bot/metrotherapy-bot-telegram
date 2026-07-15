@@ -9,6 +9,21 @@ from services.payments.telegram_stars import parse_stars_payload, send_stars_inv
 from services.practice_token_contract import telegram_stars_price
 
 
+TOPUP_URL = "tg://stars_topup?balance=1226&purpose=metrotherapy_practice_start_7"
+
+
+def test_stars_topup_url_targets_exact_package_amount() -> None:
+    assert (
+        stars_invoice_transport._stars_topup_url(
+            amount_xtr=1226,
+            package_id="practice_start_7",
+        )
+        == TOPUP_URL
+    )
+    with pytest.raises(ValueError, match="stars_topup_amount_invalid"):
+        stars_invoice_transport._stars_topup_url(amount_xtr=0, package_id="practice_start_7")
+
+
 @pytest.mark.asyncio
 async def test_runtime_stars_transport_uses_audited_invoice_link_with_recovery(monkeypatch) -> None:
     monkeypatch.setattr(stars_invoice_transport, "log_event", lambda *args, **kwargs: None)
@@ -48,12 +63,13 @@ async def test_runtime_stars_transport_uses_audited_invoice_link_with_recovery(m
     buttons = [button for row in markup.inline_keyboard for button in row]
     assert buttons[0].url == "https://t.me/$metrotherapy-stars-test"
     assert buttons[0].text == "⭐ Оплатить пакет — 1 226 Stars"
-    assert buttons[1].url is None
-    assert buttons[1].callback_data == "stars:buy:practice_start_7"
-    assert buttons[2].callback_data == "pay:methods:practice_start_7"
-    assert all("PremiumBot" not in str(button.url or "") for button in buttons)
+    assert buttons[1].url == TOPUP_URL
+    assert buttons[1].text == "➕ Купить 1 226 Stars"
+    assert buttons[2].callback_data == "stars:buy:practice_start_7"
+    assert buttons[2].text == "🔄 Stars куплены — продолжить оплату"
+    assert buttons[3].callback_data == "pay:methods:practice_start_7"
+    assert "Telegram откроет штатное окно пополнения" in captured_answer["text"]
     assert "Настройки → Ваши Stars" in captured_answer["text"]
-    assert "официальный Telegram на телефоне" in captured_answer["text"]
     assert "Метротерапия не получает и не хранит данные вашей карты" in captured_answer["text"]
     assert "PremiumBot" not in captured_answer["text"]
 
@@ -92,8 +108,9 @@ async def test_gift_recovery_preserves_gift_callbacks(monkeypatch) -> None:
 
     assert token == gift_token
     buttons = [button for row in captured_answer["reply_markup"].inline_keyboard for button in row]
-    assert buttons[1].callback_data == "stars:gift:practice_start_7"
-    assert buttons[2].callback_data == "pay:gift_methods:practice_start_7"
+    assert buttons[1].url == TOPUP_URL
+    assert buttons[2].callback_data == "stars:gift:practice_start_7"
+    assert buttons[3].callback_data == "pay:gift_methods:practice_start_7"
     assert all("PremiumBot" not in str(button.url or "") for button in buttons)
 
 
