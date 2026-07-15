@@ -13,6 +13,7 @@ from services.payments.checkout_intent import (
     checkout_intent_required,
     verify_checkout_intent,
 )
+from services.payments.terms import payment_terms_html
 from services.payments.verified_reconciliation import record_verified_yookassa_webhook
 from services.payments.yookassa_checkout import YooKassaCheckoutError, create_yookassa_confirmation_url
 from services.practice_token_contract import package_by_id
@@ -22,6 +23,15 @@ log = logging.getLogger(__name__)
 _TOKEN_PAYMENT_KINDS = {"tokens", "practices", "practice_package"}
 _LEGACY_PAYMENT_KINDS = {"subscription", "gift"}
 _ALLOWED_PAYMENT_KINDS = _TOKEN_PAYMENT_KINDS | _LEGACY_PAYMENT_KINDS
+
+
+async def payment_terms_web(_request: web.Request) -> web.Response:
+    return web.Response(
+        text=payment_terms_html(),
+        content_type="text/html",
+        charset="utf-8",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
 
 
 def legacy_public_payment_kinds_enabled() -> bool:

@@ -17,7 +17,7 @@ from runtime.ingress_flags import (
 )
 from runtime.messenger_ingress import max_webhook, vk_webhook
 from runtime.messenger_media_http import audio_access, audio_media
-from runtime.payment_http import pay_yookassa_web, yookassa_reconciliation_webhook
+from runtime.payment_http import payment_terms_web, pay_yookassa_web, yookassa_reconciliation_webhook
 from runtime.telegram_transport import telegram_transport
 from runtime.telegram_webhook_runtime import (
     telegram_legacy_webhook_path,
@@ -58,6 +58,7 @@ def _register_health_routes(app: web.Application) -> None:
 
 
 def _register_payment_routes(app: web.Application) -> None:
+    app.router.add_get("/terms", payment_terms_web)
     app.router.add_get("/pay/yookassa", pay_yookassa_web)
     app.router.add_post("/pay/yookassa/webhook", yookassa_reconciliation_webhook)
 

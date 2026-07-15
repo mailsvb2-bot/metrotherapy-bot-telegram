@@ -314,6 +314,16 @@ def translate_sql_for_postgres(sql: str) -> str:
     s = s.replace("strftime('%s','now')", 'EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::BIGINT')
 
     # DDL compatibility
+    # Telegram user/chat identifiers may use up to 52 significant bits. Keep
+    # identity-shaped columns 64-bit even when the SQLite source DDL says
+    # INTEGER (which is already dynamically wide in SQLite).
+    if re.match(r"(?is)^(?:CREATE|ALTER)\s+TABLE\b", s):
+        s = re.sub(
+            r"\b(?P<name>(?:[A-Za-z_][A-Za-z0-9_]*_)?(?:user_id|chat_id)|admin_id|requested_by)\s+(?:INTEGER|INT)\b",
+            lambda match: f"{match.group('name')} BIGINT",
+            s,
+            flags=re.IGNORECASE,
+        )
     # SQLite INTEGER PRIMARY KEY behaves like an auto-generated rowid, so in Postgres
     # it must map to BIGSERIAL PRIMARY KEY rather than plain BIGINT PRIMARY KEY.
     s = re.sub(r'\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b', 'BIGSERIAL PRIMARY KEY', s, flags=re.IGNORECASE)

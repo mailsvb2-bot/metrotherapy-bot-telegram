@@ -1,38 +1,18 @@
 from __future__ import annotations
 import logging
-import sqlite3
 
-from services.sla import record as sla_record
 from services.bg import tm
-from services.fast_send_audio import send_audio_cached
 
-from datetime import timedelta
-from core.time_utils import utc_now
-from services.jobs import add_job, cancel_post_prompt
 
 import asyncio
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, BufferedInputFile, Message
-from aiogram.types import FSInputFile
+from aiogram.types import CallbackQuery, Message
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramNetworkError
 
-from keyboards.inline import kb_mood_scale, kb_mood_done, kb_body_question, kb_after_post_actions, kb_post_show_chart
 from keyboards.inline import kb_menu_only
-from services.db import mark_delivery_once
-from services.idempotency import wall_key
-from services.idempotency_keys import for_demo_click, for_session
-from services.mood import set_pre, set_post, get_session, mark_audio_sent, last_delta
-from services.events import log_event
-from services.audio_anchor import get_by_anchor
-from services.catalog import AudioCatalog
 # Контракт: запись факта отправки демо живёт в demo_analytics.
 # В старых ветках файл мог называться demo_events — оставляем только корректный импорт.
-from services.demo_analytics import record_demo_sent
-from services.body import pick_body_question, save_body_feedback, technique_for_area
-from services.audio_cache import get_cached_file_id, save_cached_file_id
-from services.support_ai import decide_support_pre
-from services.subscription import register_touch
 
 
 from core.callback_utils import safe_answer_callback
@@ -65,7 +45,6 @@ async def post_show_chart(cb: CallbackQuery):
     uid = int(cb.from_user.id)
 
     # Строим график + отправляем фото в фоне, чтобы апдейт не висел (и не попадал в SLOW).
-    from services.bg import tm
     message = _callback_message(cb)
     if message is None:
         return
@@ -136,4 +115,3 @@ async def post_show_chart(cb: CallbackQuery):
 
     # После постановки фоновой задачи — выходим сразу.
     return
-

@@ -4,6 +4,7 @@ import pytest
 
 from services.validators.architecture import validate_public_payment_base_url
 from services.validators.base import ValidationError
+from services.payments.public_url import payment_public_base_url
 
 
 def _clear_payment_env(monkeypatch):
@@ -62,6 +63,14 @@ def test_payment_base_url_accepts_tls(monkeypatch):
     monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://example.test")
 
     validate_public_payment_base_url(strict=True)
+
+
+def test_explicit_payment_base_url_has_priority_over_messenger_url(monkeypatch):
+    _clear_payment_env(monkeypatch)
+    monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://payments.example")
+    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://messenger.example")
+
+    assert payment_public_base_url() == "https://payments.example"
 
 
 def test_payment_base_url_skips_release_mode_without_explicit_requirement(monkeypatch):

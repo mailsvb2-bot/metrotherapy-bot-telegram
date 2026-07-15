@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -27,12 +28,15 @@ def test_stars_payload_is_user_bound_and_amount_checked() -> None:
     assert order.buyer_user_id == 781001
     assert order.package_id == "practice_start_7"
     assert order.gift_token == ""
-    assert validate_stars_pre_checkout(
-        payload=payload,
-        user_id=781001,
-        currency="XTR",
-        total_amount=telegram_stars_price("practice_start_7"),
-    ) is None
+    assert (
+        validate_stars_pre_checkout(
+            payload=payload,
+            user_id=781001,
+            currency="XTR",
+            total_amount=telegram_stars_price("practice_start_7"),
+        )
+        is None
+    )
     assert validate_stars_pre_checkout(
         payload=payload,
         user_id=781002,
@@ -48,6 +52,7 @@ def test_stars_payload_is_user_bound_and_amount_checked() -> None:
 
 
 def test_stars_price_can_be_changed_without_changing_ruble_price(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     monkeypatch.setenv("TELEGRAM_STARS_PRICE_PRACTICE_START_7", "1777")
     assert telegram_stars_price("practice_start_7") == 1777
 
@@ -157,16 +162,22 @@ async def test_invoice_uses_xtr_and_empty_provider_token(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_xtr_pre_checkout_stays_on_legacy_path(monkeypatch) -> None:
-    calls = []
+async def test_non_xtr_pre_checkout_is_rejected_without_legacy_fallback(monkeypatch) -> None:
+    calls: list[dict] = []
 
-    async def fake_legacy(pre):
-        calls.append(pre)
+    async def unexpected_legacy(_pre):
+        raise AssertionError("legacy RUB pre-checkout must stay unreachable")
 
-    monkeypatch.setattr(payment_handler, "legacy_pre_checkout", fake_legacy)
-    pre = SimpleNamespace(currency="RUB")
+    monkeypatch.setattr(payment_handler, "legacy_pre_checkout", unexpected_legacy, raising=False)
+
+    async def answer(**kwargs):
+        calls.append(kwargs)
+
+    pre = SimpleNamespace(currency="RUB", answer=answer)
     await payment_handler._pre_checkout(pre)  # noqa: SLF001
-    assert calls == [pre]
+    assert len(calls) == 1
+    assert calls[0]["ok"] is False
+    assert calls[0]["error_message"]
 
 
 @pytest.mark.asyncio
@@ -181,3 +192,88 @@ async def test_non_xtr_successful_payment_stays_on_legacy_path(monkeypatch) -> N
     message = SimpleNamespace(successful_payment=payment)
     await payment_handler._successful_payment(message)  # noqa: SLF001
     assert calls == [message]
+
+
+def test_successful_payment_survives_stars_feature_flag_change(monkeypatch) -> None:
+    monkeypatch.setattr(telegram_stars, "log_event", lambda *args, **kwargs: None)
+    user_id = 781151
+    charge_id = "stars-flag-race-781151"
+    payload = build_stars_payload(buyer_user_id=user_id, package_id="practice_start_7")
+    amount = telegram_stars_price("practice_start_7")
+
+    monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "0")
+    result = record_successful_stars_payment(
+        user_id=user_id,
+        payload=payload,
+        total_amount=amount,
+        currency=STARS_CURRENCY,
+        telegram_charge_id=charge_id,
+    )
+
+    assert result.completed is True
+    assert get_wallet(user_id).available_tokens == 7
+    with db() as conn:
+        payment = conn.execute(
+            "SELECT processing_status FROM payments WHERE telegram_charge_id=?",
+            (charge_id,),
+        ).fetchone()
+    assert payment["processing_status"] == "side_effects_done"
+
+
+def test_invalid_successful_payment_is_persisted_for_manual_recovery(monkeypatch) -> None:
+    monkeypatch.setattr(telegram_stars, "log_event", lambda *args, **kwargs: None)
+    charge_id = "stars-invalid-payload-781061"
+
+    with pytest.raises(telegram_stars.StarsPaymentError):
+        record_successful_stars_payment(
+            user_id=781061,
+            payload="broken-payload",
+            total_amount=1900,
+            currency=STARS_CURRENCY,
+            telegram_charge_id=charge_id,
+        )
+
+    with db() as conn:
+        payment = conn.execute(
+            """
+            SELECT user_id, amount, currency, provider_status, processing_status, problem
+            FROM payments
+            WHERE telegram_charge_id=?
+            """.strip(),
+            (charge_id,),
+        ).fetchone()
+    assert int(payment["user_id"]) == 781061
+    assert int(payment["amount"]) == 1900
+    assert payment["currency"] == STARS_CURRENCY
+    assert payment["provider_status"] == "succeeded"
+    assert payment["processing_status"] == "action_required"
+    assert payment["problem"]
+
+
+def test_database_failure_during_grant_is_marked_for_manual_recovery(monkeypatch) -> None:
+    monkeypatch.setattr(telegram_stars, "log_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        telegram_stars,
+        "grant_tokens_for_payment",
+        lambda **_kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("grant unavailable")),
+    )
+    user_id = 781071
+    charge_id = "stars-grant-db-failure-781071"
+    payload = build_stars_payload(buyer_user_id=user_id, package_id="practice_start_7")
+
+    with pytest.raises(telegram_stars.StarsPaymentError):
+        record_successful_stars_payment(
+            user_id=user_id,
+            payload=payload,
+            total_amount=telegram_stars_price("practice_start_7"),
+            currency=STARS_CURRENCY,
+            telegram_charge_id=charge_id,
+        )
+
+    with db() as conn:
+        payment = conn.execute(
+            "SELECT processing_status, problem FROM payments WHERE telegram_charge_id=?",
+            (charge_id,),
+        ).fetchone()
+    assert payment["processing_status"] == "action_required"
+    assert "OperationalError" in payment["problem"]

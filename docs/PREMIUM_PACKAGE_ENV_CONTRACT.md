@@ -17,9 +17,14 @@ STRESS_VIDEO_COURSE_URL=https://metrotherapy.ru/antistress-course
 
 `VIDEO_COURSE_URL` is accepted as a compatibility alias, but `STRESS_VIDEO_COURSE_URL` is the canonical variable.
 
-## YooKassa reconciliation
+## Payment reconciliation
 
-Premium entitlements are granted only after a successful and amount-verified YooKassa webhook.
+Premium entitlements are granted only after either:
+
+- a successful and amount-verified YooKassa webhook from VK, MAX or web checkout; or
+- a validated Telegram `successful_payment` in `XTR` from the native Stars invoice flow.
+
+Both providers use the same idempotent token and premium-entitlement services.
 
 Expected package amounts:
 
@@ -28,7 +33,7 @@ Expected package amounts:
 
 ## Delivery behavior
 
-After the webhook is accepted:
+After the provider payment is accepted:
 
 1. practice tokens are granted;
 2. premium entitlements are recorded;

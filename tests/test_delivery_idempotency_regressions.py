@@ -14,7 +14,7 @@ from services.idempotency_keys import for_demo_click, for_session
 def _legacy_demo_key_from_rating_handler_shape(session_id: int) -> int:
     # Mirrors the legacy handler call shape where `sid` is a local variable and
     # for_demo_click() is called without explicit args.
-    sid = int(session_id)
+    sid = int(session_id)  # noqa: F841 - canonical legacy caller-local contract
     return for_demo_click()
 
 

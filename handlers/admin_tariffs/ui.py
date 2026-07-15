@@ -12,6 +12,7 @@ from aiogram.types import InlineKeyboardButton
 from core.callbacks import ADMIN_TARIFFS
 from services.db import get_connection
 from services.plans import get_active_plans
+from services.practice_token_contract import public_practice_packages, telegram_stars_price, telegram_stars_pricing_mode
 
 
 from core.callback_utils import safe_answer_callback
@@ -33,7 +34,7 @@ def kb_tariffs_nav() -> InlineKeyboardMarkup:
 
 def _tariffs_menu_kb() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="✏️ Изменить", callback_data="admin:tariffs:edit")],
+        [InlineKeyboardButton(text="✏️ Архивные подписки", callback_data="admin:tariffs:edit")],
         [InlineKeyboardButton(text="🗂 Архив", callback_data="admin:tariffs:history")],
         [InlineKeyboardButton(text="📈 Динамика", callback_data="admin:tariffs:dynamics")],
         [InlineKeyboardButton(text="🏠 Меню", callback_data="admin:menu")],
@@ -42,13 +43,23 @@ def _tariffs_menu_kb() -> InlineKeyboardMarkup:
 
 
 def _prices_text() -> str:
+    packages = public_practice_packages()
+    package_lines = [
+        f"• {package.title} — {package.price_rub} ₽ / {telegram_stars_price(package.package_id)} XTR ({package.package_id})"
+        for package in packages
+    ]
     plans = get_active_plans()
-    if not plans:
-        return "Тарифы пока не настроены."
-    lines = []
+    legacy_lines = []
     for p in plans:
-        lines.append(f"• {p['title']} — {p['price']} ₽ ({p['code']})")
-    return "Текущие тарифы:\n" + "\n".join(lines)
+        legacy_lines.append(f"• {p['title']} — {p['price']} ₽ ({p['code']})")
+    legacy = "\n".join(legacy_lines) if legacy_lines else "• нет активных архивных подписок"
+    return (
+        "Публичные пакеты практик (канонический каталог):\n"
+        + "\n".join(package_lines)
+        + f"\n\nРежим Stars: {telegram_stars_pricing_mode()}\n"
+        + "\nАрхивные тарифы подписки (не управляют публичными пакетами):\n"
+        + legacy
+    )
 
 
 def _tariff_history_rows():

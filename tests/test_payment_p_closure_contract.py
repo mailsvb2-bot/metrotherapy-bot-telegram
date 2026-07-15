@@ -139,9 +139,9 @@ def test_payment_kind_normalization_prefers_tokens_and_package_links():
     assert payment_http._normalize_payment_kind("tokens", "practice_60") == "tokens"
 
 
-def test_shared_payment_public_base_url_precedence(monkeypatch):
+def test_payment_specific_public_base_url_takes_precedence(monkeypatch):
     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://messenger.example/")
     monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://payment.example")
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://public.example")
 
-    assert payment_public_base_url() == "https://messenger.example"
+    assert payment_public_base_url() == "https://payment.example"

@@ -11,7 +11,7 @@ This checklist records the production-readiness evidence expected for the curren
 - [ ] `sudo systemctl status metrotherapy.service --no-pager -l` shows `active (running)`.
 - [ ] `curl -i http://127.0.0.1:8082/healthz` returns `HTTP/1.1 200 OK` and `ok=true`.
 
-## P0 payment/package proof
+## P0 YooKassa payment/package proof (VK, MAX and web)
 
 - [ ] Public `/pay/yookassa` reaches the Python backend through nginx.
 - [ ] `practice_start_7` checkout returns a redirect to the payment provider.
@@ -31,14 +31,24 @@ python scripts/probe_checkout_redirect.py \
   --base-url https://metrotherapy-bot.metrotherapy.ru \
   --package all \
   --user-id 201126430 \
-  --source telegram
+  --source web
 ```
+
+## P0 Telegram Stars proof
+
+- [ ] Telegram package buttons show native `XTR` invoices and no YooKassa URL.
+- [ ] `/terms` opens on the configured payment host and discloses that one Star is not one ruble.
+- [ ] Each invoice amount matches the current canonical Stars pricing mode.
+- [ ] A successful Stars payment creates one payment row and grants the package exactly once.
+- [ ] A duplicate `successful_payment` does not grant practices or premium access twice.
+- [ ] `/refundstars <charge_id>` previews the entitlement reversal without calling Telegram.
+- [ ] `/refundstars <charge_id> CONFIRM` refunds through Telegram and revokes only unused access.
 
 ## P0 messenger proof
 
 - [ ] Telegram polling runtime is active and not conflicting with another bot instance.
 - [ ] Messenger webhook runtime is active.
-- [ ] Telegram package buttons open public YooKassa links in a live Telegram chat.
+- [ ] Telegram package buttons open native Stars invoices in a live Telegram chat.
 - [ ] VK package links open public YooKassa links in a live VK conversation.
 - [ ] MAX package links open public YooKassa links in a live MAX conversation.
 - [ ] Premium entitlement records remain stored even if delivery outbox sending fails.
@@ -57,6 +67,6 @@ python scripts/probe_checkout_redirect.py \
 - Do not make DB-driven pricing the source of truth until admin package-control surfaces exist.
 - Do not claim full production-grade while SQLite is the production persistence path.
 
-## Current production-grade blocker
+## Remaining live proof
 
-The system can run as a hardened staging/alpha service, but it should not be called fully production-grade until persistence is migrated from SQLite to a production database profile and the live Telegram/VK/MAX package-link flows are manually proven.
+Repository and CI checks do not prove that the current VPS environment, Telegram bot token and provider accounts are deployed correctly. Run the production gate and the live Telegram/VK/MAX payment checks after deployment.

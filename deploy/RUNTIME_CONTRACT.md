@@ -18,6 +18,7 @@ The aiohttp ingress runtime may still be enabled for non-Telegram surfaces:
 - MAX webhook
 - VK webhook
 - YooKassa web/reconciliation endpoints
+- public payment terms (`/terms`)
 - audio media/access links
 
 Use:

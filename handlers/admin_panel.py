@@ -56,6 +56,7 @@ async def admin_cmd(message: Message):
         "• /demo_stats — демо-аналитика\n"
         "• /funnel — воронка (уникальные пользователи)\n"
         "• /retention — базовая статистика удержания\n"
+        "• /refundstars <charge_id> — проверить/вернуть Telegram Stars\n"
         "\nПодсказка: удобнее пользоваться кнопкой \"🛠 Панель\" в меню."
     )
 

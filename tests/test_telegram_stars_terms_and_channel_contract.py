@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from services.messenger.package_payment_ui import package_payment_links
-from services.payments.terms import payment_terms_keyboard, payment_terms_text
+from services.payments.terms import payment_terms_html, payment_terms_keyboard, payment_terms_text, payment_terms_url
 from services.payments.ui import kb_tariffs
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,11 +22,39 @@ def test_terms_surface_requires_explicit_acceptance(monkeypatch) -> None:
     buttons = _buttons(markup)
 
     assert "Telegram Stars (XTR)" in text
+    assert "не равна одному рублю" in text
     assert "/paysupport" in text
     assert "@support_example" in text
     assert "https://metrotherapy.example/terms" in text
     assert any(button.callback_data == "stars:buy:practice_start_7" for button in buttons)
     assert any(button.url == "https://metrotherapy.example/terms" for button in buttons)
+
+
+def test_terms_url_defaults_to_canonical_payment_host(monkeypatch) -> None:
+    monkeypatch.delenv("PAYMENT_TERMS_URL", raising=False)
+    monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://pay.metrotherapy.example/")
+    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://messenger.metrotherapy.example")
+
+    assert payment_terms_url() == "https://pay.metrotherapy.example/terms"
+
+
+def test_terms_url_replaces_known_legacy_dead_url(monkeypatch) -> None:
+    monkeypatch.setenv("PAYMENT_TERMS_URL", "https://metrotherapy.ru/terms")
+    monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://metrotherapy-bot.metrotherapy.ru")
+
+    assert payment_terms_url() == "https://metrotherapy-bot.metrotherapy.ru/terms"
+
+
+def test_full_terms_page_discloses_star_pricing_and_support(monkeypatch) -> None:
+    monkeypatch.setenv("PAYMENT_MERCHANT_NAME", "ООО Тест")
+    monkeypatch.setenv("PAYMENT_SUPPORT_CONTACT", "@support_example")
+
+    page = payment_terms_html()
+
+    assert "ООО Тест" in page
+    assert "Одна Star не равна одному рублю" in page
+    assert "@support_example" in page
+    assert "/paysupport" in page
 
 
 def test_telegram_tariffs_never_expose_external_checkout(monkeypatch) -> None:

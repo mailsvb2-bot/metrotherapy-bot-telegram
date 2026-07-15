@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
@@ -156,7 +157,10 @@ def validate_stars_order(
     total_amount: int | None,
     pre_checkout: bool,
 ) -> StarsOrder:
-    if not telegram_stars_enabled():
+    # The feature flag controls creation and pre-checkout of *new* invoices.
+    # A successful_payment update is proof that Telegram has already charged the
+    # user, so it must remain processable after a rollout flag/config change.
+    if pre_checkout and not telegram_stars_enabled():
         raise ValueError("stars_payments_disabled")
     if str(currency or "").strip().upper() != STARS_CURRENCY:
         raise ValueError("stars_currency_invalid")
@@ -280,7 +284,77 @@ def _payment_row(charge_id: str) -> dict[str, Any]:
     }
 
 
-def _record_payment_fact(
+def _record_received_payment_fact(
+    *,
+    user_id: int,
+    charge_id: str,
+    provider_charge_id: str,
+    payload: str,
+    amount: int,
+    currency: str,
+) -> None:
+    """Persist Telegram's successful-payment fact before business validation.
+
+    Telegram has already charged the buyer when this function is reached. Even
+    a stale/unknown payload must therefore be durable and visible to support and
+    reconciliation instead of disappearing before validation.
+    """
+    now = _utc_iso()
+    normalized_currency = str(currency or "").strip().upper()
+    raw = json.dumps(
+        {
+            "provider": STARS_PROVIDER,
+            "received": True,
+            "amount": int(amount),
+            "currency": normalized_currency,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    with db() as conn:
+        with tx(conn):
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO payments(
+                    user_id, telegram_charge_id, provider_charge_id, payload,
+                    amount, currency, created_at, provider_status,
+                    provider_event_id, provider_raw, reconciled_at, problem,
+                    processing_status, processing_error
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """.strip(),
+                (
+                    int(user_id),
+                    charge_id,
+                    provider_charge_id or None,
+                    payload,
+                    int(amount),
+                    normalized_currency,
+                    now,
+                    "succeeded",
+                    charge_id,
+                    raw,
+                    now,
+                    "",
+                    "grant_pending",
+                    "",
+                ),
+            )
+
+    row = _payment_row(charge_id)
+    if not row:
+        raise StarsPaymentError("stars_payment_fact_missing")
+    if int(row.get("user_id") or 0) != int(user_id):
+        raise StarsPaymentError("stars_payment_user_conflict")
+    if str(row.get("payload") or "") != payload:
+        raise StarsPaymentError("stars_payment_payload_conflict")
+    if int(row.get("amount") or 0) != int(amount):
+        raise StarsPaymentError("stars_payment_amount_conflict")
+    if str(row.get("currency") or "").upper() != normalized_currency:
+        raise StarsPaymentError("stars_payment_currency_conflict")
+
+
+def _record_validated_payment_fact(
     *,
     order: StarsOrder,
     charge_id: str,
@@ -304,29 +378,17 @@ def _record_payment_fact(
         with tx(conn):
             conn.execute(
                 """
-                INSERT OR IGNORE INTO payments(
-                    user_id, telegram_charge_id, provider_charge_id, payload,
-                    amount, currency, created_at, provider_status,
-                    provider_event_id, provider_raw, reconciled_at, problem,
-                    processing_status, processing_error
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                UPDATE payments
+                SET provider_charge_id=COALESCE(provider_charge_id, ?),
+                    provider_status='succeeded', provider_event_id=?, provider_raw=?,
+                    reconciled_at=?, problem='', processing_error='',
+                    processing_status=CASE
+                        WHEN side_effects_done_at_utc IS NOT NULL THEN processing_status
+                        ELSE 'grant_pending'
+                    END
+                WHERE telegram_charge_id=?
                 """.strip(),
-                (
-                    order.buyer_user_id,
-                    charge_id,
-                    provider_charge_id or None,
-                    payload,
-                    int(amount),
-                    STARS_CURRENCY,
-                    now,
-                    "succeeded",
-                    charge_id,
-                    raw,
-                    now,
-                    "",
-                    "grant_pending",
-                    "",
-                ),
+                (provider_charge_id or None, charge_id, raw, now, charge_id),
             )
     row = _payment_row(charge_id)
     if not row:
@@ -367,7 +429,7 @@ def _mark_payment_error(charge_id: str, exc: BaseException) -> None:
                 """
                 UPDATE payments
                 SET processing_status='action_required', processing_error=?, problem=?
-                WHERE telegram_charge_id=?
+                WHERE telegram_charge_id=? AND side_effects_done_at_utc IS NULL
                 """.strip(),
                 (message, message, charge_id),
             )
@@ -385,23 +447,39 @@ def record_successful_stars_payment(
     charge_id = str(telegram_charge_id or "").strip()
     if not charge_id:
         raise StarsPaymentError("stars_charge_id_missing")
+    normalized_payload = str(payload or "")
+    normalized_provider_charge = str(provider_charge_id or "").strip()
+    try:
+        normalized_amount = int(total_amount)
+    except (TypeError, ValueError) as exc:
+        raise StarsPaymentError("stars_amount_invalid") from exc
+
+    _record_received_payment_fact(
+        user_id=int(user_id),
+        charge_id=charge_id,
+        provider_charge_id=normalized_provider_charge,
+        payload=normalized_payload,
+        amount=normalized_amount,
+        currency=str(currency or ""),
+    )
     try:
         order = validate_stars_order(
-            payload=payload,
+            payload=normalized_payload,
             user_id=int(user_id),
             currency=currency,
-            total_amount=total_amount,
+            total_amount=normalized_amount,
             pre_checkout=False,
         )
     except ValueError as exc:
+        _mark_payment_error(charge_id, exc)
         raise StarsPaymentError("stars_successful_payment_validation_failed") from exc
 
-    _record_payment_fact(
+    _record_validated_payment_fact(
         order=order,
         charge_id=charge_id,
-        provider_charge_id=str(provider_charge_id or "").strip(),
-        payload=str(payload),
-        amount=int(total_amount),
+        provider_charge_id=normalized_provider_charge,
+        payload=normalized_payload,
+        amount=normalized_amount,
     )
     existing = _payment_row(charge_id)
     if existing.get("side_effects_done_at_utc"):
@@ -445,7 +523,7 @@ def record_successful_stars_payment(
             premium_outbox = int(premium.outbox_created)
             consultation_created = bool(premium.consultation_request_created)
         _mark_payment_done(charge_id)
-    except (RuntimeError, ValueError) as exc:
+    except (RuntimeError, ValueError, sqlite3.Error) as exc:
         _mark_payment_error(charge_id, exc)
         log.exception("Telegram Stars post-payment processing failed: charge_id=%s", charge_id)
         raise StarsPaymentError("stars_post_payment_processing_failed") from exc
@@ -456,7 +534,7 @@ def record_successful_stars_payment(
         {
             "package_id": order.package_id,
             "gift": order.is_gift,
-            "amount_xtr": int(total_amount),
+            "amount_xtr": normalized_amount,
             "charge_id": charge_id,
         },
     )

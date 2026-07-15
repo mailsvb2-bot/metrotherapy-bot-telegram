@@ -12,8 +12,8 @@ def payment_public_base_url() -> str:
     links cannot drift between providers.
     """
     return (
-        os.getenv("MESSENGER_PUBLIC_BASE_URL", "").strip()
-        or os.getenv("PAYMENT_PUBLIC_BASE_URL", "").strip()
+        os.getenv("PAYMENT_PUBLIC_BASE_URL", "").strip()
+        or os.getenv("MESSENGER_PUBLIC_BASE_URL", "").strip()
         or os.getenv("PUBLIC_BASE_URL", "").strip()
         or str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
         or str(getattr(settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "") or "").strip()

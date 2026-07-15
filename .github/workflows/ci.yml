@@ -63,3 +63,53 @@ jobs:
                 : 'Regression contour failed',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
+
+  postgres:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    name: postgres / payment and concurrency
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: metrotherapy_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d metrotherapy_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      APP_ENV: test
+      LOAD_DOTENV: '0'
+      METRO_DB_ENGINE: postgres
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/metrotherapy_ci
+      POSTGRES_REUSE_CONNECTIONS: '0'
+      POSTGRES_CI_SMOKE: '1'
+      TELEGRAM_STARS_ENABLED: '1'
+      BOT_TOKEN: '000000:CI'
+      TELEGRAM_TRANSPORT: polling
+      TELEGRAM_WEBHOOK_ENABLED: '0'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Postgres payment smoke
+        run: python scripts/postgres_ci_smoke.py
+
+      - name: Postgres scheduler concurrency
+        run: python scripts/probe_postgres_job_concurrency.py --workers 4 --jobs 16
