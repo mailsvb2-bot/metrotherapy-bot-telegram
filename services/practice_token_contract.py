@@ -147,6 +147,18 @@ def telegram_stars_enabled() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+def telegram_yookassa_enabled() -> bool:
+    """Allow the external-browser YooKassa choice on Telegram surfaces.
+
+    The switch is independent from the shared YooKassa runtime used by VK, MAX
+    and web, so the Telegram button can be disabled immediately without taking
+    the other payment channels offline.
+    """
+
+    raw = (os.getenv("TELEGRAM_YOOKASSA_ENABLED") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def _telegram_stars_env_key(package_id: str) -> str:
     suffix = "".join(ch if ch.isalnum() else "_" for ch in package_id.upper())
     return f"TELEGRAM_STARS_PRICE_{suffix}"

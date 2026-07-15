@@ -6,6 +6,7 @@ import os
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.payments.public_url import payment_public_base_url
+from services.practice_token_contract import telegram_yookassa_enabled
 
 
 def payment_terms_url() -> str:
@@ -30,10 +31,17 @@ def payment_terms_text() -> str:
     support = payment_support_contact()
     url = payment_terms_url()
     terms_line = f"• Полные условия: {url}\n" if url else ""
+    payment_methods = (
+        "• Можно выбрать Telegram Stars (XTR) либо банковскую карту через YooKassa.\n"
+        "• Счёт Stars оплачивается внутри Telegram; YooKassa открывается на внешней "
+        "защищённой странице в браузере.\n"
+        if telegram_yookassa_enabled()
+        else "• Оплата проводится в Telegram Stars (XTR).\n"
+    )
     return (
-        "📜 Условия оплаты Telegram Stars\n\n"
+        "📜 Условия оплаты\n\n"
         "• Вы приобретаете цифровой пакет практик Метротерапии.\n"
-        "• Оплата внутри Telegram проводится только в Telegram Stars (XTR).\n"
+        f"{payment_methods}"
         "• Одна Telegram Star не равна одному рублю: стоимость Stars в обычной валюте "
         "определяет Telegram и она может отличаться в зависимости от страны и способа покупки.\n"
         "• Количество практик и состав пакета указаны до подтверждения платежа.\n"
@@ -49,6 +57,13 @@ def payment_terms_text() -> str:
 def payment_terms_html() -> str:
     merchant = html.escape(payment_merchant_name())
     support = html.escape(payment_support_contact())
+    payment_methods = (
+        "<p>Пользователь может выбрать Telegram Stars (XTR) либо банковскую карту через YooKassa. "
+        "Счёт Stars оплачивается внутри Telegram. При выборе YooKassa пользователь переходит на "
+        "внешнюю защищённую страницу платёжного провайдера.</p>"
+        if telegram_yookassa_enabled()
+        else "<p>Оплата проводится в Telegram Stars (XTR).</p>"
+    )
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -67,7 +82,8 @@ def payment_terms_html() -> str:
   <h2>Предмет покупки</h2>
   <p>Пользователь приобретает цифровой пакет практик. Состав пакета и количество практик показываются до оплаты.</p>
   <h2>Оплата и предоставление доступа</h2>
-  <p>Внутри Telegram оплата проводится только в Telegram Stars (XTR). Одна Star не равна одному рублю: стоимость Stars в обычной валюте определяет Telegram и она может различаться в зависимости от страны, налогов и способа покупки.</p>
+  {payment_methods}
+  <p>Одна Star не равна одному рублю: стоимость Stars в обычной валюте определяет Telegram и она может различаться в зависимости от страны, налогов и способа покупки.</p>
   <p>Доступ начисляется после подтверждения <code>successful_payment</code> от Telegram. Повторная доставка одного подтверждения не приводит к повторному начислению.</p>
   <h2>Возврат и поддержка</h2>
   <p>Для проверки платежа или запроса возврата используйте команду <code>/paysupport</code> либо обратитесь в поддержку: <strong>{support}</strong>. Возможность возврата зависит от состояния заказа и уже использованного цифрового доступа.</p>

@@ -6,9 +6,11 @@ from services.gift_claims import create_gift_checkout_token
 from services.payments.checkout_intent import add_checkout_intent_to_url
 from services.payments.public_url import payment_public_base_url
 from services.practice_token_contract import (
+    package_by_id,
     public_practice_packages,
     telegram_stars_enabled,
     telegram_stars_price,
+    telegram_yookassa_enabled,
 )
 from services.practice_tokens import payment_url
 
@@ -62,24 +64,143 @@ def _practice_payment_url(
 
 def _telegram_package_rows(*, gift: bool) -> list[list[InlineKeyboardButton]]:
     rows: list[list[InlineKeyboardButton]] = []
-    if not telegram_stars_enabled():
-        rows.append([
-            InlineKeyboardButton(
-                text="⭐ Оплата временно недоступна",
-                callback_data="tariffs:stars_disabled",
-            )
-        ])
-        return rows
-
-    action = "gift_terms" if gift else "terms"
+    action = "gift_methods" if gift else "methods"
     for package in public_practice_packages():
+        stars = _stars_label(telegram_stars_price(package.package_id))
         rows.append([
             InlineKeyboardButton(
-                text=f"⭐ {package.title} — {_stars_label(telegram_stars_price(package.package_id))}",
-                callback_data=f"stars:{action}:{package.package_id}",
+                text=f"📦 {package.title} — {_price_label(package.price_rub)} / {stars}",
+                callback_data=f"pay:{action}:{package.package_id}",
             )
         ])
     return rows
+
+
+def telegram_payment_method_text(package_id: str) -> str:
+    package = package_by_id(package_id)
+    if not package.public:
+        raise ValueError("payment_package_not_public")
+    yookassa = (
+        f"💳 Банковской картой через YooKassa — {_price_label(package.price_rub)}\n"
+        "Откроется защищённая страница оплаты во внешнем браузере.\n\n"
+        "Если Telegram показывает PROVIDER_ACCOUNT_INVALID или не позволяет купить Stars, "
+        "можно выбрать оплату банковской картой."
+        if telegram_yookassa_enabled()
+        else "💳 Оплата через YooKassa временно недоступна."
+    )
+    return (
+        f"{package.title}\n"
+        f"{package.description}\n\n"
+        "Выберите способ оплаты:\n\n"
+        f"⭐ Telegram Stars — {_stars_label(telegram_stars_price(package.package_id))}\n"
+        "Нативная оплата внутри Telegram.\n\n"
+        f"{yookassa}"
+    )
+
+
+def kb_telegram_payment_methods(
+    *,
+    user_id: int,
+    package_id: str,
+    gift: bool = False,
+) -> InlineKeyboardMarkup:
+    package = package_by_id(package_id)
+    if not package.public:
+        raise ValueError("payment_package_not_public")
+    buyer_id = int(user_id)
+    if buyer_id <= 0:
+        raise ValueError("payment_buyer_required")
+
+    rows: list[list[InlineKeyboardButton]] = []
+    if telegram_stars_enabled():
+        stars_action = "gift_terms" if gift else "terms"
+        rows.append([
+            InlineKeyboardButton(
+                text=f"⭐ Telegram Stars · {_stars_label(telegram_stars_price(package.package_id))}",
+                callback_data=f"stars:{stars_action}:{package.package_id}",
+            )
+        ])
+    else:
+        rows.append([
+            InlineKeyboardButton(
+                text="⭐ Telegram Stars временно недоступны",
+                callback_data="tariffs:stars_disabled",
+            )
+        ])
+
+    base_url = payment_public_base_url()
+    yookassa_label = f"💳 YooKassa · {_price_label(package.price_rub)}"
+    if not telegram_yookassa_enabled():
+        rows.append([
+            InlineKeyboardButton(
+                text="💳 YooKassa временно недоступна",
+                callback_data="tariffs:yookassa_disabled",
+            )
+        ])
+    elif not base_url:
+        rows.append([
+            InlineKeyboardButton(
+                text=yookassa_label,
+                callback_data="tariffs:public_base_missing",
+            )
+        ])
+    elif gift:
+        rows.append([
+            InlineKeyboardButton(
+                text=yookassa_label,
+                callback_data=f"yookassa:gift:{package.package_id}",
+            )
+        ])
+    elif base_url:
+        rows.append([
+            InlineKeyboardButton(
+                text=yookassa_label,
+                url=_practice_payment_url(
+                    base_url=base_url,
+                    user_id=buyer_id,
+                    platform="telegram",
+                    package_id=package.package_id,
+                ),
+            )
+        ])
+    rows.append([InlineKeyboardButton(text="📜 Условия оплаты", callback_data="stars:terms")])
+    rows.append([
+        InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data="gift:menu" if gift else "sub:menu",
+        )
+    ])
+    return kb(rows)
+
+
+def kb_telegram_gift_yookassa_checkout(*, user_id: int, package_id: str) -> InlineKeyboardMarkup:
+    package = package_by_id(package_id)
+    if not package.public:
+        raise ValueError("payment_package_not_public")
+    buyer_id = int(user_id)
+    if buyer_id <= 0:
+        raise ValueError("payment_buyer_required")
+    if not telegram_yookassa_enabled():
+        raise ValueError("telegram_yookassa_disabled")
+    base_url = payment_public_base_url()
+    if not base_url:
+        raise ValueError("payment_public_base_missing")
+    gift_token = create_gift_checkout_token(
+        buyer_user_id=buyer_id,
+        package_id=package.package_id,
+        source_platform="telegram",
+    )
+    url = _practice_payment_url(
+        base_url=base_url,
+        user_id=buyer_id,
+        platform="telegram",
+        package_id=package.package_id,
+        gift_token=gift_token,
+    )
+    return kb([
+        [InlineKeyboardButton(text=f"💳 Перейти к YooKassa · {_price_label(package.price_rub)}", url=url)],
+        [InlineKeyboardButton(text="⬅️ К способам оплаты", callback_data=f"pay:gift_methods:{package.package_id}")],
+    ])
 
 
 def _external_package_rows(
@@ -138,14 +259,14 @@ def _practice_package_rows(
         ]]
 
     if platform == "telegram":
-        # Telegram requires digital goods and services sold inside bots to use XTR.
-        # External YooKassa checkout remains available on VK, MAX and web surfaces.
+        # Telegram presents the package first, then an explicit method choice.
+        # The YooKassa path is a signed external-browser checkout.
         return _telegram_package_rows(gift=gift)
     return _external_package_rows(user_id=user_id, platform=platform, gift=gift)
 
 
 def kb_tariffs(user_id: int | None = None) -> InlineKeyboardMarkup:
-    """Public Telegram tariff surface: native Stars only for digital packages."""
+    """Public Telegram tariff surface with an explicit payment-method step."""
     rows = _practice_package_rows(user_id=user_id, platform="telegram")
     rows.append([InlineKeyboardButton(text="📜 Условия оплаты", callback_data="stars:terms")])
     rows.append([InlineKeyboardButton(text="🎁 Подарить", callback_data="gift:menu")])

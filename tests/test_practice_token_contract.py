@@ -9,6 +9,7 @@ from services.practice_token_contract import (
     public_practice_packages,
     telegram_stars_buyer_rub_per_xtr,
     telegram_stars_price,
+    telegram_yookassa_enabled,
 )
 
 
@@ -51,6 +52,14 @@ def test_explicit_stars_price_requires_explicit_mode(monkeypatch):
     monkeypatch.setenv("TELEGRAM_STARS_PRICE_PRACTICE_START_7", "1700")
 
     assert telegram_stars_price("practice_start_7") == 1700
+
+
+def test_telegram_yookassa_switch_defaults_on_and_can_be_disabled(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_YOOKASSA_ENABLED", raising=False)
+    assert telegram_yookassa_enabled() is True
+
+    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
+    assert telegram_yookassa_enabled() is False
 
 
 def test_invalid_buyer_parity_reference_is_rejected(monkeypatch):
