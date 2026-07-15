@@ -6,61 +6,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   statuses: write
-  pull-requests: write
 
 jobs:
-  apply-fundamental-hardening:
-    if: github.event_name == 'push' && github.ref_name == 'agent/fundamental-payment-identity-hardening' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
-    name: apply fundamental hardening
-    steps:
-      - name: Checkout patch branch
-        uses: actions/checkout@v4
-        with:
-          ref: agent/fundamental-payment-identity-hardening
-          fetch-depth: 0
-
-      - name: Apply code and tests atomically
-        id: apply
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          : > "$RUNNER_TEMP/apply.log"
-          {
-            cat .agent/patch.part.* > "$RUNNER_TEMP/fundamental.patch"
-            git apply --index --whitespace=error-all \
-              --exclude=.github/workflows/ci.yml \
-              --exclude=.github/workflows/release-gate.yml \
-              "$RUNNER_TEMP/fundamental.patch"
-            rm -rf .agent
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "Fundamentally harden payment and identity contracts"
-            git push origin HEAD:agent/fundamental-payment-identity-hardening
-          } 2>&1 | tee "$RUNNER_TEMP/apply.log"
-
-      - name: Report patch failure
-        if: steps.apply.outcome != 'success'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          {
-            echo 'Atomic code patch application failed:'
-            echo
-            echo '```text'
-            tail -c 3500 "$RUNNER_TEMP/apply.log"
-            echo
-            echo '```'
-          } > "$RUNNER_TEMP/comment.md"
-          gh pr comment 101 --body-file "$RUNNER_TEMP/comment.md"
-          exit 1
-
   quality:
     runs-on: ubuntu-22.04
     timeout-minutes: 25
