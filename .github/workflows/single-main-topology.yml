@@ -1,6 +1,7 @@
 name: Single main topology cleanup
 
 # Exact topology audits are requested explicitly through commit-message markers.
+# The same marker is used after a reviewed merge to restore the canonical 1/main topology.
 # Server audit retries are sent only after the preceding main regression contour is green.
 on:
   push:
