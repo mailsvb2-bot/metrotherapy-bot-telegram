@@ -54,12 +54,15 @@ def test_explicit_stars_price_requires_explicit_mode(monkeypatch):
     assert telegram_stars_price("practice_start_7") == 1700
 
 
-def test_telegram_yookassa_is_permanently_disabled_for_digital_packages(monkeypatch):
+def test_telegram_yookassa_has_independent_kill_switch(monkeypatch):
     monkeypatch.delenv("TELEGRAM_YOOKASSA_ENABLED", raising=False)
+    assert telegram_yookassa_enabled() is True
+
+    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
     assert telegram_yookassa_enabled() is False
 
     monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
-    assert telegram_yookassa_enabled() is False
+    assert telegram_yookassa_enabled() is True
 
 
 def test_invalid_buyer_parity_reference_is_rejected(monkeypatch):
