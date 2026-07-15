@@ -2,10 +2,9 @@ from __future__ import annotations
 
 """Payment router.
 
-Telegram users can choose either native Telegram Stars or the existing external
-YooKassa checkout. VK, MAX and web checkout remain on YooKassa. Legacy Telegram
-RUB invoice callback buttons stay disabled so they cannot create a third payment
-path.
+Telegram digital packages use native Telegram Stars. VK, MAX and web checkout
+remain on YooKassa. Legacy Telegram RUB invoice callback buttons stay disabled
+so they cannot create a second in-Telegram payment path.
 """
 
 import asyncio
@@ -38,6 +37,11 @@ from services.payments.telegram_stars import (
     send_stars_invoice,
     validate_stars_pre_checkout,
 )
+from services.payments.terms import (
+    payment_support_contact,
+    payment_terms_keyboard,
+    payment_terms_text,
+)
 from services.payments.ui import kb_after_paid, kb_back
 
 router = Router()
@@ -61,6 +65,24 @@ def _package_id(data: str | None, prefix: str) -> str:
     return package_id
 
 
+async def _show_stars_terms(cb: CallbackQuery, *, as_gift: bool) -> None:
+    await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
+    prefix = "stars:gift_terms:" if as_gift else "stars:terms:"
+    try:
+        package_id = _package_id(cb.data, prefix)
+    except ValueError:
+        log.exception("Telegram Stars terms callback invalid")
+        await message.answer("Пакет не найден. Откройте тарифы заново.", reply_markup=kb_back("sub:menu"))
+        return
+    await message.answer(
+        payment_terms_text(),
+        reply_markup=payment_terms_keyboard(package_id=package_id, as_gift=as_gift),
+    )
+
+
 async def _send_stars_from_callback(cb: CallbackQuery, *, as_gift: bool) -> None:
     await safe_answer_callback(cb)
     message = _callback_message(cb)
@@ -73,13 +95,13 @@ async def _send_stars_from_callback(cb: CallbackQuery, *, as_gift: bool) -> None
     except (StarsPaymentError, ValueError):
         log.exception("Telegram Stars invoice creation failed")
         await message.answer(
-            "Не удалось создать счёт в Stars. Выберите пакет ещё раз или оплатите через YooKassa.",
+            "Не удалось создать счёт в Stars. Выберите пакет ещё раз.",
             reply_markup=kb_back("sub:menu" if not as_gift else "gift:menu"),
         )
     except (TelegramAPIError, asyncio.TimeoutError):
         log.exception("Telegram Stars API invoice request failed")
         await message.answer(
-            "Telegram временно не создал счёт в Stars. YooKassa продолжает работать — можно выбрать её в списке пакетов.",
+            "Telegram временно не создал счёт в Stars. Попробуйте ещё раз позже.",
             reply_markup=kb_back("sub:menu" if not as_gift else "gift:menu"),
         )
 
@@ -102,15 +124,21 @@ async def _cmd_subscribe(message: Message):
     await cmd_subscribe(message)
 
 
+@router.message(Command("terms"))
+async def _terms(message: Message):
+    await message.answer(payment_terms_text())
+
+
 @router.message(Command("paysupport"))
 async def _pay_support(message: Message):
     await message.answer(
         "Поддержка по оплате\n\n"
-        "Напишите @metrotherapysupportbot и приложите:\n"
+        f"Напишите {payment_support_contact()} и приложите:\n"
         "• дату и примерное время оплаты;\n"
         "• выбранный пакет;\n"
-        "• способ оплаты: Telegram Stars или YooKassa;\n"
+        "• способ оплаты и сумму;\n"
         "• скриншот чека, если он есть.\n\n"
+        "Telegram и его служба поддержки не обрабатывают споры по покупкам у бота. "
         "Не отправляйте данные банковской карты, коды из SMS и пароли."
     )
 
@@ -121,6 +149,24 @@ async def _sub_menu(cb: CallbackQuery):
     await sub_menu(cb)
 
 
+@router.callback_query(F.data == "stars:terms")
+async def _stars_terms_overview(cb: CallbackQuery):
+    await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is not None:
+        await message.answer(payment_terms_text(), reply_markup=kb_back("sub:menu"))
+
+
+@router.callback_query(F.data.regexp(r"^stars:terms:[a-z0-9_]+$"))
+async def _stars_terms(cb: CallbackQuery):
+    await _show_stars_terms(cb, as_gift=False)
+
+
+@router.callback_query(F.data.regexp(r"^stars:gift_terms:[a-z0-9_]+$"))
+async def _stars_gift_terms(cb: CallbackQuery):
+    await _show_stars_terms(cb, as_gift=True)
+
+
 @router.callback_query(F.data.regexp(r"^stars:buy:[a-z0-9_]+$"))
 async def _stars_buy(cb: CallbackQuery):
     await _send_stars_from_callback(cb, as_gift=False)
@@ -129,6 +175,15 @@ async def _stars_buy(cb: CallbackQuery):
 @router.callback_query(F.data.regexp(r"^stars:gift:[a-z0-9_]+$"))
 async def _stars_gift(cb: CallbackQuery):
     await _send_stars_from_callback(cb, as_gift=True)
+
+
+@router.callback_query(F.data == "tariffs:stars_disabled")
+async def _stars_disabled(cb: CallbackQuery):
+    await safe_answer_callback(
+        cb,
+        "Оплата цифровых пакетов в Telegram временно недоступна. Попробуйте позже.",
+        show_alert=True,
+    )
 
 
 @router.callback_query(F.data.regexp(r"^sub:buy:\d+:\d+$"))
@@ -236,7 +291,6 @@ async def _successful_payment(message: Message):
     if result.wallet_balance is not None:
         balance = f" На балансе: {result.wallet_balance} практик."
     await message.answer(
-        f"✅ Оплата Telegram Stars прошла. Практики начислены.{balance}\n\n"
-        "YooKassa остаётся доступна как альтернативный способ оплаты.",
+        f"✅ Оплата Telegram Stars прошла. Практики начислены.{balance}",
         reply_markup=kb_after_paid(),
     )

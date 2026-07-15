@@ -7,7 +7,7 @@ def _buttons(markup):
     return [button for row in markup.inline_keyboard for button in row]
 
 
-def test_public_tariff_keyboard_uses_stars_and_yookassa(monkeypatch):
+def test_public_telegram_tariff_keyboard_is_stars_only(monkeypatch):
     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://bot.example")
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
 
@@ -17,17 +17,15 @@ def test_public_tariff_keyboard_uses_stars_and_yookassa(monkeypatch):
     urls = [button.url for button in buttons if button.url]
     callbacks = [button.callback_data for button in buttons if button.callback_data]
 
-    assert "⭐ Stars · Стартовый пакет — 1 900 ⭐" in texts
-    assert "⭐ Stars · Полный маршрут — 7 900 ⭐" in texts
-    assert "⭐ Stars · Антистресс-система — 12 900 ⭐" in texts
-    assert "⭐ Stars · Персональный месяц — 23 000 ⭐" in texts
+    assert "⭐ Стартовый пакет — 1 900 ⭐" in texts
+    assert "⭐ Полный маршрут — 7 900 ⭐" in texts
+    assert "⭐ Антистресс-система — 12 900 ⭐" in texts
+    assert "⭐ Персональный месяц — 23 000 ⭐" in texts
 
-    assert "💳 YooKassa · Стартовый пакет — 1 900 ₽" in texts
-    assert "💳 YooKassa · Полный маршрут — 7 900 ₽" in texts
-    assert "💳 YooKassa · Антистресс-система — 12 900 ₽" in texts
-    assert "💳 YooKassa · Персональный месяц — 23 000 ₽" in texts
+    assert not any("YooKassa" in text for text in texts)
+    assert not urls
 
-    joined = "\n".join(texts + urls + callbacks)
+    joined = "\n".join(texts + callbacks)
     assert "morning_5" not in joined
     assert "morning_20" not in joined
     assert "evening_5" not in joined
@@ -35,23 +33,23 @@ def test_public_tariff_keyboard_uses_stars_and_yookassa(monkeypatch):
     assert "both_5" not in joined
     assert "both_20" not in joined
 
-    assert "stars:buy:practice_start_7" in callbacks
-    assert "stars:buy:practice_60" in callbacks
-    assert "stars:buy:practice_antistress_60" in callbacks
-    assert "stars:buy:practice_personal_month" in callbacks
-
-    assert any("kind=tokens" in url and "package_id=practice_start_7" in url for url in urls)
-    assert any("kind=tokens" in url and "package_id=practice_60" in url for url in urls)
-    assert any("kind=tokens" in url and "package_id=practice_antistress_60" in url for url in urls)
-    assert any("kind=tokens" in url and "package_id=practice_personal_month" in url for url in urls)
+    assert "stars:terms:practice_start_7" in callbacks
+    assert "stars:terms:practice_60" in callbacks
+    assert "stars:terms:practice_antistress_60" in callbacks
+    assert "stars:terms:practice_personal_month" in callbacks
+    assert "stars:terms" in callbacks
 
 
-def test_stars_emergency_switch_does_not_remove_yookassa(monkeypatch):
+def test_stars_emergency_switch_fails_closed_inside_telegram(monkeypatch):
     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://bot.example")
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "0")
 
     buttons = _buttons(kb_tariffs(user_id=405))
-    assert not any((button.callback_data or "").startswith("stars:") for button in buttons)
-    yookassa = [button for button in buttons if button.url]
-    assert len(yookassa) == 4
-    assert all("/pay/yookassa?" in str(button.url) for button in yookassa)
+    texts = [button.text for button in buttons]
+    callbacks = [button.callback_data for button in buttons if button.callback_data]
+
+    assert not any((callback or "").startswith("stars:terms:") for callback in callbacks)
+    assert not any(button.url for button in buttons)
+    assert "⭐ Оплата временно недоступна" in texts
+    assert "tariffs:stars_disabled" in callbacks
+    assert not any("YooKassa" in text for text in texts)
