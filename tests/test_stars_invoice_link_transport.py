@@ -3,19 +3,18 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
 from services.payments import stars_invoice_transport
 from services.payments.telegram_stars import parse_stars_payload, send_stars_invoice
 from services.practice_token_contract import telegram_stars_price
 
 
-TOPUP_URL = "tg://stars_topup?balance=1226&purpose=metrotherapy_practice_start_7"
+TOPUP_URL = "tg://stars_topup?balance=1500&purpose=metrotherapy_practice_start_7"
 
 
 def test_stars_topup_url_targets_exact_package_amount() -> None:
     assert (
         stars_invoice_transport._stars_topup_url(
-            amount_xtr=1226,
+            amount_xtr=1500,
             package_id="practice_start_7",
         )
         == TOPUP_URL
@@ -26,6 +25,7 @@ def test_stars_topup_url_targets_exact_package_amount() -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_stars_transport_uses_audited_invoice_link_with_recovery(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     monkeypatch.setattr(stars_invoice_transport, "log_event", lambda *args, **kwargs: None)
     captured_link: dict = {}
     captured_answer: dict = {}
@@ -56,15 +56,15 @@ async def test_runtime_stars_transport_uses_audited_invoice_link_with_recovery(m
     assert captured_link["currency"] == "XTR"
     assert "provider_token" not in captured_link
     assert len(captured_link["prices"]) == 1
-    assert captured_link["prices"][0].amount == telegram_stars_price("practice_start_7")
+    assert captured_link["prices"][0].amount == telegram_stars_price("practice_start_7") == 1500
     assert parse_stars_payload(captured_link["payload"]).buyer_user_id == 782001
 
     markup = captured_answer["reply_markup"]
     buttons = [button for row in markup.inline_keyboard for button in row]
     assert buttons[0].url == "https://t.me/$metrotherapy-stars-test"
-    assert buttons[0].text == "⭐ Оплатить пакет — 1 226 Stars"
+    assert buttons[0].text == "⭐ Оплатить пакет — 1 500 Stars"
     assert buttons[1].url == TOPUP_URL
-    assert buttons[1].text == "➕ Купить 1 226 Stars"
+    assert buttons[1].text == "➕ Купить 1 500 Stars"
     assert buttons[2].callback_data == "stars:buy:practice_start_7"
     assert buttons[2].text == "🔄 Stars куплены — продолжить оплату"
     assert buttons[3].callback_data == "pay:methods:practice_start_7"
@@ -76,6 +76,7 @@ async def test_runtime_stars_transport_uses_audited_invoice_link_with_recovery(m
 
 @pytest.mark.asyncio
 async def test_gift_recovery_preserves_gift_callbacks(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     gift_token = "gift_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     monkeypatch.setattr(stars_invoice_transport, "log_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
