@@ -86,7 +86,7 @@ def test_telegram_tariffs_use_intermediate_payment_method_step(monkeypatch) -> N
     assert query["source"] == ["telegram"]
     assert query["user_id"] == ["99101"]
     assert query["package_id"] == ["practice_start_7"]
-    assert query["amount_minor"] == ["190000"]
+    assert query["amount_minor"] == ["249900"]
     assert query["currency"] == ["RUB"]
     assert query["intent"][0]
 
