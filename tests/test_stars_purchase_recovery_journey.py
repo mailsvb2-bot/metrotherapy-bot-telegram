@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from handlers import payments as payment_handlers
-from services.payments.stars_invoice_transport import PREMIUM_BOT_URL, _invoice_keyboard
+from services.payments.stars_invoice_transport import _invoice_keyboard, _invoice_message_text
 from services.payments.terms import payment_terms_keyboard
 from services.payments.ui import kb_tariffs, kb_telegram_payment_methods
 
@@ -44,9 +44,14 @@ def test_personal_purchase_journey_keeps_package_context_through_stars_recovery(
     )
     buttons = _buttons(invoice)
     assert buttons[0].url == "https://t.me/$invoice-personal"
-    assert buttons[1].url == PREMIUM_BOT_URL
-    assert buttons[2].callback_data == f"stars:buy:{package_id}"
-    assert buttons[3].callback_data == f"pay:methods:{package_id}"
+    assert buttons[1].callback_data == f"stars:buy:{package_id}"
+    assert buttons[2].callback_data == f"pay:methods:{package_id}"
+    assert all("PremiumBot" not in str(button.url or "") for button in buttons)
+
+    help_text = _invoice_message_text(amount_xtr=1226)
+    assert "Настройки → Ваши Stars" in help_text
+    assert "официальный Telegram на телефоне" in help_text
+    assert "PremiumBot" not in help_text
 
 
 def test_gift_purchase_journey_keeps_gift_context_through_stars_recovery(monkeypatch) -> None:
@@ -67,9 +72,9 @@ def test_gift_purchase_journey_keeps_gift_context_through_stars_recovery(monkeyp
         as_gift=True,
     )
     buttons = _buttons(invoice)
-    assert buttons[1].url == PREMIUM_BOT_URL
-    assert buttons[2].callback_data == f"stars:gift:{package_id}"
-    assert buttons[3].callback_data == f"pay:gift_methods:{package_id}"
+    assert buttons[1].callback_data == f"stars:gift:{package_id}"
+    assert buttons[2].callback_data == f"pay:gift_methods:{package_id}"
+    assert all("PremiumBot" not in str(button.url or "") for button in buttons)
 
 
 @pytest.mark.asyncio
