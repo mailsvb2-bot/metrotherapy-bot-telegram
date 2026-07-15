@@ -36,19 +36,41 @@ jobs:
           set -o pipefail
           python scripts/regression_gate.py 2>&1 | tee "$RUNNER_TEMP/regression-contour.log"
 
-      - name: Focused mypy gate
+      - name: Critical type contracts
         run: >-
-          python -m mypy
+          python -m mypy --follow-imports=skip --check-untyped-defs
+          services/accounts/identity.py
+          services/messenger/text_ui.py
           services/payments/checkout_intent.py
-          services/payments/yookassa_provider.py
+          services/payments/telegram_stars.py
+          services/payments/telegram_stars_refunds.py
           services/payments/verified_reconciliation.py
+          services/practice_token_lots.py
+          services/practice_tokens_access_core.py
+          services/practice_tokens_wallet.py
+          services/premium_entitlements.py
+          services/sales_desk.py
+          services/sales_desk_repository.py
+          services/sales_desk_sync.py
           runtime/payment_http.py
           services/privacy_controls.py
 
-      - name: Focused Bandit gate
+      - name: Critical Bandit gate
         run: >-
-          python -m bandit -q -c pyproject.toml
-          services/payments runtime/payment_http.py services/privacy_controls.py
+          python -m bandit -q -r -c pyproject.toml
+          services/payments
+          services/accounts/identity.py
+          services/messenger/text_ui.py
+          services/practice_token_lots.py
+          services/practice_tokens_access_core.py
+          services/practice_tokens_wallet.py
+          services/premium_entitlements.py
+          services/sales_desk.py
+          services/sales_desk_db.py
+          services/sales_desk_repository.py
+          services/sales_desk_sync.py
+          runtime/payment_http.py
+          services/privacy_controls.py
 
       - name: Dependency audit
         run: python -m pip_audit -r requirements.txt --progress-spinner off
