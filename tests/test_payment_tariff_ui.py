@@ -24,10 +24,11 @@ def test_public_telegram_tariff_keyboard_opens_payment_method_choice(monkeypatch
     urls = [button.url for button in buttons if button.url]
     callbacks = [button.callback_data for button in buttons if button.callback_data]
 
-    assert "📦 Стартовый пакет — 1 900 ₽ / 1 226 ⭐" in texts
-    assert "📦 Полный маршрут — 7 900 ₽ / 5 099 ⭐" in texts
-    assert "📦 Антистресс-система — 12 900 ₽ / 8 327 ⭐" in texts
-    assert "📦 Персональный месяц — 23 000 ₽ / 14 847 ⭐" in texts
+    assert "📦 Стартовый пакет: картой 1 900 ₽ или 1 226 звёзд" in texts
+    assert "📦 Полный маршрут: картой 7 900 ₽ или 5 099 звёзд" in texts
+    assert "📦 Антистресс-система: картой 12 900 ₽ или 8 327 звёзд" in texts
+    assert "📦 Персональный месяц: картой 23 000 ₽ или 14 847 звёзд" in texts
+    assert not any(" / " in text or "XTR" in text or "RUB" in text for text in texts)
     assert not urls
 
     joined = "\n".join(texts + callbacks)
@@ -71,10 +72,17 @@ def test_payment_method_choice_contains_stars_and_signed_yookassa(monkeypatch):
         expected_package_id="practice_start_7",
     )
 
+    texts = [button.text for button in buttons]
+    assert "⭐ Звёздами Telegram — 1 226 звёзд" in texts
+    assert "💳 Картой через ЮKassa — 1 900 ₽" in texts
+
     text = telegram_payment_method_text("practice_start_7")
-    assert "Telegram Stars — 1 226 ⭐" in text
-    assert "YooKassa — 1 900 ₽" in text
-    assert "PROVIDER_ACCOUNT_INVALID" in text
+    assert "Это две готовые цены одного пакета — пересчитывать ничего не нужно" in text
+    assert "Звёздами Telegram — 1 226 звёзд" in text
+    assert "Картой через ЮKassa — 1 900 ₽" in text
+    assert "PROVIDER_ACCOUNT_INVALID" not in text
+    assert "XTR" not in text
+    assert "RUB" not in text
 
 
 def test_stars_emergency_switch_keeps_yookassa_available(monkeypatch):
@@ -93,9 +101,9 @@ def test_stars_emergency_switch_keeps_yookassa_available(monkeypatch):
 
     assert not any((callback or "").startswith("stars:terms:") for callback in callbacks)
     assert any(button.url and "/pay/yookassa?" in str(button.url) for button in buttons)
-    assert "⭐ Telegram Stars временно недоступны" in texts
+    assert "⭐ Оплата звёздами временно недоступна" in texts
     assert "tariffs:stars_disabled" in callbacks
-    assert any("YooKassa" in text for text in texts)
+    assert any("ЮKassa" in text for text in texts)
 
 
 def test_telegram_yookassa_switch_removes_external_url(monkeypatch):
@@ -114,4 +122,4 @@ def test_telegram_yookassa_switch_removes_external_url(monkeypatch):
     assert not any(button.url for button in buttons)
     assert "stars:terms:practice_start_7" in callbacks
     assert "tariffs:yookassa_disabled" in callbacks
-    assert "YooKassa временно недоступна" in telegram_payment_method_text("practice_start_7")
+    assert "Оплата картой через ЮKassa временно недоступна" in telegram_payment_method_text("practice_start_7")

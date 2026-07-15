@@ -33,7 +33,7 @@ def _price_label(price_rub: int) -> str:
 
 
 def _stars_label(price_xtr: int) -> str:
-    return f"{int(price_xtr):,} ⭐".replace(",", " ")
+    return f"{int(price_xtr):,} звёзд".replace(",", " ")
 
 
 def _practice_payment_url(
@@ -69,7 +69,7 @@ def _telegram_package_rows(*, gift: bool) -> list[list[InlineKeyboardButton]]:
         stars = _stars_label(telegram_stars_price(package.package_id))
         rows.append([
             InlineKeyboardButton(
-                text=f"📦 {package.title} — {_price_label(package.price_rub)} / {stars}",
+                text=f"📦 {package.title}: картой {_price_label(package.price_rub)} или {stars}",
                 callback_data=f"pay:{action}:{package.package_id}",
             )
         ])
@@ -81,18 +81,19 @@ def telegram_payment_method_text(package_id: str) -> str:
     if not package.public:
         raise ValueError("payment_package_not_public")
     yookassa = (
-        f"💳 Банковской картой через YooKassa — {_price_label(package.price_rub)}\n"
+        f"💳 Картой через ЮKassa — {_price_label(package.price_rub)}\n"
         "Откроется защищённая страница оплаты во внешнем браузере.\n\n"
-        "Если Telegram показывает PROVIDER_ACCOUNT_INVALID или не позволяет купить Stars, "
-        "можно выбрать оплату банковской картой."
+        "Если Telegram не позволяет купить звёзды или показывает ошибку оплаты, "
+        "выберите банковскую карту."
         if telegram_yookassa_enabled()
-        else "💳 Оплата через YooKassa временно недоступна."
+        else "💳 Оплата картой через ЮKassa временно недоступна."
     )
     return (
         f"{package.title}\n"
         f"{package.description}\n\n"
-        "Выберите способ оплаты:\n\n"
-        f"⭐ Telegram Stars — {_stars_label(telegram_stars_price(package.package_id))}\n"
+        "Это две готовые цены одного пакета — пересчитывать ничего не нужно.\n"
+        "Выберите удобный способ оплаты:\n\n"
+        f"⭐ Звёздами Telegram — {_stars_label(telegram_stars_price(package.package_id))}\n"
         "Нативная оплата внутри Telegram.\n\n"
         f"{yookassa}"
     )
@@ -116,24 +117,24 @@ def kb_telegram_payment_methods(
         stars_action = "gift_terms" if gift else "terms"
         rows.append([
             InlineKeyboardButton(
-                text=f"⭐ Telegram Stars · {_stars_label(telegram_stars_price(package.package_id))}",
+                text=f"⭐ Звёздами Telegram — {_stars_label(telegram_stars_price(package.package_id))}",
                 callback_data=f"stars:{stars_action}:{package.package_id}",
             )
         ])
     else:
         rows.append([
             InlineKeyboardButton(
-                text="⭐ Telegram Stars временно недоступны",
+                text="⭐ Оплата звёздами временно недоступна",
                 callback_data="tariffs:stars_disabled",
             )
         ])
 
     base_url = payment_public_base_url()
-    yookassa_label = f"💳 YooKassa · {_price_label(package.price_rub)}"
+    yookassa_label = f"💳 Картой через ЮKassa — {_price_label(package.price_rub)}"
     if not telegram_yookassa_enabled():
         rows.append([
             InlineKeyboardButton(
-                text="💳 YooKassa временно недоступна",
+                text="💳 Оплата картой временно недоступна",
                 callback_data="tariffs:yookassa_disabled",
             )
         ])
@@ -198,7 +199,7 @@ def kb_telegram_gift_yookassa_checkout(*, user_id: int, package_id: str) -> Inli
         gift_token=gift_token,
     )
     return kb([
-        [InlineKeyboardButton(text=f"💳 Перейти к YooKassa · {_price_label(package.price_rub)}", url=url)],
+        [InlineKeyboardButton(text=f"💳 Оплатить картой через ЮKassa — {_price_label(package.price_rub)}", url=url)],
         [InlineKeyboardButton(text="⬅️ К способам оплаты", callback_data=f"pay:gift_methods:{package.package_id}")],
     ])
 
@@ -212,7 +213,7 @@ def _external_package_rows(
     base_url = payment_public_base_url()
     rows: list[list[InlineKeyboardButton]] = []
     for package in public_practice_packages():
-        label = f"💳 YooKassa · {package.title} — {_price_label(package.price_rub)}"
+        label = f"💳 Картой через ЮKassa — {package.title}: {_price_label(package.price_rub)}"
         if not base_url:
             rows.append([
                 InlineKeyboardButton(

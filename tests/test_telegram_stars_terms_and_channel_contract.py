@@ -21,8 +21,10 @@ def test_terms_surface_requires_explicit_acceptance(monkeypatch) -> None:
     markup = payment_terms_keyboard(package_id="practice_start_7", as_gift=False)
     buttons = _buttons(markup)
 
-    assert "Telegram Stars (XTR)" in text
-    assert "YooKassa" in text
+    assert "звёздами Telegram" in text
+    assert "ЮKassa" in text
+    assert "XTR" not in text
+    assert "RUB" not in text
     assert "внешней" in text
     assert "не равна одному рублю" in text
     assert "/paysupport" in text
@@ -55,7 +57,7 @@ def test_full_terms_page_discloses_star_pricing_and_support(monkeypatch) -> None
 
     assert "ООО Тест" in page
     assert "Одна Star не равна одному рублю" in page
-    assert "YooKassa" in page
+    assert "ЮKassa" in page
     assert "@support_example" in page
     assert "/paysupport" in page
 

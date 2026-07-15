@@ -32,11 +32,11 @@ def payment_terms_text() -> str:
     url = payment_terms_url()
     terms_line = f"• Полные условия: {url}\n" if url else ""
     payment_methods = (
-        "• Можно выбрать Telegram Stars (XTR) либо банковскую карту через YooKassa.\n"
-        "• Счёт Stars оплачивается внутри Telegram; YooKassa открывается на внешней "
+        "• Можно выбрать оплату звёздами Telegram либо банковской картой через ЮKassa.\n"
+        "• Счёт в звёздах оплачивается внутри Telegram; ЮKassa открывается на внешней "
         "защищённой странице в браузере.\n"
         if telegram_yookassa_enabled()
-        else "• Оплата проводится в Telegram Stars (XTR).\n"
+        else "• Оплата проводится звёздами Telegram.\n"
     )
     return (
         "📜 Условия оплаты\n\n"
@@ -58,11 +58,11 @@ def payment_terms_html() -> str:
     merchant = html.escape(payment_merchant_name())
     support = html.escape(payment_support_contact())
     payment_methods = (
-        "<p>Пользователь может выбрать Telegram Stars (XTR) либо банковскую карту через YooKassa. "
-        "Счёт Stars оплачивается внутри Telegram. При выборе YooKassa пользователь переходит на "
+        "<p>Пользователь может выбрать оплату звёздами Telegram либо банковскую карту через ЮKassa. "
+        "Счёт в звёздах оплачивается внутри Telegram. При выборе ЮKassa пользователь переходит на "
         "внешнюю защищённую страницу платёжного провайдера.</p>"
         if telegram_yookassa_enabled()
-        else "<p>Оплата проводится в Telegram Stars (XTR).</p>"
+        else "<p>Оплата проводится звёздами Telegram.</p>"
     )
     return f"""<!doctype html>
 <html lang="ru">
