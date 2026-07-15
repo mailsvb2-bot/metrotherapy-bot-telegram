@@ -1,0 +1,44 @@
+name: Structural audited runtime patch
+
+on:
+  push:
+    branches:
+      - agent/runtime-hardening-closure
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/runtime-hardening-closure
+          fetch-depth: 0
+
+      - name: Apply structural patch
+        run: python scripts/agent_runtime_patch_v2.py
+
+      - name: Syntax validation
+        run: >-
+          python -m py_compile
+          app.py
+          services/db/core.py
+          services/db/__init__.py
+          services/payments/telegram_stars_refunds.py
+          services/payments/yookassa_checkout.py
+          tests/test_runtime_hardening_closure.py
+          tests/test_telegram_stars_refund_race.py
+
+      - name: Commit patched files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py services/db/core.py services/db/__init__.py \
+            services/payments/telegram_stars_refunds.py services/payments/yookassa_checkout.py \
+            tests/test_runtime_hardening_closure.py tests/test_telegram_stars_refund_race.py
+          git commit -m "Close remaining runtime hardening gaps"
+          git push origin HEAD:agent/runtime-hardening-closure
