@@ -9,9 +9,6 @@ from services.gift_claims import create_gift_checkout_token
 from services.practice_token_contract import PracticePackage, package_by_id, telegram_stars_enabled
 
 
-PREMIUM_BOT_URL = "https://t.me/PremiumBot"
-
-
 def _stars_amount_label(amount_xtr: int) -> str:
     return f"{int(amount_xtr):,} Stars".replace(",", " ")
 
@@ -29,7 +26,6 @@ def _invoice_keyboard(
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=f"⭐ Оплатить пакет — {amount}", url=url)],
-            [InlineKeyboardButton(text="➕ Купить Stars в официальном Telegram", url=PREMIUM_BOT_URL)],
             [
                 InlineKeyboardButton(
                     text="🔄 Я купил(а) Stars — продолжить",
@@ -52,10 +48,12 @@ def _invoice_message_text(*, amount_xtr: int) -> str:
         f"⭐ Оплата пакета — {amount}\n\n"
         "Если Stars уже есть, нажмите «Оплатить пакет».\n\n"
         "Если Stars не хватает:\n"
-        "1. Нажмите «Купить Stars в официальном Telegram».\n"
-        f"2. Купите не меньше {amount}.\n"
-        "3. Вернитесь в этот чат и нажмите «Я купил(а) Stars — продолжить».\n\n"
-        "Покупка Stars проходит на стороне Telegram. "
+        "1. Откройте Telegram → Настройки → Ваши Stars (или «Мои звёзды»).\n"
+        "2. Нажмите «Купить Stars» и купите нужное количество.\n"
+        f"3. Для этого пакета нужно не меньше {amount}.\n"
+        "4. Вернитесь в этот чат и нажмите «Я купил(а) Stars — продолжить».\n\n"
+        "Если раздел Stars отсутствует на компьютере, откройте официальный Telegram на телефоне. "
+        "Доступность покупки определяет Telegram для конкретного аккаунта, клиента и региона.\n\n"
         "Метротерапия не получает и не хранит данные вашей карты."
     )
 
@@ -99,8 +97,9 @@ async def send_stars_invoice(
 
     Production uses the same ``createInvoiceLink`` method that is exercised by
     the live provider capability audit. Buyers who do not yet have enough Stars
-    can open Telegram's official PremiumBot and then request a fresh invoice for
-    the same package without repeating package selection or terms navigation.
+    receive client-native Telegram Settings instructions and can then request a
+    fresh invoice for the same package without repeating package selection or
+    terms navigation.
     """
 
     from services.payments.telegram_stars import (  # local import avoids package-init cycles
@@ -179,6 +178,7 @@ async def send_stars_invoice(
             "amount_xtr": order.amount_xtr,
             "transport": "invoice_link" if bot is not None else "unbound_test_fallback",
             "stars_purchase_recovery": True,
+            "stars_purchase_help": "telegram_settings",
         },
     )
     return gift_token
