@@ -13,17 +13,18 @@ def _yookassa_button(buttons):
     return next(button for button in buttons if button.url and "ЮKassa" in button.text)
 
 
-def test_public_telegram_tariff_keyboard_shows_both_prices(monkeypatch):
+def test_public_telegram_tariff_keyboard_shows_aligned_prices(monkeypatch):
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
     monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     buttons = _buttons(kb_tariffs(user_id=404))
     texts = [button.text for button in buttons]
     callbacks = [button.callback_data for button in buttons if button.callback_data]
 
-    assert "📦 Стартовый пакет: 1 226 звёзд или 1 900 ₽" in texts
-    assert "📦 Полный маршрут: 5 099 звёзд или 7 900 ₽" in texts
-    assert "📦 Антистресс-система: 8 327 звёзд или 12 900 ₽" in texts
-    assert "📦 Персональный месяц: 14 847 звёзд или 23 000 ₽" in texts
+    assert "📦 Стартовый пакет: 1 500 звёзд или 2 499 ₽" in texts
+    assert "📦 Полный маршрут: 2 500 звёзд или 4 199 ₽" in texts
+    assert "📦 Антистресс-система: 5 000 звёзд или 8 290 ₽" in texts
+    assert "📦 Персональный месяц: 15 000 звёзд или 24 870 ₽" in texts
     assert not any(button.url for button in buttons)
     assert "pay:methods:practice_start_7" in callbacks
 
@@ -31,6 +32,7 @@ def test_public_telegram_tariff_keyboard_shows_both_prices(monkeypatch):
 def test_payment_method_choice_contains_stars_and_signed_yookassa(monkeypatch):
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
     monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://metrotherapy.example")
     monkeypatch.setenv("PAYMENT_CHECKOUT_SIGNING_KEY", "unit-test-checkout-signing-key")
 
@@ -39,8 +41,8 @@ def test_payment_method_choice_contains_stars_and_signed_yookassa(monkeypatch):
     texts = [button.text for button in buttons]
 
     assert "stars:terms:practice_start_7" in callbacks
-    assert "⭐ Звёздами Telegram — 1 226 звёзд" in texts
-    assert "💳 Картой через ЮKassa — 1 900 ₽" in texts
+    assert "⭐ Звёздами Telegram — 1 500 звёзд" in texts
+    assert "💳 Картой через ЮKassa — 2 499 ₽" in texts
 
     yookassa = _yookassa_button(buttons)
     parsed = urlsplit(yookassa.url)
@@ -49,14 +51,14 @@ def test_payment_method_choice_contains_stars_and_signed_yookassa(monkeypatch):
     assert query["source"] == ["telegram"]
     assert query["user_id"] == ["404"]
     assert query["package_id"] == ["practice_start_7"]
-    assert query["amount_minor"] == ["190000"]
+    assert query["amount_minor"] == ["249900"]
     assert query["currency"] == ["RUB"]
     assert query["intent"][0]
 
     text = telegram_payment_method_text("practice_start_7")
     assert "Выберите способ оплаты" in text
-    assert "1 226 звёзд" in text
-    assert "1 900 ₽" in text
+    assert "1 500 звёзд" in text
+    assert "2 499 ₽" in text
     assert "ЮKassa" in text
 
 
