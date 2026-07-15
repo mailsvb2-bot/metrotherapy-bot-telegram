@@ -16,7 +16,7 @@ from services.payments.checkout_intent import (
 from services.payments.terms import payment_terms_html
 from services.payments.verified_reconciliation import record_verified_yookassa_webhook
 from services.payments.yookassa_checkout import YooKassaCheckoutError, create_yookassa_confirmation_url
-from services.practice_token_contract import package_by_id
+from services.practice_token_contract import package_by_id, telegram_yookassa_enabled
 
 log = logging.getLogger(__name__)
 
@@ -199,10 +199,10 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
     intent = (request.query.get("intent") or "").strip()
     kind = _normalize_payment_kind(request.query.get("kind"), package_id)
 
-    if source.casefold() == "telegram" and kind in _TOKEN_PAYMENT_KINDS:
+    if source.casefold() == "telegram" and kind in _TOKEN_PAYMENT_KINDS and not telegram_yookassa_enabled():
         return web.Response(
             status=410,
-            text="Цифровые пакеты в Telegram оплачиваются только Telegram Stars.",
+            text="Оплата через ЮKassa для Telegram временно отключена.",
             content_type="text/plain",
         )
 

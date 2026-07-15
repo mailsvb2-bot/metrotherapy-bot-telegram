@@ -10,6 +10,7 @@ from runtime.payment_http import payment_terms_web
 async def test_payment_terms_web_is_a_real_utf8_page(monkeypatch) -> None:
     monkeypatch.setenv("PAYMENT_MERCHANT_NAME", "Метротерапия")
     monkeypatch.setenv("PAYMENT_SUPPORT_CONTACT", "@metrotherapysupportbot")
+    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
 
     response = await payment_terms_web(make_mocked_request("GET", "/terms"))
 
@@ -18,5 +19,6 @@ async def test_payment_terms_web_is_a_real_utf8_page(monkeypatch) -> None:
     assert response.charset == "utf-8"
     assert "Условия оплаты цифровых пакетов" in response.text
     assert "звёздами Telegram" in response.text
-    assert "XTR" not in response.text
+    assert "XTR" in response.text
+    assert "ЮKassa" in response.text
     assert "RUB" not in response.text
