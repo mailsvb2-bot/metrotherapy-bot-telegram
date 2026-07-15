@@ -7,6 +7,8 @@ from services.practice_token_contract import (
     normalize_delivery_mode,
     package_by_id,
     public_practice_packages,
+    telegram_stars_buyer_rub_per_xtr,
+    telegram_stars_price,
 )
 
 
@@ -26,6 +28,37 @@ def test_practice_package_prices_are_locked():
     assert package_by_id("practice_60").price_rub == 7900
     assert package_by_id("practice_antistress_60").price_rub == 12900
     assert package_by_id("practice_personal_month").price_rub == 23000
+
+
+def test_default_stars_prices_use_buyer_parity_reference(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_STARS_PRICING_MODE", raising=False)
+    monkeypatch.delenv("TELEGRAM_STARS_BUYER_RUB_PER_XTR", raising=False)
+
+    assert telegram_stars_price("practice_start_7") == 1226
+    assert telegram_stars_price("practice_60") == 5099
+    assert telegram_stars_price("practice_antistress_60") == 8327
+    assert telegram_stars_price("practice_personal_month") == 14847
+
+    reference = telegram_stars_buyer_rub_per_xtr()
+    for package in public_practice_packages():
+        estimated_cost = telegram_stars_price(package.package_id) * reference
+        assert estimated_cost <= package.price_rub
+        assert package.price_rub - estimated_cost < reference
+
+
+def test_explicit_stars_price_requires_explicit_mode(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICE_PRACTICE_START_7", "1700")
+
+    assert telegram_stars_price("practice_start_7") == 1700
+
+
+def test_invalid_buyer_parity_reference_is_rejected(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "buyer_parity")
+    monkeypatch.setenv("TELEGRAM_STARS_BUYER_RUB_PER_XTR", "0")
+
+    with pytest.raises(ValueError):
+        telegram_stars_price("practice_start_7")
 
 
 def test_practice_package_titles_are_localized_public_ladder():

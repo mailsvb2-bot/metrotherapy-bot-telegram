@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 
 
 @dataclass(frozen=True)
@@ -27,7 +28,7 @@ DEFAULT_PRACTICE_PACKAGES: tuple[PracticePackage, ...] = (
         10,
         True,
         "",
-        1900,
+        1226,
     ),
     PracticePackage(
         "practice_60",
@@ -38,7 +39,7 @@ DEFAULT_PRACTICE_PACKAGES: tuple[PracticePackage, ...] = (
         20,
         True,
         "",
-        7900,
+        5099,
     ),
     PracticePackage(
         "practice_antistress_60",
@@ -49,7 +50,7 @@ DEFAULT_PRACTICE_PACKAGES: tuple[PracticePackage, ...] = (
         30,
         True,
         "",
-        12900,
+        8327,
     ),
     PracticePackage(
         "practice_personal_month",
@@ -60,7 +61,7 @@ DEFAULT_PRACTICE_PACKAGES: tuple[PracticePackage, ...] = (
         40,
         True,
         "",
-        23000,
+        14847,
     ),
 )
 
@@ -71,13 +72,15 @@ LEGACY_PRACTICE_PACKAGES: tuple[PracticePackage, ...] = (
 
 ALL_PRACTICE_PACKAGES: tuple[PracticePackage, ...] = DEFAULT_PRACTICE_PACKAGES + LEGACY_PRACTICE_PACKAGES
 
-VALID_DELIVERY_MODES = frozenset({
-    "single_daily",
-    "morning_only",
-    "evening_only",
-    "both",
-    "paused",
-})
+VALID_DELIVERY_MODES = frozenset(
+    {
+        "single_daily",
+        "morning_only",
+        "evening_only",
+        "both",
+        "paused",
+    }
+)
 
 
 MORNING_RU = "\u0443\u0442\u0440\u043e"
@@ -149,13 +152,36 @@ def _telegram_stars_env_key(package_id: str) -> str:
     return f"TELEGRAM_STARS_PRICE_{suffix}"
 
 
+def telegram_stars_pricing_mode() -> str:
+    mode = (os.getenv("TELEGRAM_STARS_PRICING_MODE") or "buyer_parity").strip().lower()
+    if mode not in {"buyer_parity", "explicit"}:
+        raise ValueError("Invalid TELEGRAM_STARS_PRICING_MODE")
+    return mode
+
+
+def telegram_stars_buyer_rub_per_xtr() -> Decimal:
+    raw = (os.getenv("TELEGRAM_STARS_BUYER_RUB_PER_XTR") or "1.54905").strip()
+    try:
+        value = Decimal(raw)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("Invalid TELEGRAM_STARS_BUYER_RUB_PER_XTR") from exc
+    if not value.is_finite() or value <= 0:
+        raise ValueError("TELEGRAM_STARS_BUYER_RUB_PER_XTR must be positive")
+    return value
+
+
 def telegram_stars_price(package_id: str | None) -> int:
     package = package_by_id(package_id)
-    raw = (os.getenv(_telegram_stars_env_key(package.package_id)) or "").strip()
-    try:
-        amount = int(raw) if raw else int(package.price_xtr)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"Invalid Telegram Stars price for {package.package_id}") from exc
+    if telegram_stars_pricing_mode() == "buyer_parity":
+        amount = int(
+            (Decimal(package.price_rub) / telegram_stars_buyer_rub_per_xtr()).to_integral_value(rounding=ROUND_FLOOR)
+        )
+    else:
+        raw = (os.getenv(_telegram_stars_env_key(package.package_id)) or "").strip()
+        try:
+            amount = int(raw) if raw else int(package.price_xtr)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid Telegram Stars price for {package.package_id}") from exc
     if amount <= 0 or amount > 100_000:
         raise ValueError(f"Telegram Stars price out of range for {package.package_id}")
     return amount

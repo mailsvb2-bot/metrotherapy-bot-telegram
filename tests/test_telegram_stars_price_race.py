@@ -12,6 +12,7 @@ from services.practice_tokens import get_wallet
 
 def test_paid_invoice_keeps_its_pinned_price_after_catalog_change(monkeypatch) -> None:
     monkeypatch.setattr(telegram_stars, "log_event", lambda *args, **kwargs: None)
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     user_id = 781041
     payload = build_stars_payload(
         buyer_user_id=user_id,

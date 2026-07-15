@@ -1,17 +1,15 @@
 from __future__ import annotations
 import logging
 
-import os
 
 
 from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
+from aiogram.exceptions import TelegramAPIError
 from aiogram.dispatcher.event.bases import SkipHandler
-from aiogram.types import CallbackQuery, Message, BufferedInputFile
+from aiogram.types import CallbackQuery, Message
 
 import asyncio
-from datetime import datetime
 from core.time_utils import today_tz
 
 from keyboards.inline import (
@@ -19,9 +17,7 @@ from keyboards.inline import (
     kb_back_main,
     kb_main,
     kb_ref_bonus_actions,
-    kb_state_after_charts,
     kb_settings_locked,
-    kb_menu_only,
     kb_messenger_platforms,
     kb_delivery_channel_slots,
     kb_delivery_channel_select,
@@ -30,10 +26,8 @@ from services.db import db
 from services.subscription import has_access
 from services.events import log_event
 # (ленивый импорт графиков внутри хендлеров)
-from services.mood import series
 from services.bonuses import compute_bonus_stats, paid_referrals_count, gift_grants_count, gift_days_granted
 from services.pending import set_pending, peek_pending, pop_pending
-from config.settings import settings
 from services.messenger.links import build_messenger_targets
 from services.messenger.platforms import platform_title
 from services.messenger.preferences import get_channel_snapshot, set_preferred_platform
@@ -419,7 +413,6 @@ async def settings_time_input(message: Message):
     await _to_thread(_persist_user_time, uid, slot, hhmm)
 
     await _to_thread(log_event, uid, "settings_time_set", {"slot": slot, "time": hhmm})
-    is_admin = uid in settings.admin_id_list
     # Быстрый UX: сразу предложить настроить второе время, чтобы не возвращаться в меню.
     try:
         row = await _to_thread(_load_user_times, uid)

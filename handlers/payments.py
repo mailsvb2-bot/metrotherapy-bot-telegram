@@ -12,7 +12,7 @@ import logging
 import sqlite3
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
@@ -25,10 +25,7 @@ from services.payments.gift import (
     gift_pick_target,
     gift_users_shared,
 )
-from services.payments.hooks import (
-    pre_checkout as legacy_pre_checkout,
-    successful_payment as legacy_successful_payment,
-)
+from services.payments.hooks import successful_payment as legacy_successful_payment
 from services.payments.subscription import cmd_subscribe, sub_menu
 from services.payments.telegram_stars import (
     STARS_CURRENCY,
@@ -37,17 +34,195 @@ from services.payments.telegram_stars import (
     send_stars_invoice,
     validate_stars_pre_checkout,
 )
+from services.payments.telegram_stars_refunds import (
+    StarsRefundError,
+    StarsRefundPlan,
+    cancel_prepared_stars_refund,
+    complete_stars_refund,
+    mark_stars_refund_provider_succeeded,
+    prepare_stars_refund,
+    preview_stars_refund,
+    refund_plan_text,
+)
 from services.payments.terms import (
     payment_support_contact,
     payment_terms_keyboard,
     payment_terms_text,
 )
 from services.payments.ui import kb_after_paid, kb_back
+from services.admin import is_platform_admin
+from services.events import log_event
 
 router = Router()
 log = logging.getLogger(__name__)
 
 _DISABLED = "Этот старый способ оплаты отключён. Откройте тарифы заново и выберите актуальный пакет."
+
+
+def _message_user_id(message: Message) -> int | None:
+    user = message.from_user
+    return int(user.id) if user is not None else None
+
+
+def _already_refunded_error(exc: BaseException) -> bool:
+    text = str(exc).strip().lower().replace("_", " ").replace("-", " ")
+    return "already refunded" in text or "payment was refunded" in text
+
+
+async def _cancel_refund_hold(charge_id: str, error: str) -> bool:
+    try:
+        await asyncio.to_thread(cancel_prepared_stars_refund, charge_id, error=error)
+        return True
+    except (StarsRefundError, sqlite3.Error):
+        log.exception("Telegram Stars refund hold release failed: charge_id=%s", charge_id)
+        return False
+
+
+def _refund_command_args(text: str | None) -> tuple[str, bool] | None:
+    parts = (text or "").split(maxsplit=2)
+    if len(parts) < 2 or not parts[1].strip():
+        return None
+    return parts[1].strip(), len(parts) == 3 and parts[2].strip().upper() == "CONFIRM"
+
+
+async def _load_refund_plan(message: Message, charge_id: str) -> StarsRefundPlan | None:
+    try:
+        return await asyncio.to_thread(preview_stars_refund, charge_id)
+    except (StarsRefundError, sqlite3.Error):
+        log.exception("Telegram Stars refund preview failed: charge_id=%s", charge_id)
+        await message.answer("Не удалось проверить платёж. Повторите позже или проверьте журнал сервера.")
+        return None
+
+
+async def _prepare_refund_plan(message: Message, charge_id: str, admin_id: int) -> StarsRefundPlan | None:
+    try:
+        return await asyncio.to_thread(prepare_stars_refund, charge_id, requested_by=admin_id)
+    except (StarsRefundError, sqlite3.Error):
+        log.exception("Telegram Stars refund preparation failed: charge_id=%s", charge_id)
+        await message.answer("Не удалось безопасно подготовить возврат. Доступ пользователя не изменён.")
+        return None
+
+
+async def _provider_refund_failure(message: Message, charge_id: str, error: str, lead: str) -> bool:
+    restored = await _cancel_refund_hold(charge_id, error)
+    tail = "Удержанные практики восстановлены." if restored else "Нужна ручная проверка удержания практик."
+    await message.answer(f"{lead} {tail}")
+    return False
+
+
+async def _provider_refund_ambiguous(message: Message, charge_id: str, exc: BaseException) -> bool:
+    log.exception("Telegram Stars refund result is ambiguous: charge_id=%s", charge_id)
+    await message.answer(
+        "Telegram не вернул однозначный результат возврата. Доступ остаётся временно удержанным: "
+        "запустите эту же команду ещё раз. Повтор безопасен и завершит или подтвердит возврат."
+    )
+    return False
+
+
+async def _run_provider_refund(message: Message, prepared: StarsRefundPlan) -> bool:
+    if prepared.status == "provider_refunded":
+        return True
+    charge_id = prepared.telegram_charge_id
+    try:
+        provider_ok = bool(await message.bot.refund_star_payment(
+            user_id=prepared.payment_user_id,
+            telegram_payment_charge_id=charge_id,
+        ))
+    except TelegramBadRequest as exc:
+        if not _already_refunded_error(exc):
+            log.exception("Telegram Stars refund rejected by Telegram: charge_id=%s", charge_id)
+            return await _provider_refund_failure(message, charge_id, str(exc), "Telegram отклонил возврат.")
+        provider_ok = True
+    except (TelegramAPIError, asyncio.TimeoutError) as exc:
+        return await _provider_refund_ambiguous(message, charge_id, exc)
+
+    if not provider_ok:
+        return await _provider_refund_failure(
+            message,
+            charge_id,
+            "refundStarPayment returned false",
+            "Telegram не подтвердил возврат.",
+        )
+    try:
+        await asyncio.to_thread(mark_stars_refund_provider_succeeded, charge_id)
+        return True
+    except (StarsRefundError, sqlite3.Error):
+        log.exception("Telegram refund succeeded but local provider state failed: charge_id=%s", charge_id)
+        await message.answer(
+            "⚠️ Telegram подтвердил возврат, но локальная финализация не завершилась. "
+            "Не повторяйте новый возврат; запустите эту же команду ещё раз."
+        )
+        return False
+
+
+async def _complete_refund(message: Message, charge_id: str) -> StarsRefundPlan | None:
+    try:
+        return await asyncio.to_thread(complete_stars_refund, charge_id)
+    except (StarsRefundError, sqlite3.Error):
+        log.exception("Telegram Stars local refund finalization failed: charge_id=%s", charge_id)
+        await message.answer(
+            "⚠️ Telegram подтвердил возврат, но локальный доступ ещё не отозван. "
+            "Запустите эту же команду ещё раз для безопасной финализации."
+        )
+        return None
+
+
+async def _refund_plan_allows_execution(
+    message: Message,
+    plan: StarsRefundPlan,
+    *,
+    confirmed: bool,
+) -> bool:
+    if plan.status == "completed":
+        await message.answer(refund_plan_text(plan) + "\n\n✅ Возврат уже завершён.")
+        return False
+    if not confirmed:
+        tail = f"\n\nДля выполнения: /refundstars {plan.telegram_charge_id} CONFIRM" if plan.refundable else ""
+        await message.answer(refund_plan_text(plan) + tail)
+        return False
+    if not plan.refundable:
+        await message.answer(refund_plan_text(plan) + "\n\n⛔ Автоматический возврат заблокирован.")
+        return False
+    return True
+
+
+@router.message(Command("refundstars"))
+async def cmd_refund_stars(message: Message) -> None:
+    admin_id = _message_user_id(message)
+    if admin_id is None or not is_platform_admin(admin_id):
+        return
+
+    command = _refund_command_args(message.text)
+    if command is None:
+        await message.answer(
+            "Использование:\n"
+            "/refundstars <telegram_charge_id> — проверить\n"
+            "/refundstars <telegram_charge_id> CONFIRM — выполнить возврат"
+        )
+        return
+
+    charge_id, confirmed = command
+    plan = await _load_refund_plan(message, charge_id)
+    if plan is None:
+        return
+    if not await _refund_plan_allows_execution(message, plan, confirmed=confirmed):
+        return
+
+    prepared = await _prepare_refund_plan(message, charge_id, admin_id)
+    if prepared is None:
+        return
+    if not await _run_provider_refund(message, prepared):
+        return
+    completed = await _complete_refund(message, charge_id)
+    if completed is None:
+        return
+
+    log_event(
+        completed.payment_user_id,
+        "telegram_stars_refunded",
+        {"charge_id": charge_id, "package_id": completed.package_id, "by": admin_id},
+    )
+    await message.answer(refund_plan_text(completed) + "\n\n✅ Stars возвращены, доступ отозван.")
 
 
 def _callback_message(cb: CallbackQuery) -> Message | None:
@@ -110,7 +285,8 @@ async def _answer_stars_manual_recovery(message: Message) -> None:
     log.exception("Telegram Stars payment requires manual recovery")
     await message.answer(
         "Оплата в Stars получена, но автоматическое начисление не завершилось. "
-        "Пожалуйста, отправьте /paysupport — платёж сохранён и не потеряется."
+        "Пожалуйста, отправьте /paysupport и сохраните сообщение Telegram об оплате — "
+        "поддержка проверит платёж по его идентификатору."
     )
 
 
@@ -233,7 +409,16 @@ async def _gift_buy_disabled(cb: CallbackQuery):
 @router.pre_checkout_query()
 async def _pre_checkout(pre: PreCheckoutQuery):
     if str(pre.currency or "").upper() != STARS_CURRENCY:
-        await legacy_pre_checkout(pre)
+        try:
+            await pre.answer(
+                ok=False,
+                error_message=(
+                    "Этот способ оплаты отключён. Цифровые пакеты внутри Telegram "
+                    "можно оплатить только Telegram Stars. Откройте тарифы заново."
+                ),
+            )
+        except (TelegramAPIError, asyncio.TimeoutError):
+            log.exception("Legacy Telegram pre-checkout rejection failed")
         return
     error = await asyncio.to_thread(
         validate_stars_pre_checkout,

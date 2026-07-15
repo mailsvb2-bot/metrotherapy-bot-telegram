@@ -58,7 +58,8 @@ def _tariff_dynamics_sync() -> tuple[list[Any], list[Any]]:
         try:
             payments_daily = conn.execute(
                 "SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS n "
-                "FROM payments WHERE status IN ('succeeded','paid','success') GROUP BY substr(created_at, 1, 10) ORDER BY day ASC"
+                "FROM payments WHERE provider_status IN ('succeeded','paid','success') "
+                "GROUP BY substr(created_at, 1, 10) ORDER BY day ASC"
             ).fetchall()
         except sqlite3.Error:
             logger.exception("payments daily read failed")
@@ -85,8 +86,9 @@ async def tariffs_edit(cb: CallbackQuery, state: FSMContext, ctx: TariffsCtx) ->
     await safe_edit_admin(
         cb,
         state,
-        "✏️ Изменение тарифов\n\n"
-        "1) Выберите тариф кнопкой ниже → я попрошу новую цену.\n\n"
+        "✏️ Архивные тарифы подписки\n\n"
+        "Эти записи не меняют публичные пакеты практик и цены Telegram Stars.\n\n"
+        "1) Выберите архивный тариф кнопкой ниже → я попрошу новую цену.\n\n"
         "ИЛИ\n\n"
         "2) Отправьте сообщением новые цены, по одной строке:\n"
         "<название тарифа или code>=<цена в рублях>\n\n"

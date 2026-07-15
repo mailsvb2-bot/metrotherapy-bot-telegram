@@ -30,12 +30,8 @@ def _is_excluded_scan_path(path: Path, project_root: Path) -> bool:
 
 
 import logging
-import compileall
-import os
 import re
 from pathlib import Path
-
-from typing import Iterable
 
 import sqlite3
 
@@ -101,6 +97,7 @@ def validate_db_schema(strict: bool = True) -> None:
         "plans",
         "plan_price_history",
         "payments",
+        "telegram_stars_refunds",
         "selected_plan",
         "mood_sessions",
     }

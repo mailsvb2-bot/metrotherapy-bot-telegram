@@ -12,14 +12,13 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Literal
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from core.ai.decision_core import DecisionCore
 from core.runtime.sovereignty.enforcement import require_token, set_current_token
 from core.time_utils import utc_now, utc_now_iso, today_tz
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramNetworkError, TelegramAPIError
-from aiogram.types import FSInputFile
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config.settings import settings
@@ -29,9 +28,9 @@ from services.events import log_event
 from services.catalog import AudioCatalog
 from services.audio_guard import pick_demo_file
 from services.subscription import is_active as is_sub_active
-from services.demo_analytics import record_demo_sent, demo_sent_kinds
+from services.demo_analytics import demo_sent_kinds
 from services.demo_policy import can_repeat_demo_for_user
-from services.jobs import add_job, claim_due_jobs, lock_job, mark_done, reschedule
+from services.jobs import claim_due_jobs, lock_job, mark_done, reschedule
 from services.funnel_texts import funnel_text, funnel_text_ab
 from services.events import has_event_since
 from services.state_log import recent_hour_local, first_hour_today_local
@@ -445,20 +444,6 @@ class Engine:
                 "⚠️ Демо временно недоступно: аудиофайл не найден. Пожалуйста, сообщите администратору."
             )
             return
-        caption = (
-            "✨ Ваш ресурсный демо-транс готов.\n\n"
-            "Рекомендация: наденьте наушники и просто позвольте себе расслабиться. "
-            "После прослушивания обычно приходит ощущение ясности и лёгкости — "
-            "как после освежающего душа."
-        )
-
-        # Telegram voice-note надёжно работает с .ogg/.opus.
-        # Если демо у вас в mp3/wav — отправим как обычное аудио.
-        # После отправки демо показываем действия (второй демо + главное меню).
-        # Сначала отправляем с базовой клавиатурой (без message_id), затем обновляем
-        # клавиатуру, чтобы кнопка «Прослушал(а)» содержала корректный message_id.
-        after_kb = self._kb_after_demo(kind, allow_other=(other not in sent))
-
         # --- ЭТАП 2: мини-опрос до/после демо ---
         # Для демо используем локальный день проекта; ошибки тут не ожидаются.
         day = today_tz().isoformat()

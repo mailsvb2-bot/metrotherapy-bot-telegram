@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 
 from services.validators.base import ValidationError
@@ -143,6 +144,18 @@ def validate_prod_monetization_contract(*, strict: bool = True) -> None:
         errors.append("TOKEN_ENFORCEMENT_MODE must be hard in prod")
     if not _first_env("YOOKASSA_RECEIPT_EMAIL", "PAYMENT_RECEIPT_EMAIL", "ADMIN_EMAIL"):
         errors.append("YOOKASSA_RECEIPT_EMAIL or PAYMENT_RECEIPT_EMAIL or ADMIN_EMAIL is required in prod")
+
+    stars_enabled = (_env("TELEGRAM_STARS_ENABLED", "1") or "1").strip().lower() not in _DISABLED_VALUES
+    stars_mode = (_env("TELEGRAM_STARS_PRICING_MODE", "buyer_parity") or "buyer_parity").strip().lower()
+    if stars_enabled and stars_mode not in {"buyer_parity", "explicit"}:
+        errors.append("TELEGRAM_STARS_PRICING_MODE must be buyer_parity or explicit")
+    if stars_enabled and stars_mode == "buyer_parity":
+        try:
+            reference = float(_env("TELEGRAM_STARS_BUYER_RUB_PER_XTR", "1.54905"))
+        except (TypeError, ValueError):
+            reference = 0.0
+        if not math.isfinite(reference) or reference <= 0:
+            errors.append("TELEGRAM_STARS_BUYER_RUB_PER_XTR must be a positive number")
 
     if errors and strict:
         raise ValidationError("Production monetization contract failed: " + "; ".join(errors))

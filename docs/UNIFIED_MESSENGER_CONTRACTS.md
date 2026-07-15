@@ -49,7 +49,7 @@ The model must not decide business flow outcomes. It may only carry already-deci
 
 Before any runtime switch:
 
-- Telegram package buttons preserve current YooKassa URLs.
+- Telegram package buttons create native Telegram Stars invoices and never expose an external checkout for digital packages.
 - VK package links preserve source/user/package metadata.
 - MAX package links preserve source/user/package metadata.
 - Score buttons use the same numeric scale across Telegram/VK/MAX.

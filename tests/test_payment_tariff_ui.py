@@ -17,11 +17,10 @@ def test_public_telegram_tariff_keyboard_is_stars_only(monkeypatch):
     urls = [button.url for button in buttons if button.url]
     callbacks = [button.callback_data for button in buttons if button.callback_data]
 
-    assert "⭐ Стартовый пакет — 1 900 ⭐" in texts
-    assert "⭐ Полный маршрут — 7 900 ⭐" in texts
-    assert "⭐ Антистресс-система — 12 900 ⭐" in texts
-    assert "⭐ Персональный месяц — 23 000 ⭐" in texts
-
+    assert "⭐ Стартовый пакет — 1 226 ⭐" in texts
+    assert "⭐ Полный маршрут — 5 099 ⭐" in texts
+    assert "⭐ Антистресс-система — 8 327 ⭐" in texts
+    assert "⭐ Персональный месяц — 14 847 ⭐" in texts
     assert not any("YooKassa" in text for text in texts)
     assert not urls
 

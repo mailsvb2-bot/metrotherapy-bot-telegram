@@ -142,7 +142,6 @@ def conversion_breakdown(start_utc: str | None = None, end_utc: str | None = Non
     Дальше считаем, сколько таких пользователей достигли каждого шага.
     """
     import json
-    from datetime import datetime
     from zoneinfo import ZoneInfo
 
     tz = ZoneInfo(tz_name)
