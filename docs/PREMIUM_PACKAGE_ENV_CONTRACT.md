@@ -21,7 +21,7 @@ STRESS_VIDEO_COURSE_URL=https://metrotherapy.ru/antistress-course
 
 Premium entitlements are granted only after either:
 
-- a successful and amount-verified YooKassa webhook from VK, MAX or web checkout; or
+- a successful and amount-verified YooKassa webhook from Telegram, VK, MAX or web checkout; or
 - a validated Telegram `successful_payment` in `XTR` from the native Stars invoice flow.
 
 Both providers use the same idempotent token and premium-entitlement services.

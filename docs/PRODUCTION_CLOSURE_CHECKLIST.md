@@ -11,7 +11,7 @@ This checklist records the production-readiness evidence expected for the curren
 - [ ] `sudo systemctl status metrotherapy.service --no-pager -l` shows `active (running)`.
 - [ ] `curl -i http://127.0.0.1:8082/healthz` returns `HTTP/1.1 200 OK` and `ok=true`.
 
-## P0 YooKassa payment/package proof (VK, MAX and web)
+## P0 YooKassa payment/package proof (Telegram, VK, MAX and web)
 
 - [ ] Public `/pay/yookassa` reaches the Python backend through nginx.
 - [ ] `practice_start_7` checkout returns a redirect to the payment provider.
@@ -36,7 +36,11 @@ python scripts/probe_checkout_redirect.py \
 
 ## P0 Telegram Stars proof
 
-- [ ] Telegram package buttons show native `XTR` invoices and no YooKassa URL.
+- [ ] Telegram package buttons first open a method-choice screen with both current RUB and XTR prices.
+- [ ] The Stars button opens a native `XTR` invoice with an empty `provider_token`.
+- [ ] The YooKassa button opens a signed, buyer-bound external checkout URL in the browser.
+- [ ] If Stars are disabled, the YooKassa path remains available.
+- [ ] `TELEGRAM_YOOKASSA_ENABLED=0` removes the button and rejects previously issued Telegram-source links without affecting VK, MAX or web.
 - [ ] `/terms` opens on the configured payment host and discloses that one Star is not one ruble.
 - [ ] Each invoice amount matches the current canonical Stars pricing mode.
 - [ ] A successful Stars payment creates one payment row and grants the package exactly once.
@@ -48,7 +52,7 @@ python scripts/probe_checkout_redirect.py \
 
 - [ ] Telegram polling runtime is active and not conflicting with another bot instance.
 - [ ] Messenger webhook runtime is active.
-- [ ] Telegram package buttons open native Stars invoices in a live Telegram chat.
+- [ ] Telegram package buttons open the method-choice screen in a live chat; both Stars and YooKassa paths reach the expected checkout.
 - [ ] VK package links open public YooKassa links in a live VK conversation.
 - [ ] MAX package links open public YooKassa links in a live MAX conversation.
 - [ ] Premium entitlement records remain stored even if delivery outbox sending fails.

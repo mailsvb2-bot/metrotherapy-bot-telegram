@@ -17,7 +17,10 @@ os.environ["APP_ENV"] = "test"
 os.environ["LOAD_DOTENV"] = "0"
 os.environ["METRO_DB_ENGINE"] = "sqlite"
 os.environ["DATABASE_URL"] = ""
-os.environ["METRO_DB_PATH"] = str(TEST_ROOT / f"pytest_{os.getpid()}.db")
+TEST_DB_PATH = TEST_ROOT / f"pytest_{os.getpid()}.db"
+for suffix in ("", "-wal", "-shm"):
+    (TEST_ROOT / f"{TEST_DB_PATH.name}{suffix}").unlink(missing_ok=True)
+os.environ["METRO_DB_PATH"] = str(TEST_DB_PATH)
 
 os.environ.setdefault("BOT_TOKEN", "000000:TEST")
 os.environ.setdefault("PAY_PROVIDER_TOKEN", "000000:TEST")

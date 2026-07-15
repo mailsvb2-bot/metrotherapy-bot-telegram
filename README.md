@@ -29,8 +29,9 @@
 - `TOKEN_ENFORCEMENT_MODE=hard`
 - Soft/off режимы допустимы только для local/dev migration drills.
 - Если у пользователя нет доступных практик, paid audio не должен выдаваться как оплаченный доступ.
-- Цифровые пакеты внутри Telegram продаются только через Telegram Stars (`XTR`); внешний YooKassa checkout в Telegram не показывается.
-- VK, MAX и web продолжают использовать YooKassa и тот же идемпотентный контур начисления практик.
+- После выбора пакета Telegram показывает промежуточный экран способа оплаты: нативный счёт Telegram Stars (`XTR`) либо подписанный внешний checkout YooKassa в браузере.
+- `TELEGRAM_YOOKASSA_ENABLED=0` немедленно скрывает и блокирует Telegram→YooKassa, не отключая YooKassa для VK, MAX и web.
+- Telegram, VK, MAX и web используют один идемпотентный YooKassa-контур начисления практик; Stars остаются отдельным нативным Telegram-контуром.
 - `TELEGRAM_STARS_PRICING_MODE=buyer_parity` рассчитывает количество Stars относительно рублёвой цены и настраиваемого ориентира `TELEGRAM_STARS_BUYER_RUB_PER_XTR`. Это ориентир стоимости покупки для пользователя, а не фиксированный курс: одна Star не равна одному рублю.
 - Возврат Stars выполняется администратором в два шага: `/refundstars <charge_id>` и `/refundstars <charge_id> CONFIRM`. Уже использованный доступ автоматически не возвращается.
 

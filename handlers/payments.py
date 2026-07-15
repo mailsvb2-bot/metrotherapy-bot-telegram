@@ -49,7 +49,13 @@ from services.payments.terms import (
     payment_terms_keyboard,
     payment_terms_text,
 )
-from services.payments.ui import kb_after_paid, kb_back
+from services.payments.ui import (
+    kb_after_paid,
+    kb_back,
+    kb_telegram_gift_yookassa_checkout,
+    kb_telegram_payment_methods,
+    telegram_payment_method_text,
+)
 from services.admin import is_platform_admin
 from services.events import log_event
 
@@ -258,6 +264,36 @@ async def _show_stars_terms(cb: CallbackQuery, *, as_gift: bool) -> None:
     )
 
 
+async def _show_payment_methods(cb: CallbackQuery, *, as_gift: bool) -> None:
+    await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
+    prefix = "pay:gift_methods:" if as_gift else "pay:methods:"
+    try:
+        package_id = _package_id(cb.data, prefix)
+        user_id = int(cb.from_user.id)
+        text = telegram_payment_method_text(package_id)
+        markup = kb_telegram_payment_methods(
+            user_id=user_id,
+            package_id=package_id,
+            gift=as_gift,
+        )
+    except (TypeError, ValueError):
+        log.exception("Payment method choice callback invalid")
+        await message.answer(
+            "Не удалось открыть способы оплаты. Выберите пакет заново.",
+            reply_markup=kb_back("gift:menu" if as_gift else "sub:menu"),
+        )
+        return
+    log_event(
+        user_id,
+        "payment_method_choice_opened",
+        {"package_id": package_id, "gift": bool(as_gift), "surface": "telegram"},
+    )
+    await message.answer(text, reply_markup=markup)
+
+
 async def _send_stars_from_callback(cb: CallbackQuery, *, as_gift: bool) -> None:
     await safe_answer_callback(cb)
     message = _callback_message(cb)
@@ -333,6 +369,16 @@ async def _stars_terms_overview(cb: CallbackQuery):
         await message.answer(payment_terms_text(), reply_markup=kb_back("sub:menu"))
 
 
+@router.callback_query(F.data.regexp(r"^pay:methods:[a-z0-9_]+$"))
+async def _payment_methods(cb: CallbackQuery):
+    await _show_payment_methods(cb, as_gift=False)
+
+
+@router.callback_query(F.data.regexp(r"^pay:gift_methods:[a-z0-9_]+$"))
+async def _gift_payment_methods(cb: CallbackQuery):
+    await _show_payment_methods(cb, as_gift=True)
+
+
 @router.callback_query(F.data.regexp(r"^stars:terms:[a-z0-9_]+$"))
 async def _stars_terms(cb: CallbackQuery):
     await _show_stars_terms(cb, as_gift=False)
@@ -353,11 +399,60 @@ async def _stars_gift(cb: CallbackQuery):
     await _send_stars_from_callback(cb, as_gift=True)
 
 
+@router.callback_query(F.data.regexp(r"^yookassa:gift:[a-z0-9_]+$"))
+async def _yookassa_gift(cb: CallbackQuery):
+    await safe_answer_callback(cb)
+    message = _callback_message(cb)
+    if message is None:
+        return
+    try:
+        package_id = _package_id(cb.data, "yookassa:gift:")
+        user_id = int(cb.from_user.id)
+        markup = kb_telegram_gift_yookassa_checkout(
+            user_id=user_id,
+            package_id=package_id,
+        )
+    except (sqlite3.Error, TypeError, ValueError):
+        log.exception("YooKassa gift checkout creation failed")
+        await message.answer(
+            "Не удалось подготовить оплату подарка через YooKassa. Попробуйте позже.",
+            reply_markup=kb_back("gift:menu"),
+        )
+        return
+    log_event(
+        user_id,
+        "yookassa_gift_checkout_created",
+        {"package_id": package_id, "surface": "telegram_external"},
+    )
+    await message.answer(
+        "Ссылка на оплату подарка подготовлена. YooKassa откроется во внешнем браузере.",
+        reply_markup=markup,
+    )
+
+
 @router.callback_query(F.data == "tariffs:stars_disabled")
 async def _stars_disabled(cb: CallbackQuery):
     await safe_answer_callback(
         cb,
         "Оплата цифровых пакетов в Telegram временно недоступна. Попробуйте позже.",
+        show_alert=True,
+    )
+
+
+@router.callback_query(F.data == "tariffs:public_base_missing")
+async def _public_base_missing(cb: CallbackQuery):
+    await safe_answer_callback(
+        cb,
+        "Оплата банковской картой временно недоступна. Попробуйте позже или напишите /paysupport.",
+        show_alert=True,
+    )
+
+
+@router.callback_query(F.data == "tariffs:yookassa_disabled")
+async def _yookassa_disabled(cb: CallbackQuery):
+    await safe_answer_callback(
+        cb,
+        "Оплата банковской картой временно недоступна. Попробуйте Stars или напишите /paysupport.",
         show_alert=True,
     )
 
