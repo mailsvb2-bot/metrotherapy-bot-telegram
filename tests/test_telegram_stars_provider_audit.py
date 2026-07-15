@@ -9,8 +9,17 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "scripts" / "run_deploy_worker.sh"
 
 
-def test_provider_audit_uses_native_xtr_without_provider_token(monkeypatch) -> None:
+def _explicit_prices(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICE_PRACTICE_START_7", "1500")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICE_PRACTICE_60", "2500")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICE_PRACTICE_ANTISTRESS_60", "5000")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICE_PRACTICE_PERSONAL_MONTH", "15000")
+
+
+def test_provider_audit_uses_native_xtr_and_reports_price_ladder(monkeypatch) -> None:
     monkeypatch.setenv("BOT_TOKEN", "123:test-token")
+    _explicit_prices(monkeypatch)
     calls: list[tuple[str, dict | None]] = []
 
     def fake_api_call(_token: str, method: str, payload: dict | None = None):
@@ -23,7 +32,10 @@ def test_provider_audit_uses_native_xtr_without_provider_token(monkeypatch) -> N
     message, code = audit.run()
 
     assert code == 0
-    assert message == "status=ok stage=createInvoiceLink bot=@MetrotherapyBot code=200 error=NONE"
+    assert message == (
+        "status=ok stage=createInvoiceLink bot=@MetrotherapyBot code=200 "
+        "error=NONE prices=1500,2500,5000,15000"
+    )
     assert calls[1][0] == "createInvoiceLink"
     payload = calls[1][1]
     assert payload is not None
@@ -34,6 +46,7 @@ def test_provider_audit_uses_native_xtr_without_provider_token(monkeypatch) -> N
 
 def test_provider_audit_reports_provider_account_invalid_without_secret(monkeypatch) -> None:
     monkeypatch.setenv("BOT_TOKEN", "123:secret-token")
+    _explicit_prices(monkeypatch)
 
     def fake_api_call(_token: str, method: str, payload: dict | None = None):
         del payload
@@ -51,7 +64,19 @@ def test_provider_audit_reports_provider_account_invalid_without_secret(monkeypa
     assert code == 4
     assert "bot=@MetrotherapyBot" in message
     assert "error=PROVIDER_ACCOUNT_INVALID" in message
+    assert "prices=1500,2500,5000,15000" in message
     assert "secret-token" not in message
+
+
+def test_provider_audit_fails_closed_on_invalid_price_ladder(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123:test-token")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICE_PRACTICE_START_7", "0")
+
+    message, code = audit.run()
+
+    assert code == 6
+    assert message == "status=error stage=prices bot=unknown code=0 error=INVALID_PRICE_LADDER"
 
 
 def test_deploy_worker_publishes_sanitized_provider_audit_result() -> None:
