@@ -6,6 +6,7 @@ APP_DIR="${APP_DIR:-/root/metrotherapy}"
 DEPLOY_SH="${DEPLOY_SH:-$APP_DIR/deploy.sh}"
 PYTHON="${PYTHON:-$APP_DIR/.venv/bin/python}"
 LOCK_FILE="${LOCK_FILE:-$APP_DIR/data/deploy/metrotherapy_deploy.lock}"
+FLOCK_BIN="${FLOCK_BIN:-/usr/bin/flock}"
 LOG_FILE="${LOG_FILE:-/var/log/metrotherapy_deploy.log}"
 ENV_FILE="${ENV_FILE:-/etc/metrotherapy/metrotherapy.env}"
 MIGRATION_DIR="${MIGRATION_DIR:-/var/lib/metrotherapy/deploy-migrations}"
@@ -13,12 +14,22 @@ YOOKASSA_MIGRATION_MARKER="$MIGRATION_DIR/telegram-yookassa-dual-payment-v1.appl
 
 mkdir -p "$(dirname "$LOCK_FILE")"
 
-if [ -e "$LOCK_FILE" ]; then
-  printf '=== deploy skipped: lock exists %s ===\n' "$(date -Is)" >> "$LOG_FILE"
-  exit 0
+if [ ! -x "$FLOCK_BIN" ]; then
+  printf 'ERROR: flock is unavailable: %s\n' "$FLOCK_BIN" >> "$LOG_FILE"
+  exit 31
 fi
 
-touch "$LOCK_FILE"
+# The file is only a stable inode for the kernel lock. It may persist forever.
+# The actual lock belongs to FD 9 and is released automatically if this worker
+# exits, is killed, or crashes. This prevents a stale sentinel file from
+# permanently blocking every future production deploy.
+exec 9>"$LOCK_FILE"
+if ! "$FLOCK_BIN" -n 9; then
+  printf '=== deploy skipped: another worker holds flock %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+  exit 0
+fi
+printf '%s\n' "$$" 1>&9
+
 MIGRATION_PENDING=0
 ENV_BACKUP=""
 
@@ -29,7 +40,7 @@ cleanup() {
     printf '=== Telegram YooKassa env migration rolled back after failed deploy: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
   fi
   rm -f "$ENV_BACKUP" 2>/dev/null || true
-  rm -f "$LOCK_FILE"
+  "$FLOCK_BIN" -u 9 || true
 }
 trap cleanup EXIT INT TERM HUP
 
