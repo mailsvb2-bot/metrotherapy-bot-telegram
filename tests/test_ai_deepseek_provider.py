@@ -108,6 +108,33 @@ def test_deepseek_provider_auto_detects_deepseek_key(monkeypatch):
     assert router.provider_configured() is True
 
 
+def test_deepseek_defaults_never_inherit_openai_endpoint_or_model(monkeypatch):
+    monkeypatch.setenv("AI_ENABLED", "1")
+    monkeypatch.setenv("AI_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
+    monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+    provider = router.build_ai_provider()
+
+    assert isinstance(provider, OpenAICompatibleProvider)
+    assert provider.config.name == "deepseek"
+    assert provider.config.model == "deepseek-chat"
+    assert provider.config.base_url == "https://api.deepseek.com/v1"
+
+
+def test_explicit_deepseek_requires_dedicated_key(monkeypatch):
+    monkeypatch.setenv("AI_ENABLED", "1")
+    monkeypatch.setenv("AI_PROVIDER", "deepseek")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-be-reused")
+
+    assert router.provider_configured("deepseek") is False
+    assert router.build_ai_provider() is None
+
+
 def test_openai_compatible_provider_returns_none_on_http_error(monkeypatch):
     def fake_urlopen(req, timeout):
         raise urllib.error.HTTPError(req.full_url, 400, "bad request", hdrs=None, fp=None)

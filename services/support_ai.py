@@ -12,7 +12,8 @@ from __future__ import annotations
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from datetime import date, timedelta
+from typing import Any, Optional
 
 from services.mood import series
 from services.subscription import has_access
@@ -47,6 +48,40 @@ def _variance(values: list[float]) -> float | None:
     return sum((x - m) ** 2 for x in values) / (len(values) - 1)
 
 
+def _parse_day(value: object) -> date | None:
+    try:
+        return date.fromisoformat(str(value or "").strip()[:10])
+    except ValueError:
+        return None
+
+
+def _skip_count_last_days(rows: list[dict[str, Any]], *, days: int = 5) -> int:
+    """Count unfinished scored sessions in the latest calendar-day window.
+
+    The previous implementation returned only 0/1 and inspected the last fourteen
+    rows, despite exposing the field as ``skip_count_5d``. Use the newest valid
+    session day as the deterministic anchor so tests, delayed jobs and imported
+    history do not depend on the server clock.
+    """
+
+    parsed = [(row, _parse_day(row.get("day"))) for row in rows]
+    valid_days = [day for _, day in parsed if day is not None]
+    if not valid_days:
+        fallback = rows[-max(1, int(days)) :]
+        return sum(1 for row in fallback if row.get("pre") is not None and row.get("post") is None)
+
+    anchor = max(valid_days)
+    cutoff = anchor - timedelta(days=max(1, int(days)) - 1)
+    return sum(
+        1
+        for row, row_day in parsed
+        if row_day is not None
+        and cutoff <= row_day <= anchor
+        and row.get("pre") is not None
+        and row.get("post") is None
+    )
+
+
 def decide_support_pre(
     *,
     user_id: int,
@@ -72,19 +107,15 @@ def decide_support_pre(
     # 2) Самочувствие: динамика по последним сессиям
     rows = series(int(user_id), kind=(kind_norm if kind_norm not in ("both", "") else None), limit=40)
     deltas: list[float] = []
-    pre_only = 0
     for r in rows[-14:]:
         pre, post = r.get("pre"), r.get("post")
-        if pre is None:
-            continue
-        if post is None:
-            pre_only += 1
+        if pre is None or post is None:
             continue
         deltas.append(float(int(post) - int(pre)))
 
     avg_delta = _avg(deltas[-7:])
     var_delta = _variance(deltas[-10:])
-    skip_count_5d = 1 if pre_only >= 1 else 0
+    skip_count_5d = _skip_count_last_days(rows, days=5)
 
     # 3) Режимы
     if skip_count_5d >= 1:
@@ -107,7 +138,7 @@ def decide_support_pre(
     )
 
     # best-effort logging
-    log_reaction(user_id=int(user_id), mode=mode, area=area, note=f"avg={avg_delta}; same_area={same_area}; pre_only={pre_only}")
+    log_reaction(user_id=int(user_id), mode=mode, area=area, note=f"avg={avg_delta}; same_area={same_area}; skips_5d={skip_count_5d}")
     return SupportDecision(
         mode=mode,
         message=msg,
