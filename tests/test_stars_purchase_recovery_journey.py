@@ -10,6 +10,9 @@ from services.payments.terms import payment_terms_keyboard
 from services.payments.ui import kb_tariffs, kb_telegram_payment_methods
 
 
+TOPUP_URL = "tg://stars_topup?balance=1226&purpose=metrotherapy_practice_start_7"
+
+
 def _buttons(markup):
     return [button for row in markup.inline_keyboard for button in row]
 
@@ -44,13 +47,15 @@ def test_personal_purchase_journey_keeps_package_context_through_stars_recovery(
     )
     buttons = _buttons(invoice)
     assert buttons[0].url == "https://t.me/$invoice-personal"
-    assert buttons[1].callback_data == f"stars:buy:{package_id}"
-    assert buttons[2].callback_data == f"pay:methods:{package_id}"
+    assert buttons[1].url == TOPUP_URL
+    assert buttons[2].callback_data == f"stars:buy:{package_id}"
+    assert buttons[3].callback_data == f"pay:methods:{package_id}"
     assert all("PremiumBot" not in str(button.url or "") for button in buttons)
 
     help_text = _invoice_message_text(amount_xtr=1226)
+    assert "нажмите кнопку «Купить Stars»" in help_text
+    assert "Telegram откроет штатное окно пополнения" in help_text
     assert "Настройки → Ваши Stars" in help_text
-    assert "официальный Telegram на телефоне" in help_text
     assert "PremiumBot" not in help_text
 
 
@@ -72,8 +77,9 @@ def test_gift_purchase_journey_keeps_gift_context_through_stars_recovery(monkeyp
         as_gift=True,
     )
     buttons = _buttons(invoice)
-    assert buttons[1].callback_data == f"stars:gift:{package_id}"
-    assert buttons[2].callback_data == f"pay:gift_methods:{package_id}"
+    assert buttons[1].url == TOPUP_URL
+    assert buttons[2].callback_data == f"stars:gift:{package_id}"
+    assert buttons[3].callback_data == f"pay:gift_methods:{package_id}"
     assert all("PremiumBot" not in str(button.url or "") for button in buttons)
 
 
