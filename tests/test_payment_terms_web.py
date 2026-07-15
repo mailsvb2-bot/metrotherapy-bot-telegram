@@ -17,4 +17,6 @@ async def test_payment_terms_web_is_a_real_utf8_page(monkeypatch) -> None:
     assert response.content_type == "text/html"
     assert response.charset == "utf-8"
     assert "Условия оплаты цифровых пакетов" in response.text
-    assert "Telegram Stars" in response.text
+    assert "звёздами Telegram" in response.text
+    assert "XTR" not in response.text
+    assert "RUB" not in response.text

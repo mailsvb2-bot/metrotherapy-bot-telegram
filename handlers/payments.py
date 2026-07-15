@@ -415,7 +415,7 @@ async def _yookassa_gift(cb: CallbackQuery):
     except (sqlite3.Error, TypeError, ValueError):
         log.exception("YooKassa gift checkout creation failed")
         await message.answer(
-            "Не удалось подготовить оплату подарка через YooKassa. Попробуйте позже.",
+            "Не удалось подготовить оплату подарка через ЮKassa. Попробуйте позже.",
             reply_markup=kb_back("gift:menu"),
         )
         return
@@ -425,7 +425,7 @@ async def _yookassa_gift(cb: CallbackQuery):
         {"package_id": package_id, "surface": "telegram_external"},
     )
     await message.answer(
-        "Ссылка на оплату подарка подготовлена. YooKassa откроется во внешнем браузере.",
+        "Ссылка на оплату подарка подготовлена. ЮKassa откроется во внешнем браузере.",
         reply_markup=markup,
     )
 

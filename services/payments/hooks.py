@@ -114,7 +114,7 @@ def _gift_plan_id_by_code(code: str) -> int:
 
 def validate_pre_checkout_invoice(*, payload: str | None, currency: str | None, total_amount: int | None) -> str | None:
     if (currency or "").strip().upper() != "RUB":
-        return "Платёж отклонён: поддерживается только RUB. Обновите тариф и попробуйте снова."
+        return "Платёж отклонён: поддерживается только оплата в рублях. Обновите тариф и попробуйте снова."
     try:
         requested_amount = int(total_amount or 0)
     except (TypeError, ValueError):
