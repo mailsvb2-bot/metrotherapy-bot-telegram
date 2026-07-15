@@ -1,4 +1,3 @@
--    raise ValueError("proposed_user_id is required for first-time nonnumeric messenger identities")
 +    if norm == "telegram":
 +        if proposed_user_id is not None:
 +            return int(proposed_user_id)
@@ -86,7 +85,7 @@ index ab0f98f..316fd89 100644
 +        done_replies = [
              MessengerReply(
                  text=(
-                     f"✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\n\n"
+                     f"✅ Подтвердил аудио №{confirmed.anchor} — {confirmed.title}.\\n\\n"
 @@ -757,20 +768,10 @@ def handle_incoming_text(
              )
          ]
