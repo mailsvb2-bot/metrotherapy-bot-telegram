@@ -48,12 +48,14 @@ async def test_runtime_stars_transport_uses_audited_invoice_link_with_recovery(m
     buttons = [button for row in markup.inline_keyboard for button in row]
     assert buttons[0].url == "https://t.me/$metrotherapy-stars-test"
     assert buttons[0].text == "⭐ Оплатить пакет — 1 226 Stars"
-    assert buttons[1].url == "https://t.me/PremiumBot"
-    assert buttons[1].text == "➕ Купить Stars в официальном Telegram"
-    assert buttons[2].callback_data == "stars:buy:practice_start_7"
-    assert buttons[3].callback_data == "pay:methods:practice_start_7"
-    assert "Если Stars не хватает" in captured_answer["text"]
+    assert buttons[1].url is None
+    assert buttons[1].callback_data == "stars:buy:practice_start_7"
+    assert buttons[2].callback_data == "pay:methods:practice_start_7"
+    assert all("PremiumBot" not in str(button.url or "") for button in buttons)
+    assert "Настройки → Ваши Stars" in captured_answer["text"]
+    assert "официальный Telegram на телефоне" in captured_answer["text"]
     assert "Метротерапия не получает и не хранит данные вашей карты" in captured_answer["text"]
+    assert "PremiumBot" not in captured_answer["text"]
 
 
 @pytest.mark.asyncio
@@ -90,8 +92,9 @@ async def test_gift_recovery_preserves_gift_callbacks(monkeypatch) -> None:
 
     assert token == gift_token
     buttons = [button for row in captured_answer["reply_markup"].inline_keyboard for button in row]
-    assert buttons[2].callback_data == "stars:gift:practice_start_7"
-    assert buttons[3].callback_data == "pay:gift_methods:practice_start_7"
+    assert buttons[1].callback_data == "stars:gift:practice_start_7"
+    assert buttons[2].callback_data == "pay:gift_methods:practice_start_7"
+    assert all("PremiumBot" not in str(button.url or "") for button in buttons)
 
 
 def test_package_installs_invoice_link_transport() -> None:
