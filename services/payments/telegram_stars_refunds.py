@@ -81,34 +81,68 @@ def _delivery_pattern(charge_id: str) -> str:
     return f"premium_delivery:{STARS_PROVIDER}:{escaped}:%"
 
 
-def _premium_refund_problem(*, user_id: int, charge_id: str) -> str:
+def _premium_refund_problem_in_conn(conn: Any, *, user_id: int, charge_id: str) -> str:
     prefix = _delivery_pattern(charge_id)
-    with db() as conn:
-        delivered = conn.execute(
-            """
-            SELECT status
-            FROM premium_delivery_outbox
-            WHERE user_id=? AND idempotency_key LIKE ? ESCAPE '!'
-              AND status NOT IN ('pending', 'refund_pending', 'cancelled')
-            LIMIT 1
-            """.strip(),
-            (int(user_id), prefix),
-        ).fetchone()
-        consultation = conn.execute(
-            """
-            SELECT status
-            FROM consultation_requests
-            WHERE user_id=? AND provider=? AND provider_payment_id=?
-              AND status NOT IN ('new', 'refund_pending', 'cancelled')
-            LIMIT 1
-            """.strip(),
-            (int(user_id), STARS_PROVIDER, charge_id),
-        ).fetchone()
+    delivered = conn.execute(
+        """
+        SELECT status
+        FROM premium_delivery_outbox
+        WHERE user_id=? AND idempotency_key LIKE ? ESCAPE '!'
+          AND status NOT IN ('pending', 'refund_pending', 'cancelled')
+        LIMIT 1
+        """.strip(),
+        (int(user_id), prefix),
+    ).fetchone()
+    consultation = conn.execute(
+        """
+        SELECT status
+        FROM consultation_requests
+        WHERE user_id=? AND provider=? AND provider_payment_id=?
+          AND status NOT IN ('new', 'refund_pending', 'cancelled')
+        LIMIT 1
+        """.strip(),
+        (int(user_id), STARS_PROVIDER, charge_id),
+    ).fetchone()
     if delivered:
         return "premium_content_already_delivered"
     if consultation:
         return "consultation_already_in_progress"
     return ""
+
+
+def _premium_refund_problem(*, user_id: int, charge_id: str) -> str:
+    with db() as conn:
+        return _premium_refund_problem_in_conn(conn, user_id=user_id, charge_id=charge_id)
+
+
+def _claim_refundable_side_effects(conn: Any, *, user_id: int, charge_id: str) -> str:
+    """Freeze pending fulfilment and recheck after acquiring DB row locks."""
+    prefix = _delivery_pattern(charge_id)
+    conn.execute(
+        """
+        UPDATE premium_entitlements
+        SET status='refund_pending', updated_at=CURRENT_TIMESTAMP
+        WHERE user_id=? AND provider=? AND provider_payment_id=? AND status='active'
+        """.strip(),
+        (int(user_id), STARS_PROVIDER, charge_id),
+    )
+    conn.execute(
+        """
+        UPDATE premium_delivery_outbox
+        SET status='refund_pending', updated_at=CURRENT_TIMESTAMP
+        WHERE user_id=? AND idempotency_key LIKE ? ESCAPE '!' AND status='pending'
+        """.strip(),
+        (int(user_id), prefix),
+    )
+    conn.execute(
+        """
+        UPDATE consultation_requests
+        SET status='refund_pending', updated_at=CURRENT_TIMESTAMP
+        WHERE user_id=? AND provider=? AND provider_payment_id=? AND status='new'
+        """.strip(),
+        (int(user_id), STARS_PROVIDER, charge_id),
+    )
+    return _premium_refund_problem_in_conn(conn, user_id=user_id, charge_id=charge_id)
 
 
 def _payment_record(charge_id: str) -> dict[str, Any]:
@@ -337,6 +371,14 @@ def prepare_stars_refund(telegram_charge_id: str, *, requested_by: int) -> Stars
                     ),
                 )
 
+            side_effect_problem = _claim_refundable_side_effects(
+                conn,
+                user_id=plan.beneficiary_user_id,
+                charge_id=charge_id,
+            )
+            if side_effect_problem:
+                raise StarsRefundError(side_effect_problem)
+
             if plan.tokens:
                 cursor = conn.execute(
                     """
@@ -369,30 +411,6 @@ def prepare_stars_refund(telegram_charge_id: str, *, requested_by: int) -> Stars
                     idempotency_key=f"stars_refund_hold:{charge_id}:{attempt}",
                 )
 
-            conn.execute(
-                """
-                UPDATE premium_entitlements
-                SET status='refund_pending', updated_at=CURRENT_TIMESTAMP
-                WHERE user_id=? AND provider=? AND provider_payment_id=? AND status='active'
-                """.strip(),
-                (plan.beneficiary_user_id, STARS_PROVIDER, charge_id),
-            )
-            conn.execute(
-                """
-                UPDATE premium_delivery_outbox
-                SET status='refund_pending', updated_at=CURRENT_TIMESTAMP
-                WHERE user_id=? AND idempotency_key LIKE ? ESCAPE '!' AND status='pending'
-                """.strip(),
-                (plan.beneficiary_user_id, prefix),
-            )
-            conn.execute(
-                """
-                UPDATE consultation_requests
-                SET status='refund_pending', updated_at=CURRENT_TIMESTAMP
-                WHERE user_id=? AND provider=? AND provider_payment_id=? AND status='new'
-                """.strip(),
-                (plan.beneficiary_user_id, STARS_PROVIDER, charge_id),
-            )
             if plan.gift_token:
                 cursor = conn.execute(
                     "UPDATE gift_claims SET status='refund_pending' WHERE gift_token=? AND status='paid'",
