@@ -61,4 +61,5 @@ def test_deploy_worker_publishes_sanitized_provider_audit_result() -> None:
     assert "[stars-provider-audit-result]" in source
     assert "telegram_stars_provider_audit.py" in source
     assert "cut -c1-180" in source
-    assert source.index('/usr/bin/bash "$DEPLOY_SH"') < source.index("publish_stars_provider_audit_if_requested\n")
+    audit_call = source.rindex("\npublish_stars_provider_audit_if_requested\n")
+    assert source.index('/usr/bin/bash "$DEPLOY_SH"') < audit_call
