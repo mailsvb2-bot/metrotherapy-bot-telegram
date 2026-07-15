@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           cat .agent/patch.part.* > "$RUNNER_TEMP/fundamental.patch"
-          git apply --index --whitespace=error-all "$RUNNER_TEMP/fundamental.patch"
+          git apply --index --whitespace=error-all --exclude=.github/workflows/ci.yml "$RUNNER_TEMP/fundamental.patch"
           cp .agent/final-ci.yml .github/workflows/ci.yml
           rm -rf .agent
           git rm .github/workflows/agent-source-snapshot.yml
