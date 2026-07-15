@@ -9,11 +9,54 @@ from services.gift_claims import create_gift_checkout_token
 from services.practice_token_contract import PracticePackage, package_by_id, telegram_stars_enabled
 
 
-def _invoice_keyboard(*, url: str, amount_xtr: int) -> InlineKeyboardMarkup:
+PREMIUM_BOT_URL = "https://t.me/PremiumBot"
+
+
+def _stars_amount_label(amount_xtr: int) -> str:
+    return f"{int(amount_xtr):,} Stars".replace(",", " ")
+
+
+def _invoice_keyboard(
+    *,
+    url: str,
+    amount_xtr: int,
+    package_id: str,
+    as_gift: bool,
+) -> InlineKeyboardMarkup:
+    retry_action = "gift" if as_gift else "buy"
+    methods_action = "gift_methods" if as_gift else "methods"
+    amount = _stars_amount_label(amount_xtr)
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"⭐ Оплатить {int(amount_xtr):,} звёзд".replace(",", " "), url=url)],
+            [InlineKeyboardButton(text=f"⭐ Оплатить пакет — {amount}", url=url)],
+            [InlineKeyboardButton(text="➕ Купить Stars в официальном Telegram", url=PREMIUM_BOT_URL)],
+            [
+                InlineKeyboardButton(
+                    text="🔄 Я купил(а) Stars — продолжить",
+                    callback_data=f"stars:{retry_action}:{package_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ К способам оплаты",
+                    callback_data=f"pay:{methods_action}:{package_id}",
+                )
+            ],
         ]
+    )
+
+
+def _invoice_message_text(*, amount_xtr: int) -> str:
+    amount = _stars_amount_label(amount_xtr)
+    return (
+        f"⭐ Оплата пакета — {amount}\n\n"
+        "Если Stars уже есть, нажмите «Оплатить пакет».\n\n"
+        "Если Stars не хватает:\n"
+        "1. Нажмите «Купить Stars в официальном Telegram».\n"
+        f"2. Купите не меньше {amount}.\n"
+        "3. Вернитесь в этот чат и нажмите «Я купил(а) Stars — продолжить».\n\n"
+        "Покупка Stars проходит на стороне Telegram. "
+        "Метротерапия не получает и не хранит данные вашей карты."
     )
 
 
@@ -52,11 +95,12 @@ async def send_stars_invoice(
     package_id: str,
     as_gift: bool = False,
 ) -> str:
-    """Create a native XTR invoice link and send a dedicated Telegram button.
+    """Create a native XTR invoice link and send a guided purchase flow.
 
     Production uses the same ``createInvoiceLink`` method that is exercised by
-    the live provider capability audit. The payload and post-payment processing
-    stay identical to the previous ``sendInvoice`` path.
+    the live provider capability audit. Buyers who do not yet have enough Stars
+    can open Telegram's official PremiumBot and then request a fresh invoice for
+    the same package without repeating package selection or terms navigation.
     """
 
     from services.payments.telegram_stars import (  # local import avoids package-init cycles
@@ -117,9 +161,13 @@ async def send_stars_invoice(
         if not isinstance(invoice_url, str) or not invoice_url.startswith("https://"):
             raise StarsPaymentError("stars_invoice_link_invalid")
         await message.answer(
-            f"⭐ Счёт в Telegram Stars готов: {order.amount_xtr:,} звёзд.".replace(",", " ")
-            + "\n\nНажмите кнопку ниже, чтобы открыть защищённую форму оплаты Telegram.",
-            reply_markup=_invoice_keyboard(url=invoice_url, amount_xtr=order.amount_xtr),
+            _invoice_message_text(amount_xtr=order.amount_xtr),
+            reply_markup=_invoice_keyboard(
+                url=invoice_url,
+                amount_xtr=order.amount_xtr,
+                package_id=package.package_id,
+                as_gift=as_gift,
+            ),
         )
 
     log_event(
@@ -130,6 +178,7 @@ async def send_stars_invoice(
             "gift": bool(as_gift),
             "amount_xtr": order.amount_xtr,
             "transport": "invoice_link" if bot is not None else "unbound_test_fallback",
+            "stars_purchase_recovery": True,
         },
     )
     return gift_token
