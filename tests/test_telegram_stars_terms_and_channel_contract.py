@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from services.messenger.package_payment_ui import package_payment_links
 from services.payments.terms import payment_terms_html, payment_terms_keyboard, payment_terms_text, payment_terms_url
@@ -16,15 +17,15 @@ def _buttons(markup):
 def test_terms_surface_requires_explicit_acceptance(monkeypatch) -> None:
     monkeypatch.setenv("PAYMENT_TERMS_URL", "https://metrotherapy.example/terms")
     monkeypatch.setenv("PAYMENT_SUPPORT_CONTACT", "@support_example")
+    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
 
     text = payment_terms_text()
     markup = payment_terms_keyboard(package_id="practice_start_7", as_gift=False)
     buttons = _buttons(markup)
 
     assert "звёздами Telegram" in text
-    assert "ЮKassa" not in text
-    assert "XTR" not in text
-    assert "RUB" not in text
+    assert "ЮKassa" in text
+    assert "XTR" in text
     assert "не равна одному рублю" in text
     assert "/paysupport" in text
     assert "@support_example" in text
@@ -51,11 +52,13 @@ def test_terms_url_replaces_known_legacy_dead_url(monkeypatch) -> None:
 def test_full_terms_page_discloses_star_pricing_and_support(monkeypatch) -> None:
     monkeypatch.setenv("PAYMENT_MERCHANT_NAME", "ООО Тест")
     monkeypatch.setenv("PAYMENT_SUPPORT_CONTACT", "@support_example")
+    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
 
     page = payment_terms_html()
 
     assert "ООО Тест" in page
     assert "Одна Star не равна одному рублю" in page
+    assert "звёздами Telegram" in page
     assert "ЮKassa" in page
     assert "@support_example" in page
     assert "/paysupport" in page
@@ -63,7 +66,9 @@ def test_full_terms_page_discloses_star_pricing_and_support(monkeypatch) -> None
 
 def test_telegram_tariffs_use_intermediate_payment_method_step(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
+    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://pay.example")
+    monkeypatch.setenv("PAYMENT_CHECKOUT_SIGNING_KEY", "unit-test-checkout-signing-key")
 
     buttons = _buttons(kb_tariffs(user_id=99101))
     assert not any(button.url for button in buttons)
@@ -76,7 +81,14 @@ def test_telegram_tariffs_use_intermediate_payment_method_step(monkeypatch) -> N
         )
     )
     assert any(button.callback_data == "stars:terms:practice_start_7" for button in methods)
-    assert not any(button.url for button in methods)
+    yookassa = next(button for button in methods if button.url and "ЮKassa" in button.text)
+    query = parse_qs(urlsplit(yookassa.url).query)
+    assert query["source"] == ["telegram"]
+    assert query["user_id"] == ["99101"]
+    assert query["package_id"] == ["practice_start_7"]
+    assert query["amount_minor"] == ["190000"]
+    assert query["currency"] == ["RUB"]
+    assert query["intent"][0]
 
 
 def test_vk_and_max_keep_yookassa_checkout(monkeypatch) -> None:
@@ -98,6 +110,5 @@ def test_payment_router_has_terms_and_explicit_payment_method_choice() -> None:
     assert "pay:gift_methods:" in source
     assert "pay:methods:" in source
     assert "telegram_digital_yookassa_disabled" not in source
-    assert "старый способ оплаты цифрового пакета" in source
     assert "stars:gift_terms:" in source
     assert "stars:terms:" in source
