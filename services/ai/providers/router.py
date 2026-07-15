@@ -61,14 +61,21 @@ def _openai_config() -> AIProviderConfig:
 
 
 def _deepseek_config() -> AIProviderConfig:
-    api_key = (_env("DEEPSEEK_API_KEY", "") or getattr(settings, "OPENAI_API_KEY", "") or _env("OPENAI_API_KEY", "")).strip()
-    model = (_env("DEEPSEEK_MODEL", "") or getattr(settings, "OPENAI_MODEL", "") or _env("OPENAI_MODEL", "deepseek-chat") or "deepseek-chat").strip()
-    base_url = (_env("DEEPSEEK_BASE_URL", "") or getattr(settings, "OPENAI_BASE_URL", "") or _env("OPENAI_BASE_URL", "https://api.deepseek.com/v1") or "https://api.deepseek.com/v1").strip()
+    """Build DeepSeek configuration only from the dedicated DeepSeek namespace.
+
+    Reusing Settings.OPENAI_* defaults here is unsafe: those fields are populated
+    with OpenAI's endpoint/model even when the operator only supplied a DeepSeek
+    key. That can send a DeepSeek credential to the wrong host and produce an
+    invalid model request. Explicit DeepSeek selection therefore fails closed
+    unless DEEPSEEK_API_KEY is present, while endpoint/model use safe DeepSeek
+    defaults.
+    """
+
     return AIProviderConfig(
         name="deepseek",
-        api_key=api_key,
-        model=model,
-        base_url=base_url,
+        api_key=_env("DEEPSEEK_API_KEY", "").strip(),
+        model=(_env("DEEPSEEK_MODEL", "deepseek-chat") or "deepseek-chat").strip(),
+        base_url=(_env("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1") or "https://api.deepseek.com/v1").strip(),
         timeout_sec=_timeout(),
     )
 

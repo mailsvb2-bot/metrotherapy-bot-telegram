@@ -104,15 +104,31 @@ def _record_verified_conversion_dry_run(payload: dict[str, Any], result: Reconci
     )
 
 
-def record_verified_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
-    """Verify YooKassa source-of-truth before grant-producing reconciliation.
+def _canonical_provider_event(status: str) -> str:
+    normalized = str(status or "unknown").strip().lower() or "unknown"
+    aliases = {"cancelled": "canceled"}
+    return f"payment.{aliases.get(normalized, normalized)}"
 
-    This wrapper is used by the public HTTP webhook. Direct reconciliation remains
-    available for hermetic probes/tests that intentionally construct local payloads
-    without provider calls.
+
+def _provider_canonical_payload(payload: dict[str, Any], provider_object: dict[str, Any] | None) -> dict[str, Any]:
+    if provider_object is None:
+        return payload
+    canonical = dict(payload)
+    canonical["object"] = dict(provider_object)
+    canonical["event"] = _canonical_provider_event(str(provider_object.get("status") or "unknown"))
+    return canonical
+
+
+def record_verified_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
+    """Verify YooKassa source-of-truth before persisting any payment fact.
+
+    In production every payment webhook is resolved through YooKassa's API. The
+    canonical provider object—not the caller-controlled webhook body—is then used
+    for reconciliation and analytics. Hermetic tests/dev may explicitly disable
+    provider verification and keep using the supplied payload.
     """
     try:
-        verify_yookassa_webhook_with_provider(payload)
+        provider_object = verify_yookassa_webhook_with_provider(payload)
     except YooKassaProviderVerificationError as exc:
         obj = _object(payload)
         payment_id = str(obj.get("id") or payload.get("id") or "").strip()
@@ -129,6 +145,8 @@ def record_verified_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationR
             processing_status="action_required",
             side_effects_done=False,
         )
-    result = record_yookassa_webhook(payload)
-    _record_verified_conversion_dry_run(payload, result)
+
+    canonical_payload = _provider_canonical_payload(payload, provider_object)
+    result = record_yookassa_webhook(canonical_payload)
+    _record_verified_conversion_dry_run(canonical_payload, result)
     return result
