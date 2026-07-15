@@ -1,0 +1,29 @@
+name: Agent Source Snapshot
+
+on:
+  push:
+    branches:
+      - agent/fundamental-payment-identity-hardening
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Build source archive
+        run: git archive --format=zip --output="$RUNNER_TEMP/metrotherapy-source.zip" HEAD
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-source-snapshot
+          path: ${{ runner.temp }}/metrotherapy-source.zip
+          if-no-files-found: error
+          retention-days: 1
