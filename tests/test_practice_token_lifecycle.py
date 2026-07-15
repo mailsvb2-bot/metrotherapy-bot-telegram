@@ -274,6 +274,7 @@ def test_practice_wallet_is_account_native_across_linked_messengers():
     assert reservation_id
     assert wallet_after_reserve.user_id == 910010
     assert wallet_after_reserve.available_tokens == 2
+    assert wallet_after_reserve.reserved_tokens == 1
 
     finalize_audio_access(
         check_and_reserve_for_audio(linked.user_id, is_demo=False, session_id=2, audio_anchor=2),
@@ -317,6 +318,7 @@ def test_delivery_mode_is_account_native_across_linked_messengers():
         external_user_id="940040",
         start_payload=f"bridge_{token}",
     )
+    assert linked.user_id == 910012
 
     assert set_delivery_mode(linked.user_id, "both") == "both"
     assert get_delivery_mode(910012) == "both"
