@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   statuses: write
+  pull-requests: write
 
 jobs:
   apply-fundamental-hardening:
@@ -23,19 +24,41 @@ jobs:
           fetch-depth: 0
 
       - name: Apply atomic patch and remove staging files
+        id: apply
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          cat .agent/patch.part.* > "$RUNNER_TEMP/fundamental.patch"
-          git apply --index --whitespace=error-all --exclude=.github/workflows/ci.yml "$RUNNER_TEMP/fundamental.patch"
-          cp .agent/final-ci.yml .github/workflows/ci.yml
-          rm -rf .agent
-          git rm .github/workflows/agent-source-snapshot.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Fundamentally harden payment and identity contracts"
-          git push origin HEAD:agent/fundamental-payment-identity-hardening
+          set -o pipefail
+          : > "$RUNNER_TEMP/apply.log"
+          {
+            cat .agent/patch.part.* > "$RUNNER_TEMP/fundamental.patch"
+            git apply --index --whitespace=error-all --exclude=.github/workflows/ci.yml "$RUNNER_TEMP/fundamental.patch"
+            cp .agent/final-ci.yml .github/workflows/ci.yml
+            rm -rf .agent
+            git rm .github/workflows/agent-source-snapshot.yml
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "Fundamentally harden payment and identity contracts"
+            git push origin HEAD:agent/fundamental-payment-identity-hardening
+          } 2>&1 | tee "$RUNNER_TEMP/apply.log"
+
+      - name: Report patch failure
+        if: steps.apply.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          {
+            echo 'Atomic patch application failed:'
+            echo
+            echo '```text'
+            tail -c 3500 "$RUNNER_TEMP/apply.log"
+            echo
+            echo '```'
+          } > "$RUNNER_TEMP/comment.md"
+          gh pr comment 101 --body-file "$RUNNER_TEMP/comment.md"
+          exit 1
 
   quality:
     runs-on: ubuntu-22.04
