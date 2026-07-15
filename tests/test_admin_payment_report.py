@@ -44,7 +44,7 @@ def test_admin_payment_report_shows_payment_problem_and_consultation_request():
             "pay-personal-admin-1",
             user_id=user_id,
             package_id="practice_personal_month",
-            amount="23000.00",
+            amount="24870.00",
             source="vk",
         )
     )

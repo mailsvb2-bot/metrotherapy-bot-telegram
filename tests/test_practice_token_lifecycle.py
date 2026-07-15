@@ -190,10 +190,10 @@ def test_render_packages_text_contains_canonical_package_payment_links():
     assert "Пакеты практик" in text
     assert "1 практика = одно аудио" in text
     assert "Сейчас у Вас:" in text
-    assert "Стартовый пакет — 1 900 ₽" in text
-    assert "Полный маршрут — 7 900 ₽" in text
-    assert "Антистресс-система — 12 900 ₽" in text
-    assert "Персональный месяц — 23 000 ₽" in text
+    assert "Стартовый пакет — 2 499 ₽" in text
+    assert "Полный маршрут — 4 199 ₽" in text
+    assert "Антистресс-система — 8 290 ₽" in text
+    assert "Персональный месяц — 24 870 ₽" in text
     assert "kind=tokens" in text
     assert "package_id=practice_start_7" in text
     assert "package_id=practice_60" in text
@@ -262,6 +262,7 @@ def test_practice_wallet_is_account_native_across_linked_messengers():
         idempotency_key="grant:test:account-wallet-cross-channel",
     )
     assert inserted is True
+    assert wallet.user_id == 910010
     assert wallet.available_tokens == 3
 
     vk_wallet = get_wallet(linked.user_id)

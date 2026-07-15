@@ -7,51 +7,55 @@ from services.practice_token_contract import (
     normalize_delivery_mode,
     package_by_id,
     public_practice_packages,
-    telegram_stars_buyer_rub_per_xtr,
     telegram_stars_price,
     telegram_yookassa_enabled,
 )
 
 
+PUBLIC_PRICE_LADDER = {
+    "practice_start_7": (2499, 1500),
+    "practice_60": (4199, 2500),
+    "practice_antistress_60": (8290, 5000),
+    "practice_personal_month": (24870, 15000),
+}
+
+
 def test_public_practice_packages_are_current_ladder():
     package_ids = [package.package_id for package in public_practice_packages()]
 
-    assert package_ids == [
-        "practice_start_7",
-        "practice_60",
-        "practice_antistress_60",
-        "practice_personal_month",
-    ]
+    assert package_ids == list(PUBLIC_PRICE_LADDER)
 
 
-def test_practice_package_prices_are_locked():
-    assert package_by_id("practice_start_7").price_rub == 1900
-    assert package_by_id("practice_60").price_rub == 7900
-    assert package_by_id("practice_antistress_60").price_rub == 12900
-    assert package_by_id("practice_personal_month").price_rub == 23000
-
-
-def test_default_stars_prices_use_buyer_parity_reference(monkeypatch):
+def test_practice_package_rub_and_stars_prices_are_locked(monkeypatch):
     monkeypatch.delenv("TELEGRAM_STARS_PRICING_MODE", raising=False)
-    monkeypatch.delenv("TELEGRAM_STARS_BUYER_RUB_PER_XTR", raising=False)
+    for package_id in PUBLIC_PRICE_LADDER:
+        env_key = "TELEGRAM_STARS_PRICE_" + "".join(
+            ch if ch.isalnum() else "_" for ch in package_id.upper()
+        )
+        monkeypatch.delenv(env_key, raising=False)
 
-    assert telegram_stars_price("practice_start_7") == 1226
-    assert telegram_stars_price("practice_60") == 5099
-    assert telegram_stars_price("practice_antistress_60") == 8327
-    assert telegram_stars_price("practice_personal_month") == 14847
-
-    reference = telegram_stars_buyer_rub_per_xtr()
-    for package in public_practice_packages():
-        estimated_cost = telegram_stars_price(package.package_id) * reference
-        assert estimated_cost <= package.price_rub
-        assert package.price_rub - estimated_cost < reference
+    for package_id, (price_rub, price_xtr) in PUBLIC_PRICE_LADDER.items():
+        package = package_by_id(package_id)
+        assert package.price_rub == price_rub
+        assert package.price_xtr == price_xtr
+        assert telegram_stars_price(package_id) == price_xtr
 
 
-def test_explicit_stars_price_requires_explicit_mode(monkeypatch):
+def test_explicit_stars_env_can_override_catalog_for_emergency(monkeypatch):
     monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     monkeypatch.setenv("TELEGRAM_STARS_PRICE_PRACTICE_START_7", "1700")
 
     assert telegram_stars_price("practice_start_7") == 1700
+
+
+def test_buyer_parity_remains_an_explicit_legacy_mode(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "buyer_parity")
+    monkeypatch.setenv("TELEGRAM_STARS_BUYER_RUB_PER_XTR", "1.54905")
+
+    assert telegram_stars_price("practice_start_7") == 1613
+    assert telegram_stars_price("practice_60") == 2710
+    assert telegram_stars_price("practice_antistress_60") == 5351
+    assert telegram_stars_price("practice_personal_month") == 16055
 
 
 def test_telegram_yookassa_has_independent_kill_switch(monkeypatch):

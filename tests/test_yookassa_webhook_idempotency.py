@@ -103,7 +103,7 @@ def test_duplicate_personal_month_webhook_does_not_double_grant():
         payment_id=payment_id,
         user_id=user_id,
         package_id="practice_personal_month",
-        amount="23000.00",
+        amount="24870.00",
     )
 
     before = _snapshot(user_id=user_id, payment_id=payment_id)
@@ -160,7 +160,7 @@ def test_replay_recovers_payment_token_grant_marker_without_double_wallet_grant(
         payment_id=payment_id,
         user_id=user_id,
         package_id="practice_personal_month",
-        amount="23000.00",
+        amount="24870.00",
     )
 
     first = record_yookassa_webhook(payload)

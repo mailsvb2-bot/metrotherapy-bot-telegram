@@ -6,6 +6,14 @@ from services.validators.base import ValidationError
 from services.validators.prod import validate_prod_monetization_contract
 
 
+EXPLICIT_PRICES = {
+    "TELEGRAM_STARS_PRICE_PRACTICE_START_7": "1500",
+    "TELEGRAM_STARS_PRICE_PRACTICE_60": "2500",
+    "TELEGRAM_STARS_PRICE_PRACTICE_ANTISTRESS_60": "5000",
+    "TELEGRAM_STARS_PRICE_PRACTICE_PERSONAL_MONTH": "15000",
+}
+
+
 def _base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_ENV", "prod")
     monkeypatch.setenv("TOKEN_ECONOMY_ENABLED", "1")
@@ -14,12 +22,31 @@ def _base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
 
 
-def test_prod_accepts_buyer_parity_stars_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prod_accepts_explicit_stars_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
+    for key, value in EXPLICIT_PRICES.items():
+        monkeypatch.setenv(key, value)
+
+    validate_prod_monetization_contract(strict=True)
+
+
+def test_prod_accepts_catalog_defaults_when_explicit_overrides_are_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base(monkeypatch)
+    monkeypatch.delenv("TELEGRAM_STARS_PRICING_MODE", raising=False)
+    for key in EXPLICIT_PRICES:
+        monkeypatch.delenv(key, raising=False)
+
+    validate_prod_monetization_contract(strict=True)
+
+
+def test_prod_rejects_buyer_parity_stars_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
     _base(monkeypatch)
     monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "buyer_parity")
     monkeypatch.setenv("TELEGRAM_STARS_BUYER_RUB_PER_XTR", "1.54905")
 
-    validate_prod_monetization_contract(strict=True)
+    with pytest.raises(ValidationError, match="must be explicit"):
+        validate_prod_monetization_contract(strict=True)
 
 
 def test_prod_rejects_invalid_stars_pricing_mode(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -30,10 +57,10 @@ def test_prod_rejects_invalid_stars_pricing_mode(monkeypatch: pytest.MonkeyPatch
         validate_prod_monetization_contract(strict=True)
 
 
-def test_prod_rejects_non_positive_buyer_reference(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prod_rejects_drifted_explicit_package_price(monkeypatch: pytest.MonkeyPatch) -> None:
     _base(monkeypatch)
-    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "buyer_parity")
-    monkeypatch.setenv("TELEGRAM_STARS_BUYER_RUB_PER_XTR", "0")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICE_PRACTICE_START_7", "1226")
 
-    with pytest.raises(ValidationError, match="TELEGRAM_STARS_BUYER_RUB_PER_XTR"):
+    with pytest.raises(ValidationError, match="TELEGRAM_STARS_PRICE_PRACTICE_START_7 must be 1500"):
         validate_prod_monetization_contract(strict=True)

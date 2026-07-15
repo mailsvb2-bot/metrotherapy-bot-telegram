@@ -18,50 +18,54 @@ class PracticePackage:
     price_xtr: int = 0
 
 
+# Buyer-facing prices are deliberately locked to clean Telegram Stars top-up
+# levels. Do not derive these values from a floating RUB/XTR reference: the
+# resulting fractional product prices make Telegram offer a different top-up
+# bundle than the package itself and destroy checkout trust.
 DEFAULT_PRACTICE_PACKAGES: tuple[PracticePackage, ...] = (
     PracticePackage(
         "practice_start_7",
         "Стартовый пакет",
         "7 практик. Мягкий вход и проверка формата.",
         7,
-        1900,
+        2499,
         10,
         True,
         "",
-        1226,
+        1500,
     ),
     PracticePackage(
         "practice_60",
         "Полный маршрут",
         "60 практик. Базовый месячный маршрут.",
         60,
-        7900,
+        4199,
         20,
         True,
         "",
-        5099,
+        2500,
     ),
     PracticePackage(
         "practice_antistress_60",
         "Антистресс-система",
         "60 практик + доступ к видеокурсу.",
         60,
-        12900,
+        8290,
         30,
         True,
         "",
-        8327,
+        5000,
     ),
     PracticePackage(
         "practice_personal_month",
         "Персональный месяц",
         "60 практик + видеокурс + заявка на консультацию.",
         60,
-        23000,
+        24870,
         40,
         True,
         "",
-        14847,
+        15000,
     ),
 )
 
@@ -165,7 +169,7 @@ def _telegram_stars_env_key(package_id: str) -> str:
 
 
 def telegram_stars_pricing_mode() -> str:
-    mode = (os.getenv("TELEGRAM_STARS_PRICING_MODE") or "buyer_parity").strip().lower()
+    mode = (os.getenv("TELEGRAM_STARS_PRICING_MODE") or "explicit").strip().lower()
     if mode not in {"buyer_parity", "explicit"}:
         raise ValueError("Invalid TELEGRAM_STARS_PRICING_MODE")
     return mode

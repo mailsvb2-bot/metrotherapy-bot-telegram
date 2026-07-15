@@ -8,6 +8,16 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from services.practice_token_contract import telegram_stars_price
+
+
+_AUDITED_PACKAGES = (
+    "practice_start_7",
+    "practice_60",
+    "practice_antistress_60",
+    "practice_personal_month",
+)
+
 
 def _api_call(token: str, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     request = Request(
@@ -51,16 +61,25 @@ def _bot_label(response: dict[str, Any]) -> str:
     return f"@{username}" if username else "unknown"
 
 
+def _price_ladder_label() -> str:
+    return ",".join(str(telegram_stars_price(package_id)) for package_id in _AUDITED_PACKAGES)
+
+
 def run() -> tuple[str, int]:
     token = str(os.getenv("BOT_TOKEN") or "").strip()
     if not token:
         return "status=error stage=config bot=unknown code=0 error=BOT_TOKEN_MISSING", 2
 
+    try:
+        prices = _price_ladder_label()
+    except (TypeError, ValueError):
+        return "status=error stage=prices bot=unknown code=0 error=INVALID_PRICE_LADDER", 6
+
     identity = _api_call(token, "getMe")
     if not identity.get("ok"):
         code = int(identity.get("error_code") or 0)
         error = _safe_error(identity.get("description"))
-        return f"status=error stage=getMe bot=unknown code={code} error={error}", 3
+        return f"status=error stage=getMe bot=unknown code={code} error={error} prices={prices}", 3
     bot = _bot_label(identity)
 
     invoice = _api_call(
@@ -77,12 +96,12 @@ def run() -> tuple[str, int]:
     if not invoice.get("ok"):
         code = int(invoice.get("error_code") or 0)
         error = _safe_error(invoice.get("description"))
-        return f"status=error stage=createInvoiceLink bot={bot} code={code} error={error}", 4
+        return f"status=error stage=createInvoiceLink bot={bot} code={code} error={error} prices={prices}", 4
 
     result = invoice.get("result")
     if not isinstance(result, str) or not result.startswith("https://"):
-        return f"status=error stage=createInvoiceLink bot={bot} code=0 error=INVALID_INVOICE_LINK", 5
-    return f"status=ok stage=createInvoiceLink bot={bot} code=200 error=NONE", 0
+        return f"status=error stage=createInvoiceLink bot={bot} code=0 error=INVALID_INVOICE_LINK prices={prices}", 5
+    return f"status=ok stage=createInvoiceLink bot={bot} code=200 error=NONE prices={prices}", 0
 
 
 def main() -> int:

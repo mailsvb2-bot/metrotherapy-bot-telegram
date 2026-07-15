@@ -71,7 +71,7 @@ def test_gift_payment_choice_offers_stars_and_signed_yookassa(monkeypatch):
         expected_package_id="practice_start_7",
         expected_kind="tokens",
         expected_source="telegram",
-        expected_amount_minor=190000,
+        expected_amount_minor=249900,
         expected_currency="RUB",
         expected_gift_token=query["gift_token"][0],
     )
