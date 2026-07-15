@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   apply:
@@ -22,6 +23,8 @@ jobs:
           fetch-depth: 0
 
       - name: Apply validated atomic patch
+        id: apply
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -34,3 +37,14 @@ jobs:
           git add -A
           git commit -m "Fundamentally harden payment and identity contracts"
           git push origin HEAD:agent/fundamental-payment-identity-hardening
+
+      - name: Report application result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+        run: gh pr comment 101 --body "Atomic patch application: **${APPLY_OUTCOME}** on ${GITHUB_SHA}."
+
+      - name: Fail when patch was not applied
+        if: steps.apply.outcome != 'success'
+        run: exit 1
