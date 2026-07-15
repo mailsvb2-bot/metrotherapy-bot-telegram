@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlencode
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message
 
@@ -11,6 +12,19 @@ from services.practice_token_contract import PracticePackage, package_by_id, tel
 
 def _stars_amount_label(amount_xtr: int) -> str:
     return f"{int(amount_xtr):,} Stars".replace(",", " ")
+
+
+def _stars_topup_url(*, amount_xtr: int, package_id: str) -> str:
+    amount = int(amount_xtr)
+    if amount <= 0:
+        raise ValueError("stars_topup_amount_invalid")
+    purpose = f"metrotherapy_{package_id}"[:64]
+    return "tg://stars_topup?" + urlencode(
+        {
+            "balance": amount,
+            "purpose": purpose,
+        }
+    )
 
 
 def _invoice_keyboard(
@@ -28,7 +42,13 @@ def _invoice_keyboard(
             [InlineKeyboardButton(text=f"⭐ Оплатить пакет — {amount}", url=url)],
             [
                 InlineKeyboardButton(
-                    text="🔄 Я купил(а) Stars — продолжить",
+                    text=f"➕ Купить {amount}",
+                    url=_stars_topup_url(amount_xtr=amount_xtr, package_id=package_id),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔄 Stars куплены — продолжить оплату",
                     callback_data=f"stars:{retry_action}:{package_id}",
                 )
             ],
@@ -47,13 +67,12 @@ def _invoice_message_text(*, amount_xtr: int) -> str:
     return (
         f"⭐ Оплата пакета — {amount}\n\n"
         "Если Stars уже есть, нажмите «Оплатить пакет».\n\n"
-        "Если Stars не хватает:\n"
-        "1. Откройте Telegram → Настройки → Ваши Stars (или «Мои звёзды»).\n"
-        "2. Нажмите «Купить Stars» и купите нужное количество.\n"
-        f"3. Для этого пакета нужно не меньше {amount}.\n"
-        "4. Вернитесь в этот чат и нажмите «Я купил(а) Stars — продолжить».\n\n"
-        "Если раздел Stars отсутствует на компьютере, откройте официальный Telegram на телефоне. "
-        "Доступность покупки определяет Telegram для конкретного аккаунта, клиента и региона.\n\n"
+        "Если Stars не хватает, нажмите кнопку «Купить Stars» ниже. "
+        "Telegram откроет штатное окно пополнения на нужную сумму.\n\n"
+        "После покупки вернитесь в этот чат и нажмите "
+        "«Stars куплены — продолжить оплату».\n\n"
+        "Если окно пополнения не открылось, обновите официальный Telegram или попробуйте на телефоне. "
+        "Резервный путь: Telegram → Настройки → Ваши Stars (или «Мои звёзды»).\n\n"
         "Метротерапия не получает и не хранит данные вашей карты."
     )
 
@@ -97,8 +116,8 @@ async def send_stars_invoice(
 
     Production uses the same ``createInvoiceLink`` method that is exercised by
     the live provider capability audit. Buyers who do not yet have enough Stars
-    receive client-native Telegram Settings instructions and can then request a
-    fresh invoice for the same package without repeating package selection or
+    can open Telegram's native ``stars_topup`` flow for the exact package amount
+    and then request a fresh invoice without repeating package selection or
     terms navigation.
     """
 
@@ -178,7 +197,7 @@ async def send_stars_invoice(
             "amount_xtr": order.amount_xtr,
             "transport": "invoice_link" if bot is not None else "unbound_test_fallback",
             "stars_purchase_recovery": True,
-            "stars_purchase_help": "telegram_settings",
+            "stars_purchase_help": "telegram_stars_topup_deeplink",
         },
     )
     return gift_token
