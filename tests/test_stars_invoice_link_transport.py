@@ -10,7 +10,7 @@ from services.practice_token_contract import telegram_stars_price
 
 
 @pytest.mark.asyncio
-async def test_runtime_stars_transport_uses_audited_invoice_link(monkeypatch) -> None:
+async def test_runtime_stars_transport_uses_audited_invoice_link_with_recovery(monkeypatch) -> None:
     monkeypatch.setattr(stars_invoice_transport, "log_event", lambda *args, **kwargs: None)
     captured_link: dict = {}
     captured_answer: dict = {}
@@ -45,10 +45,53 @@ async def test_runtime_stars_transport_uses_audited_invoice_link(monkeypatch) ->
     assert parse_stars_payload(captured_link["payload"]).buyer_user_id == 782001
 
     markup = captured_answer["reply_markup"]
-    button = markup.inline_keyboard[0][0]
-    assert button.url == "https://t.me/$metrotherapy-stars-test"
-    assert "Оплатить" in button.text
-    assert "защищённую форму оплаты Telegram" in captured_answer["text"]
+    buttons = [button for row in markup.inline_keyboard for button in row]
+    assert buttons[0].url == "https://t.me/$metrotherapy-stars-test"
+    assert buttons[0].text == "⭐ Оплатить пакет — 1 226 Stars"
+    assert buttons[1].url == "https://t.me/PremiumBot"
+    assert buttons[1].text == "➕ Купить Stars в официальном Telegram"
+    assert buttons[2].callback_data == "stars:buy:practice_start_7"
+    assert buttons[3].callback_data == "pay:methods:practice_start_7"
+    assert "Если Stars не хватает" in captured_answer["text"]
+    assert "Метротерапия не получает и не хранит данные вашей карты" in captured_answer["text"]
+
+
+@pytest.mark.asyncio
+async def test_gift_recovery_preserves_gift_callbacks(monkeypatch) -> None:
+    gift_token = "gift_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    monkeypatch.setattr(stars_invoice_transport, "log_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        stars_invoice_transport,
+        "create_gift_checkout_token",
+        lambda **_kwargs: gift_token,
+    )
+    captured_answer: dict = {}
+
+    class FakeBot:
+        async def create_invoice_link(self, **_kwargs):
+            return "https://t.me/$metrotherapy-stars-gift-test"
+
+    class FakeMessage:
+        from_user = SimpleNamespace(id=782002)
+        bot = FakeBot()
+
+        async def answer(self, text, **kwargs):
+            captured_answer["text"] = text
+            captured_answer.update(kwargs)
+
+        async def answer_invoice(self, **_kwargs):
+            raise AssertionError("production Stars transport must not use sendInvoice")
+
+    token = await send_stars_invoice(
+        FakeMessage(),  # type: ignore[arg-type]
+        package_id="practice_start_7",
+        as_gift=True,
+    )
+
+    assert token == gift_token
+    buttons = [button for row in captured_answer["reply_markup"].inline_keyboard for button in row]
+    assert buttons[2].callback_data == "stars:gift:practice_start_7"
+    assert buttons[3].callback_data == "pay:gift_methods:practice_start_7"
 
 
 def test_package_installs_invoice_link_transport() -> None:
