@@ -10,10 +10,10 @@ def test_package_payment_text_uses_canonical_packages(monkeypatch):
 
     text = package_payment_text(user_id=404, platform="vk", external_user_id="vk404")
 
-    assert "Стартовый пакет — 1 900 ₽" in text
-    assert "Полный маршрут — 7 900 ₽" in text
-    assert "Антистресс-система — 12 900 ₽" in text
-    assert "Персональный месяц — 23 000 ₽" in text
+    assert "Стартовый пакет — 2 499 ₽" in text
+    assert "Полный маршрут — 4 199 ₽" in text
+    assert "Антистресс-система — 8 290 ₽" in text
+    assert "Персональный месяц — 24 870 ₽" in text
     assert "kind=tokens" in text
     assert "package_id=practice_start_7" in text
     assert "package_id=practice_60" in text
@@ -30,8 +30,8 @@ def test_gift_package_text_uses_same_public_ladder(monkeypatch):
     text = gift_package_text(user_id=505, platform="max", external_user_id="max505", recipient_hint="Мария")
 
     assert "🎁 Подарить Метротерапию" in text
-    assert "Стартовый пакет — 1 900 ₽" in text
-    assert "Персональный месяц — 23 000 ₽" in text
+    assert "Стартовый пакет — 2 499 ₽" in text
+    assert "Персональный месяц — 24 870 ₽" in text
     assert "kind=tokens" in text
     assert "package_id=practice_personal_month" in text
     assert "kind=gift" not in text
