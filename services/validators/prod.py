@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import os
 
 from services.validators.base import ValidationError
@@ -9,6 +8,12 @@ _POLLING_ALIASES = {"polling", "telegram", "longpoll", "long-polling"}
 _TRUE_VALUES = {"1", "true", "yes", "on", "webhook"}
 _HARD_TOKEN_VALUES = {"hard", "1", "true", "yes", "on"}
 _DISABLED_VALUES = {"0", "false", "no", "off"}
+_EXPLICIT_STARS_PRICES = {
+    "TELEGRAM_STARS_PRICE_PRACTICE_START_7": "1500",
+    "TELEGRAM_STARS_PRICE_PRACTICE_60": "2500",
+    "TELEGRAM_STARS_PRICE_PRACTICE_ANTISTRESS_60": "5000",
+    "TELEGRAM_STARS_PRICE_PRACTICE_PERSONAL_MONTH": "15000",
+}
 
 
 def _env(name: str, default: str = "") -> str:
@@ -78,6 +83,7 @@ def validate_prod_telegram_polling_contract(*, strict: bool = True) -> None:
     not silently switch away from polling. MAX/VK/YooKassa may still use the local
     aiohttp messenger runtime; this check is only about Telegram updates.
     """
+
     if not _prod():
         return
 
@@ -104,6 +110,7 @@ def validate_prod_postgres_contract(*, strict: bool = True) -> None:
     backup/restore drills and horizontal recovery must share one durable source
     of truth.
     """
+
     if not _prod():
         return
 
@@ -129,8 +136,10 @@ def validate_prod_monetization_contract(*, strict: bool = True) -> None:
     Soft/off token modes are useful for local rollout and tests, but production
     must never silently deliver paid practice audio without a hard token reserve.
     Receipt contact must also be explicit so fiscalization does not depend on a
-    hidden support-email fallback.
+    hidden support-email fallback. Telegram Stars prices are a fixed product
+    ladder; exchange-rate-derived buyer parity is deliberately forbidden in prod.
     """
+
     if not _prod():
         return
 
@@ -146,16 +155,14 @@ def validate_prod_monetization_contract(*, strict: bool = True) -> None:
         errors.append("YOOKASSA_RECEIPT_EMAIL or PAYMENT_RECEIPT_EMAIL or ADMIN_EMAIL is required in prod")
 
     stars_enabled = (_env("TELEGRAM_STARS_ENABLED", "1") or "1").strip().lower() not in _DISABLED_VALUES
-    stars_mode = (_env("TELEGRAM_STARS_PRICING_MODE", "buyer_parity") or "buyer_parity").strip().lower()
-    if stars_enabled and stars_mode not in {"buyer_parity", "explicit"}:
-        errors.append("TELEGRAM_STARS_PRICING_MODE must be buyer_parity or explicit")
-    if stars_enabled and stars_mode == "buyer_parity":
-        try:
-            reference = float(_env("TELEGRAM_STARS_BUYER_RUB_PER_XTR", "1.54905"))
-        except (TypeError, ValueError):
-            reference = 0.0
-        if not math.isfinite(reference) or reference <= 0:
-            errors.append("TELEGRAM_STARS_BUYER_RUB_PER_XTR must be a positive number")
+    stars_mode = (_env("TELEGRAM_STARS_PRICING_MODE", "explicit") or "explicit").strip().lower()
+    if stars_enabled and stars_mode != "explicit":
+        errors.append("TELEGRAM_STARS_PRICING_MODE must be explicit in prod")
+    if stars_enabled:
+        for key, expected in _EXPLICIT_STARS_PRICES.items():
+            configured = _env(key)
+            if configured and configured != expected:
+                errors.append(f"{key} must be {expected} in prod")
 
     if errors and strict:
         raise ValidationError("Production monetization contract failed: " + "; ".join(errors))
@@ -168,6 +175,7 @@ def validate_prod_guardrails(*, strict: bool = True) -> None:
     architecture checks used to depend on optional environment flags. In prod this
     must be an explicit deployment contract, not a README recommendation.
     """
+
     app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
     if app_env not in {"prod", "production"}:
         return
