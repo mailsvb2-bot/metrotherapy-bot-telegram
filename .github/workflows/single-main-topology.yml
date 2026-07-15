@@ -4,7 +4,7 @@ name: Single main topology cleanup
 # The same marker is used after a reviewed merge to restore the canonical 1/main topology.
 # Post-merge marker commits are code-neutral and only trigger the repository topology audit.
 # Server audit retries are sent only after the preceding main regression contour is green.
-# Production now deploys direct Telegram Stars top-up deep links.
+# Production verification covers the direct Telegram Stars top-up release.
 on:
   push:
     branches:
