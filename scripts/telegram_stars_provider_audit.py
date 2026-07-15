@@ -4,11 +4,19 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from services.practice_token_contract import telegram_stars_price
+# The deploy worker executes this file by absolute path. In that mode Python puts
+# ``scripts/`` rather than the repository root on sys.path, so bootstrap the root
+# before importing application services.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from services.practice_token_contract import telegram_stars_price  # noqa: E402
 
 
 _AUDITED_PACKAGES = (
