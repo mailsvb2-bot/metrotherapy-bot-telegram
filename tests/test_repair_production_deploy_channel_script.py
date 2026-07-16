@@ -66,3 +66,16 @@ def test_recovery_workflow_reads_the_allowed_actions_secret_name() -> None:
     assert "secrets.METRO_DEPLOY_WEBHOOK_SECRET" in text
     assert "secrets.GITHUB_WEBHOOK_SECRET" not in text
     assert "[recover-production-deploy]" in text
+
+
+def test_recovery_workflow_signs_the_same_trigger_bound_payload_it_posts() -> None:
+    text = RECOVERY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "TRIGGER_SHA: ${{ github.sha }}" in text
+    assert '\"after\":\"%s\"' in text
+    assert '"$TRIGGER_SHA"' in text
+    assert 'PAYLOAD="$payload" SECRET="$DEPLOY_WEBHOOK_SECRET"' in text
+    assert '--data "$payload"' in text
+    assert "GitHub recovery trigger SHA is invalid" in text
+    assert "Signed trigger-bound production deploy queued" in text
+    assert "payload='{\"ref\":\"refs/heads/main\"}'" not in text
