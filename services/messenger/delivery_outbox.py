@@ -20,7 +20,6 @@ from services.messenger.reply_dispatcher import send_reply_bundle
 from services.messenger.text_ui import MessengerReply
 
 log = logging.getLogger(__name__)
-
 _ALLOWED_PLATFORMS = {"vk", "max"}
 _worker_task: asyncio.Task | None = None
 _worker_stop: asyncio.Event | None = None
@@ -40,9 +39,7 @@ class ClaimedDelivery:
 
 
 def _row_value(row: Any, key: str, index: int) -> Any:
-    if hasattr(row, "keys"):
-        return row[key]
-    return row[index]
+    return row[key] if hasattr(row, "keys") else row[index]
 
 
 def _json_safe(value: Any) -> Any:
@@ -56,15 +53,18 @@ def _json_safe(value: Any) -> Any:
 
 
 def serialize_replies(replies: list[MessengerReply]) -> str:
-    payload = [
-        {
-            "kind": str(reply.kind or "text"),
-            "text": str(reply.text or ""),
-            "meta": _json_safe(dict(reply.meta or {})),
-        }
-        for reply in replies
-    ]
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(
+        [
+            {
+                "kind": str(reply.kind or "text"),
+                "text": str(reply.text or ""),
+                "meta": _json_safe(dict(reply.meta or {})),
+            }
+            for reply in replies
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def deserialize_replies(raw: str) -> list[MessengerReply]:
@@ -101,66 +101,46 @@ def persist_reply_bundle(
     if normalized_platform not in _ALLOWED_PLATFORMS:
         raise ValueError(f"unsupported messenger outbox platform: {normalized_platform!r}")
     normalized_event_key = str(event_key or "").strip()
+    normalized_external_id = str(external_user_id or "").strip()
     if not normalized_event_key:
         raise ValueError("messenger outbox event_key is required")
-    normalized_external_id = str(external_user_id or "").strip()
     if not normalized_external_id:
         raise ValueError("messenger outbox external_user_id is required")
 
     now = utc_now_iso()
     encoded = serialize_replies(list(replies))
+    values = (
+        normalized_platform,
+        normalized_external_id,
+        int(canonical_user_id),
+        normalized_event_key,
+        str(action or "")[:240],
+        encoded,
+        now,
+        now,
+        now,
+    )
     with db() as conn:
         with tx(conn):
-            if CONFIG.uses_postgres:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO messenger_delivery_outbox(
-                        platform, external_user_id, canonical_user_id, event_key,
-                        action, replies_json, status, attempts, available_at,
-                        locked_at, lock_token, last_error, created_at, updated_at, sent_at
-                    ) VALUES(?,?,?,?,?,?, 'pending',0,?, NULL,NULL,'',?,?,NULL)
-                    ON CONFLICT (platform, event_key) DO NOTHING
-                    """.strip(),
-                    (
-                        normalized_platform,
-                        normalized_external_id,
-                        int(canonical_user_id),
-                        normalized_event_key,
-                        str(action or "")[:240],
-                        encoded,
-                        now,
-                        now,
-                        now,
-                    ),
-                )
-            else:
-                cursor = conn.execute(
-                    """
-                    INSERT OR IGNORE INTO messenger_delivery_outbox(
-                        platform, external_user_id, canonical_user_id, event_key,
-                        action, replies_json, status, attempts, available_at,
-                        locked_at, lock_token, last_error, created_at, updated_at, sent_at
-                    ) VALUES(?,?,?,?,?,?, 'pending',0,?, NULL,NULL,'',?,?,NULL)
-                    """.strip(),
-                    (
-                        normalized_platform,
-                        normalized_external_id,
-                        int(canonical_user_id),
-                        normalized_event_key,
-                        str(action or "")[:240],
-                        encoded,
-                        now,
-                        now,
-                        now,
-                    ),
-                )
+            insert_sql = (
+                "INSERT INTO messenger_delivery_outbox("
+                "platform,external_user_id,canonical_user_id,event_key,action,replies_json,"
+                "status,attempts,available_at,locked_at,lock_token,last_error,created_at,updated_at,sent_at"
+                ") VALUES(?,?,?,?,?,?, 'pending',0,?,NULL,NULL,'',?,?,NULL) "
+                "ON CONFLICT (platform,event_key) DO NOTHING"
+                if CONFIG.uses_postgres
+                else
+                "INSERT OR IGNORE INTO messenger_delivery_outbox("
+                "platform,external_user_id,canonical_user_id,event_key,action,replies_json,"
+                "status,attempts,available_at,locked_at,lock_token,last_error,created_at,updated_at,sent_at"
+                ") VALUES(?,?,?,?,?,?, 'pending',0,?,NULL,NULL,'',?,?,NULL)"
+            )
+            cursor = conn.execute(insert_sql, values)
             inserted = int(getattr(cursor, "rowcount", 0) or 0) == 1
             conn.execute(
-                """
-                UPDATE messenger_webhook_events
-                SET status='completed', completed_at=?, updated_at=?, last_error=''
-                WHERE platform=? AND event_key=?
-                """.strip(),
+                "UPDATE messenger_webhook_events "
+                "SET status='completed',completed_at=?,updated_at=?,last_error='' "
+                "WHERE platform=? AND event_key=?",
                 (now, now, normalized_platform, normalized_event_key),
             )
     return inserted
@@ -184,35 +164,36 @@ def _claimed_from_rows(rows: list[Any], token: str) -> list[ClaimedDelivery]:
 
 
 def claim_due_deliveries(*, limit: int = 20, lock_ttl_sec: int = 120) -> list[ClaimedDelivery]:
+    """Atomically lease due work, including abandoned ``sending`` rows."""
+
     now = utc_now().replace(microsecond=0)
     now_iso = now.isoformat()
     stale_before = (now - timedelta(seconds=max(1, int(lock_ttl_sec)))).isoformat()
     token = uuid.uuid4().hex
+    due_predicate = (
+        "((status IN ('pending','retry') AND available_at<=?) "
+        "OR (status='sending' AND locked_at IS NOT NULL AND locked_at<=?))"
+    )
 
     with db() as conn:
         with tx(conn):
             if CONFIG.uses_postgres:
                 rows = conn.execute(
-                    """
+                    f"""
                     WITH due AS (
-                        SELECT id
-                        FROM messenger_delivery_outbox
-                        WHERE status IN ('pending','retry')
-                          AND available_at <= ?
-                          AND (locked_at IS NULL OR locked_at <= ?)
-                        ORDER BY id ASC
-                        LIMIT ?
-                        FOR UPDATE SKIP LOCKED
+                        SELECT id FROM messenger_delivery_outbox
+                        WHERE {due_predicate}
+                        ORDER BY id ASC LIMIT ? FOR UPDATE SKIP LOCKED
                     )
                     UPDATE messenger_delivery_outbox
-                    SET status='sending', locked_at=?, lock_token=?, updated_at=?
+                    SET status='sending',locked_at=?,lock_token=?,updated_at=?
                     FROM due
                     WHERE messenger_delivery_outbox.id=due.id
-                    RETURNING messenger_delivery_outbox.id, messenger_delivery_outbox.platform,
+                    RETURNING messenger_delivery_outbox.id,messenger_delivery_outbox.platform,
                               messenger_delivery_outbox.external_user_id,
                               messenger_delivery_outbox.canonical_user_id,
-                              messenger_delivery_outbox.event_key, messenger_delivery_outbox.action,
-                              messenger_delivery_outbox.replies_json, messenger_delivery_outbox.attempts,
+                              messenger_delivery_outbox.event_key,messenger_delivery_outbox.action,
+                              messenger_delivery_outbox.replies_json,messenger_delivery_outbox.attempts,
                               messenger_delivery_outbox.lock_token
                     """.strip(),
                     (now_iso, stale_before, int(limit), now_iso, token, now_iso),
@@ -220,15 +201,7 @@ def claim_due_deliveries(*, limit: int = 20, lock_ttl_sec: int = 120) -> list[Cl
                 return _claimed_from_rows(list(rows), token)
 
             rows = conn.execute(
-                """
-                SELECT id
-                FROM messenger_delivery_outbox
-                WHERE status IN ('pending','retry')
-                  AND available_at <= ?
-                  AND (locked_at IS NULL OR locked_at <= ?)
-                ORDER BY id ASC
-                LIMIT ?
-                """.strip(),
+                f"SELECT id FROM messenger_delivery_outbox WHERE {due_predicate} ORDER BY id ASC LIMIT ?",  # nosec B608
                 (now_iso, stale_before, int(limit)),
             ).fetchall()
             ids = [int(_row_value(row, "id", 0)) for row in rows]
@@ -237,13 +210,12 @@ def claim_due_deliveries(*, limit: int = 20, lock_ttl_sec: int = 120) -> list[Cl
             placeholders = ",".join("?" for _ in ids)
             conn.execute(
                 "UPDATE messenger_delivery_outbox "
-                "SET status='sending', locked_at=?, lock_token=?, updated_at=? "
-                f"WHERE id IN ({placeholders}) "  # nosec B608 - placeholders derive from validated integer count
-                "AND status IN ('pending','retry') AND (locked_at IS NULL OR locked_at <= ?)",
-                [now_iso, token, now_iso, *ids, stale_before],
+                "SET status='sending',locked_at=?,lock_token=?,updated_at=? "
+                f"WHERE id IN ({placeholders}) AND {due_predicate}",  # nosec B608
+                [now_iso, token, now_iso, *ids, now_iso, stale_before],
             )
             claimed = conn.execute(
-                "SELECT id, platform, external_user_id, canonical_user_id, event_key, action, replies_json, attempts, lock_token "
+                "SELECT id,platform,external_user_id,canonical_user_id,event_key,action,replies_json,attempts,lock_token "
                 "FROM messenger_delivery_outbox WHERE lock_token=? "
                 f"AND id IN ({placeholders}) ORDER BY id",  # nosec B608
                 [token, *ids],
@@ -256,18 +228,20 @@ def mark_delivery_sent(item: ClaimedDelivery) -> None:
     with db() as conn:
         with tx(conn):
             conn.execute(
-                """
-                UPDATE messenger_delivery_outbox
-                SET status='sent', sent_at=?, updated_at=?, locked_at=NULL, lock_token=NULL, last_error=''
-                WHERE id=? AND lock_token=?
-                """.strip(),
+                "UPDATE messenger_delivery_outbox "
+                "SET status='sent',sent_at=?,updated_at=?,locked_at=NULL,lock_token=NULL,last_error='' "
+                "WHERE id=? AND lock_token=?",
                 (now, now, int(item.id), item.lock_token),
             )
 
 
 def reschedule_delivery(item: ClaimedDelivery, error: str) -> None:
     attempts = int(item.attempts) + 1
-    max_attempts = max(1, int(os.getenv("MESSENGER_OUTBOX_MAX_ATTEMPTS", "8") or "8"))
+    try:
+        configured_max = int(os.getenv("MESSENGER_OUTBOX_MAX_ATTEMPTS", "8") or "8")
+    except ValueError:
+        configured_max = 8
+    max_attempts = max(1, configured_max)
     now = utc_now().replace(microsecond=0)
     terminal = attempts >= max_attempts
     delay = min(5 * (2 ** max(0, attempts - 1)), 900)
@@ -276,11 +250,9 @@ def reschedule_delivery(item: ClaimedDelivery, error: str) -> None:
     with db() as conn:
         with tx(conn):
             conn.execute(
-                """
-                UPDATE messenger_delivery_outbox
-                SET status=?, attempts=?, available_at=?, updated_at=?, locked_at=NULL, lock_token=NULL, last_error=?
-                WHERE id=? AND lock_token=?
-                """.strip(),
+                "UPDATE messenger_delivery_outbox "
+                "SET status=?,attempts=?,available_at=?,updated_at=?,locked_at=NULL,lock_token=NULL,last_error=? "
+                "WHERE id=? AND lock_token=?",
                 (status, attempts, available_at, now.isoformat(), str(error or "")[:500], int(item.id), item.lock_token),
             )
     if terminal:
@@ -306,7 +278,10 @@ async def _deliver_one(item: ClaimedDelivery) -> None:
 
 
 async def _worker_loop(stop_event: asyncio.Event) -> None:
-    idle_sleep = max(0.1, float(os.getenv("MESSENGER_OUTBOX_IDLE_SLEEP_SEC", "0.5") or "0.5"))
+    try:
+        idle_sleep = max(0.1, float(os.getenv("MESSENGER_OUTBOX_IDLE_SLEEP_SEC", "0.5") or "0.5"))
+    except ValueError:
+        idle_sleep = 0.5
     while not stop_event.is_set():
         try:
             claimed = await asyncio.to_thread(claim_due_deliveries)
@@ -323,7 +298,7 @@ async def _worker_loop(stop_event: asyncio.Event) -> None:
                     await _deliver_one(item)
                 except asyncio.CancelledError:
                     raise
-                except (MessengerTransportError, OSError, RuntimeError, ValueError, TypeError) as exc:
+                except Exception as exc:  # validator: allow-wide-except
                     log.exception(
                         "%s durable delivery failed event_key=%s attempt=%s",
                         item.platform.upper(),
@@ -369,7 +344,7 @@ async def stop_delivery_worker() -> None:
 def outbox_snapshot() -> dict[str, int]:
     with db() as conn:
         rows = conn.execute(
-            "SELECT status, COUNT(*) AS count FROM messenger_delivery_outbox GROUP BY status"
+            "SELECT status,COUNT(*) AS count FROM messenger_delivery_outbox GROUP BY status"
         ).fetchall()
     counts = {str(_row_value(row, "status", 0)): int(_row_value(row, "count", 1) or 0) for row in rows}
     return {
