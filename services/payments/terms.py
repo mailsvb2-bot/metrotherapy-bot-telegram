@@ -6,7 +6,6 @@ import os
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.payments.public_url import payment_public_base_url
-from services.practice_token_contract import telegram_yookassa_enabled
 
 
 def payment_terms_url() -> str:
@@ -28,43 +27,32 @@ def payment_merchant_name() -> str:
 
 
 def payment_terms_text() -> str:
+    """Telegram-facing terms: digital packages inside Telegram are Stars-only."""
+
     support = payment_support_contact()
     url = payment_terms_url()
     terms_line = f"• Полные условия: {url}\n" if url else ""
-    payment_methods = (
-        "• Можно оплатить звёздами Telegram (XTR) либо банковской картой через ЮKassa.\n"
-        "• Счёт в Stars оплачивается внутри Telegram; ЮKassa открывается на внешней "
-        "защищённой странице в браузере.\n"
-        if telegram_yookassa_enabled()
-        else "• Оплата проводится звёздами Telegram (XTR).\n"
-    )
     return (
         "📜 Условия оплаты\n\n"
         "• Вы приобретаете цифровой пакет практик Метротерапии.\n"
-        f"{payment_methods}"
+        "• В Telegram цифровые пакеты оплачиваются только звёздами Telegram (XTR).\n"
+        "• Сначала можно пополнить баланс Stars, а затем отдельно подтвердить покупку Метротерапии.\n"
         "• Одна Telegram Star не равна одному рублю: стоимость Stars в обычной валюте "
         "определяет Telegram и она может отличаться в зависимости от страны и способа покупки.\n"
         "• Количество практик, состав пакета и цена показываются до подтверждения платежа.\n"
-        "• Практики начисляются только после подтверждения платежа Telegram или ЮKassa.\n"
+        "• Stars списываются только после подтверждения в окне Telegram.\n"
+        "• Практики начисляются только после подтверждения платежа Telegram.\n"
         "• Повторное подтверждение одного платежа не приводит к повторному начислению.\n"
         "• По вопросам оплаты и возврата используйте /paysupport.\n"
         f"• Поддержка: {support}.\n"
         f"{terms_line}\n"
-        "Выбирая способ оплаты, Вы подтверждаете, что прочитали и принимаете условия."
+        "Продолжая оплату, Вы подтверждаете, что прочитали и принимаете условия."
     )
 
 
 def payment_terms_html() -> str:
     merchant = html.escape(payment_merchant_name())
     support = html.escape(payment_support_contact())
-    payment_methods = (
-        "<p>Пользователь может оплатить цифровой пакет звёздами Telegram (XTR) либо "
-        "банковской картой через ЮKassa. Счёт Stars оплачивается внутри Telegram. "
-        "При выборе ЮKassa пользователь переходит на внешнюю защищённую страницу "
-        "платёжного провайдера.</p>"
-        if telegram_yookassa_enabled()
-        else "<p>Оплата проводится звёздами Telegram (XTR).</p>"
-    )
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -83,7 +71,8 @@ def payment_terms_html() -> str:
   <h2>Предмет покупки</h2>
   <p>Пользователь приобретает цифровой пакет практик. Состав пакета и количество практик показываются до оплаты.</p>
   <h2>Оплата и предоставление доступа</h2>
-  {payment_methods}
+  <p>В Telegram цифровые пакеты оплачиваются звёздами Telegram (XTR). В других поддерживаемых каналах — VK, MAX и web — может использоваться защищённый checkout ЮKassa.</p>
+  <p>Покупка Stars и оплата пакета являются двумя отдельными подтверждаемыми действиями. Stars списываются только после подтверждения пользователем в интерфейсе Telegram.</p>
   <p>Одна Star не равна одному рублю: стоимость Stars в обычной валюте определяет Telegram и она может различаться в зависимости от страны, налогов и способа покупки.</p>
   <p>Доступ начисляется только после подтверждения платежа соответствующим провайдером. Повторная доставка одного подтверждения не приводит к повторному начислению.</p>
   <h2>Возврат и поддержка</h2>
@@ -95,10 +84,11 @@ def payment_terms_html() -> str:
 
 def payment_terms_keyboard(*, package_id: str, as_gift: bool) -> InlineKeyboardMarkup:
     action = "gift" if as_gift else "buy"
+    methods_action = "gift_methods" if as_gift else "methods"
     rows = [
         [
             InlineKeyboardButton(
-                text="✅ Принимаю и оплатить звёздами",
+                text="✅ Принимаю условия — открыть оплату",
                 callback_data=f"stars:{action}:{package_id}",
             )
         ],
@@ -109,8 +99,8 @@ def payment_terms_keyboard(*, package_id: str, as_gift: bool) -> InlineKeyboardM
     rows.append(
         [
             InlineKeyboardButton(
-                text="⬅️ Назад",
-                callback_data="gift:menu" if as_gift else "sub:menu",
+                text="⬅️ Назад к выбору Stars",
+                callback_data=f"pay:{methods_action}:{package_id}",
             )
         ]
     )
