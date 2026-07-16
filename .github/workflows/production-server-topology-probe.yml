@@ -24,13 +24,14 @@ jobs:
           endpoint="https://metrotherapy-bot.metrotherapy.ru/github-deploy"
           health="https://metrotherapy-bot.metrotherapy.ru/healthz"
           response=""
+          health_code="000"
 
           for attempt in $(seq 1 24); do
             echo "attempt=$attempt"
-            curl -fsS --max-time 5 "$health" >/dev/null
-            response="$(curl -fsS --max-time 5 "$endpoint" || true)"
-            echo "response=$response"
-            if printf '%s' "$response" | grep -q 'local_branch_count='; then
+            health_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$health" || true)"
+            response="$(curl -fsS --max-time 5 "$endpoint" 2>/dev/null || true)"
+            echo "health_code=$health_code response=$response"
+            if [ "$health_code" = "200" ] && printf '%s' "$response" | grep -q 'local_branch_count='; then
               break
             fi
             sleep 5
@@ -38,11 +39,17 @@ jobs:
 
           count="$(printf '%s' "$response" | sed -n 's/.*local_branch_count=\([0-9][0-9]*\).*/\1/p')"
           branches="$(printf '%s' "$response" | sed -n 's/.*local_branches=\([^ ]*\).*/\1/p')"
+          echo "SERVER_HEALTH_CODE=$health_code"
           echo "SERVER_LOCAL_BRANCH_COUNT=$count"
           echo "SERVER_LOCAL_BRANCHES=$branches"
+          echo "health_code=$health_code" >> "$GITHUB_OUTPUT"
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "branches=$branches" >> "$GITHUB_OUTPUT"
 
+          if [ "$health_code" != "200" ]; then
+            echo "Expected production health HTTP 200; got $health_code" >&2
+            exit 1
+          fi
           if [ "$count" != "1" ] || [ "$branches" != "main" ]; then
             echo "Expected production server local topology 1/main; got count=$count branches=$branches" >&2
             exit 1
@@ -53,11 +60,13 @@ jobs:
         uses: actions/github-script@v7
         env:
           PROBE_OUTCOME: ${{ steps.topology.outcome }}
+          SERVER_HEALTH_CODE: ${{ steps.topology.outputs.health_code }}
           SERVER_BRANCH_COUNT: ${{ steps.topology.outputs.count }}
           SERVER_BRANCHES: ${{ steps.topology.outputs.branches }}
         with:
           script: |
             const ok = process.env.PROBE_OUTCOME === 'success';
+            const healthCode = process.env.SERVER_HEALTH_CODE || '?';
             const count = process.env.SERVER_BRANCH_COUNT || '?';
             const branches = process.env.SERVER_BRANCHES || '?';
             await github.rest.repos.createCommitStatus({
@@ -67,7 +76,7 @@ jobs:
               state: ok ? 'success' : 'failure',
               context: 'ops/server-single-main',
               description: ok
-                ? `Server local branches=${count}: ${branches}`
-                : `Server topology probe failed: ${count}/${branches}`,
+                ? `Server health=${healthCode}; local branches=${count}: ${branches}`
+                : `Server probe failed: health=${healthCode} topology=${count}/${branches}`,
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
