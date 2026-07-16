@@ -27,6 +27,7 @@ from runtime.telegram_webhook_runtime import (
     telegram_webhook_path,
 )
 from services.messenger.audio_links import AUDIO_ACCESS_PREFIX, AUDIO_MEDIA_PREFIX
+from services.messenger.delivery_outbox import start_delivery_worker, stop_delivery_worker
 
 if TYPE_CHECKING:
     from aiogram import Bot, Dispatcher
@@ -39,8 +40,12 @@ class MessengerWebhookRuntime:
     runner: web.AppRunner
     site: web.TCPSite
     telegram_public_url: str = ""
+    delivery_worker_started: bool = False
 
     async def stop(self) -> None:
+        if self.delivery_worker_started:
+            await stop_delivery_worker()
+            self.delivery_worker_started = False
         await self.runner.cleanup()
 
 
@@ -219,9 +224,14 @@ async def start_messenger_webhook_runtime(
 
     runner = web.AppRunner(app)
     await runner.setup()
+    delivery_worker_started = False
     try:
         site = web.TCPSite(runner, host=host, port=port)
         await site.start()
+
+        if max_enabled or vk_enabled:
+            start_delivery_worker()
+            delivery_worker_started = True
 
         if telegram_enabled:
             await bot.set_webhook(
@@ -239,14 +249,22 @@ async def start_messenger_webhook_runtime(
             )
 
         log.info(
-            "HTTP ingress started on %s:%s payment=%s max=%s vk=%s",
+            "HTTP ingress started on %s:%s payment=%s max=%s vk=%s durable_delivery=%s",
             host,
             port,
             payment_enabled,
             max_enabled,
             vk_enabled,
+            delivery_worker_started,
         )
-        return MessengerWebhookRuntime(runner=runner, site=site, telegram_public_url=telegram_public_url)
+        return MessengerWebhookRuntime(
+            runner=runner,
+            site=site,
+            telegram_public_url=telegram_public_url,
+            delivery_worker_started=delivery_worker_started,
+        )
     except (OSError, RuntimeError, ValueError, TypeError, AttributeError, TelegramAPIError):
+        if delivery_worker_started:
+            await stop_delivery_worker()
         await runner.cleanup()
         raise
