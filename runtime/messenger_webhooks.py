@@ -51,6 +51,31 @@ def _truthy_env(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+async def _max_webhook_with_official_secret(request: web.Request) -> web.Response:
+    """Map MAX's official secret header onto the stable ingress contract.
+
+    MAX subscriptions deliver the configured secret in
+    ``X-Max-Bot-Api-Secret``. The ingress also keeps historical internal header
+    aliases for already-configured environments, but new official traffic must
+    work without putting secrets in query strings or JSON bodies.
+    """
+
+    official = (request.headers.get("X-Max-Bot-Api-Secret") or "").strip()
+    legacy_present = any(
+        request.headers.get(name)
+        for name in (
+            "X-Max-Webhook-Secret",
+            "X-Webhook-Secret",
+            "X-Metrotherapy-Webhook-Secret",
+        )
+    )
+    if official and not legacy_present:
+        headers = request.headers.copy()
+        headers["X-Max-Webhook-Secret"] = official
+        request = request.clone(headers=headers)
+    return await max_webhook(request)
+
+
 def _register_health_routes(app: web.Application) -> None:
     app.router.add_get("/", _health)
     app.router.add_get("/health", _health)
@@ -64,7 +89,7 @@ def _register_payment_routes(app: web.Application) -> None:
 
 
 def _register_max_routes(app: web.Application) -> None:
-    app.router.add_post("/webhooks/max", max_webhook)
+    app.router.add_post("/webhooks/max", _max_webhook_with_official_secret)
 
 
 def _register_vk_routes(app: web.Application) -> None:
@@ -158,9 +183,16 @@ async def start_messenger_webhook_runtime(
             await bot.set_webhook(
                 url=telegram_public_url,
                 secret_token=(getattr(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "") or "") or None,
-                drop_pending_updates=bool(getattr(settings, "TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES", False) or False),
+                drop_pending_updates=bool(
+                    getattr(settings, "TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES", False) or False
+                ),
             )
-            log.info("Telegram webhook runtime started on %s:%s, public_url=%s", host, port, telegram_public_url)
+            log.info(
+                "Telegram webhook runtime started on %s:%s, public_url=%s",
+                host,
+                port,
+                telegram_public_url,
+            )
 
         log.info(
             "HTTP ingress started on %s:%s payment=%s max=%s vk=%s",

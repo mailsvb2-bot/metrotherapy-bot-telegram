@@ -1,57 +1,69 @@
 # MAX webhook setup
 
-The runtime protects `/webhooks/max` with `MAX_WEBHOOK_SECRET`.
+MAX production uses the official webhook subscription API and the API2 domain.
 
-Inbound MAX requests are accepted only when the request provides the configured secret through one of these supported channels:
-
-- `X-Max-Webhook-Secret`
-- `X-Webhook-Secret`
-- `X-Metrotherapy-Webhook-Secret`
-- `?secret=...`
-- JSON payload field `secret`
-
-## Dry-run
-
-Load the production environment first, then print the protected webhook URL:
-
-```bash
-set -a
-. /etc/metrotherapy/metrotherapy.env
-set +a
-python scripts/configure_max_webhook.py --json
-```
-
-The generated URL has this shape:
-
-```text
-https://<MESSENGER_PUBLIC_BASE_URL>/webhooks/max?secret=<MAX_WEBHOOK_SECRET>
-```
-
-## Apply
-
-The public MAX webhook registration endpoint was intentionally not hard-coded. Set the official registration endpoint in `MAX_SET_WEBHOOK_URL`, then run:
-
-```bash
-set -a
-. /etc/metrotherapy/metrotherapy.env
-set +a
-python scripts/configure_max_webhook.py --apply --json
-```
-
-Optional registration variables:
+## Required production variables
 
 ```env
-MAX_SET_WEBHOOK_URL=
-MAX_SET_WEBHOOK_METHOD=POST
-MAX_SET_WEBHOOK_TOKEN_HEADER=Authorization
-MAX_SET_WEBHOOK_AUTH_SCHEME=raw
-MAX_SET_WEBHOOK_TIMEOUT_SEC=20
+MAX_WEBHOOK_ENABLED=1
+MAX_BOT_TOKEN=...
+MAX_WEBHOOK_SECRET=...
+MAX_API_BASE_URL=https://platform-api2.max.ru
+MESSENGER_PUBLIC_BASE_URL=https://your-public-domain.example
 ```
 
-`MAX_SET_WEBHOOK_AUTH_SCHEME` values:
+`MAX_WEBHOOK_SECRET` must contain 5–256 characters from `A-Z`, `a-z`, `0-9`, `_`, `-`.
 
-- `raw`: sends the bot token as the header value.
-- `bearer`: sends `Bearer <token>`.
-- `token`: sends `Token <token>`.
+The runtime validates the official webhook header:
 
-If the official MAX API supports registering a URL with a query string, prefer the generated `?secret=...` URL. If it supports headers instead, keep the runtime secret validation and configure MAX to send one of the supported headers.
+```text
+X-Max-Bot-Api-Secret
+```
+
+Historical internal header aliases remain accepted for compatibility, but new registrations must use the official `secret` field of `POST /subscriptions`. Do not put the webhook secret into the URL.
+
+## TLS trust
+
+MAX requires HTTPS with a trusted certificate chain. Python uses the operating-system trust store by default. Keep the server CA store current and include the required trusted certificate chain.
+
+When the server deliberately uses a dedicated PEM bundle, set:
+
+```env
+MAX_CA_BUNDLE=/absolute/path/to/ca-bundle.pem
+```
+
+Do not disable TLS verification.
+
+## Register or refresh the subscription
+
+Load the server environment and run the canonical helper:
+
+```bash
+set -a
+. /etc/metrotherapy/metrotherapy.env
+set +a
+python scripts/register_max_webhook.py
+```
+
+The helper:
+
+- calls `https://platform-api2.max.ru` only;
+- sends the bot token only in the API `Authorization` header;
+- creates the subscription through `POST /subscriptions`;
+- passes the webhook secret in the JSON `secret` field;
+- verifies that `/webhooks/max` appears in active subscriptions;
+- never prints the bot token or webhook secret.
+
+The old query-secret registration helper was removed. Do not place webhook secrets into URLs, access logs or operational screenshots.
+
+## Runtime contract
+
+The public endpoint is:
+
+```text
+https://<MESSENGER_PUBLIC_BASE_URL>/webhooks/max
+```
+
+The endpoint returns HTTP 200 quickly. Processing and outgoing replies run asynchronously, while duplicate events are suppressed in the database.
+
+Uploaded media is first registered through the authenticated `/uploads` API call. The returned upload URL receives the media bytes without forwarding `MAX_BOT_TOKEN`. Supported audio formats are sent directly; only unsupported formats require ffmpeg conversion. Provider-side `attachment.not.ready` responses use increasing configurable waits.

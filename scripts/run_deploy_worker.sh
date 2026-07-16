@@ -13,6 +13,7 @@ MIGRATION_DIR="${MIGRATION_DIR:-/var/lib/metrotherapy/deploy-migrations}"
 YOOKASSA_MIGRATION_MARKER="$MIGRATION_DIR/telegram-yookassa-dual-payment-v1.applied"
 STARS_PRICE_MIGRATION_MARKER="$MIGRATION_DIR/telegram-stars-explicit-ladder-v1.applied"
 STARS_ONLY_MIGRATION_MARKER="$MIGRATION_DIR/telegram-stars-only-checkout-v1.applied"
+MAX_API2_MIGRATION_MARKER="$MIGRATION_DIR/max-platform-api2-v1.applied"
 
 mkdir -p "$(dirname "$LOCK_FILE")"
 
@@ -36,6 +37,7 @@ MIGRATION_PENDING=0
 YOOKASSA_MIGRATION_PENDING=0
 STARS_PRICE_MIGRATION_PENDING=0
 STARS_ONLY_MIGRATION_PENDING=0
+MAX_API2_MIGRATION_PENDING=0
 ENV_BACKUP=""
 
 ensure_env_backup() {
@@ -93,6 +95,46 @@ publish_stars_provider_audit_if_requested() {
     audit_output="status=error stage=runner bot=unknown code=$audit_code error=EMPTY_AUDIT_RESULT"
   fi
   audit_message="[stars-provider-audit-result] $audit_output"
+
+  git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Audit" \
+      -c user.email="deploy-audit@metrotherapy.local" \
+      commit --allow-empty -m "$audit_message"
+  git -C "$APP_DIR" push origin main
+  printf '=== %s ===\n' "$audit_message" >> "$LOG_FILE"
+}
+
+publish_max_provider_audit_if_requested() {
+  local request_message
+  local audit_output
+  local audit_code
+  local audit_message
+
+  request_message="$(git -C "$APP_DIR" log -1 --pretty=%B)"
+  case "$request_message" in
+    *"[max-provider-audit-request]"*) ;;
+    *) return 0 ;;
+  esac
+
+  if [ ! -f "$ENV_FILE" ]; then
+    audit_output="status=error stage=config bot=unknown code=0 error=ENV_FILE_MISSING"
+    audit_code=2
+  else
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
+    if audit_output="$("$PYTHON" "$APP_DIR/scripts/max_provider_audit.py" 2>&1)"; then
+      audit_code=0
+    else
+      audit_code="$?"
+    fi
+  fi
+
+  audit_output="$(printf '%s' "$audit_output" | tr '\r\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g' | cut -c1-220)"
+  if [ -z "$audit_output" ]; then
+    audit_output="status=error stage=runner bot=unknown code=$audit_code error=EMPTY_AUDIT_RESULT"
+  fi
+  audit_message="[max-provider-audit-result] $audit_output"
 
   git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Audit" \
       -c user.email="deploy-audit@metrotherapy.local" \
@@ -195,6 +237,31 @@ if [ ! -e "$STARS_ONLY_MIGRATION_MARKER" ]; then
   printf '=== disabled Telegram YooKassa; digital packages are Stars-only: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 fi
 
+if [ ! -e "$MAX_API2_MIGRATION_MARKER" ]; then
+  ensure_env_backup
+  ENV_TMP="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+  awk '
+    BEGIN { written = 0 }
+    /^MAX_API_BASE_URL=/ {
+      if (!written) {
+        print "MAX_API_BASE_URL=https://platform-api2.max.ru"
+        written = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!written) {
+        print "MAX_API_BASE_URL=https://platform-api2.max.ru"
+      }
+    }
+  ' "$ENV_FILE" > "$ENV_TMP"
+  cat "$ENV_TMP" > "$ENV_FILE"
+  rm -f "$ENV_TMP"
+  MAX_API2_MIGRATION_PENDING=1
+  printf '=== migrated MAX API base to platform-api2.max.ru: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+fi
+
 printf '=== deploy queued started: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 /usr/bin/bash "$DEPLOY_SH" >> "$LOG_FILE" 2>&1
 printf '=== deploy queued finished: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
@@ -211,6 +278,10 @@ if [ "$STARS_ONLY_MIGRATION_PENDING" = "1" ]; then
   touch "$STARS_ONLY_MIGRATION_MARKER"
   printf '=== Telegram Stars-only migration committed: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 fi
+if [ "$MAX_API2_MIGRATION_PENDING" = "1" ]; then
+  touch "$MAX_API2_MIGRATION_MARKER"
+  printf '=== MAX API2 migration committed: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+fi
 if [ "$MIGRATION_PENDING" = "1" ]; then
   rm -f "$ENV_BACKUP"
   ENV_BACKUP=""
@@ -218,3 +289,4 @@ if [ "$MIGRATION_PENDING" = "1" ]; then
 fi
 
 publish_stars_provider_audit_if_requested
+publish_max_provider_audit_if_requested

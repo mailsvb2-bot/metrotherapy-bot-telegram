@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from config.settings import settings
@@ -162,9 +163,21 @@ def check_max_preflight() -> MessengerPreflightStatus:
         warnings.append("MAX_WEBHOOK_SECRET is not configured; MAX webhook secret verification is not enforced")
     if _deployed_env():
         _https_warning("MESSENGER_PUBLIC_BASE_URL", str(_value("MESSENGER_PUBLIC_BASE_URL", "") or ""), warnings)
-    api_base = str(os.getenv("MAX_API_BASE_URL") or _value("MAX_API_BASE_URL", "") or "").strip()
-    if "botapi.max.ru" in api_base:
-        warnings.append("MAX_API_BASE_URL uses legacy botapi.max.ru domain")
+
+    api_base = str(
+        os.getenv("MAX_API_BASE_URL")
+        or _value("MAX_API_BASE_URL", "")
+        or "https://platform-api2.max.ru"
+    ).strip().rstrip("/")
+    if api_base in {"https://platform-api.max.ru", "https://botapi.max.ru"}:
+        warnings.append("MAX_API_BASE_URL uses a legacy domain; migrate to https://platform-api2.max.ru")
+    elif api_base != "https://platform-api2.max.ru":
+        warnings.append("MAX_API_BASE_URL should use the official https://platform-api2.max.ru domain")
+
+    ca_bundle = str(os.getenv("MAX_CA_BUNDLE") or _value("MAX_CA_BUNDLE", "") or "").strip()
+    if ca_bundle and not Path(ca_bundle).is_file():
+        warnings.append("MAX_CA_BUNDLE points to a missing file")
+
     return MessengerPreflightStatus(
         channel="max",
         ok=not missing,
@@ -173,7 +186,8 @@ def check_max_preflight() -> MessengerPreflightStatus:
         details={
             "enabled": True,
             "webhook_url": _public_webhook_url("/webhooks/max"),
-            "api_base": api_base or "https://platform-api.max.ru",
+            "api_base": api_base,
+            "ca_bundle_configured": bool(ca_bundle),
         },
     )
 
