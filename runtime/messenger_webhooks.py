@@ -19,6 +19,7 @@ from runtime.ingress_flags import (
 from runtime.messenger_ingress import max_webhook, vk_webhook
 from runtime.messenger_media_http import audio_access, audio_media
 from runtime.payment_http import payment_terms_web, pay_yookassa_web, yookassa_reconciliation_webhook
+from runtime.payment_webhook_admission import ingress_body_limit, payment_webhook_admission_middleware
 from runtime.telegram_transport import telegram_transport
 from runtime.telegram_webhook_runtime import (
     telegram_legacy_webhook_path,
@@ -27,6 +28,7 @@ from runtime.telegram_webhook_runtime import (
     telegram_webhook_path,
 )
 from services.messenger.audio_links import AUDIO_ACCESS_PREFIX, AUDIO_MEDIA_PREFIX
+from services.messenger.delivery_outbox import start_delivery_worker, stop_delivery_worker
 
 if TYPE_CHECKING:
     from aiogram import Bot, Dispatcher
@@ -39,8 +41,12 @@ class MessengerWebhookRuntime:
     runner: web.AppRunner
     site: web.TCPSite
     telegram_public_url: str = ""
+    delivery_worker_started: bool = False
 
     async def stop(self) -> None:
+        if self.delivery_worker_started:
+            await stop_delivery_worker()
+            self.delivery_worker_started = False
         await self.runner.cleanup()
 
 
@@ -62,13 +68,7 @@ def _deployed_env() -> bool:
 
 
 async def _max_webhook_with_official_secret(request: web.Request) -> web.Response:
-    """Map MAX's official secret header onto the stable ingress contract.
-
-    MAX subscriptions deliver the configured secret in
-    ``X-Max-Bot-Api-Secret``. The ingress also keeps historical internal header
-    aliases for already-configured environments, but new official traffic must
-    work without putting secrets in query strings or JSON bodies.
-    """
+    """Map MAX's official secret header onto the stable ingress contract."""
 
     official = (request.headers.get("X-Max-Bot-Api-Secret") or "").strip()
     legacy_present = any(
@@ -87,13 +87,7 @@ async def _max_webhook_with_official_secret(request: web.Request) -> web.Respons
 
 
 def _vk_group_ok(payload: dict[str, Any]) -> bool:
-    """Fail closed when a callback belongs to another VK community.
-
-    VK Callback API includes ``group_id`` in every base callback object. The
-    secret is still validated by the stable ingress handler; this additional
-    ownership check prevents a callback for a different community from entering
-    the same business identity and payment flow.
-    """
+    """Fail closed when a callback belongs to another VK community."""
 
     expected_raw = str(getattr(settings, "VK_GROUP_ID", "") or "").strip()
     if not expected_raw:
@@ -157,9 +151,6 @@ def _register_telegram_routes(
     app["telegram_dispatcher"] = dispatcher
     app["task_manager"] = dispatcher.workflow_data.get("task_manager")
     app.router.add_post(telegram_webhook_path(), telegram_webhook)
-    # Legacy /telegram-webhook/{BOT_TOKEN} is disabled by default because bot
-    # tokens can leak through access logs and support screenshots. Enable only
-    # as a deliberate temporary migration bridge.
     if _truthy_env("TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED"):
         app.router.add_post(telegram_legacy_webhook_path(), telegram_webhook)
     public_url = telegram_public_webhook_url()
@@ -178,7 +169,6 @@ def _resolve_ingress_bind(*, ingress_enabled: bool, telegram_enabled: bool) -> t
         str(ingress_host) != str(telegram_host) or int(ingress_port) != int(telegram_port)
     ):
         raise RuntimeError("Telegram and HTTP ingress runtimes must share the same ingress host/port")
-
     if telegram_enabled:
         return str(telegram_host), int(telegram_port)
     return str(ingress_host), int(ingress_port)
@@ -196,7 +186,10 @@ async def start_messenger_webhook_runtime(
     if not ingress_enabled and not telegram_enabled:
         return None
 
-    app = web.Application()
+    app = web.Application(
+        client_max_size=ingress_body_limit(),
+        middlewares=[payment_webhook_admission_middleware],
+    )
     _register_health_routes(app)
 
     if payment_enabled:
@@ -219,9 +212,14 @@ async def start_messenger_webhook_runtime(
 
     runner = web.AppRunner(app)
     await runner.setup()
+    delivery_worker_started = False
     try:
         site = web.TCPSite(runner, host=host, port=port)
         await site.start()
+
+        if max_enabled or vk_enabled:
+            start_delivery_worker()
+            delivery_worker_started = True
 
         if telegram_enabled:
             await bot.set_webhook(
@@ -239,14 +237,22 @@ async def start_messenger_webhook_runtime(
             )
 
         log.info(
-            "HTTP ingress started on %s:%s payment=%s max=%s vk=%s",
+            "HTTP ingress started on %s:%s payment=%s max=%s vk=%s durable_delivery=%s",
             host,
             port,
             payment_enabled,
             max_enabled,
             vk_enabled,
+            delivery_worker_started,
         )
-        return MessengerWebhookRuntime(runner=runner, site=site, telegram_public_url=telegram_public_url)
+        return MessengerWebhookRuntime(
+            runner=runner,
+            site=site,
+            telegram_public_url=telegram_public_url,
+            delivery_worker_started=delivery_worker_started,
+        )
     except (OSError, RuntimeError, ValueError, TypeError, AttributeError, TelegramAPIError):
+        if delivery_worker_started:
+            await stop_delivery_worker()
         await runner.cleanup()
         raise

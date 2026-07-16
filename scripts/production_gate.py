@@ -68,12 +68,8 @@ def _json_probe_name(line: str) -> str:
 
 
 def _should_drop_misplaced_probe(header: str, line: str) -> bool:
-    """Drop a stale copied probe line that appears under the Telegram header.
+    """Drop a stale copied probe line that appears under the Telegram header."""
 
-    The gate remains strict: actual command failures still fail before output is
-    printed. This only keeps the human report from showing a verified synthetic
-    journey payload beneath the Telegram smoke heading.
-    """
     if str(header).strip() != "==> Telegram live smoke":
         return False
     probe = _json_probe_name(line)
@@ -158,6 +154,9 @@ def main() -> int:
 
     print("==> postgres job concurrency", flush=True)
     _run([sys.executable, "scripts/probe_postgres_job_concurrency.py"], env=gate_env)
+
+    print("==> postgres messenger outbox concurrency", flush=True)
+    _run([sys.executable, "scripts/probe_postgres_messenger_outbox.py"], env=gate_env)
 
     print("==> auto-audio load dry-run", flush=True)
     _run([sys.executable, "scripts/probe_auto_audio_load_dry_run.py"], env=gate_env)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -19,14 +20,13 @@ from runtime.messenger_payloads import (
     vk_event_key,
 )
 from runtime.messenger_senders import MessengerTransportError, VkBotSender
-from services.bg import tm as task_manager
 from services.events import log_event
 from services.gift_claims import claim_gift_token, is_gift_token, normalize_gift_token
+from services.messenger.delivery_outbox import persist_reply_bundle
 from services.messenger.entrypoints import register_user_entry
-from services.messenger.observability import log_action_completed, log_payload_normalized
-from services.messenger.reply_dispatcher import send_reply_bundle
+from services.messenger.observability import log_payload_normalized
 from services.messenger.text_ui_router import MessengerReply, handle_incoming_text
-from services.messenger.webhook_dedupe import register_inbound_event
+from services.messenger.webhook_dedupe import claim_inbound_event, fail_inbound_event
 
 log = logging.getLogger(__name__)
 
@@ -229,54 +229,73 @@ async def _ack_vk_message_event(payload: dict[str, Any]) -> None:
         log.exception("VK message_event acknowledgement failed")
 
 
-async def _send_reply_bundle_logged(
+def _process_and_persist(
+    *,
     platform: str,
-    external_user_id: str,
-    canonical_user_id: int,
-    replies: list[MessengerReply],
-    action: str,
-) -> None:
+    event_key: str,
+    payload: dict[str, Any],
+    extracted: dict[str, Any],
+    normalized_text: str,
+    event_type: str,
+) -> tuple[bool, int, int]:
+    """Own the synchronous DB/business boundary outside the aiohttp event loop."""
+
+    if not claim_inbound_event(platform, event_key, payload):
+        return False, 0, 0
+
     try:
-        await send_reply_bundle(platform, external_user_id, canonical_user_id, replies)
-    except MessengerTransportError:
-        log.exception("%s send failed", platform.upper())
-        log_event(canonical_user_id, f"{platform}_send_failed", {})
-        log_action_completed(
+        log_payload_normalized(
             platform=platform,
-            user_id=canonical_user_id,
-            action=action,
-            replies=len(replies),
-            status="send_failed",
+            user_id=extracted["user_id"],
+            raw_text=extracted["text"],
+            normalized_text=normalized_text,
+            event_key=event_key,
         )
-        return
+        claim_result = _claim_replies_if_needed(
+            platform=platform,
+            extracted={**extracted, "text": normalized_text},
+        )
+        if claim_result is not None:
+            canonical_user_id, replies = claim_result
+            action = "gift_claim"
+        else:
+            canonical_user_id, replies = handle_incoming_text(
+                extracted["user_id"],
+                platform=platform,
+                external_user_id=extracted["external_user_id"],
+                text=normalized_text,
+                username=extracted["username"],
+                display_name=extracted["display_name"],
+                first_name=extracted["first_name"],
+            )
+            action = normalized_text
 
-    log.info(
-        "%s replies sent: external_user_id=%s canonical_user_id=%s replies=%s",
-        platform.upper(),
-        external_user_id,
-        canonical_user_id,
-        len(replies),
-    )
-    log_action_completed(
-        platform=platform,
-        user_id=canonical_user_id,
-        action=action,
-        replies=len(replies),
-        status="ok",
-    )
-
-
-def _schedule_reply_bundle(
-    platform: str,
-    external_user_id: str,
-    canonical_user_id: int,
-    replies: list[MessengerReply],
-    action: str,
-) -> None:
-    task_manager().create(
-        _send_reply_bundle_logged(platform, external_user_id, canonical_user_id, replies, action),
-        name=f"{platform}_reply_dispatch:{canonical_user_id}",
-    )
+        log.info(
+            "%s %s processed: external_user_id=%s canonical_user_id=%s text=%r replies=%s",
+            platform.upper(),
+            event_type,
+            extracted["external_user_id"],
+            canonical_user_id,
+            extracted["text"][:120],
+            len(replies),
+        )
+        log_event(
+            canonical_user_id,
+            f"{platform}_webhook_inbound",
+            {"text": extracted["text"][:120], "replies": len(replies), "event_key": event_key},
+        )
+        persist_reply_bundle(
+            platform=platform,
+            external_user_id=extracted["external_user_id"],
+            canonical_user_id=int(canonical_user_id),
+            event_key=event_key,
+            replies=list(replies),
+            action=action,
+        )
+        return True, int(canonical_user_id), len(replies)
+    except Exception as exc:
+        fail_inbound_event(platform, event_key, payload, f"{type(exc).__name__}: {exc}")
+        raise
 
 
 async def vk_webhook(request: web.Request) -> web.Response:
@@ -299,56 +318,27 @@ async def vk_webhook(request: web.Request) -> web.Response:
     if event_type == "message_event":
         await _ack_vk_message_event(payload)
 
-    event_key = _vk_dedupe_key(payload)
-    if not register_inbound_event("vk", event_key, payload):
-        return web.Response(text="ok")
-
     extracted = extract_vk_message(payload)
     if not extracted:
         return web.Response(text="ok")
 
+    event_key = _vk_dedupe_key(payload)
     normalized_text = _entry_start_text(_vk_score_route_text(payload) or extracted["text"])
-    log_payload_normalized(
-        platform="vk",
-        user_id=extracted["user_id"],
-        raw_text=extracted["text"],
-        normalized_text=normalized_text,
-        event_key=event_key,
-    )
-
-    claim_result = _claim_replies_if_needed(
-        platform="vk",
-        extracted={**extracted, "text": normalized_text},
-    )
-    if claim_result is not None:
-        canonical_user_id, replies = claim_result
-        action = "gift_claim"
-    else:
-        canonical_user_id, replies = handle_incoming_text(
-            extracted["user_id"],
+    try:
+        processed, _, _ = await asyncio.to_thread(
+            _process_and_persist,
             platform="vk",
-            external_user_id=extracted["external_user_id"],
-            text=normalized_text,
-            username=extracted["username"],
-            display_name=extracted["display_name"],
-            first_name=extracted["first_name"],
+            event_key=event_key,
+            payload=payload,
+            extracted=extracted,
+            normalized_text=normalized_text,
+            event_type=event_type,
         )
-        action = normalized_text
-
-    log.info(
-        "VK %s processed: external_user_id=%s canonical_user_id=%s text=%r replies=%s",
-        event_type,
-        extracted["external_user_id"],
-        canonical_user_id,
-        extracted["text"][:120],
-        len(replies),
-    )
-    log_event(
-        canonical_user_id,
-        "vk_webhook_inbound",
-        {"text": extracted["text"][:120], "replies": len(replies)},
-    )
-    _schedule_reply_bundle("vk", extracted["external_user_id"], canonical_user_id, replies, action)
+    except (RuntimeError, OSError, ValueError, TypeError, KeyError):
+        log.exception("VK webhook processing failed event_key=%s", event_key)
+        return web.Response(status=503, text="retry")
+    if not processed:
+        log.info("VK webhook duplicate skipped: event_key=%s", event_key)
     return web.Response(text="ok")
 
 
@@ -386,11 +376,6 @@ async def max_webhook(request: web.Request) -> web.Response:
         log.info("MAX webhook ignored: update_type=%r keys=%s", update_type, sorted(payload.keys()))
         return web.json_response({"ok": True})
 
-    event_key = max_event_key(payload)
-    if not register_inbound_event("max", event_key, payload):
-        log.info("MAX webhook duplicate skipped: update_type=%r event_key=%s", update_type, event_key)
-        return web.json_response({"ok": True})
-
     extracted = extract_max_message(payload)
     if not extracted:
         message = payload.get("message") or {}
@@ -404,46 +389,21 @@ async def max_webhook(request: web.Request) -> web.Response:
         )
         return web.json_response({"ok": True})
 
+    event_key = max_event_key(payload)
     normalized_text = _entry_start_text(_max_score_route_text(payload) or extracted["text"])
-    log_payload_normalized(
-        platform="max",
-        user_id=extracted["user_id"],
-        raw_text=extracted["text"],
-        normalized_text=normalized_text,
-        event_key=event_key,
-    )
-
-    claim_result = _claim_replies_if_needed(
-        platform="max",
-        extracted={**extracted, "text": normalized_text},
-    )
-    if claim_result is not None:
-        canonical_user_id, replies = claim_result
-        action = "gift_claim"
-    else:
-        canonical_user_id, replies = handle_incoming_text(
-            extracted["user_id"],
+    try:
+        processed, _, _ = await asyncio.to_thread(
+            _process_and_persist,
             platform="max",
-            external_user_id=extracted["external_user_id"],
-            text=normalized_text,
-            username=extracted["username"],
-            display_name=extracted["display_name"],
-            first_name=extracted["first_name"],
+            event_key=event_key,
+            payload=payload,
+            extracted=extracted,
+            normalized_text=normalized_text,
+            event_type=update_type,
         )
-        action = normalized_text
-
-    log.info(
-        "MAX webhook processed: update_type=%r external_user_id=%s canonical_user_id=%s text=%r replies=%s",
-        update_type,
-        extracted["external_user_id"],
-        canonical_user_id,
-        extracted["text"][:120],
-        len(replies),
-    )
-    log_event(
-        canonical_user_id,
-        "max_webhook_inbound",
-        {"text": extracted["text"][:120], "replies": len(replies)},
-    )
-    _schedule_reply_bundle("max", extracted["external_user_id"], canonical_user_id, replies, action)
+    except (RuntimeError, OSError, ValueError, TypeError, KeyError):
+        log.exception("MAX webhook processing failed event_key=%s", event_key)
+        return web.json_response({"ok": False, "error": "retry"}, status=503)
+    if not processed:
+        log.info("MAX webhook duplicate skipped: update_type=%r event_key=%s", update_type, event_key)
     return web.json_response({"ok": True})
