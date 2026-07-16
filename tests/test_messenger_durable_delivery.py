@@ -1,8 +1,6 @@
 import importlib
 import json
 
-import pytest
-
 
 def _reload(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_ENV", "test")
@@ -30,6 +28,21 @@ def _reload(monkeypatch, tmp_path):
         modules["services.messenger.delivery_outbox"],
         modules["services.db.core"],
     )
+
+
+def _enqueue(dedupe, outbox, *, platform, event_key, user_id, text):
+    from services.messenger.text_ui import MessengerReply
+
+    payload = {"type": "message_created", "message": {"id": event_key}}
+    assert dedupe.claim_inbound_event(platform, event_key, payload) is True
+    assert outbox.persist_reply_bundle(
+        platform=platform,
+        external_user_id=f"{platform}-{user_id}",
+        canonical_user_id=user_id,
+        event_key=event_key,
+        replies=[MessengerReply(text=text)],
+        action="continue",
+    ) is True
 
 
 def test_inbound_claim_can_retry_failed_event(monkeypatch, tmp_path):
@@ -89,18 +102,7 @@ def test_persist_reply_bundle_completes_inbound_and_is_idempotent(monkeypatch, t
 
 def test_claim_and_mark_delivery_sent(monkeypatch, tmp_path):
     dedupe, outbox, _ = _reload(monkeypatch, tmp_path)
-    from services.messenger.text_ui import MessengerReply
-
-    payload = {"type": "message_created", "message": {"id": "max-1"}}
-    assert dedupe.claim_inbound_event("max", "max-event-1", payload) is True
-    outbox.persist_reply_bundle(
-        platform="max",
-        external_user_id="max-42",
-        canonical_user_id=42,
-        event_key="max-event-1",
-        replies=[MessengerReply(kind="text", text="ready")],
-        action="continue",
-    )
+    _enqueue(dedupe, outbox, platform="max", event_key="max-event-1", user_id=42, text="ready")
 
     claimed = outbox.claim_due_deliveries(limit=5)
     assert len(claimed) == 1
@@ -113,18 +115,8 @@ def test_claim_and_mark_delivery_sent(monkeypatch, tmp_path):
 
 def test_delivery_failure_is_rescheduled(monkeypatch, tmp_path):
     dedupe, outbox, db_core = _reload(monkeypatch, tmp_path)
-    from services.messenger.text_ui import MessengerReply
+    _enqueue(dedupe, outbox, platform="max", event_key="max-event-2", user_id=43, text="retry me")
 
-    payload = {"type": "message_created", "message": {"id": "max-2"}}
-    assert dedupe.claim_inbound_event("max", "max-event-2", payload) is True
-    outbox.persist_reply_bundle(
-        platform="max",
-        external_user_id="max-43",
-        canonical_user_id=43,
-        event_key="max-event-2",
-        replies=[MessengerReply(text="retry me")],
-        action="continue",
-    )
     item = outbox.claim_due_deliveries(limit=1)[0]
     outbox.reschedule_delivery(item, "transport down")
 
@@ -136,3 +128,21 @@ def test_delivery_failure_is_rescheduled(monkeypatch, tmp_path):
     assert row["status"] == "retry"
     assert int(row["attempts"]) == 1
     assert "transport down" in row["last_error"]
+
+
+def test_stale_sending_lease_is_reclaimed_after_worker_crash(monkeypatch, tmp_path):
+    dedupe, outbox, db_core = _reload(monkeypatch, tmp_path)
+    _enqueue(dedupe, outbox, platform="vk", event_key="vk-crash-1", user_id=44, text="recover")
+
+    first = outbox.claim_due_deliveries(limit=1, lock_ttl_sec=30)
+    assert len(first) == 1
+    with db_core.db() as conn:
+        conn.execute(
+            "UPDATE messenger_delivery_outbox SET locked_at=? WHERE id=?",
+            ("2000-01-01T00:00:00+00:00", first[0].id),
+        )
+
+    recovered = outbox.claim_due_deliveries(limit=1, lock_ttl_sec=30)
+    assert len(recovered) == 1
+    assert recovered[0].id == first[0].id
+    assert recovered[0].lock_token != first[0].lock_token
