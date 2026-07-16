@@ -12,6 +12,7 @@ ENV_FILE="${ENV_FILE:-/etc/metrotherapy/metrotherapy.env}"
 MIGRATION_DIR="${MIGRATION_DIR:-/var/lib/metrotherapy/deploy-migrations}"
 YOOKASSA_MIGRATION_MARKER="$MIGRATION_DIR/telegram-yookassa-dual-payment-v1.applied"
 STARS_PRICE_MIGRATION_MARKER="$MIGRATION_DIR/telegram-stars-explicit-ladder-v1.applied"
+STARS_ONLY_MIGRATION_MARKER="$MIGRATION_DIR/telegram-stars-only-checkout-v1.applied"
 
 mkdir -p "$(dirname "$LOCK_FILE")"
 
@@ -34,6 +35,7 @@ printf '%s\n' "$$" 1>&9
 MIGRATION_PENDING=0
 YOOKASSA_MIGRATION_PENDING=0
 STARS_PRICE_MIGRATION_PENDING=0
+STARS_ONLY_MIGRATION_PENDING=0
 ENV_BACKUP=""
 
 ensure_env_backup() {
@@ -122,7 +124,7 @@ if [ ! -e "$YOOKASSA_MIGRATION_MARKER" ]; then
   cat "$ENV_TMP" > "$ENV_FILE"
   rm -f "$ENV_TMP"
   YOOKASSA_MIGRATION_PENDING=1
-  printf '=== enabled TELEGRAM_YOOKASSA_ENABLED=1 for dual Telegram payments: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+  printf '=== applied historical Telegram YooKassa dual-payment migration: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 fi
 
 if [ ! -e "$STARS_PRICE_MIGRATION_MARKER" ]; then
@@ -168,17 +170,46 @@ if [ ! -e "$STARS_PRICE_MIGRATION_MARKER" ]; then
   printf '=== configured explicit Telegram Stars price ladder: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 fi
 
+if [ ! -e "$STARS_ONLY_MIGRATION_MARKER" ]; then
+  ensure_env_backup
+  ENV_TMP="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+  awk '
+    BEGIN { written = 0 }
+    /^TELEGRAM_YOOKASSA_ENABLED=/ {
+      if (!written) {
+        print "TELEGRAM_YOOKASSA_ENABLED=0"
+        written = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!written) {
+        print "TELEGRAM_YOOKASSA_ENABLED=0"
+      }
+    }
+  ' "$ENV_FILE" > "$ENV_TMP"
+  cat "$ENV_TMP" > "$ENV_FILE"
+  rm -f "$ENV_TMP"
+  STARS_ONLY_MIGRATION_PENDING=1
+  printf '=== disabled Telegram YooKassa; digital packages are Stars-only: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+fi
+
 printf '=== deploy queued started: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 /usr/bin/bash "$DEPLOY_SH" >> "$LOG_FILE" 2>&1
 printf '=== deploy queued finished: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 
 if [ "$YOOKASSA_MIGRATION_PENDING" = "1" ]; then
   touch "$YOOKASSA_MIGRATION_MARKER"
-  printf '=== Telegram YooKassa env migration committed: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+  printf '=== historical Telegram YooKassa migration committed: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 fi
 if [ "$STARS_PRICE_MIGRATION_PENDING" = "1" ]; then
   touch "$STARS_PRICE_MIGRATION_MARKER"
   printf '=== Telegram Stars price migration committed: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+fi
+if [ "$STARS_ONLY_MIGRATION_PENDING" = "1" ]; then
+  touch "$STARS_ONLY_MIGRATION_MARKER"
+  printf '=== Telegram Stars-only migration committed: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 fi
 if [ "$MIGRATION_PENDING" = "1" ]; then
   rm -f "$ENV_BACKUP"
