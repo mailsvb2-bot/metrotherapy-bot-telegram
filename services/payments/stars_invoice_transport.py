@@ -1,30 +1,25 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlencode
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message
 
 from services.events import log_event
 from services.gift_claims import create_gift_checkout_token
+from services.payments.stars_links import stars_amount_label, stars_topup_url
 from services.practice_token_contract import PracticePackage, package_by_id, telegram_stars_enabled
 
 
 def _stars_amount_label(amount_xtr: int) -> str:
-    return f"{int(amount_xtr):,} Stars".replace(",", " ")
+    """Compatibility wrapper for older imports and focused unit tests."""
+
+    return stars_amount_label(amount_xtr)
 
 
 def _stars_topup_url(*, amount_xtr: int, package_id: str) -> str:
-    amount = int(amount_xtr)
-    if amount <= 0:
-        raise ValueError("stars_topup_amount_invalid")
-    purpose = f"metrotherapy_{package_id}"[:64]
-    return "tg://stars_topup?" + urlencode(
-        {
-            "balance": amount,
-            "purpose": purpose,
-        }
-    )
+    """Compatibility wrapper for older imports and focused unit tests."""
+
+    return stars_topup_url(amount_xtr=amount_xtr, package_id=package_id)
 
 
 def _invoice_keyboard(
@@ -34,27 +29,15 @@ def _invoice_keyboard(
     package_id: str,
     as_gift: bool,
 ) -> InlineKeyboardMarkup:
-    retry_action = "gift" if as_gift else "buy"
     methods_action = "gift_methods" if as_gift else "methods"
-    amount = _stars_amount_label(amount_xtr)
+    amount = stars_amount_label(amount_xtr)
+    object_name = "подарок" if as_gift else "Метротерапию"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"⭐ Оплатить пакет — {amount}", url=url)],
+            [InlineKeyboardButton(text=f"⭐ Оплатить {object_name} — {amount}", url=url)],
             [
                 InlineKeyboardButton(
-                    text=f"➕ Купить {amount}",
-                    url=_stars_topup_url(amount_xtr=amount_xtr, package_id=package_id),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🔄 Stars куплены — продолжить оплату",
-                    callback_data=f"stars:{retry_action}:{package_id}",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⬅️ К способам оплаты",
+                    text="⬅️ Назад: купить или проверить Stars",
                     callback_data=f"pay:{methods_action}:{package_id}",
                 )
             ],
@@ -63,17 +46,12 @@ def _invoice_keyboard(
 
 
 def _invoice_message_text(*, amount_xtr: int) -> str:
-    amount = _stars_amount_label(amount_xtr)
+    amount = stars_amount_label(amount_xtr)
     return (
-        f"⭐ Оплата пакета — {amount}\n\n"
-        "Если Stars уже есть, нажмите «Оплатить пакет».\n\n"
-        "Если Stars не хватает, нажмите кнопку «Купить Stars» ниже. "
-        "Telegram откроет штатное окно пополнения на нужную сумму.\n\n"
-        "После покупки вернитесь в этот чат и нажмите "
-        "«Stars куплены — продолжить оплату».\n\n"
-        "Если окно пополнения не открылось, обновите официальный Telegram или попробуйте на телефоне. "
-        "Резервный путь: Telegram → Настройки → Ваши Stars (или «Мои звёзды»).\n\n"
-        "Метротерапия не получает и не хранит данные вашей карты."
+        f"⭐ Счёт готов — {amount}\n\n"
+        "Нажмите кнопку оплаты ниже. Telegram покажет окончательное подтверждение, "
+        "и Stars спишутся только после Вашего подтверждения.\n\n"
+        "Если Stars не хватает, вернитесь назад и выберите «Сначала купить Stars»."
     )
 
 
@@ -112,13 +90,12 @@ async def send_stars_invoice(
     package_id: str,
     as_gift: bool = False,
 ) -> str:
-    """Create a native XTR invoice link and send a guided purchase flow.
+    """Create a native XTR invoice only after the buyer chose the payment path.
 
-    Production uses the same ``createInvoiceLink`` method that is exercised by
-    the live provider capability audit. Buyers who do not yet have enough Stars
-    can open Telegram's native ``stars_topup`` flow for the exact package amount
-    and then request a fresh invoice without repeating package selection or
-    terms navigation.
+    Buyers without Stars are sent to Telegram's top-up flow before this function
+    is called. The invoice screen therefore stays focused on one action: confirm
+    payment. A back button returns to the explicit "already have / buy first"
+    choice without losing the selected package.
     """
 
     from services.payments.telegram_stars import (  # local import avoids package-init cycles
@@ -197,7 +174,7 @@ async def send_stars_invoice(
             "amount_xtr": order.amount_xtr,
             "transport": "invoice_link" if bot is not None else "unbound_test_fallback",
             "stars_purchase_recovery": True,
-            "stars_purchase_help": "telegram_stars_topup_deeplink",
+            "stars_purchase_help": "pre_invoice_topup_choice",
         },
     )
     return gift_token

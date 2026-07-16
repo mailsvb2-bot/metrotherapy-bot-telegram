@@ -16,7 +16,7 @@ from services.payments.checkout_intent import (
 from services.payments.terms import payment_terms_html
 from services.payments.verified_reconciliation import record_verified_yookassa_webhook
 from services.payments.yookassa_checkout import YooKassaCheckoutError, create_yookassa_confirmation_url
-from services.practice_token_contract import package_by_id, telegram_yookassa_enabled
+from services.practice_token_contract import package_by_id
 
 log = logging.getLogger(__name__)
 
@@ -199,10 +199,13 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
     intent = (request.query.get("intent") or "").strip()
     kind = _normalize_payment_kind(request.query.get("kind"), package_id)
 
-    if source.casefold() == "telegram" and kind in _TOKEN_PAYMENT_KINDS and not telegram_yookassa_enabled():
+    # Digital goods inside Telegram are permanently Stars-only. Reject old or
+    # manually constructed Telegram YooKassa links even when a stale env flag is
+    # accidentally enabled. VK, MAX and web continue through the code below.
+    if source.casefold() == "telegram" and kind in _TOKEN_PAYMENT_KINDS:
         return web.Response(
             status=410,
-            text="Оплата через ЮKassa для Telegram временно отключена.",
+            text="Оплата цифровых пакетов через ЮKassa в Telegram отключена. Используйте Telegram Stars.",
             content_type="text/plain",
         )
 
@@ -261,6 +264,7 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
 
 async def yookassa_reconciliation_webhook(request: web.Request) -> web.Response:
     """Provider reconciliation endpoint."""
+
     if not _webhook_secret_ok(request):
         return web.json_response({"ok": False, "error": "forbidden"}, status=403)
 

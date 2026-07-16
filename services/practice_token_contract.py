@@ -152,14 +152,13 @@ def telegram_stars_enabled() -> bool:
 
 
 def telegram_yookassa_enabled() -> bool:
-    """Allow the signed external-browser YooKassa choice on Telegram surfaces.
+    """Legacy emergency flag for Telegram-to-YooKassa links.
 
-    The switch is independent from the shared YooKassa runtime used by VK, MAX
-    and web, so the Telegram button can be disabled immediately without taking
-    the other payment channels offline.
+    Telegram digital packages are Stars-only by default. VK, MAX and web keep
+    using the shared YooKassa runtime independently from this flag.
     """
 
-    raw = (os.getenv("TELEGRAM_YOOKASSA_ENABLED") or "1").strip().lower()
+    raw = (os.getenv("TELEGRAM_YOOKASSA_ENABLED") or "0").strip().lower()
     return raw not in {"0", "false", "no", "off"}
 
 

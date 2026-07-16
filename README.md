@@ -29,11 +29,12 @@
 - `TOKEN_ENFORCEMENT_MODE=hard`
 - Soft/off режимы допустимы только для local/dev migration drills.
 - Если у пользователя нет доступных практик, paid audio не должен выдаваться как оплаченный доступ.
-- После выбора пакета Telegram показывает два способа оплаты: нативный счёт Telegram Stars (`XTR`) и подписанный внешний checkout ЮKassa в браузере.
-- `TELEGRAM_YOOKASSA_ENABLED=0` немедленно скрывает и блокирует Telegram→ЮKassa, не отключая ЮKassa для VK, MAX и web.
-- Telegram, VK, MAX и web используют единый идемпотентный YooKassa-контур начисления практик; Stars используют отдельный нативный Telegram-контур с теми же идемпотентными сервисами начисления.
-- Checkout intent фиксирует пользователя, платформу, пакет, сумму и валюту; изменение любого из этих полей отклоняется до обращения к платёжному провайдеру.
-- `TELEGRAM_STARS_PRICING_MODE=buyer_parity` рассчитывает количество Stars относительно рублёвой цены и настраиваемого ориентира `TELEGRAM_STARS_BUYER_RUB_PER_XTR`. Это ориентир стоимости покупки для пользователя, а не фиксированный курс: одна Star не равна одному рублю.
+- Цифровые пакеты внутри Telegram оплачиваются только нативными Telegram Stars (`XTR`).
+- После выбора пакета пользователь сначала выбирает: Stars уже есть или Stars нужно купить. Инвойс создаётся только после этого выбора и принятия условий.
+- `TELEGRAM_YOOKASSA_ENABLED=0` является обязательным production-контрактом. Старые Telegram→ЮKassa ссылки отклоняются; VK, MAX и web продолжают использовать ЮKassa независимо.
+- Telegram Stars и YooKassa для внешних каналов используют единые идемпотентные сервисы начисления практик.
+- Stars имеют фиксированную продуктовую лестницу: `1500 / 2500 / 5000 / 15000 XTR`; production запрещает вычисляемый `buyer_parity`.
+- Checkout intent для внешних каналов фиксирует пользователя, платформу, пакет, сумму и валюту; изменение любого поля отклоняется до обращения к ЮKassa.
 - Возврат Stars выполняется администратором в два шага: `/refundstars <charge_id>` и `/refundstars <charge_id> CONFIRM`. Уже использованный доступ автоматически не возвращается.
 
 ## Структура
@@ -124,6 +125,9 @@ VALIDATOR_RELEASE_MODE=0|1
 APP_ENV=prod
 TELEGRAM_TRANSPORT=polling
 TELEGRAM_WEBHOOK_ENABLED=0
+TELEGRAM_STARS_ENABLED=1
+TELEGRAM_YOOKASSA_ENABLED=0
+TELEGRAM_STARS_PRICING_MODE=explicit
 METRO_DB_ENGINE=postgres
 DATABASE_URL=postgresql://...
 TOKEN_ENFORCEMENT_MODE=hard

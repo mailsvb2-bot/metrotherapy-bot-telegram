@@ -24,7 +24,7 @@ def test_stars_topup_url_targets_exact_package_amount() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_stars_transport_uses_audited_invoice_link_with_recovery(monkeypatch) -> None:
+async def test_runtime_stars_transport_uses_focused_invoice_link(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     monkeypatch.setattr(stars_invoice_transport, "log_event", lambda *args, **kwargs: None)
     captured_link: dict = {}
@@ -61,21 +61,19 @@ async def test_runtime_stars_transport_uses_audited_invoice_link_with_recovery(m
 
     markup = captured_answer["reply_markup"]
     buttons = [button for row in markup.inline_keyboard for button in row]
+    assert len(buttons) == 2
     assert buttons[0].url == "https://t.me/$metrotherapy-stars-test"
-    assert buttons[0].text == "⭐ Оплатить пакет — 1 500 Stars"
-    assert buttons[1].url == TOPUP_URL
-    assert buttons[1].text == "➕ Купить 1 500 Stars"
-    assert buttons[2].callback_data == "stars:buy:practice_start_7"
-    assert buttons[2].text == "🔄 Stars куплены — продолжить оплату"
-    assert buttons[3].callback_data == "pay:methods:practice_start_7"
-    assert "Telegram откроет штатное окно пополнения" in captured_answer["text"]
-    assert "Настройки → Ваши Stars" in captured_answer["text"]
-    assert "Метротерапия не получает и не хранит данные вашей карты" in captured_answer["text"]
+    assert buttons[0].text == "⭐ Оплатить Метротерапию — 1 500 Stars"
+    assert buttons[1].callback_data == "pay:methods:practice_start_7"
+    assert buttons[1].text == "⬅️ Назад: купить или проверить Stars"
+    assert all(button.url != TOPUP_URL for button in buttons)
+    assert "Stars спишутся только после Вашего подтверждения" in captured_answer["text"]
+    assert "вернитесь назад" in captured_answer["text"]
     assert "PremiumBot" not in captured_answer["text"]
 
 
 @pytest.mark.asyncio
-async def test_gift_recovery_preserves_gift_callbacks(monkeypatch) -> None:
+async def test_gift_invoice_preserves_gift_back_callback(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     gift_token = "gift_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     monkeypatch.setattr(stars_invoice_transport, "log_event", lambda *args, **kwargs: None)
@@ -109,9 +107,9 @@ async def test_gift_recovery_preserves_gift_callbacks(monkeypatch) -> None:
 
     assert token == gift_token
     buttons = [button for row in captured_answer["reply_markup"].inline_keyboard for button in row]
-    assert buttons[1].url == TOPUP_URL
-    assert buttons[2].callback_data == "stars:gift:practice_start_7"
-    assert buttons[3].callback_data == "pay:gift_methods:practice_start_7"
+    assert len(buttons) == 2
+    assert buttons[0].text == "⭐ Оплатить подарок — 1 500 Stars"
+    assert buttons[1].callback_data == "pay:gift_methods:practice_start_7"
     assert all("PremiumBot" not in str(button.url or "") for button in buttons)
 
 
