@@ -14,6 +14,7 @@ YOOKASSA_MIGRATION_MARKER="$MIGRATION_DIR/telegram-yookassa-dual-payment-v1.appl
 STARS_PRICE_MIGRATION_MARKER="$MIGRATION_DIR/telegram-stars-explicit-ladder-v1.applied"
 STARS_ONLY_MIGRATION_MARKER="$MIGRATION_DIR/telegram-stars-only-checkout-v1.applied"
 MAX_API2_MIGRATION_MARKER="$MIGRATION_DIR/max-platform-api2-v1.applied"
+MAX_TRUST_MIGRATION_MARKER="$MIGRATION_DIR/max-mincifry-trust-v1.applied"
 
 mkdir -p "$(dirname "$LOCK_FILE")"
 
@@ -38,6 +39,7 @@ YOOKASSA_MIGRATION_PENDING=0
 STARS_PRICE_MIGRATION_PENDING=0
 STARS_ONLY_MIGRATION_PENDING=0
 MAX_API2_MIGRATION_PENDING=0
+MAX_TRUST_MIGRATION_PENDING=0
 ENV_BACKUP=""
 
 ensure_env_backup() {
@@ -262,6 +264,24 @@ if [ ! -e "$MAX_API2_MIGRATION_MARKER" ]; then
   printf '=== migrated MAX API base to platform-api2.max.ru: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 fi
 
+if [ ! -e "$MAX_TRUST_MIGRATION_MARKER" ]; then
+  if [ ! -f "$ENV_FILE" ]; then
+    printf 'ERROR: production env file not found for MAX trust migration: %s\n' "$ENV_FILE" >> "$LOG_FILE"
+    exit 45
+  fi
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+  if [ -n "${MAX_BOT_TOKEN:-}" ]; then
+    PYTHON_BIN="$PYTHON" /usr/bin/bash "$APP_DIR/scripts/install_max_trust.sh" >> "$LOG_FILE" 2>&1
+    MAX_TRUST_MIGRATION_PENDING=1
+    printf '=== installed verified MAX Minцифры trust chain: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+  else
+    printf '=== MAX trust migration deferred: MAX_BOT_TOKEN is empty: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+  fi
+fi
+
 printf '=== deploy queued started: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 /usr/bin/bash "$DEPLOY_SH" >> "$LOG_FILE" 2>&1
 printf '=== deploy queued finished: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
@@ -281,6 +301,10 @@ fi
 if [ "$MAX_API2_MIGRATION_PENDING" = "1" ]; then
   touch "$MAX_API2_MIGRATION_MARKER"
   printf '=== MAX API2 migration committed: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+fi
+if [ "$MAX_TRUST_MIGRATION_PENDING" = "1" ]; then
+  touch "$MAX_TRUST_MIGRATION_MARKER"
+  printf '=== MAX Minцифры trust migration committed: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 fi
 if [ "$MIGRATION_PENDING" = "1" ]; then
   rm -f "$ENV_BACKUP"
