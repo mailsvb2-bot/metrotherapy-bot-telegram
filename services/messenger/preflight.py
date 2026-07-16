@@ -63,6 +63,12 @@ def _https_warning(name: str, value: str, warnings: list[str]) -> None:
         warnings.append(f"{name} should start with https:// in deployed environments")
 
 
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "webhook"}
+
+
 def check_telegram_preflight() -> MessengerPreflightStatus:
     missing: list[str] = []
     warnings: list[str] = []
@@ -134,18 +140,42 @@ def check_vk_preflight() -> MessengerPreflightStatus:
     required = ["VK_GROUP_TOKEN", "VK_CONFIRMATION_TOKEN", "VK_GROUP_ID", "MESSENGER_PUBLIC_BASE_URL"]
     if _deployed_env():
         required.append("VK_SECRET")
-    missing = _missing(*required)
+    missing = list(_missing(*required))
     warnings: list[str] = []
+
+    group_id_raw = str(_env_or_setting("VK_GROUP_ID", "") or "").strip()
+    if group_id_raw:
+        try:
+            group_id = int(group_id_raw)
+        except ValueError:
+            group_id = 0
+        if group_id <= 0:
+            missing.append("VK_GROUP_ID(valid positive integer)")
+
     if not str(_value("VK_SECRET", "") or "").strip():
         warnings.append("VK_SECRET is not configured; VK webhook secret verification is not enforced")
     if _deployed_env():
         _https_warning("MESSENGER_PUBLIC_BASE_URL", str(_value("MESSENGER_PUBLIC_BASE_URL", "") or ""), warnings)
+
+    api_version = str(_env_or_setting("VK_API_VERSION", "5.199") or "5.199").strip()
+    if api_version != "5.199":
+        warnings.append("VK_API_VERSION differs from the audited official 5.199 schema")
+
+    callback_ack_enabled = _truthy(_env_or_setting("VK_CALLBACK_SNACKBAR_ENABLED", "1"))
+    if not callback_ack_enabled:
+        warnings.append("VK_CALLBACK_SNACKBAR_ENABLED is off; callback buttons may keep a pending UI state")
+
     return MessengerPreflightStatus(
         channel="vk",
         ok=not missing,
-        missing=missing,
+        missing=tuple(sorted(set(missing))),
         warnings=tuple(warnings),
-        details={"enabled": True, "webhook_url": _public_webhook_url("/webhooks/vk")},
+        details={
+            "enabled": True,
+            "webhook_url": _public_webhook_url("/webhooks/vk"),
+            "api_version": api_version,
+            "callback_ack_enabled": callback_ack_enabled,
+        },
     )
 
 
