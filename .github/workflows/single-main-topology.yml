@@ -4,7 +4,7 @@ name: Single main topology cleanup
 # The same marker is used after a reviewed merge to restore the canonical 1/main topology.
 # Post-merge marker commits are code-neutral and only trigger the repository topology audit.
 # Server audit retries are sent only after the preceding main regression contour is green.
-# Clean the repair branch and invoke the signed trigger-bound production recovery channel.
+# Signed recovery, public topology probe, and final trigger-bound VK verification run together.
 on:
   push:
     branches:
