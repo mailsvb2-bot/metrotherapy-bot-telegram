@@ -149,3 +149,25 @@ def test_vk_deploy_worker_shell_and_audit_markers_are_valid() -> None:
     assert "[vk-provider-audit-request]" in source
     assert "[vk-provider-audit-result]" in source
     assert "vk_provider_audit.py" in source
+
+
+def test_deploy_workers_wait_instead_of_dropping_provider_audits() -> None:
+    source = WORKER.read_text(encoding="utf-8")
+
+    assert 'LOCK_WAIT_SECONDS="${DEPLOY_LOCK_WAIT_SECONDS:-900}"' in source
+    assert '"$FLOCK_BIN" -w "$LOCK_WAIT_SECONDS" 9' in source
+    assert '"$FLOCK_BIN" -n 9' not in source
+    assert "deploy lock wait timed out" in source
+    assert "deploy skipped: another worker holds flock" not in source
+
+
+def test_provider_audit_results_rebase_and_retry_on_main_races() -> None:
+    source = WORKER.read_text(encoding="utf-8")
+
+    assert "publish_result_commit()" in source
+    assert "git -C \"$APP_DIR\" fetch origin main" in source
+    assert "git -C \"$APP_DIR\" rebase --keep-empty origin/main" in source
+    assert "git -C \"$APP_DIR\" push origin HEAD:main" in source
+    assert "for attempt in 1 2 3" in source
+    assert "audit result push raced with main" in source
+    assert 'publish_result_commit "$audit_message"' in source

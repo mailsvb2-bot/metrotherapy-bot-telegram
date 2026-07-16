@@ -15,8 +15,9 @@ def test_deploy_worker_uses_kernel_flock_instead_of_stale_file_sentinel() -> Non
     source = _source()
 
     assert 'exec 9>"$LOCK_FILE"' in source
-    assert '"$FLOCK_BIN" -n 9' in source
+    assert '"$FLOCK_BIN" -w "$LOCK_WAIT_SECONDS" 9' in source
     assert '"$FLOCK_BIN" -u 9 || true' in source
+    assert '"$FLOCK_BIN" -n 9' not in source
     assert 'if [ -e "$LOCK_FILE" ]' not in source
     assert 'touch "$LOCK_FILE"' not in source
     assert 'rm -f "$LOCK_FILE"' not in source
@@ -25,7 +26,7 @@ def test_deploy_worker_uses_kernel_flock_instead_of_stale_file_sentinel() -> Non
 def test_deploy_lock_is_acquired_before_any_production_mutation() -> None:
     source = _source()
 
-    acquire = source.index('"$FLOCK_BIN" -n 9')
+    acquire = source.index('"$FLOCK_BIN" -w "$LOCK_WAIT_SECONDS" 9')
     env_migration = source.index('mkdir -p "$MIGRATION_DIR"')
     deploy = source.index('/usr/bin/bash "$DEPLOY_SH"')
 
@@ -37,4 +38,6 @@ def test_persistent_lock_file_is_documented_as_inode_not_state() -> None:
 
     assert "The file is only a stable inode for the kernel lock" in source
     assert "released automatically if this worker" in source
-    assert "another worker holds flock" in source
+    assert "Workers wait in order instead of dropping" in source
+    assert "deploy waiting for flock" in source
+    assert "deploy lock wait timed out" in source
