@@ -8,6 +8,7 @@ PYTHON="${PYTHON:-$APP_DIR/.venv/bin/python}"
 LOCK_FILE="${LOCK_FILE:-$APP_DIR/data/deploy/metrotherapy_deploy.lock}"
 FLOCK_BIN="${FLOCK_BIN:-/usr/bin/flock}"
 LOCK_WAIT_SECONDS="${DEPLOY_LOCK_WAIT_SECONDS:-900}"
+TRIGGER_SHA="${DEPLOY_TRIGGER_SHA:-}"
 LOG_FILE="${LOG_FILE:-/var/log/metrotherapy_deploy.log}"
 ENV_FILE="${ENV_FILE:-/etc/metrotherapy/metrotherapy.env}"
 MIGRATION_DIR="${MIGRATION_DIR:-/var/lib/metrotherapy/deploy-migrations}"
@@ -30,6 +31,18 @@ case "$LOCK_WAIT_SECONDS" in
     exit 32
     ;;
 esac
+if [ -n "$TRIGGER_SHA" ]; then
+  case "$TRIGGER_SHA" in
+    *[!0-9a-f]*)
+      printf 'ERROR: DEPLOY_TRIGGER_SHA must be a lowercase hexadecimal commit: %s\n' "$TRIGGER_SHA" >> "$LOG_FILE"
+      exit 35
+      ;;
+  esac
+  if [ "${#TRIGGER_SHA}" -ne 40 ] || [ "$TRIGGER_SHA" = "0000000000000000000000000000000000000000" ]; then
+    printf 'ERROR: DEPLOY_TRIGGER_SHA must be one non-zero 40-character commit: %s\n' "$TRIGGER_SHA" >> "$LOG_FILE"
+    exit 35
+  fi
+fi
 
 # The file is only a stable inode for the kernel lock. It may persist forever.
 # The actual lock belongs to FD 9 and is released automatically if this worker
@@ -43,10 +56,27 @@ if ! "$FLOCK_BIN" -w "$LOCK_WAIT_SECONDS" 9; then
 fi
 printf '%s\n' "$$" 1>&9
 
-LATEST_MESSAGE="$(git -C "$APP_DIR" log -1 --pretty=%B 2>/dev/null || true)"
-case "$LATEST_MESSAGE" in
+if [ -n "$TRIGGER_SHA" ]; then
+  git -C "$APP_DIR" fetch origin main
+  if ! git -C "$APP_DIR" cat-file -e "$TRIGGER_SHA^{commit}" 2>/dev/null; then
+    if ! git -C "$APP_DIR" fetch origin "$TRIGGER_SHA"; then
+      printf 'ERROR: deploy trigger commit is unavailable: %s\n' "$TRIGGER_SHA" >> "$LOG_FILE"
+      exit 36
+    fi
+  fi
+  TRIGGER_MESSAGE="$(git -C "$APP_DIR" show -s --format=%B "$TRIGGER_SHA")"
+else
+  # Compatibility for an operator invoking the worker manually. Authenticated
+  # webhook deliveries always provide DEPLOY_TRIGGER_SHA.
+  TRIGGER_SHA="$(git -C "$APP_DIR" rev-parse HEAD)"
+  TRIGGER_MESSAGE="$(git -C "$APP_DIR" log -1 --pretty=%B 2>/dev/null || true)"
+  printf '=== deploy trigger fallback to local HEAD: %s ===\n' "$TRIGGER_SHA" >> "$LOG_FILE"
+fi
+printf '=== deploy trigger sha: %s ===\n' "$TRIGGER_SHA" >> "$LOG_FILE"
+
+case "$TRIGGER_MESSAGE" in
   *"[max-trust-install-result]"*|*"[stars-provider-audit-result]"*|*"[max-provider-audit-result]"*|*"[vk-provider-audit-result]"*)
-    printf '=== deploy skipped after published provider result: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+    printf '=== deploy skipped after published provider result trigger=%s: %s ===\n' "$TRIGGER_SHA" "$(date -Is)" >> "$LOG_FILE"
     exit 0
     ;;
 esac
@@ -94,23 +124,31 @@ sanitize_result() {
 publish_result_commit() {
   local message="$1"
   local attempt
+  local parent_sha
+  local tree_sha
+  local result_sha
 
-  # Base the result on the newest remote main. This prevents a valid audit from
-  # being lost when another authenticated push arrived during the API request.
-  git -C "$APP_DIR" fetch origin main
-  git -C "$APP_DIR" merge --ff-only origin/main
-  git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Audit" \
-      -c user.email="deploy-audit@metrotherapy.local" \
-      commit --allow-empty -m "$message"
-
+  # Build the empty result commit from the newest remote main without checking
+  # it out. The production worktree therefore remains pinned to code that was
+  # actually deployed by this worker. Every queued worker is bound to its own
+  # immutable trigger SHA, so a newer request cannot be mistaken for this result.
   for attempt in 1 2 3; do
-    if git -C "$APP_DIR" push origin HEAD:main; then
+    git -C "$APP_DIR" fetch origin main
+    parent_sha="$(git -C "$APP_DIR" rev-parse origin/main)"
+    tree_sha="$(git -C "$APP_DIR" rev-parse "$parent_sha^{tree}")"
+    result_sha="$(
+      printf '%s\n' "$message" |
+        git -C "$APP_DIR" \
+          -c user.name="Metrotherapy Deploy Audit" \
+          -c user.email="deploy-audit@metrotherapy.local" \
+          commit-tree "$tree_sha" -p "$parent_sha" -F -
+    )"
+
+    if git -C "$APP_DIR" push origin "$result_sha:refs/heads/main"; then
       printf '=== %s ===\n' "$message" >> "$LOG_FILE"
       return 0
     fi
     printf '=== audit result push raced with main; retry=%s ===\n' "$attempt" >> "$LOG_FILE"
-    git -C "$APP_DIR" fetch origin main
-    git -C "$APP_DIR" rebase --keep-empty origin/main
     sleep "$attempt"
   done
 
@@ -128,7 +166,7 @@ publish_max_trust_install_error() {
   if [ -z "$safe_output" ]; then
     safe_output="EMPTY_INSTALLER_RESULT"
   fi
-  message="[max-trust-install-result] status=error code=$code error=$safe_output"
+  message="[max-trust-install-result] trigger=${TRIGGER_SHA:0:12} status=error code=$code error=$safe_output"
   publish_result_commit "$message"
 }
 
@@ -138,7 +176,7 @@ publish_stars_provider_audit_if_requested() {
   local audit_code
   local audit_message
 
-  request_message="$(git -C "$APP_DIR" log -1 --pretty=%B)"
+  request_message="$TRIGGER_MESSAGE"
   case "$request_message" in
     *"[stars-provider-audit-request]"*) ;;
     *) return 0 ;;
@@ -163,7 +201,7 @@ publish_stars_provider_audit_if_requested() {
   if [ -z "$audit_output" ]; then
     audit_output="status=error stage=runner bot=unknown code=$audit_code error=EMPTY_AUDIT_RESULT"
   fi
-  audit_message="[stars-provider-audit-result] $audit_output"
+  audit_message="[stars-provider-audit-result] trigger=${TRIGGER_SHA:0:12} $audit_output"
   publish_result_commit "$audit_message"
 }
 
@@ -173,7 +211,7 @@ publish_max_provider_audit_if_requested() {
   local audit_code
   local audit_message
 
-  request_message="$(git -C "$APP_DIR" log -1 --pretty=%B)"
+  request_message="$TRIGGER_MESSAGE"
   case "$request_message" in
     *"[max-provider-audit-request]"*) ;;
     *) return 0 ;;
@@ -198,7 +236,7 @@ publish_max_provider_audit_if_requested() {
   if [ -z "$audit_output" ]; then
     audit_output="status=error stage=runner bot=unknown code=$audit_code error=EMPTY_AUDIT_RESULT"
   fi
-  audit_message="[max-provider-audit-result] $audit_output"
+  audit_message="[max-provider-audit-result] trigger=${TRIGGER_SHA:0:12} $audit_output"
   publish_result_commit "$audit_message"
 }
 
@@ -208,7 +246,7 @@ publish_vk_provider_audit_if_requested() {
   local audit_code
   local audit_message
 
-  request_message="$(git -C "$APP_DIR" log -1 --pretty=%B)"
+  request_message="$TRIGGER_MESSAGE"
   case "$request_message" in
     *"[vk-provider-audit-request]"*) ;;
     *) return 0 ;;
@@ -233,7 +271,7 @@ publish_vk_provider_audit_if_requested() {
   if [ -z "$audit_output" ]; then
     audit_output="status=error stage=runner group=unknown code=$audit_code error=EMPTY_AUDIT_RESULT"
   fi
-  audit_message="[vk-provider-audit-result] $audit_output"
+  audit_message="[vk-provider-audit-result] trigger=${TRIGGER_SHA:0:12} $audit_output"
   publish_result_commit "$audit_message"
 }
 
@@ -421,9 +459,9 @@ if [ ! -e "$VK_CALLBACK_MIGRATION_MARKER" ]; then
   printf '=== configured VK callback acknowledgements and audio retries: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 fi
 
-printf '=== deploy queued started: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+printf '=== deploy queued started trigger=%s: %s ===\n' "$TRIGGER_SHA" "$(date -Is)" >> "$LOG_FILE"
 /usr/bin/bash "$DEPLOY_SH" >> "$LOG_FILE" 2>&1
-printf '=== deploy queued finished: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+printf '=== deploy queued finished trigger=%s: %s ===\n' "$TRIGGER_SHA" "$(date -Is)" >> "$LOG_FILE"
 
 if [ "$YOOKASSA_MIGRATION_PENDING" = "1" ]; then
   touch "$YOOKASSA_MIGRATION_MARKER"
