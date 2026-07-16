@@ -72,7 +72,7 @@ def test_recovery_workflow_signs_the_same_trigger_bound_payload_it_posts() -> No
     text = RECOVERY_WORKFLOW.read_text(encoding="utf-8")
 
     assert "TRIGGER_SHA: ${{ github.sha }}" in text
-    assert '\"after\":\"%s\"' in text
+    assert r'\"after\":\"%s\"' in text
     assert '"$TRIGGER_SHA"' in text
     assert 'PAYLOAD="$payload" SECRET="$DEPLOY_WEBHOOK_SECRET"' in text
     assert '--data "$payload"' in text
