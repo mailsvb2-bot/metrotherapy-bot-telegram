@@ -4,7 +4,7 @@ name: Single main topology cleanup
 # The same marker is used after a reviewed merge to restore the canonical 1/main topology.
 # Post-merge marker commits are code-neutral and only trigger the repository topology audit.
 # Server audit retries are sent only after the preceding main regression contour is green.
-# Deploy secret-safe worker telemetry and diagnose the final trigger-bound VK verification.
+# Retry GitHub branch reads after deleteRef because branch-list propagation is eventually consistent.
 on:
   push:
     branches:
@@ -45,11 +45,22 @@ jobs:
                 });
               }
 
-              const remaining = await github.paginate(
-                github.rest.repos.listBranches,
-                { owner, repo, per_page: 100 },
-              );
-              const names = remaining.map((branch) => branch.name).sort();
+              let names = [];
+              for (let attempt = 1; attempt <= 10; attempt += 1) {
+                const remaining = await github.paginate(
+                  github.rest.repos.listBranches,
+                  { owner, repo, per_page: 100 },
+                );
+                names = remaining.map((branch) => branch.name).sort();
+                core.info(
+                  `GITHUB_BRANCH_VERIFY_ATTEMPT=${attempt} count=${names.length} branches=${names.join(',')}`,
+                );
+                if (names.length === 1 && names[0] === 'main') {
+                  break;
+                }
+                await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+              }
+
               core.info(`GITHUB_BRANCH_COUNT=${names.length}`);
               core.info(`GITHUB_BRANCHES=${names.join(',')}`);
 
