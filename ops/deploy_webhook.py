@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 # Reviewed: operator-only webhook runner; commands use fixed absolute paths.
 import subprocess  # nosec B404
 from pathlib import Path
@@ -14,13 +15,26 @@ SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 APP_DIR = Path("/root/metrotherapy")
 DEPLOY_WORKER = APP_DIR / "scripts/run_deploy_worker.sh"
 SYSTEMD_RUN = "/usr/bin/systemd-run"
+_TRIGGER_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_ZERO_SHA = "0" * 40
 
 
 class DeployQueueError(RuntimeError):
     """The authenticated deploy request could not be handed to systemd."""
 
 
-def _run_deploy_background() -> None:
+def _validated_trigger_sha(value: object) -> str | None:
+    """Return one immutable GitHub push SHA or reject an unusable event."""
+
+    if not isinstance(value, str):
+        return None
+    trigger_sha = value.strip().lower()
+    if trigger_sha == _ZERO_SHA or _TRIGGER_SHA_RE.fullmatch(trigger_sha) is None:
+        return None
+    return trigger_sha
+
+
+def _run_deploy_background(trigger_sha: str) -> None:
     """Queue a deploy outside the webhook service cgroup.
 
     A deploy is allowed to restart ``github-deploy-webhook.service`` while it
@@ -28,7 +42,14 @@ def _run_deploy_background() -> None:
     would make systemd kill the deploy together with the service restart. A
     transient service gives the worker an independent lifecycle and guarantees
     that its EXIT trap can remove the deploy lock.
+
+    The triggering commit SHA is attached to the transient unit so queued
+    workers never infer their purpose from a newer shared checkout.
     """
+
+    validated_sha = _validated_trigger_sha(trigger_sha)
+    if validated_sha is None:
+        raise DeployQueueError("invalid deploy trigger sha")
 
     unit_name = f"metrotherapy-deploy-{uuid.uuid4().hex[:12]}"
     command = [
@@ -39,6 +60,7 @@ def _run_deploy_background() -> None:
         "--no-block",
         "--property=Type=exec",
         f"--property=WorkingDirectory={APP_DIR}",
+        f"--setenv=DEPLOY_TRIGGER_SHA={validated_sha}",
         "/usr/bin/bash",
         str(DEPLOY_WORKER),
     ]
@@ -128,7 +150,6 @@ class Handler(BaseHTTPRequestHandler):
         if not SECRET or not hmac.compare_digest(signature, expected):
             self._send(403, b"bad signature")
             return
-
         event = self.headers.get("X-GitHub-Event", "")
         if event == "ping":
             self._send(200, b"pong")
@@ -148,8 +169,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(202, b"not main")
             return
 
+        trigger_sha = _validated_trigger_sha(payload.get("after"))
+        if trigger_sha is None:
+            self._send(400, b"bad after sha")
+            return
+
         try:
-            _run_deploy_background()
+            _run_deploy_background(trigger_sha)
         except DeployQueueError as exc:
             self._send(503, f"deploy queue failed: {exc}".encode("utf-8"))
             return
