@@ -24,6 +24,41 @@ _ALLOWED_PLATFORMS = {"vk", "max"}
 _worker_task: asyncio.Task | None = None
 _worker_stop: asyncio.Event | None = None
 
+_POSTGRES_CLAIM_SQL = """
+WITH due AS (
+    SELECT id
+    FROM messenger_delivery_outbox
+    WHERE (
+        (status IN ('pending','retry') AND available_at<=?)
+        OR (status='sending' AND locked_at IS NOT NULL AND locked_at<=?)
+    )
+    ORDER BY id ASC
+    LIMIT ?
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE messenger_delivery_outbox
+SET status='sending', locked_at=?, lock_token=?, updated_at=?
+FROM due
+WHERE messenger_delivery_outbox.id=due.id
+RETURNING messenger_delivery_outbox.id, messenger_delivery_outbox.platform,
+          messenger_delivery_outbox.external_user_id,
+          messenger_delivery_outbox.canonical_user_id,
+          messenger_delivery_outbox.event_key, messenger_delivery_outbox.action,
+          messenger_delivery_outbox.replies_json, messenger_delivery_outbox.attempts,
+          messenger_delivery_outbox.lock_token
+""".strip()
+
+_SQLITE_SELECT_DUE_SQL = """
+SELECT id
+FROM messenger_delivery_outbox
+WHERE (
+    (status IN ('pending','retry') AND available_at<=?)
+    OR (status='sending' AND locked_at IS NOT NULL AND locked_at<=?)
+)
+ORDER BY id ASC
+LIMIT ?
+""".strip()
+
 
 @dataclass(frozen=True)
 class ClaimedDelivery:
@@ -179,38 +214,18 @@ def claim_due_deliveries(*, limit: int = 1, lock_ttl_sec: int = 900) -> list[Cla
     now_iso = now.isoformat()
     stale_before = (now - timedelta(seconds=max(1, int(lock_ttl_sec)))).isoformat()
     token = uuid.uuid4().hex
-    due_predicate = (
-        "((status IN ('pending','retry') AND available_at<=?) "
-        "OR (status='sending' AND locked_at IS NOT NULL AND locked_at<=?))"
-    )
 
     with db() as conn:
         with tx(conn):
             if CONFIG.uses_postgres:
                 rows = conn.execute(
-                    f"""
-                    WITH due AS (
-                        SELECT id FROM messenger_delivery_outbox
-                        WHERE {due_predicate}
-                        ORDER BY id ASC LIMIT ? FOR UPDATE SKIP LOCKED
-                    )
-                    UPDATE messenger_delivery_outbox
-                    SET status='sending',locked_at=?,lock_token=?,updated_at=?
-                    FROM due
-                    WHERE messenger_delivery_outbox.id=due.id
-                    RETURNING messenger_delivery_outbox.id,messenger_delivery_outbox.platform,
-                              messenger_delivery_outbox.external_user_id,
-                              messenger_delivery_outbox.canonical_user_id,
-                              messenger_delivery_outbox.event_key,messenger_delivery_outbox.action,
-                              messenger_delivery_outbox.replies_json,messenger_delivery_outbox.attempts,
-                              messenger_delivery_outbox.lock_token
-                    """.strip(),
+                    _POSTGRES_CLAIM_SQL,
                     (now_iso, stale_before, int(limit), now_iso, token, now_iso),
                 ).fetchall()
                 return _claimed_from_rows(list(rows), token)
 
             rows = conn.execute(
-                f"SELECT id FROM messenger_delivery_outbox WHERE {due_predicate} ORDER BY id ASC LIMIT ?",  # nosec B608
+                _SQLITE_SELECT_DUE_SQL,
                 (now_iso, stale_before, int(limit)),
             ).fetchall()
             ids = [int(_row_value(row, "id", 0)) for row in rows]
@@ -220,13 +235,15 @@ def claim_due_deliveries(*, limit: int = 1, lock_ttl_sec: int = 900) -> list[Cla
             conn.execute(
                 "UPDATE messenger_delivery_outbox "
                 "SET status='sending',locked_at=?,lock_token=?,updated_at=? "
-                f"WHERE id IN ({placeholders}) AND {due_predicate}",  # nosec B608
+                f"WHERE id IN ({placeholders}) AND "  # nosec B608 - placeholders are generated, never user input
+                "((status IN ('pending','retry') AND available_at<=?) "
+                "OR (status='sending' AND locked_at IS NOT NULL AND locked_at<=?))",
                 [now_iso, token, now_iso, *ids, now_iso, stale_before],
             )
             claimed = conn.execute(
                 "SELECT id,platform,external_user_id,canonical_user_id,event_key,action,replies_json,attempts,lock_token "
                 "FROM messenger_delivery_outbox WHERE lock_token=? "
-                f"AND id IN ({placeholders}) ORDER BY id",  # nosec B608
+                f"AND id IN ({placeholders}) ORDER BY id",  # nosec B608 - placeholders are generated, never user input
                 [token, *ids],
             ).fetchall()
             return _claimed_from_rows(list(claimed), token)
