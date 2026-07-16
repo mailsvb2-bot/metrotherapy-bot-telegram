@@ -51,6 +51,10 @@ def test_deploy_script_has_valid_bash_syntax() -> None:
     _assert_bash_syntax(DEPLOY_SCRIPT)
 
 
+def test_deploy_worker_has_valid_bash_syntax() -> None:
+    _assert_bash_syntax(WORKER)
+
+
 def test_stale_deploy_recovery_has_valid_bash_syntax() -> None:
     assert STALE_RECOVERY.is_file()
     _assert_bash_syntax(STALE_RECOVERY)
@@ -138,6 +142,24 @@ def test_coalescing_keeps_provider_audits_after_deploy_returns() -> None:
     assert deploy_call < stars_audit < max_audit < vk_audit
 
 
+def test_waiting_workers_never_truncate_active_lock_metadata() -> None:
+    source = WORKER.read_text(encoding="utf-8")
+
+    open_lock = source.index('exec 9<>"$LOCK_FILE"')
+    acquire_lock = source.index('"$FLOCK_BIN" -w "$LOCK_WAIT_SECONDS" 9')
+    acquisition_epoch = source.index('LOCK_ACQUIRED_EPOCH="$(date +%s)"')
+    replace_metadata = source.index(': > "$LOCK_FILE"', acquisition_epoch)
+    write_metadata = source.index('"$LOCK_METADATA_VERSION"', replace_metadata)
+    clear_metadata = source.rindex(': > "$LOCK_FILE"')
+
+    assert 'exec 9>"$LOCK_FILE"' not in source
+    assert open_lock < acquire_lock < acquisition_epoch < replace_metadata < write_metadata
+    assert write_metadata < clear_metadata
+    assert 'LOCK_METADATA_VERSION="v1"' in source
+    assert '"$$"' in source[replace_metadata:write_metadata + 200]
+    assert '"$LOCK_ACQUIRED_EPOCH"' in source[replace_metadata:write_metadata + 300]
+
+
 def test_every_long_production_deploy_phase_has_a_hard_deadline() -> None:
     source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
@@ -159,17 +181,35 @@ def test_every_long_production_deploy_phase_has_a_hard_deadline() -> None:
     assert "trap 'rollback 129' HUP" in source
 
 
+def test_stale_recovery_uses_kernel_holder_and_lock_acquisition_age() -> None:
+    source = STALE_RECOVERY.read_text(encoding="utf-8")
+
+    assert 'LSLOCKS_BIN="${LSLOCKS_BIN:-/usr/bin/lslocks}"' in source
+    assert 'STALE_AFTER_SECONDS="${STALE_AFTER_SECONDS:-3600}"' in source
+    assert 'ALLOW_LEGACY_LOCK_METADATA="${ALLOW_LEGACY_LOCK_METADATA:-0}"' in source
+    assert 'exec 8<>"$LOCK_FILE"' in source
+    assert '"$FLOCK_BIN" -n 8' in source
+    assert '"$LSLOCKS_BIN" --noheadings --raw --output PID,PATH' in source
+    assert 'awk -v path="$LOCK_FILE"' in source
+    assert 'holder_pid="$(printf' in source
+    assert 'metadata_version" = "v1"' in source
+    assert '"$metadata_pid" = "$holder_pid"' in source
+    assert 'held_seconds="$((now_epoch - lock_acquired_epoch))"' in source
+
+    legacy_gate = source.index('[ "$ALLOW_LEGACY_LOCK_METADATA" = "1" ]')
+    legacy_process_age = source.index('"$PS_BIN" -o etimes= -p "$holder_pid"')
+    assert legacy_gate < legacy_process_age
+
+
 def test_stale_recovery_stops_only_the_exact_lock_holder_unit() -> None:
     source = STALE_RECOVERY.read_text(encoding="utf-8")
 
-    assert 'STALE_AFTER_SECONDS="${STALE_AFTER_SECONDS:-1200}"' in source
-    assert 'holder_pid="$(sed -n' in source
     assert 'kill -0 "$holder_pid"' in source
     assert 'grep -F -- "$WORKER_PATH"' in source
-    assert '"$FLOCK_BIN" -n 8' in source
     assert '"$SYSTEMCTL_BIN" show "$unit" -p MainPID --value' in source
     assert 'if [ "$main_pid" = "$holder_pid" ]; then' in source
     assert '[ "$matching_count" -eq 1 ]' in source
+    assert '"$TIMEOUT_BIN"' in source
     assert '"$SYSTEMCTL_BIN" stop "$matching_unit"' in source
     assert '"$FLOCK_BIN" -w "$LOCK_RELEASE_WAIT_SECONDS" 8' in source
     assert "STALE_DEPLOY_RECOVERY_OK" in source
