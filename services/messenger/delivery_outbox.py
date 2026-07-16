@@ -10,7 +10,7 @@ from datetime import timedelta
 from typing import Any
 
 from core.time_utils import utc_now, utc_now_iso
-from runtime.messenger_senders import MessengerTransportError, provider_delivery_scope
+from runtime.messenger_senders import provider_delivery_scope
 from services.bg import tm
 from services.db import db, tx
 from services.db.runtime import CONFIG
@@ -40,6 +40,15 @@ class ClaimedDelivery:
 
 def _row_value(row: Any, key: str, index: int) -> Any:
     return row[key] if hasattr(row, "keys") else row[index]
+
+
+def _positive_int(name: str, default: int, *, minimum: int = 1, maximum: int = 86_400) -> int:
+    raw = (os.getenv(name) or str(default)).strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = int(default)
+    return min(max(value, minimum), maximum)
 
 
 def _json_safe(value: Any) -> Any:
@@ -163,8 +172,13 @@ def _claimed_from_rows(rows: list[Any], token: str) -> list[ClaimedDelivery]:
     ]
 
 
-def claim_due_deliveries(*, limit: int = 20, lock_ttl_sec: int = 120) -> list[ClaimedDelivery]:
-    """Atomically lease due work, including abandoned ``sending`` rows."""
+def claim_due_deliveries(*, limit: int = 1, lock_ttl_sec: int = 900) -> list[ClaimedDelivery]:
+    """Atomically lease due work, including abandoned ``sending`` rows.
+
+    The production worker deliberately claims one item at a time. A row is never
+    left aging behind a slow media upload in the same local batch, and the
+    default 15-minute lease comfortably exceeds provider upload retry windows.
+    """
 
     now = utc_now().replace(microsecond=0)
     now_iso = now.isoformat()
@@ -235,13 +249,23 @@ def mark_delivery_sent(item: ClaimedDelivery) -> None:
             )
 
 
+def release_delivery_lease(item: ClaimedDelivery, *, reason: str = "worker_shutdown") -> None:
+    """Return a graceful-shutdown claim immediately instead of waiting for TTL."""
+
+    now = utc_now_iso()
+    with db() as conn:
+        with tx(conn):
+            conn.execute(
+                "UPDATE messenger_delivery_outbox "
+                "SET status='retry',available_at=?,updated_at=?,locked_at=NULL,lock_token=NULL,last_error=? "
+                "WHERE id=? AND lock_token=?",
+                (now, now, str(reason or "worker_shutdown")[:500], int(item.id), item.lock_token),
+            )
+
+
 def reschedule_delivery(item: ClaimedDelivery, error: str) -> None:
     attempts = int(item.attempts) + 1
-    try:
-        configured_max = int(os.getenv("MESSENGER_OUTBOX_MAX_ATTEMPTS", "8") or "8")
-    except ValueError:
-        configured_max = 8
-    max_attempts = max(1, configured_max)
+    max_attempts = _positive_int("MESSENGER_OUTBOX_MAX_ATTEMPTS", 8, minimum=1, maximum=100)
     now = utc_now().replace(microsecond=0)
     terminal = attempts >= max_attempts
     delay = min(5 * (2 ** max(0, attempts - 1)), 900)
@@ -284,30 +308,35 @@ async def _worker_loop(stop_event: asyncio.Event) -> None:
         idle_sleep = max(0.1, float(os.getenv("MESSENGER_OUTBOX_IDLE_SLEEP_SEC", "0.5") or "0.5"))
     except ValueError:
         idle_sleep = 0.5
+    lock_ttl = _positive_int("MESSENGER_OUTBOX_LOCK_TTL_SEC", 900, minimum=30, maximum=86_400)
+
     while not stop_event.is_set():
         try:
-            claimed = await asyncio.to_thread(claim_due_deliveries)
+            claimed = await asyncio.to_thread(claim_due_deliveries, limit=1, lock_ttl_sec=lock_ttl)
             if not claimed:
                 try:
                     await asyncio.wait_for(stop_event.wait(), timeout=idle_sleep)
                 except asyncio.TimeoutError:
                     pass
                 continue
-            for item in claimed:
-                if stop_event.is_set():
-                    return
-                try:
-                    await _deliver_one(item)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:  # validator: allow-wide-except
-                    log.exception(
-                        "%s durable delivery failed event_key=%s attempt=%s",
-                        item.platform.upper(),
-                        item.event_key,
-                        int(item.attempts) + 1,
-                    )
-                    await asyncio.to_thread(reschedule_delivery, item, f"{type(exc).__name__}: {exc}")
+
+            item = claimed[0]
+            if stop_event.is_set():
+                await asyncio.to_thread(release_delivery_lease, item)
+                return
+            try:
+                await _deliver_one(item)
+            except asyncio.CancelledError:
+                await asyncio.to_thread(release_delivery_lease, item)
+                raise
+            except Exception as exc:  # validator: allow-wide-except
+                log.exception(
+                    "%s durable delivery failed event_key=%s attempt=%s",
+                    item.platform.upper(),
+                    item.event_key,
+                    int(item.attempts) + 1,
+                )
+                await asyncio.to_thread(reschedule_delivery, item, f"{type(exc).__name__}: {exc}")
         except asyncio.CancelledError:
             raise
         except Exception:  # validator: allow-wide-except
