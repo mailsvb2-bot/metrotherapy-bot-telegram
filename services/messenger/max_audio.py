@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Messenger-native Opus audio preparation.
+"""Messenger-native audio preparation.
 
-MAX and VK delivery must send audio attachments directly in the bot window. To
-avoid silent UX degradation, this module prepares a real .opus file before the
-sender uploads it to the provider. Link fallback is intentionally handled by the
-caller only when the product flow explicitly allows it.
+MAX and VK delivery must send audio attachments directly in the bot window. MAX
+accepts common audio formats natively, while VK keeps its narrower Opus/Ogg
+contract. Unsupported sources are converted into deterministic Opus cache files
+instead of silently degrading into broken document uploads.
 """
 
 import hashlib
@@ -105,9 +105,13 @@ def _target_path(source: Path, *, platform: str) -> Path:
 
 def _native_ready_suffixes(platform: str) -> set[str]:
     clean = _clean_platform(platform)
+    if clean == "max":
+        # MAX accepts common audio containers directly. Avoid unnecessary ffmpeg
+        # conversion so a missing converter cannot block already-supported files.
+        return {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus", ".wma"}
     if clean == "vk":
         # VK sender uploads both .opus and .ogg as `audio_message`; forcing every
-        # .ogg through ffmpeg breaks tests and can block already-native audio.
+        # .ogg through ffmpeg breaks already-native audio.
         return {".opus", ".ogg"}
     return {".opus"}
 
@@ -115,11 +119,12 @@ def _native_ready_suffixes(platform: str) -> set[str]:
 def ensure_messenger_opus_file(file_path: Path | str, *, platform: str) -> Path:
     """Return a file ready for native messenger audio upload.
 
-    If the source is already accepted by the target provider as native audio, it
-    is used as-is. Otherwise ffmpeg converts it into a deterministic .opus cache
-    path. The function fails loudly if conversion is impossible, because native
-    messenger audio must not silently degrade into a broken document upload.
+    If the source format is accepted by the target provider, it is used as-is.
+    Otherwise ffmpeg converts it into a deterministic Opus cache path. The
+    function fails loudly when conversion is impossible because native messenger
+    audio must not silently degrade into an unusable upload.
     """
+
     clean_platform = _clean_platform(platform)
     error_cls = _error_cls(clean_platform)
     source = Path(file_path)
