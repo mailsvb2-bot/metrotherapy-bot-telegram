@@ -24,29 +24,48 @@ Historical internal header aliases remain accepted for compatibility, but new re
 
 ## TLS trust
 
-MAX requires the Russian Trusted Root CA and Russian Trusted Sub CA for `platform-api2.max.ru`. Production deploy runs:
+MAX requires the Russian Trusted Root CA and Russian Trusted Sub CA for `platform-api2.max.ru`.
+
+The certificate copies used by deployment are vendored in the repository:
+
+```text
+deploy/certs/russian_trusted_root_ca.crt
+deploy/certs/russian_trusted_sub_ca.crt
+```
+
+They originate from the public Госуслуги certificate source, but production deploy does not depend on downloading them at runtime. The installer validates the SHA-256 fingerprint of the parsed DER certificate, which is stable across PEM line-ending or formatting changes:
+
+```text
+Russian Trusted Root CA
+D2:6D:2D:02:31:B7:C3:9F:92:CC:73:85:12:BA:54:10:35:19:E4:40:5D:68:B5:BD:70:3E:97:88:CA:8E:CF:31
+
+Russian Trusted Sub CA
+BB:BD:E2:10:3E:79:0B:99:9E:C6:2B:D0:3C:F6:25:A5:A2:E7:C3:16:E1:0A:FE:6A:49:0E:ED:EA:D8:B3:FD:9B
+```
+
+Production deploy runs:
 
 ```bash
 scripts/install_max_trust.sh
 ```
 
-The installer downloads the two certificates from the public Госуслуги certificate host over verified HTTPS and validates their immutable SHA-256 values before changing the trust store:
+Before changing the operating-system trust store, the installer verifies:
 
-```text
-Russian Trusted Root CA
-936a43fea6e8e525bcc0f81acd9c3d21b4fc4b9b68acea7906d698005afc6504
+- the DER fingerprints above;
+- certificate subjects;
+- remaining validity;
+- self-validation of the Root CA;
+- the Root → Sub CA chain.
 
-Russian Trusted Sub CA
-f0ae589f36774f29ef3648f7984b08d42fcce6f1ffeeb6236d773daeb2744ea6
-```
+Debian/Ubuntu use `update-ca-certificates`; RHEL-family systems use `update-ca-trust`. TLS verification is never disabled. After installation the script performs a real verified TLS request to `platform-api2.max.ru`.
 
-It additionally validates certificate subjects, expiration, the root/subordinate chain and a real TLS handshake to `platform-api2.max.ru`. Debian/Ubuntu use `update-ca-certificates`; RHEL-family systems use `update-ca-trust`. TLS verification is never disabled.
-
-The deployment marker is created only after the trust installation and the normal deploy/restart/health cycle succeed:
+The deployment marker is created only after trust installation and the normal deploy/restart/health cycle succeed:
 
 ```text
 /var/lib/metrotherapy/deploy-migrations/max-mincifry-trust-v1.applied
 ```
+
+When trust installation fails, the worker publishes one sanitized commit beginning with `[max-trust-install-result]` and then stops. That result commit is explicitly ignored by the next worker invocation, preventing a failure-report loop.
 
 `MAX_CA_BUNDLE` remains available only for a deliberately managed dedicated PEM bundle. Normally leave it empty so all MAX runtime calls use the updated operating-system trust store.
 
