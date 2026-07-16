@@ -1,19 +1,16 @@
 from __future__ import annotations
 
-from urllib.parse import parse_qs, urlsplit
-
 from services.payments.ui import kb_tariffs, kb_telegram_payment_methods, telegram_payment_method_text
+
+
+TOPUP_URL = "tg://stars_topup?balance=1500&purpose=metrotherapy_practice_start_7"
 
 
 def _buttons(markup):
     return [button for row in markup.inline_keyboard for button in row]
 
 
-def _yookassa_button(buttons):
-    return next(button for button in buttons if button.url and "ЮKassa" in button.text)
-
-
-def test_public_telegram_tariff_keyboard_shows_aligned_prices(monkeypatch):
+def test_public_telegram_tariff_keyboard_shows_only_stars(monkeypatch):
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
     monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
     monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
@@ -21,74 +18,67 @@ def test_public_telegram_tariff_keyboard_shows_aligned_prices(monkeypatch):
     texts = [button.text for button in buttons]
     callbacks = [button.callback_data for button in buttons if button.callback_data]
 
-    assert "📦 Стартовый пакет: 1 500 звёзд или 2 499 ₽" in texts
-    assert "📦 Полный маршрут: 2 500 звёзд или 4 199 ₽" in texts
-    assert "📦 Антистресс-система: 5 000 звёзд или 8 290 ₽" in texts
-    assert "📦 Персональный месяц: 15 000 звёзд или 24 870 ₽" in texts
+    assert "📦 Стартовый пакет — 1 500 Stars" in texts
+    assert "📦 Полный маршрут — 2 500 Stars" in texts
+    assert "📦 Антистресс-система — 5 000 Stars" in texts
+    assert "📦 Персональный месяц — 15 000 Stars" in texts
+    assert not any("₽" in text or "ЮKassa" in text for text in texts)
     assert not any(button.url for button in buttons)
     assert "pay:methods:practice_start_7" in callbacks
 
 
-def test_payment_method_choice_contains_stars_and_signed_yookassa(monkeypatch):
+def test_stars_choice_separates_existing_balance_from_topup(monkeypatch):
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
     monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
     monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
-    monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://metrotherapy.example")
-    monkeypatch.setenv("PAYMENT_CHECKOUT_SIGNING_KEY", "unit-test-checkout-signing-key")
 
     buttons = _buttons(kb_telegram_payment_methods(user_id=404, package_id="practice_start_7"))
     callbacks = [str(button.callback_data) for button in buttons if button.callback_data]
     texts = [button.text for button in buttons]
 
-    assert "stars:terms:practice_start_7" in callbacks
-    assert "⭐ Звёздами Telegram — 1 500 звёзд" in texts
-    assert "💳 Картой через ЮKassa — 2 499 ₽" in texts
-
-    yookassa = _yookassa_button(buttons)
-    parsed = urlsplit(yookassa.url)
-    query = parse_qs(parsed.query)
-    assert parsed.scheme == "https"
-    assert query["source"] == ["telegram"]
-    assert query["user_id"] == ["404"]
-    assert query["package_id"] == ["practice_start_7"]
-    assert query["amount_minor"] == ["249900"]
-    assert query["currency"] == ["RUB"]
-    assert query["intent"][0]
+    assert texts[0] == "⭐ У меня уже есть Stars — оплатить Метротерапию"
+    assert buttons[0].callback_data == "stars:terms:practice_start_7"
+    assert texts[1] == "➕ Сначала купить 1 500 Stars"
+    assert buttons[1].url == TOPUP_URL
+    assert texts[2] == "✅ Stars куплены — оплатить Метротерапию"
+    assert buttons[2].callback_data == "stars:terms:practice_start_7"
+    assert not any("ЮKassa" in text or "₽" in text for text in texts)
+    assert not any((button.url or "").startswith("https://") for button in buttons)
+    assert callbacks.count("stars:terms:practice_start_7") == 2
 
     text = telegram_payment_method_text("practice_start_7")
-    assert "Выберите способ оплаты" in text
-    assert "1 500 звёзд" in text
-    assert "2 499 ₽" in text
-    assert "ЮKassa" in text
+    assert "Выберите, что подходит Вам" in text
+    assert "Stars уже есть" in text
+    assert "Stars пока нет" in text
+    assert "1 500 Stars" in text
+    assert "ничего не списывается" in text
+    assert "ЮKassa" not in text
+    assert "₽" not in text
 
 
-def test_stars_emergency_switch_falls_back_to_yookassa(monkeypatch):
+def test_stars_disabled_does_not_fall_back_to_yookassa(monkeypatch):
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "0")
     monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
-    monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://metrotherapy.example")
-    monkeypatch.setenv("PAYMENT_CHECKOUT_SIGNING_KEY", "unit-test-checkout-signing-key")
 
     buttons = _buttons(kb_telegram_payment_methods(user_id=405, package_id="practice_start_7"))
     texts = [button.text for button in buttons]
     callbacks = [button.callback_data for button in buttons if button.callback_data]
 
-    assert "⭐ Оплата звёздами временно недоступна" in texts
+    assert "⭐ Оплата Stars временно недоступна" in texts
     assert "tariffs:stars_disabled" in callbacks
-    assert _yookassa_button(buttons).url
-    assert "временно недоступна" in telegram_payment_method_text("practice_start_7")
-    assert "ЮKassa" in telegram_payment_method_text("practice_start_7")
-
-
-def test_telegram_yookassa_kill_switch_hides_external_checkout(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
-    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
-    monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://metrotherapy.example")
-    monkeypatch.setenv("PAYMENT_CHECKOUT_SIGNING_KEY", "unit-test-checkout-signing-key")
-
-    buttons = _buttons(kb_telegram_payment_methods(user_id=406, package_id="practice_start_7"))
-    callbacks = [button.callback_data for button in buttons if button.callback_data]
-    texts = [button.text for button in buttons]
-
+    assert not any("ЮKassa" in text or "₽" in text for text in texts)
     assert not any(button.url for button in buttons)
-    assert "💳 Оплата через ЮKassa временно недоступна" in texts
-    assert "tariffs:yookassa_disabled" in callbacks
+    assert "временно недоступна" in telegram_payment_method_text("practice_start_7")
+
+
+def test_gift_stars_choice_keeps_gift_context(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
+    monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
+
+    buttons = _buttons(kb_telegram_payment_methods(user_id=406, package_id="practice_start_7", gift=True))
+
+    assert buttons[0].text == "⭐ У меня уже есть Stars — оплатить подарок"
+    assert buttons[0].callback_data == "stars:gift_terms:practice_start_7"
+    assert buttons[1].url == TOPUP_URL
+    assert buttons[2].text == "✅ Stars куплены — оплатить подарок"
+    assert buttons[2].callback_data == "stars:gift_terms:practice_start_7"
