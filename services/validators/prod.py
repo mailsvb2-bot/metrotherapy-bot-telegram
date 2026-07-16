@@ -135,9 +135,8 @@ def validate_prod_monetization_contract(*, strict: bool = True) -> None:
 
     Soft/off token modes are useful for local rollout and tests, but production
     must never silently deliver paid practice audio without a hard token reserve.
-    Receipt contact must also be explicit so fiscalization does not depend on a
-    hidden support-email fallback. Telegram Stars prices are a fixed product
-    ladder; exchange-rate-derived buyer parity is deliberately forbidden in prod.
+    Telegram digital-package checkout is Stars-only; YooKassa remains available
+    for VK, MAX and web through the shared payment runtime.
     """
 
     if not _prod():
@@ -156,6 +155,9 @@ def validate_prod_monetization_contract(*, strict: bool = True) -> None:
 
     stars_enabled = (_env("TELEGRAM_STARS_ENABLED", "1") or "1").strip().lower() not in _DISABLED_VALUES
     stars_mode = (_env("TELEGRAM_STARS_PRICING_MODE", "explicit") or "explicit").strip().lower()
+    telegram_yookassa = (_env("TELEGRAM_YOOKASSA_ENABLED", "0") or "0").strip().lower()
+    if telegram_yookassa not in _DISABLED_VALUES:
+        errors.append("TELEGRAM_YOOKASSA_ENABLED must be 0 in prod; Telegram digital packages are Stars-only")
     if stars_enabled and stars_mode != "explicit":
         errors.append("TELEGRAM_STARS_PRICING_MODE must be explicit in prod")
     if stars_enabled:
