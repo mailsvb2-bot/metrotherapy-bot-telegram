@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "repair_production_deploy_channel.sh"
 RECOVERY_WORKFLOW = ROOT / ".github" / "workflows" / "production-deploy-recovery.yml"
 TOPOLOGY_WORKFLOW = ROOT / ".github" / "workflows" / "production-server-topology-probe.yml"
+CLEANUP_WORKFLOW = ROOT / ".github" / "workflows" / "single-main-topology.yml"
 
 
 def test_production_deploy_repair_script_has_valid_bash_syntax() -> None:
@@ -94,3 +95,16 @@ def test_topology_probe_retries_transient_health_and_deploy_endpoint_failures() 
     assert 'curl -fsS --max-time 5 "$health" >/dev/null' not in text
     assert "SERVER_HEALTH_CODE=" in text
     assert "Server health=${healthCode}" in text
+
+
+def test_github_topology_cleanup_retries_eventually_consistent_branch_reads() -> None:
+    text = CLEANUP_WORKFLOW.read_text(encoding="utf-8")
+
+    delete_ref = text.index("github.rest.git.deleteRef")
+    verification_loop = text.index("for (let attempt = 1; attempt <= 10; attempt += 1)")
+    final_assertion = text.index("Expected exactly one GitHub branch named main")
+
+    assert delete_ref < verification_loop < final_assertion
+    assert "GITHUB_BRANCH_VERIFY_ATTEMPT=${attempt}" in text
+    assert "setTimeout(resolve, attempt * 500)" in text
+    assert "names.length === 1 && names[0] === 'main'" in text
