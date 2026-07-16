@@ -16,7 +16,7 @@ from services.payments.checkout_intent import (
 from services.payments.terms import payment_terms_html
 from services.payments.verified_reconciliation import record_verified_yookassa_webhook
 from services.payments.yookassa_checkout import YooKassaCheckoutError, create_yookassa_confirmation_url
-from services.practice_token_contract import package_by_id, telegram_yookassa_enabled
+from services.practice_token_contract import package_by_id
 
 log = logging.getLogger(__name__)
 
@@ -199,10 +199,13 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
     intent = (request.query.get("intent") or "").strip()
     kind = _normalize_payment_kind(request.query.get("kind"), package_id)
 
-    if source.casefold() == "telegram" and kind in _TOKEN_PAYMENT_KINDS and not telegram_yookassa_enabled():
+    # Digital goods inside Telegram are permanently Stars-only. Reject old or
+    # manually constructed Telegram YooKassa links even when a stale env flag is
+    # accidentally enabled. VK, MAX and web continue through the code below.
+    if source.casefold() == "telegram" and kind in _TOKEN_PAYMENT_KINDS:
         return web.Response(
             status=410,
-            text="Оплата через ЮKassa для Telegram временно отключена.",
+            text="Оплата цифровых пакетов через ЮKassa в Telegram отключена. Используйте Telegram Stars.",
             content_type="text/plain",
         )
 
@@ -259,32 +262,27 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
     raise web.HTTPFound(location=confirmation_url)
 
 
-async def yookassa_reconciliation_webhook(request: web.Request) -> web.Response:
-    """Provider reconciliation endpoint."""
+async def yookassa_webhook(request: web.Request) -> web.Response:
     if not _webhook_secret_ok(request):
-        return web.json_response({"ok": False, "error": "forbidden"}, status=403)
-
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
     try:
         payload = await request.json()
-    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
-        return web.json_response({"ok": False, "error": f"bad_json:{type(exc).__name__}"}, status=400)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return web.json_response({"ok": False, "error": "bad_json"}, status=400)
 
-    if not isinstance(payload, dict):
-        return web.json_response({"ok": False, "error": "bad_payload"}, status=400)
+    try:
+        result = await asyncio.to_thread(record_verified_yookassa_webhook, payload)
+    except (ValueError, TypeError, OSError) as exc:
+        log.exception("YooKassa webhook processing failed")
+        return web.json_response({"ok": False, "error": type(exc).__name__}, status=500)
 
-    result = await asyncio.to_thread(record_verified_yookassa_webhook, payload)
     status = 200 if result.ok else 400
     return web.json_response(
         {
-            "ok": result.ok,
-            "provider": result.provider,
-            "provider_payment_id": result.provider_payment_id,
-            "payment_status": result.status,
-            "event": result.event,
-            "inserted": result.inserted,
-            "problem": result.problem,
+            "ok": bool(result.ok),
+            "inserted": bool(result.inserted),
             "processing_status": result.processing_status,
-            "side_effects_done": result.side_effects_done,
+            "problem": result.problem,
         },
         status=status,
     )
