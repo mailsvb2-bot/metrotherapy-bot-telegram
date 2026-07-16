@@ -91,6 +91,7 @@ jobs:
           python -m mypy --follow-imports=skip --check-untyped-defs
           services/accounts/identity.py
           services/messenger/text_ui.py
+          services/messenger/delivery_outbox.py
           services/payments/checkout_intent.py
           services/payments/telegram_stars.py
           services/payments/telegram_stars_refunds.py
@@ -103,6 +104,7 @@ jobs:
           services/sales_desk_repository.py
           services/sales_desk_sync.py
           runtime/payment_http.py
+          runtime/payment_webhook_admission.py
 
       - name: Critical security scan
         run: >-
@@ -110,6 +112,7 @@ jobs:
           services/payments
           services/accounts/identity.py
           services/messenger/text_ui.py
+          services/messenger/delivery_outbox.py
           services/practice_token_lots.py
           services/practice_tokens_access_core.py
           services/practice_tokens_wallet.py
@@ -119,6 +122,7 @@ jobs:
           services/sales_desk_repository.py
           services/sales_desk_sync.py
           runtime/payment_http.py
+          runtime/payment_webhook_admission.py
 
       - name: Dependency vulnerability audit
         run: python -m pip_audit -r requirements.txt --progress-spinner off
@@ -172,3 +176,6 @@ jobs:
 
       - name: Postgres scheduler concurrency
         run: python scripts/probe_postgres_job_concurrency.py --workers 4 --jobs 16
+
+      - name: Postgres messenger outbox concurrency
+        run: python scripts/probe_postgres_messenger_outbox.py
