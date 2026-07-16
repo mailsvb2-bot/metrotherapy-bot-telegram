@@ -179,6 +179,10 @@ def test_provider_audit_results_publish_without_moving_production_checkout() -> 
     assert "commit-tree" in source
     assert 'git -C "$APP_DIR" push origin "$result_sha:refs/heads/main"' in source
     assert "for attempt in 1 2 3" in source
+    remote_tip_check = source.index('log -1 --format=%B origin/main')
+    commit_tree = source.index("commit-tree")
+    assert remote_tip_check < commit_tree
+    assert "audit result already published at remote tip" in source
     assert "audit result push raced with main" in source
     assert "git -C \"$APP_DIR\" merge --ff-only origin/main" not in source
     assert "git -C \"$APP_DIR\" rebase --keep-empty origin/main" not in source
