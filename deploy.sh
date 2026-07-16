@@ -14,6 +14,10 @@ LOG_PREFIX="deploy"
 LOCAL_HEALTH_URL="http://127.0.0.1:8082/healthz"
 PUBLIC_HEALTH_URL="https://metrotherapy-bot.metrotherapy.ru/healthz"
 HEALTH_WAIT_SECONDS="${HEALTH_WAIT_SECONDS:-60}"
+DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-/var/lib/metrotherapy/deploy-state}"
+DEPLOYED_SHA_FILE="${DEPLOYED_SHA_FILE:-$DEPLOY_STATE_DIR/deployed_sha}"
+TRIGGER_SHA="${DEPLOY_TRIGGER_SHA:-}"
+ZERO_SHA="0000000000000000000000000000000000000000"
 
 cd "$APP_DIR"
 
@@ -35,6 +39,68 @@ _is_truthy() {
     1|true|yes|on|webhook) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+_is_valid_commit_sha() {
+  local value="${1:-}"
+  case "$value" in
+    ''|*[!0-9a-f]*) return 1 ;;
+  esac
+  [ "${#value}" -eq 40 ] && [ "$value" != "$ZERO_SHA" ]
+}
+
+skip_if_trigger_already_deployed() {
+  local deployed_sha=""
+
+  if [ -z "$TRIGGER_SHA" ]; then
+    echo "=== deploy coalescing disabled: no immutable trigger SHA ==="
+    return 0
+  fi
+  if ! _is_valid_commit_sha "$TRIGGER_SHA"; then
+    echo "ERROR: DEPLOY_TRIGGER_SHA is not one non-zero lowercase 40-character commit"
+    exit 24
+  fi
+  if ! git cat-file -e "$TRIGGER_SHA^{commit}" 2>/dev/null; then
+    echo "ERROR: deploy trigger commit is unavailable locally: $TRIGGER_SHA"
+    exit 25
+  fi
+  if [ ! -f "$DEPLOYED_SHA_FILE" ]; then
+    echo "=== deploy coalescing unavailable: no successful deployed SHA marker ==="
+    return 0
+  fi
+
+  IFS= read -r deployed_sha < "$DEPLOYED_SHA_FILE" || true
+  if ! _is_valid_commit_sha "$deployed_sha"; then
+    echo "WARNING: ignoring invalid successful deployed SHA marker"
+    return 0
+  fi
+  if ! git cat-file -e "$deployed_sha^{commit}" 2>/dev/null; then
+    echo "WARNING: ignoring unavailable successful deployed SHA marker: $deployed_sha"
+    return 0
+  fi
+
+  if git merge-base --is-ancestor "$TRIGGER_SHA" "$deployed_sha"; then
+    echo "=== deploy coalesced: trigger=$TRIGGER_SHA already covered by successful_sha=$deployed_sha ==="
+    return 10
+  fi
+  echo "=== deploy required: trigger=$TRIGGER_SHA successful_sha=$deployed_sha ==="
+  return 0
+}
+
+record_successful_deployed_sha() {
+  local deployed_sha="$1"
+  local tmp_file
+
+  if ! _is_valid_commit_sha "$deployed_sha"; then
+    echo "ERROR: refusing to record invalid successful deployed SHA"
+    return 26
+  fi
+  mkdir -p "$DEPLOY_STATE_DIR"
+  tmp_file="$(mktemp "$DEPLOY_STATE_DIR/deployed_sha.XXXXXX")"
+  printf '%s\n' "$deployed_sha" > "$tmp_file"
+  chmod 0644 "$tmp_file"
+  mv -f "$tmp_file" "$DEPLOYED_SHA_FILE"
+  echo "=== successful deployed SHA recorded: $deployed_sha ==="
 }
 
 require_telegram_polling_contract() {
@@ -151,6 +217,16 @@ publish_server_branch_audit_if_requested() {
 
 require_telegram_polling_contract
 
+if skip_if_trigger_already_deployed; then
+  :
+else
+  coalesce_code="$?"
+  if [ "$coalesce_code" -eq 10 ]; then
+    exit 0
+  fi
+  exit "$coalesce_code"
+fi
+
 OLD_SHA="$(git rev-parse HEAD)"
 echo "=== old sha: $OLD_SHA ==="
 
@@ -258,6 +334,7 @@ if [ -f scripts/post_deploy_verify.py ]; then
   "$PYTHON" scripts/post_deploy_verify.py --skip-pytest
 fi
 
+record_successful_deployed_sha "$NEW_SHA"
 trap - ERR
 echo "=== deploy finished OK: $(date -Is) ==="
 echo "=== deployed sha: $NEW_SHA ==="
