@@ -37,49 +37,72 @@ jobs:
           python scripts/regression_gate.py 2>&1 | tee "$RUNNER_TEMP/regression-contour.log"
 
       - name: Critical type contracts
-        run: >-
-          python -m mypy --follow-imports=skip --check-untyped-defs
-          services/accounts/identity.py
-          services/messenger/text_ui.py
-          services/payments/checkout_intent.py
-          services/payments/telegram_stars.py
-          services/payments/telegram_stars_refunds.py
-          services/payments/verified_reconciliation.py
-          services/practice_token_lots.py
-          services/practice_tokens_access_core.py
-          services/practice_tokens_wallet.py
-          services/premium_entitlements.py
-          services/sales_desk.py
-          services/sales_desk_repository.py
-          services/sales_desk_sync.py
-          runtime/payment_http.py
-          services/privacy_controls.py
+        run: |
+          set -o pipefail
+          python -m mypy --follow-imports=skip --check-untyped-defs \
+            services/accounts/identity.py \
+            services/messenger/text_ui.py \
+            services/messenger/delivery_outbox.py \
+            services/payments/checkout_intent.py \
+            services/payments/telegram_stars.py \
+            services/payments/telegram_stars_refunds.py \
+            services/payments/verified_reconciliation.py \
+            services/practice_token_lots.py \
+            services/practice_tokens_access_core.py \
+            services/practice_tokens_wallet.py \
+            services/premium_entitlements.py \
+            services/sales_desk.py \
+            services/sales_desk_repository.py \
+            services/sales_desk_sync.py \
+            runtime/payment_http.py \
+            runtime/payment_webhook_admission.py \
+            services/privacy_controls.py \
+            2>&1 | tee "$RUNNER_TEMP/release-mypy.log"
 
       - name: Critical Bandit gate
-        run: >-
-          python -m bandit -q -r -c pyproject.toml
-          services/payments
-          services/accounts/identity.py
-          services/messenger/text_ui.py
-          services/practice_token_lots.py
-          services/practice_tokens_access_core.py
-          services/practice_tokens_wallet.py
-          services/premium_entitlements.py
-          services/sales_desk.py
-          services/sales_desk_db.py
-          services/sales_desk_repository.py
-          services/sales_desk_sync.py
-          runtime/payment_http.py
-          services/privacy_controls.py
+        run: |
+          set -o pipefail
+          python -m bandit -q -r -c pyproject.toml \
+            services/payments \
+            services/accounts/identity.py \
+            services/messenger/text_ui.py \
+            services/messenger/delivery_outbox.py \
+            services/practice_token_lots.py \
+            services/practice_tokens_access_core.py \
+            services/practice_tokens_wallet.py \
+            services/premium_entitlements.py \
+            services/sales_desk.py \
+            services/sales_desk_db.py \
+            services/sales_desk_repository.py \
+            services/sales_desk_sync.py \
+            runtime/payment_http.py \
+            runtime/payment_webhook_admission.py \
+            services/privacy_controls.py \
+            2>&1 | tee "$RUNNER_TEMP/release-bandit.log"
 
       - name: Dependency audit
-        run: python -m pip_audit -r requirements.txt --progress-spinner off
+        run: |
+          set -o pipefail
+          python -m pip_audit -r requirements.txt --progress-spinner off \
+            2>&1 | tee "$RUNNER_TEMP/release-pip-audit.log"
 
       - name: Release hygiene after checks
         run: python scripts/check_release_hygiene.py
+
+      - name: Upload release gate logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pre-deploy-release-gate-logs
+          path: |
+            ${{ runner.temp }}/regression-contour.log
+            ${{ runner.temp }}/release-mypy.log
+            ${{ runner.temp }}/release-bandit.log
+            ${{ runner.temp }}/release-pip-audit.log
+          if-no-files-found: warn
 
       - name: Post-deploy contract reminder
         run: |
           echo 'PRE_DEPLOY_RELEASE_GATE_OK'
           echo 'After deploy, run scripts/production_gate.py on the production host.'
-          echo 'The live gate owns restore drill, Postgres concurrency, Telegram reachability, health and readiness.'
+          echo 'The live gate owns restore drill, Postgres concurrency, messenger outbox, Telegram reachability, health and readiness.'
