@@ -49,7 +49,7 @@ cmdline="$(tr '\0' ' ' < "/proc/$holder_pid/cmdline" 2>/dev/null || true)"
 printf '%s' "$cmdline" | grep -F -- "$WORKER_PATH" >/dev/null \
   || fail "lock holder is not the canonical deploy worker"
 
-elapsed_seconds="$($PS_BIN -o etimes= -p "$holder_pid" | tr -d '[:space:]')"
+elapsed_seconds="$("$PS_BIN" -o etimes= -p "$holder_pid" | tr -d '[:space:]')"
 is_non_negative_integer "$elapsed_seconds" \
   || fail "could not determine deploy worker elapsed time"
 if [ "$elapsed_seconds" -lt "$STALE_AFTER_SECONDS" ] \
@@ -67,11 +67,10 @@ matching_unit=""
 matching_count=0
 while IFS= read -r unit; do
   [ -n "$unit" ] || continue
-  case "$unit" in
-    metrotherapy-deploy-????????????.service) ;;
-    *) continue ;;
-  esac
-  main_pid="$($SYSTEMCTL_BIN show "$unit" -p MainPID --value 2>/dev/null || true)"
+  if [[ ! "$unit" =~ ^metrotherapy-deploy-[0-9a-f]{12}\.service$ ]]; then
+    continue
+  fi
+  main_pid="$("$SYSTEMCTL_BIN" show "$unit" -p MainPID --value 2>/dev/null || true)"
   if [ "$main_pid" = "$holder_pid" ]; then
     matching_unit="$unit"
     matching_count="$((matching_count + 1))"
@@ -93,7 +92,7 @@ printf 'STALE_DEPLOY_RECOVERY_TARGET=%s\n' "$matching_unit"
 printf 'STALE_DEPLOY_RECOVERY_PID=%s\n' "$holder_pid"
 printf 'STALE_DEPLOY_RECOVERY_AGE_SECONDS=%s\n' "$elapsed_seconds"
 
-$SYSTEMCTL_BIN stop "$matching_unit"
+"$SYSTEMCTL_BIN" stop "$matching_unit"
 
 if ! "$FLOCK_BIN" -w "$LOCK_RELEASE_WAIT_SECONDS" 8; then
   fail "stopped unit but deploy lock was not released within ${LOCK_RELEASE_WAIT_SECONDS}s"
