@@ -24,15 +24,31 @@ Historical internal header aliases remain accepted for compatibility, but new re
 
 ## TLS trust
 
-MAX requires HTTPS with a trusted certificate chain. Python uses the operating-system trust store by default. Keep the server CA store current and include the required trusted certificate chain.
+MAX requires the Russian Trusted Root CA and Russian Trusted Sub CA for `platform-api2.max.ru`. Production deploy runs:
 
-When the server deliberately uses a dedicated PEM bundle, set:
-
-```env
-MAX_CA_BUNDLE=/absolute/path/to/ca-bundle.pem
+```bash
+scripts/install_max_trust.sh
 ```
 
-Do not disable TLS verification.
+The installer downloads the two certificates from the public Госуслуги certificate host over verified HTTPS and validates their immutable SHA-256 values before changing the trust store:
+
+```text
+Russian Trusted Root CA
+936a43fea6e8e525bcc0f81acd9c3d21b4fc4b9b68acea7906d698005afc6504
+
+Russian Trusted Sub CA
+f0ae589f36774f29ef3648f7984b08d42fcce6f1ffeeb6236d773daeb2744ea6
+```
+
+It additionally validates certificate subjects, expiration, the root/subordinate chain and a real TLS handshake to `platform-api2.max.ru`. Debian/Ubuntu use `update-ca-certificates`; RHEL-family systems use `update-ca-trust`. TLS verification is never disabled.
+
+The deployment marker is created only after the trust installation and the normal deploy/restart/health cycle succeed:
+
+```text
+/var/lib/metrotherapy/deploy-migrations/max-mincifry-trust-v1.applied
+```
+
+`MAX_CA_BUNDLE` remains available only for a deliberately managed dedicated PEM bundle. Normally leave it empty so all MAX runtime calls use the updated operating-system trust store.
 
 ## Register or refresh the subscription
 
