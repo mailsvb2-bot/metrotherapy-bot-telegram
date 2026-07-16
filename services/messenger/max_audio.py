@@ -139,7 +139,10 @@ def ensure_messenger_opus_file(file_path: Path | str, *, platform: str) -> Path:
         return target
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".opus.tmp")
+    # Keep the final suffix as .opus so ffmpeg can select the correct muxer even
+    # for the atomic temporary file. The previous `<target>.tmp` ended in `.tmp`
+    # and could fail with "Unable to find a suitable output format".
+    tmp = target.with_name(f"{target.stem}.tmp{target.suffix}")
     cmd = [
         _ffmpeg_bin(clean_platform),
         "-y",
@@ -154,6 +157,8 @@ def ensure_messenger_opus_file(file_path: Path | str, *, platform: str) -> Path:
         "libopus",
         "-b:a",
         _bitrate(clean_platform),
+        "-f",
+        "opus",
         str(tmp),
     ]
 

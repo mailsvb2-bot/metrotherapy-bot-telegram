@@ -4,7 +4,7 @@ import asyncio
 
 from config.settings import settings
 from runtime.messenger_ingress import _max_secret_ok, _vk_secret_ok
-from runtime.messenger_webhooks import _max_webhook_with_official_secret
+from runtime.messenger_webhooks import _max_webhook_with_official_secret, _vk_group_ok
 from runtime.telegram_webhook_runtime import telegram_secret_ok
 
 
@@ -89,3 +89,21 @@ def test_vk_webhook_secret_match(monkeypatch):
     monkeypatch.setattr(settings, "VK_SECRET", "expected")
     assert _vk_secret_ok({"secret": "expected"}) is True
     assert _vk_secret_ok({"secret": "bad"}) is False
+
+
+def test_vk_callback_group_matches_configured_community(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setattr(settings, "VK_GROUP_ID", "238191212")
+
+    assert _vk_group_ok({"group_id": 238191212}) is True
+    assert _vk_group_ok({"group_id": "238191212"}) is True
+    assert _vk_group_ok({"group_id": 1}) is False
+    assert _vk_group_ok({}) is False
+
+
+def test_vk_callback_group_is_fail_closed_without_production_group(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("ALLOW_INSECURE_MESSENGER_WEBHOOKS", "1")
+    monkeypatch.setattr(settings, "VK_GROUP_ID", "")
+
+    assert _vk_group_ok({"group_id": 238191212}) is False
