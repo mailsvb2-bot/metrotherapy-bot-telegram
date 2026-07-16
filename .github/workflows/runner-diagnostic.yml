@@ -16,13 +16,6 @@ jobs:
         run: |
           echo "runner ok"
           uname -a
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Repository sanity
-        run: |
-          pwd
-          ls -la
-          test -f README.md
       - name: Production deploy endpoint cache diagnostic
         shell: bash
         run: |
@@ -47,3 +40,10 @@ jobs:
           echo
 
           grep -q 'local_branch_count=' "$body"
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Repository sanity
+        run: |
+          pwd
+          ls -la
+          test -f README.md
