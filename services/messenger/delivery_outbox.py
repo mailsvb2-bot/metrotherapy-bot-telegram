@@ -10,7 +10,7 @@ from datetime import timedelta
 from typing import Any
 
 from core.time_utils import utc_now, utc_now_iso
-from runtime.messenger_senders import MessengerTransportError
+from runtime.messenger_senders import MessengerTransportError, provider_delivery_scope
 from services.bg import tm
 from services.db import db, tx
 from services.db.runtime import CONFIG
@@ -265,7 +265,9 @@ def reschedule_delivery(item: ClaimedDelivery, error: str) -> None:
 
 async def _deliver_one(item: ClaimedDelivery) -> None:
     replies = deserialize_replies(item.replies_json)
-    await send_reply_bundle(item.platform, item.external_user_id, item.canonical_user_id, replies)
+    provider_key = f"{item.platform}:{item.event_key}"
+    with provider_delivery_scope(provider_key):
+        await send_reply_bundle(item.platform, item.external_user_id, item.canonical_user_id, replies)
     await asyncio.to_thread(mark_delivery_sent, item)
     await asyncio.to_thread(
         log_action_completed,
