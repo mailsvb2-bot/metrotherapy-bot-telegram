@@ -24,9 +24,9 @@ def _callback(markup, prefix: str) -> str:
     )
 
 
-def test_personal_purchase_journey_keeps_package_context_through_stars_recovery(monkeypatch) -> None:
+def test_personal_purchase_journey_tops_up_before_invoice(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
-    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
+    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
     monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     package_id = "practice_start_7"
 
@@ -34,10 +34,15 @@ def test_personal_purchase_journey_keeps_package_context_through_stars_recovery(
     assert _callback(tariffs, "pay:methods:") == f"pay:methods:{package_id}"
 
     methods = kb_telegram_payment_methods(user_id=730001, package_id=package_id)
-    assert _callback(methods, "stars:terms:") == f"stars:terms:{package_id}"
+    method_buttons = _buttons(methods)
+    assert method_buttons[0].callback_data == f"stars:terms:{package_id}"
+    assert method_buttons[1].url == TOPUP_URL
+    assert method_buttons[2].callback_data == f"stars:terms:{package_id}"
+    assert all("ЮKassa" not in button.text for button in method_buttons)
 
     terms = payment_terms_keyboard(package_id=package_id, as_gift=False)
     assert _callback(terms, "stars:buy:") == f"stars:buy:{package_id}"
+    assert _callback(terms, "pay:methods:") == f"pay:methods:{package_id}"
 
     invoice = _invoice_keyboard(
         url="https://t.me/$invoice-personal",
@@ -45,31 +50,34 @@ def test_personal_purchase_journey_keeps_package_context_through_stars_recovery(
         package_id=package_id,
         as_gift=False,
     )
-    buttons = _buttons(invoice)
-    assert buttons[0].url == "https://t.me/$invoice-personal"
-    assert buttons[1].url == TOPUP_URL
-    assert buttons[2].callback_data == f"stars:buy:{package_id}"
-    assert buttons[3].callback_data == f"pay:methods:{package_id}"
-    assert all("PremiumBot" not in str(button.url or "") for button in buttons)
+    invoice_buttons = _buttons(invoice)
+    assert len(invoice_buttons) == 2
+    assert invoice_buttons[0].url == "https://t.me/$invoice-personal"
+    assert invoice_buttons[1].callback_data == f"pay:methods:{package_id}"
+    assert all(button.url != TOPUP_URL for button in invoice_buttons)
 
     help_text = _invoice_message_text(amount_xtr=1500)
-    assert "нажмите кнопку «Купить Stars»" in help_text
-    assert "Telegram откроет штатное окно пополнения" in help_text
-    assert "Настройки → Ваши Stars" in help_text
+    assert "окончательное подтверждение" in help_text
+    assert "спишутся только после" in help_text
+    assert "Сначала купить Stars" in help_text
     assert "PremiumBot" not in help_text
 
 
-def test_gift_purchase_journey_keeps_gift_context_through_stars_recovery(monkeypatch) -> None:
+def test_gift_purchase_journey_keeps_gift_context(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
-    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
+    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
     monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     package_id = "practice_start_7"
 
     methods = kb_telegram_payment_methods(user_id=730002, package_id=package_id, gift=True)
-    assert _callback(methods, "stars:gift_terms:") == f"stars:gift_terms:{package_id}"
+    method_buttons = _buttons(methods)
+    assert method_buttons[0].callback_data == f"stars:gift_terms:{package_id}"
+    assert method_buttons[1].url == TOPUP_URL
+    assert method_buttons[2].callback_data == f"stars:gift_terms:{package_id}"
 
     terms = payment_terms_keyboard(package_id=package_id, as_gift=True)
     assert _callback(terms, "stars:gift:") == f"stars:gift:{package_id}"
+    assert _callback(terms, "pay:gift_methods:") == f"pay:gift_methods:{package_id}"
 
     invoice = _invoice_keyboard(
         url="https://t.me/$invoice-gift",
@@ -77,15 +85,14 @@ def test_gift_purchase_journey_keeps_gift_context_through_stars_recovery(monkeyp
         package_id=package_id,
         as_gift=True,
     )
-    buttons = _buttons(invoice)
-    assert buttons[1].url == TOPUP_URL
-    assert buttons[2].callback_data == f"stars:gift:{package_id}"
-    assert buttons[3].callback_data == f"pay:gift_methods:{package_id}"
-    assert all("PremiumBot" not in str(button.url or "") for button in buttons)
+    invoice_buttons = _buttons(invoice)
+    assert len(invoice_buttons) == 2
+    assert invoice_buttons[0].text == "⭐ Оплатить подарок — 1 500 Stars"
+    assert invoice_buttons[1].callback_data == f"pay:gift_methods:{package_id}"
 
 
 @pytest.mark.asyncio
-async def test_return_after_buying_stars_creates_a_fresh_personal_invoice(monkeypatch) -> None:
+async def test_after_stars_are_ready_personal_invoice_can_be_recreated(monkeypatch) -> None:
     sent: list[tuple[str, bool]] = []
 
     async def fake_safe_answer(_cb, *_args, **_kwargs):
@@ -111,7 +118,7 @@ async def test_return_after_buying_stars_creates_a_fresh_personal_invoice(monkey
 
 
 @pytest.mark.asyncio
-async def test_return_after_buying_stars_creates_a_fresh_gift_invoice(monkeypatch) -> None:
+async def test_after_stars_are_ready_gift_invoice_can_be_created(monkeypatch) -> None:
     sent: list[tuple[str, bool]] = []
 
     async def fake_safe_answer(_cb, *_args, **_kwargs):
