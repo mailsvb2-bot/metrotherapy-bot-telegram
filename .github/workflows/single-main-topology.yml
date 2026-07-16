@@ -4,7 +4,7 @@ name: Single main topology cleanup
 # The same marker is used after a reviewed merge to restore the canonical 1/main topology.
 # Post-merge marker commits are code-neutral and only trigger the repository topology audit.
 # Server audit retries are sent only after the preceding main regression contour is green.
-# Production performs the post-deploy MAX API2 TLS and active-webhook audit for #119.
+# Production applies the VK Callback API ownership, audio and audit hardening from #120.
 on:
   push:
     branches:
