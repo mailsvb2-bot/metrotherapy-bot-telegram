@@ -58,9 +58,9 @@ def test_buyer_parity_remains_an_explicit_legacy_mode(monkeypatch):
     assert telegram_stars_price("practice_personal_month") == 16055
 
 
-def test_telegram_yookassa_has_independent_kill_switch(monkeypatch):
+def test_telegram_yookassa_is_disabled_by_default(monkeypatch):
     monkeypatch.delenv("TELEGRAM_YOOKASSA_ENABLED", raising=False)
-    assert telegram_yookassa_enabled() is True
+    assert telegram_yookassa_enabled() is False
 
     monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
     assert telegram_yookassa_enabled() is False
