@@ -20,6 +20,7 @@ def _base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TOKEN_ENFORCEMENT_MODE", "hard")
     monkeypatch.setenv("YOOKASSA_RECEIPT_EMAIL", "billing@example.test")
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
+    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
 
 
 def test_prod_accepts_explicit_stars_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -38,6 +39,14 @@ def test_prod_accepts_catalog_defaults_when_explicit_overrides_are_absent(monkey
         monkeypatch.delenv(key, raising=False)
 
     validate_prod_monetization_contract(strict=True)
+
+
+def test_prod_rejects_telegram_yookassa(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
+
+    with pytest.raises(ValidationError, match="TELEGRAM_YOOKASSA_ENABLED must be 0"):
+        validate_prod_monetization_contract(strict=True)
 
 
 def test_prod_rejects_buyer_parity_stars_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
