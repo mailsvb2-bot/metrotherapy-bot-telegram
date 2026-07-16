@@ -34,6 +34,14 @@ if ! "$FLOCK_BIN" -n 9; then
 fi
 printf '%s\n' "$$" 1>&9
 
+LATEST_MESSAGE="$(git -C "$APP_DIR" log -1 --pretty=%B 2>/dev/null || true)"
+case "$LATEST_MESSAGE" in
+  *"[max-trust-install-result]"*)
+    printf '=== deploy skipped after published MAX trust result: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+    exit 0
+    ;;
+esac
+
 MIGRATION_PENDING=0
 YOOKASSA_MIGRATION_PENDING=0
 STARS_PRICE_MIGRATION_PENDING=0
@@ -64,6 +72,32 @@ cleanup() {
   "$FLOCK_BIN" -u 9 || true
 }
 trap cleanup EXIT INT TERM HUP
+
+sanitize_result() {
+  printf '%s' "$1" \
+    | tr '\r\n' ' ' \
+    | sed 's/[[:space:]][[:space:]]*/ /g' \
+    | sed 's/[^A-Za-z0-9_ .:=-]/_/g' \
+    | cut -c1-180
+}
+
+publish_max_trust_install_error() {
+  local code="$1"
+  local output="$2"
+  local safe_output
+  local message
+
+  safe_output="$(sanitize_result "$output")"
+  if [ -z "$safe_output" ]; then
+    safe_output="EMPTY_INSTALLER_RESULT"
+  fi
+  message="[max-trust-install-result] status=error code=$code error=$safe_output"
+  git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Audit" \
+      -c user.email="deploy-audit@metrotherapy.local" \
+      commit --allow-empty -m "$message"
+  git -C "$APP_DIR" push origin main
+  printf '=== %s ===\n' "$message" >> "$LOG_FILE"
+}
 
 publish_stars_provider_audit_if_requested() {
   local request_message
@@ -274,9 +308,17 @@ if [ ! -e "$MAX_TRUST_MIGRATION_MARKER" ]; then
   . "$ENV_FILE"
   set +a
   if [ -n "${MAX_BOT_TOKEN:-}" ]; then
-    PYTHON_BIN="$PYTHON" /usr/bin/bash "$APP_DIR/scripts/install_max_trust.sh" >> "$LOG_FILE" 2>&1
-    MAX_TRUST_MIGRATION_PENDING=1
-    printf '=== installed verified MAX Minцифры trust chain: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+    TRUST_OUTPUT=""
+    if TRUST_OUTPUT="$(PYTHON_BIN="$PYTHON" /usr/bin/bash "$APP_DIR/scripts/install_max_trust.sh" 2>&1)"; then
+      printf '%s\n' "$TRUST_OUTPUT" >> "$LOG_FILE"
+      MAX_TRUST_MIGRATION_PENDING=1
+      printf '=== installed verified MAX Minцифры trust chain: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+    else
+      TRUST_CODE="$?"
+      printf '%s\n' "$TRUST_OUTPUT" >> "$LOG_FILE"
+      publish_max_trust_install_error "$TRUST_CODE" "$TRUST_OUTPUT"
+      exit "$TRUST_CODE"
+    fi
   else
     printf '=== MAX trust migration deferred: MAX_BOT_TOKEN is empty: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
   fi
