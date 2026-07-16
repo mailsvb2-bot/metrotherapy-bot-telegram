@@ -173,12 +173,7 @@ def _claimed_from_rows(rows: list[Any], token: str) -> list[ClaimedDelivery]:
 
 
 def claim_due_deliveries(*, limit: int = 1, lock_ttl_sec: int = 900) -> list[ClaimedDelivery]:
-    """Atomically lease due work, including abandoned ``sending`` rows.
-
-    The production worker deliberately claims one item at a time. A row is never
-    left aging behind a slow media upload in the same local batch, and the
-    default 15-minute lease comfortably exceeds provider upload retry windows.
-    """
+    """Atomically lease due work, including abandoned ``sending`` rows."""
 
     now = utc_now().replace(microsecond=0)
     now_iso = now.isoformat()
@@ -250,8 +245,6 @@ def mark_delivery_sent(item: ClaimedDelivery) -> None:
 
 
 def release_delivery_lease(item: ClaimedDelivery, *, reason: str = "worker_shutdown") -> None:
-    """Return a graceful-shutdown claim immediately instead of waiting for TTL."""
-
     now = utc_now_iso()
     with db() as conn:
         with tx(conn):
@@ -289,8 +282,7 @@ def reschedule_delivery(item: ClaimedDelivery, error: str) -> None:
 
 async def _deliver_one(item: ClaimedDelivery) -> None:
     replies = deserialize_replies(item.replies_json)
-    provider_key = f"{item.platform}:{item.event_key}"
-    with provider_delivery_scope(provider_key):
+    with provider_delivery_scope(f"{item.platform}:{item.event_key}"):
         await send_reply_bundle(item.platform, item.external_user_id, item.canonical_user_id, replies)
     await asyncio.to_thread(mark_delivery_sent, item)
     await asyncio.to_thread(
@@ -352,8 +344,9 @@ def start_delivery_worker() -> asyncio.Task:
     if _worker_task is not None and not _worker_task.done():
         return _worker_task
     _worker_stop = asyncio.Event()
-    _worker_task = tm().create(_worker_loop(_worker_stop), name="messenger_durable_delivery_worker")
-    return _worker_task
+    task = tm().create(_worker_loop(_worker_stop), name="messenger_durable_delivery_worker")
+    _worker_task = task
+    return task
 
 
 async def stop_delivery_worker() -> None:
