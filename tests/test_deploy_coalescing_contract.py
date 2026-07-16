@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_SCRIPT = ROOT / "deploy.sh"
 WORKER = ROOT / "scripts" / "run_deploy_worker.sh"
+STALE_RECOVERY = ROOT / "scripts" / "recover_stale_deploy_worker.sh"
 
 
 def _run(*command: str, cwd: Path) -> str:
@@ -30,12 +31,12 @@ def _commit(repo: Path, filename: str, content: str, message: str) -> str:
     return _run("git", "rev-parse", "HEAD", cwd=repo)
 
 
-def test_deploy_script_has_valid_bash_syntax() -> None:
+def _assert_bash_syntax(path: Path) -> None:
     bash = shutil.which("bash")
     assert bash is not None
 
     completed = subprocess.run(
-        [bash, "-n", str(DEPLOY_SCRIPT)],
+        [bash, "-n", str(path)],
         cwd=ROOT,
         check=False,
         capture_output=True,
@@ -44,6 +45,15 @@ def test_deploy_script_has_valid_bash_syntax() -> None:
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_deploy_script_has_valid_bash_syntax() -> None:
+    _assert_bash_syntax(DEPLOY_SCRIPT)
+
+
+def test_stale_deploy_recovery_has_valid_bash_syntax() -> None:
+    assert STALE_RECOVERY.is_file()
+    _assert_bash_syntax(STALE_RECOVERY)
 
 
 def test_older_trigger_is_coalesced_before_any_deploy_side_effect(tmp_path) -> None:
@@ -108,9 +118,9 @@ def test_success_marker_is_atomic_and_written_after_all_verification() -> None:
     marker_function = source.index("record_successful_deployed_sha()")
     post_deploy_verify = source.index('"$PYTHON" scripts/post_deploy_verify.py --skip-pytest')
     record_call = source.rindex('record_successful_deployed_sha "$NEW_SHA"')
-    trap_removed = source.rindex("trap - ERR")
+    trap_removed = source.rindex("trap - ERR TERM INT HUP")
 
-    assert "mktemp \"$DEPLOY_STATE_DIR/deployed_sha.XXXXXX\"" in source
+    assert 'mktemp "$DEPLOY_STATE_DIR/deployed_sha.XXXXXX"' in source
     assert 'mv -f "$tmp_file" "$DEPLOYED_SHA_FILE"' in source
     assert marker_function < post_deploy_verify < record_call < trap_removed
 
@@ -126,3 +136,43 @@ def test_coalescing_keeps_provider_audits_after_deploy_returns() -> None:
     vk_audit = worker_source.rindex("publish_vk_provider_audit_if_requested")
 
     assert deploy_call < stars_audit < max_audit < vk_audit
+
+
+def test_every_long_production_deploy_phase_has_a_hard_deadline() -> None:
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'TIMEOUT_BIN="${TIMEOUT_BIN:-/usr/bin/timeout}"' in source
+    assert '"$TIMEOUT_BIN" --signal=TERM --kill-after=30s "$seconds" "$@"' in source
+    assert 'PIP_INSTALL_TIMEOUT_SECONDS="${PIP_INSTALL_TIMEOUT_SECONDS:-600}"' in source
+    assert 'VALIDATOR_TIMEOUT_SECONDS="${VALIDATOR_TIMEOUT_SECONDS:-300}"' in source
+    assert 'POST_DEPLOY_VERIFY_TIMEOUT_SECONDS="${POST_DEPLOY_VERIFY_TIMEOUT_SECONDS:-600}"' in source
+    assert 'run_bounded "$GIT_NETWORK_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$PIP_INSTALL_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$COMPILE_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$VALIDATOR_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$RUFF_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$SERVICE_RESTART_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$POST_DEPLOY_VERIFY_TIMEOUT_SECONDS"' in source
+    assert "bounded command timed out" in source
+    assert "trap 'rollback 143' TERM" in source
+    assert "trap 'rollback 130' INT" in source
+    assert "trap 'rollback 129' HUP" in source
+
+
+def test_stale_recovery_stops_only_the_exact_lock_holder_unit() -> None:
+    source = STALE_RECOVERY.read_text(encoding="utf-8")
+
+    assert 'STALE_AFTER_SECONDS="${STALE_AFTER_SECONDS:-1200}"' in source
+    assert 'holder_pid="$(sed -n' in source
+    assert 'kill -0 "$holder_pid"' in source
+    assert 'grep -F -- "$WORKER_PATH"' in source
+    assert '"$FLOCK_BIN" -n 8' in source
+    assert '"$SYSTEMCTL_BIN" show "$unit" -p MainPID --value' in source
+    assert 'if [ "$main_pid" = "$holder_pid" ]; then' in source
+    assert '[ "$matching_count" -eq 1 ]' in source
+    assert '$SYSTEMCTL_BIN stop "$matching_unit"' in source
+    assert '"$FLOCK_BIN" -w "$LOCK_RELEASE_WAIT_SECONDS" 8' in source
+    assert "STALE_DEPLOY_RECOVERY_OK" in source
+    assert "pkill" not in source
+    assert "killall" not in source
+    assert '$SYSTEMCTL_BIN stop "$UNIT_PATTERN"' not in source
