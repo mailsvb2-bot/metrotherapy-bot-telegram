@@ -101,4 +101,10 @@ def test_deploy_worker_reports_trust_failure_without_commit_loop() -> None:
     assert 'PYTHON_BIN="$PYTHON"' in source
     assert "[max-trust-install-result]" in source
     assert "publish_max_trust_install_error" in source
-    assert "deploy skipped after published MAX trust result" in source
+    assert "deploy skipped after published provider result" in source
+    for result_marker in (
+        "[stars-provider-audit-result]",
+        "[max-provider-audit-result]",
+        "[vk-provider-audit-result]",
+    ):
+        assert result_marker in source
