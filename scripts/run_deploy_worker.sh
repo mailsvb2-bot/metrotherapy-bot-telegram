@@ -8,6 +8,7 @@ PYTHON="${PYTHON:-$APP_DIR/.venv/bin/python}"
 LOCK_FILE="${LOCK_FILE:-$APP_DIR/data/deploy/metrotherapy_deploy.lock}"
 FLOCK_BIN="${FLOCK_BIN:-/usr/bin/flock}"
 LOCK_WAIT_SECONDS="${DEPLOY_LOCK_WAIT_SECONDS:-900}"
+LOCK_METADATA_VERSION="v1"
 TRIGGER_SHA="${DEPLOY_TRIGGER_SHA:-}"
 LOG_FILE="${LOG_FILE:-/var/log/metrotherapy_deploy.log}"
 ENV_FILE="${ENV_FILE:-/etc/metrotherapy/metrotherapy.env}"
@@ -45,16 +46,28 @@ if [ -n "$TRIGGER_SHA" ]; then
 fi
 
 # The file is only a stable inode for the kernel lock. It may persist forever.
-# The actual lock belongs to FD 9 and is released automatically if this worker
-# exits, is killed, or crashes. Workers wait in order instead of dropping an
-# authenticated push while another deploy is still validating or restarting.
-exec 9>"$LOCK_FILE"
+# Waiting workers open it read/write without truncation, so they cannot destroy
+# the active holder metadata. The holder replaces metadata only after acquiring
+# FD 9. The kernel lock is released automatically on every process exit.
+exec 9<>"$LOCK_FILE"
 printf '=== deploy waiting for flock timeout=%ss: %s ===\n' "$LOCK_WAIT_SECONDS" "$(date -Is)" >> "$LOG_FILE"
 if ! "$FLOCK_BIN" -w "$LOCK_WAIT_SECONDS" 9; then
   printf 'ERROR: deploy lock wait timed out after %ss: %s\n' "$LOCK_WAIT_SECONDS" "$(date -Is)" >> "$LOG_FILE"
   exit 33
 fi
-printf '%s\n' "$$" 1>&9
+LOCK_ACQUIRED_EPOCH="$(date +%s)"
+: > "$LOCK_FILE"
+printf '%s %s %s %s\n' \
+  "$LOCK_METADATA_VERSION" \
+  "$$" \
+  "$LOCK_ACQUIRED_EPOCH" \
+  "${TRIGGER_SHA:-manual}" \
+  1>&9
+printf '=== deploy flock acquired pid=%s epoch=%s trigger=%s ===\n' \
+  "$$" \
+  "$LOCK_ACQUIRED_EPOCH" \
+  "${TRIGGER_SHA:-manual}" \
+  >> "$LOG_FILE"
 
 if [ -n "$TRIGGER_SHA" ]; then
   git -C "$APP_DIR" fetch origin main
@@ -109,6 +122,7 @@ cleanup() {
     printf '=== production env migrations rolled back after failed deploy: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
   fi
   rm -f "$ENV_BACKUP" 2>/dev/null || true
+  : > "$LOCK_FILE" 2>/dev/null || true
   "$FLOCK_BIN" -u 9 || true
 }
 trap cleanup EXIT INT TERM HUP

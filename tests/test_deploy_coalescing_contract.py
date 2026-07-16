@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_SCRIPT = ROOT / "deploy.sh"
 WORKER = ROOT / "scripts" / "run_deploy_worker.sh"
+STALE_RECOVERY = ROOT / "scripts" / "recover_stale_deploy_worker.sh"
 
 
 def _run(*command: str, cwd: Path) -> str:
@@ -30,12 +31,12 @@ def _commit(repo: Path, filename: str, content: str, message: str) -> str:
     return _run("git", "rev-parse", "HEAD", cwd=repo)
 
 
-def test_deploy_script_has_valid_bash_syntax() -> None:
+def _assert_bash_syntax(path: Path) -> None:
     bash = shutil.which("bash")
     assert bash is not None
 
     completed = subprocess.run(
-        [bash, "-n", str(DEPLOY_SCRIPT)],
+        [bash, "-n", str(path)],
         cwd=ROOT,
         check=False,
         capture_output=True,
@@ -44,6 +45,19 @@ def test_deploy_script_has_valid_bash_syntax() -> None:
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_deploy_script_has_valid_bash_syntax() -> None:
+    _assert_bash_syntax(DEPLOY_SCRIPT)
+
+
+def test_deploy_worker_has_valid_bash_syntax() -> None:
+    _assert_bash_syntax(WORKER)
+
+
+def test_stale_deploy_recovery_has_valid_bash_syntax() -> None:
+    assert STALE_RECOVERY.is_file()
+    _assert_bash_syntax(STALE_RECOVERY)
 
 
 def test_older_trigger_is_coalesced_before_any_deploy_side_effect(tmp_path) -> None:
@@ -108,9 +122,9 @@ def test_success_marker_is_atomic_and_written_after_all_verification() -> None:
     marker_function = source.index("record_successful_deployed_sha()")
     post_deploy_verify = source.index('"$PYTHON" scripts/post_deploy_verify.py --skip-pytest')
     record_call = source.rindex('record_successful_deployed_sha "$NEW_SHA"')
-    trap_removed = source.rindex("trap - ERR")
+    trap_removed = source.rindex("trap - ERR TERM INT HUP")
 
-    assert "mktemp \"$DEPLOY_STATE_DIR/deployed_sha.XXXXXX\"" in source
+    assert 'mktemp "$DEPLOY_STATE_DIR/deployed_sha.XXXXXX"' in source
     assert 'mv -f "$tmp_file" "$DEPLOYED_SHA_FILE"' in source
     assert marker_function < post_deploy_verify < record_call < trap_removed
 
@@ -126,3 +140,79 @@ def test_coalescing_keeps_provider_audits_after_deploy_returns() -> None:
     vk_audit = worker_source.rindex("publish_vk_provider_audit_if_requested")
 
     assert deploy_call < stars_audit < max_audit < vk_audit
+
+
+def test_waiting_workers_never_truncate_active_lock_metadata() -> None:
+    source = WORKER.read_text(encoding="utf-8")
+
+    open_lock = source.index('exec 9<>"$LOCK_FILE"')
+    acquire_lock = source.index('"$FLOCK_BIN" -w "$LOCK_WAIT_SECONDS" 9')
+    acquisition_epoch = source.index('LOCK_ACQUIRED_EPOCH="$(date +%s)"')
+    replace_metadata = source.index(': > "$LOCK_FILE"', acquisition_epoch)
+    write_metadata = source.index('"$LOCK_METADATA_VERSION"', replace_metadata)
+    clear_metadata = source.rindex(': > "$LOCK_FILE"')
+
+    assert 'exec 9>"$LOCK_FILE"' not in source
+    assert open_lock < acquire_lock < acquisition_epoch < replace_metadata < write_metadata
+    assert write_metadata < clear_metadata
+    assert 'LOCK_METADATA_VERSION="v1"' in source
+    assert '"$$"' in source[replace_metadata:write_metadata + 200]
+    assert '"$LOCK_ACQUIRED_EPOCH"' in source[replace_metadata:write_metadata + 300]
+
+
+def test_every_long_production_deploy_phase_has_a_hard_deadline() -> None:
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'TIMEOUT_BIN="${TIMEOUT_BIN:-/usr/bin/timeout}"' in source
+    assert '"$TIMEOUT_BIN" --signal=TERM --kill-after=30s "$seconds" "$@"' in source
+    assert 'PIP_INSTALL_TIMEOUT_SECONDS="${PIP_INSTALL_TIMEOUT_SECONDS:-600}"' in source
+    assert 'VALIDATOR_TIMEOUT_SECONDS="${VALIDATOR_TIMEOUT_SECONDS:-300}"' in source
+    assert 'POST_DEPLOY_VERIFY_TIMEOUT_SECONDS="${POST_DEPLOY_VERIFY_TIMEOUT_SECONDS:-600}"' in source
+    assert 'run_bounded "$GIT_NETWORK_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$PIP_INSTALL_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$COMPILE_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$VALIDATOR_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$RUFF_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$SERVICE_RESTART_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$POST_DEPLOY_VERIFY_TIMEOUT_SECONDS"' in source
+    assert "bounded command timed out" in source
+    assert "trap 'rollback 143' TERM" in source
+    assert "trap 'rollback 130' INT" in source
+    assert "trap 'rollback 129' HUP" in source
+
+
+def test_stale_recovery_uses_kernel_holder_and_lock_acquisition_age() -> None:
+    source = STALE_RECOVERY.read_text(encoding="utf-8")
+
+    assert 'LSLOCKS_BIN="${LSLOCKS_BIN:-/usr/bin/lslocks}"' in source
+    assert 'STALE_AFTER_SECONDS="${STALE_AFTER_SECONDS:-3600}"' in source
+    assert 'ALLOW_LEGACY_LOCK_METADATA="${ALLOW_LEGACY_LOCK_METADATA:-0}"' in source
+    assert 'exec 8<>"$LOCK_FILE"' in source
+    assert '"$FLOCK_BIN" -n 8' in source
+    assert '"$LSLOCKS_BIN" --noheadings --raw --output PID,PATH' in source
+    assert 'awk -v path="$LOCK_FILE"' in source
+    assert 'holder_pid="$(printf' in source
+    assert 'metadata_version" = "v1"' in source
+    assert '"$metadata_pid" = "$holder_pid"' in source
+    assert 'held_seconds="$((now_epoch - lock_acquired_epoch))"' in source
+
+    legacy_gate = source.index('[ "$ALLOW_LEGACY_LOCK_METADATA" = "1" ]')
+    legacy_process_age = source.index('"$PS_BIN" -o etimes= -p "$holder_pid"')
+    assert legacy_gate < legacy_process_age
+
+
+def test_stale_recovery_stops_only_the_exact_lock_holder_unit() -> None:
+    source = STALE_RECOVERY.read_text(encoding="utf-8")
+
+    assert 'kill -0 "$holder_pid"' in source
+    assert 'grep -F -- "$WORKER_PATH"' in source
+    assert '"$SYSTEMCTL_BIN" show "$unit" -p MainPID --value' in source
+    assert 'if [ "$main_pid" = "$holder_pid" ]; then' in source
+    assert '[ "$matching_count" -eq 1 ]' in source
+    assert '"$TIMEOUT_BIN"' in source
+    assert '"$SYSTEMCTL_BIN" stop "$matching_unit"' in source
+    assert '"$FLOCK_BIN" -w "$LOCK_RELEASE_WAIT_SECONDS" 8' in source
+    assert "STALE_DEPLOY_RECOVERY_OK" in source
+    assert "pkill" not in source
+    assert "killall" not in source
+    assert '"$SYSTEMCTL_BIN" stop "$UNIT_PATTERN"' not in source

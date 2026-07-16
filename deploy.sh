@@ -18,6 +18,16 @@ DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-/var/lib/metrotherapy/deploy-state}"
 DEPLOYED_SHA_FILE="${DEPLOYED_SHA_FILE:-$DEPLOY_STATE_DIR/deployed_sha}"
 TRIGGER_SHA="${DEPLOY_TRIGGER_SHA:-}"
 ZERO_SHA="0000000000000000000000000000000000000000"
+TIMEOUT_BIN="${TIMEOUT_BIN:-/usr/bin/timeout}"
+GIT_NETWORK_TIMEOUT_SECONDS="${GIT_NETWORK_TIMEOUT_SECONDS:-180}"
+WEBHOOK_RESTART_TIMEOUT_SECONDS="${WEBHOOK_RESTART_TIMEOUT_SECONDS:-120}"
+PIP_INSTALL_TIMEOUT_SECONDS="${PIP_INSTALL_TIMEOUT_SECONDS:-600}"
+COMPILE_TIMEOUT_SECONDS="${COMPILE_TIMEOUT_SECONDS:-180}"
+VALIDATOR_TIMEOUT_SECONDS="${VALIDATOR_TIMEOUT_SECONDS:-300}"
+RUFF_TIMEOUT_SECONDS="${RUFF_TIMEOUT_SECONDS:-300}"
+SERVICE_RESTART_TIMEOUT_SECONDS="${SERVICE_RESTART_TIMEOUT_SECONDS:-120}"
+POST_DEPLOY_VERIFY_TIMEOUT_SECONDS="${POST_DEPLOY_VERIFY_TIMEOUT_SECONDS:-600}"
+ROLLBACK_ACTIVE=0
 
 cd "$APP_DIR"
 
@@ -39,6 +49,44 @@ _is_truthy() {
     1|true|yes|on|webhook) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+_is_positive_integer() {
+  local value="${1:-}"
+  case "$value" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$value" -gt 0 ]
+}
+
+_require_positive_timeout() {
+  local name="$1"
+  local value="$2"
+  if ! _is_positive_integer "$value"; then
+    echo "ERROR: $name must be a positive integer number of seconds"
+    exit 27
+  fi
+}
+
+run_bounded() {
+  local seconds="$1"
+  local label="$2"
+  local code
+  shift 2
+
+  echo "=== bounded command: $label timeout=${seconds}s ==="
+  if "$TIMEOUT_BIN" --signal=TERM --kill-after=30s "$seconds" "$@"; then
+    return 0
+  else
+    code="$?"
+  fi
+
+  if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
+    echo "ERROR: bounded command timed out: $label timeout=${seconds}s code=$code"
+  else
+    echo "ERROR: bounded command failed: $label code=$code"
+  fi
+  return "$code"
 }
 
 _is_valid_commit_sha() {
@@ -141,7 +189,9 @@ sync_deploy_webhook_service() {
 
   if systemctl list-unit-files "$DEPLOY_WEBHOOK_SERVICE" >/dev/null 2>&1; then
     echo "=== restart deploy webhook service ==="
-    systemctl restart "$DEPLOY_WEBHOOK_SERVICE" || true
+    run_bounded "$WEBHOOK_RESTART_TIMEOUT_SECONDS" \
+      "restart deploy webhook service" \
+      systemctl restart "$DEPLOY_WEBHOOK_SERVICE"
   else
     echo "WARNING: deploy webhook service not installed: $DEPLOY_WEBHOOK_SERVICE"
   fi
@@ -192,7 +242,12 @@ publish_server_branch_audit_if_requested() {
   local_branch_count="$(printf '%s\n' "$local_branch_list" | sed '/^$/d' | wc -l | tr -d ' ')"
   local_branch_csv="$(printf '%s\n' "$local_branch_list" | sed '/^$/d' | paste -sd, -)"
 
-  remote_branch_list="$(git ls-remote --heads origin | awk '{ref=$2; sub("^refs/heads/", "", ref); print ref}' | sort)"
+  remote_branch_list="$(
+    "$TIMEOUT_BIN" --signal=TERM --kill-after=10s "$GIT_NETWORK_TIMEOUT_SECONDS" \
+      git ls-remote --heads origin \
+      | awk '{ref=$2; sub("^refs/heads/", "", ref); print ref}' \
+      | sort
+  )"
   remote_branch_count="$(printf '%s\n' "$remote_branch_list" | sed '/^$/d' | wc -l | tr -d ' ')"
   remote_branch_csv="$(printf '%s\n' "$remote_branch_list" | sed '/^$/d' | paste -sd, -)"
 
@@ -211,9 +266,34 @@ publish_server_branch_audit_if_requested() {
   git -c user.name="Metrotherapy Deploy Audit" \
       -c user.email="deploy-audit@metrotherapy.local" \
       commit --allow-empty -m "$audit_message"
-  git push origin main
+  run_bounded "$GIT_NETWORK_TIMEOUT_SECONDS" \
+    "publish server branch audit result" \
+    git push origin main
   echo "=== $audit_message ==="
 }
+
+for timeout_pair in \
+  "HEALTH_WAIT_SECONDS:$HEALTH_WAIT_SECONDS" \
+  "GIT_NETWORK_TIMEOUT_SECONDS:$GIT_NETWORK_TIMEOUT_SECONDS" \
+  "WEBHOOK_RESTART_TIMEOUT_SECONDS:$WEBHOOK_RESTART_TIMEOUT_SECONDS" \
+  "PIP_INSTALL_TIMEOUT_SECONDS:$PIP_INSTALL_TIMEOUT_SECONDS" \
+  "COMPILE_TIMEOUT_SECONDS:$COMPILE_TIMEOUT_SECONDS" \
+  "VALIDATOR_TIMEOUT_SECONDS:$VALIDATOR_TIMEOUT_SECONDS" \
+  "RUFF_TIMEOUT_SECONDS:$RUFF_TIMEOUT_SECONDS" \
+  "SERVICE_RESTART_TIMEOUT_SECONDS:$SERVICE_RESTART_TIMEOUT_SECONDS" \
+  "POST_DEPLOY_VERIFY_TIMEOUT_SECONDS:$POST_DEPLOY_VERIFY_TIMEOUT_SECONDS"
+do
+  _require_positive_timeout "${timeout_pair%%:*}" "${timeout_pair#*:}"
+done
+
+if [ ! -x "$TIMEOUT_BIN" ]; then
+  echo "ERROR: timeout utility is unavailable: $TIMEOUT_BIN"
+  exit 28
+fi
+
+export GIT_TERMINAL_PROMPT=0
+export GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1}"
+export GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-30}"
 
 require_telegram_polling_contract
 
@@ -229,17 +309,6 @@ fi
 
 OLD_SHA="$(git rev-parse HEAD)"
 echo "=== old sha: $OLD_SHA ==="
-
-rollback() {
-  code="$?"
-  echo "=== deploy failed with code=$code at $(date -Is) ==="
-  echo "=== rollback to $OLD_SHA ==="
-  git reset --hard "$OLD_SHA" || true
-  systemctl restart "$SERVICE_NAME" || true
-  wait_for_health "$LOCAL_HEALTH_URL" "$HEALTH_WAIT_SECONDS" || true
-  systemctl status "$SERVICE_NAME" --no-pager -l || true
-  exit "$code"
-}
 
 wait_for_health() {
   url="$1"
@@ -263,7 +332,31 @@ wait_for_health() {
   done
 }
 
-trap rollback ERR
+rollback() {
+  local code="${1:-1}"
+
+  if [ "$ROLLBACK_ACTIVE" -eq 1 ]; then
+    exit "$code"
+  fi
+  ROLLBACK_ACTIVE=1
+  trap - ERR TERM INT HUP
+
+  echo "=== deploy failed with code=$code at $(date -Is) ==="
+  echo "=== rollback to $OLD_SHA ==="
+  git reset --hard "$OLD_SHA" || true
+  "$TIMEOUT_BIN" --signal=TERM --kill-after=15s \
+    "$SERVICE_RESTART_TIMEOUT_SECONDS" \
+    systemctl restart "$SERVICE_NAME" || true
+  wait_for_health "$LOCAL_HEALTH_URL" "$HEALTH_WAIT_SECONDS" || true
+  "$TIMEOUT_BIN" --signal=TERM --kill-after=10s 30 \
+    systemctl status "$SERVICE_NAME" --no-pager -l || true
+  exit "$code"
+}
+
+trap 'rollback $?' ERR
+trap 'rollback 143' TERM
+trap 'rollback 130' INT
+trap 'rollback 129' HUP
 
 echo "=== git status before ==="
 git status --short
@@ -277,14 +370,18 @@ echo "=== checkout production branch main ==="
 git checkout main
 
 echo "=== fetch and prune origin ==="
-git fetch --prune origin
+run_bounded "$GIT_NETWORK_TIMEOUT_SECONDS" \
+  "fetch and prune origin" \
+  git fetch --prune origin
 
 echo "=== fast-forward only ==="
 git merge --ff-only origin/main
 
 require_single_local_main_branch
 
-git remote prune origin
+run_bounded "$GIT_NETWORK_TIMEOUT_SECONDS" \
+  "prune remote origin" \
+  git remote prune origin
 publish_server_branch_audit_if_requested
 
 NEW_SHA="$(git rev-parse HEAD)"
@@ -295,46 +392,64 @@ sync_deploy_webhook_service
 
 if [ -f requirements.txt ]; then
   echo "=== install requirements ==="
-  "$PIP" install -r requirements.txt
+  run_bounded "$PIP_INSTALL_TIMEOUT_SECONDS" \
+    "install requirements" \
+    "$PIP" install -r requirements.txt
 fi
 
 echo "=== compile smoke ==="
-"$PYTHON" -m compileall \
-  main.py \
-  app.py \
-  runtime \
-  services \
-  handlers \
-  keyboards \
-  scripts
+run_bounded "$COMPILE_TIMEOUT_SECONDS" \
+  "compile smoke" \
+  "$PYTHON" -m compileall \
+    main.py \
+    app.py \
+    runtime \
+    services \
+    handlers \
+    keyboards \
+    scripts
 
 echo "=== prod validator ==="
-VALIDATOR_RELEASE_MODE=1 VALIDATOR_GUARDRAILS_STRICT=1 "$PYTHON" scripts/validate_project.py
+run_bounded "$VALIDATOR_TIMEOUT_SECONDS" \
+  "production validator" \
+  env VALIDATOR_RELEASE_MODE=1 VALIDATOR_GUARDRAILS_STRICT=1 \
+  "$PYTHON" scripts/validate_project.py
 
 if [ -f scripts/check_ruff.py ]; then
   echo "=== ruff/project quality check ==="
-  "$PYTHON" scripts/check_ruff.py
+  run_bounded "$RUFF_TIMEOUT_SECONDS" \
+    "ruff project quality check" \
+    "$PYTHON" scripts/check_ruff.py
 fi
 
 echo "=== restart service ==="
-systemctl restart "$SERVICE_NAME"
+run_bounded "$SERVICE_RESTART_TIMEOUT_SECONDS" \
+  "restart metrotherapy service" \
+  systemctl restart "$SERVICE_NAME"
 
 echo "=== wait service health ==="
 wait_for_health "$LOCAL_HEALTH_URL" "$HEALTH_WAIT_SECONDS"
 
 echo "=== service status ==="
-systemctl is-active --quiet "$SERVICE_NAME"
-systemctl status "$SERVICE_NAME" --no-pager -l | sed -n '1,60p'
+run_bounded 30 \
+  "assert metrotherapy service active" \
+  systemctl is-active --quiet "$SERVICE_NAME"
+run_bounded 30 \
+  "read metrotherapy service status" \
+  systemctl status "$SERVICE_NAME" --no-pager -l \
+  | sed -n '1,60p'
 
 echo "=== public health ==="
 wait_for_health "$PUBLIC_HEALTH_URL" "$HEALTH_WAIT_SECONDS"
 
 if [ -f scripts/post_deploy_verify.py ]; then
   echo "=== post deploy verify ==="
-  "$PYTHON" scripts/post_deploy_verify.py --skip-pytest
+  run_bounded "$POST_DEPLOY_VERIFY_TIMEOUT_SECONDS" \
+    "post deploy verification bundle" \
+    "$PYTHON" scripts/post_deploy_verify.py --skip-pytest
 fi
 
 record_successful_deployed_sha "$NEW_SHA"
-trap - ERR
+trap - ERR TERM INT HUP
 echo "=== deploy finished OK: $(date -Is) ==="
 echo "=== deployed sha: $NEW_SHA ==="
