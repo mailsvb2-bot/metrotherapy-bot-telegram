@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import ssl
 import sys
 import urllib.error
@@ -17,6 +18,24 @@ def _context() -> ssl.SSLContext:
     return ssl.create_default_context(cafile=bundle or None)
 
 
+def _transport_error(exc: BaseException) -> str:
+    reason: BaseException | object = exc
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return f"TLS_CERT_VERIFY_{int(reason.verify_code)}"
+    if isinstance(reason, ssl.SSLError):
+        value = str(getattr(reason, "reason", "") or type(reason).__name__).upper()
+        return "TLS_" + "_".join(value.split())[:60]
+    if isinstance(reason, socket.gaierror):
+        return "DNS_ERROR"
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return "NETWORK_TIMEOUT"
+    if isinstance(reason, ConnectionRefusedError):
+        return "CONNECTION_REFUSED"
+    return "NETWORK_ERROR"
+
+
 def _api_call(token: str, path: str) -> tuple[dict[str, Any], int]:
     request = urllib.request.Request(
         API_BASE + path,
@@ -30,8 +49,8 @@ def _api_call(token: str, path: str) -> tuple[dict[str, Any], int]:
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", "replace")
         status = int(exc.code)
-    except (urllib.error.URLError, OSError, ssl.SSLError):
-        return {"error": "NETWORK_OR_TLS_ERROR"}, 0
+    except (urllib.error.URLError, OSError, ssl.SSLError) as exc:
+        return {"error": _transport_error(exc)}, 0
     try:
         payload = json.loads(raw) if raw else {}
     except json.JSONDecodeError:
