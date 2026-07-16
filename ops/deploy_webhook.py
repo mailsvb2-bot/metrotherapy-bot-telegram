@@ -1,4 +1,5 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
@@ -14,9 +15,37 @@ PORT = 9001
 SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 APP_DIR = Path("/root/metrotherapy")
 DEPLOY_WORKER = APP_DIR / "scripts/run_deploy_worker.sh"
+DEPLOY_LOG = Path("/var/log/metrotherapy_deploy.log")
 SYSTEMD_RUN = "/usr/bin/systemd-run"
+SYSTEMCTL = "/usr/bin/systemctl"
 _TRIGGER_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHORT_TRIGGER_RE = re.compile(r"^[0-9a-f]{12}$")
+_DEPLOY_UNIT_RE = re.compile(r"^metrotherapy-deploy-[0-9a-f]{12}\.service$")
 _ZERO_SHA = "0" * 40
+_LOG_TAIL_BYTES = 512 * 1024
+
+_TRIGGER_LINE_RE = re.compile(r"^=== deploy trigger sha: ([0-9a-f]{40}) ===$")
+_DEPLOY_STARTED_RE = re.compile(
+    r"^=== deploy queued started trigger=([0-9a-f]{40}):"
+)
+_DEPLOY_FINISHED_RE = re.compile(
+    r"^=== deploy queued finished trigger=([0-9a-f]{40}):"
+)
+_RESULT_LINE_RE = re.compile(
+    r"^=== \[(?:max-trust-install|stars-provider-audit|max-provider-audit|vk-provider-audit)-result\] "
+    r"trigger=([0-9a-f]{12})\b"
+)
+_RESULT_SKIP_RE = re.compile(
+    r"^=== deploy skipped after published provider result trigger=([0-9a-f]{40}):"
+)
+_TRIGGER_UNAVAILABLE_RE = re.compile(
+    r"^ERROR: deploy trigger commit is unavailable: ([0-9a-f]{40})$"
+)
+_RESULT_PUBLISH_ERROR_RE = re.compile(
+    r"^ERROR: unable to publish audit result after retries: "
+    r"\[(?:max-trust-install|stars-provider-audit|max-provider-audit|vk-provider-audit)-result\] "
+    r"trigger=([0-9a-f]{12})\b"
+)
 
 
 class DeployQueueError(RuntimeError):
@@ -112,6 +141,160 @@ def _local_branch_topology() -> tuple[list[str], str | None]:
     return branches, None
 
 
+def _deploy_unit_counts() -> tuple[int | None, int | None]:
+    """Return only aggregate transient-worker counts, never unit environments."""
+
+    try:
+        completed = subprocess.run(  # nosec B603
+            [
+                SYSTEMCTL,
+                "list-units",
+                "--all",
+                "--type=service",
+                "--no-legend",
+                "--plain",
+                "metrotherapy-deploy-*.service",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None, None
+
+    if completed.returncode != 0:
+        return None, None
+
+    total = 0
+    running = 0
+    for line in completed.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 4 or _DEPLOY_UNIT_RE.fullmatch(parts[0]) is None:
+            continue
+        total += 1
+        if parts[2] in {"active", "activating", "reloading"}:
+            running += 1
+    return total, running
+
+
+def _read_log_tail(path: Path) -> tuple[list[str], str]:
+    """Read a bounded log tail and return a safe timestamp for observability."""
+
+    try:
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - _LOG_TAIL_BYTES), os.SEEK_SET)
+            payload = stream.read(_LOG_TAIL_BYTES)
+        updated_at = datetime.fromtimestamp(
+            path.stat().st_mtime,
+            tz=timezone.utc,
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except OSError:
+        return [], "unknown"
+    return payload.decode("utf-8", errors="ignore").splitlines(), updated_at
+
+
+def _safe_deploy_log_status(path: Path = DEPLOY_LOG) -> dict[str, str]:
+    """Derive allowlisted worker state from fixed-format log markers only.
+
+    Free-form log text is never returned. This deliberately exposes no command
+    output, provider response, token, secret, confirmation code, or environment.
+    """
+
+    lines, updated_at = _read_log_tail(path)
+    trigger = "unknown"
+    stage = "unknown"
+    code = "unknown"
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        match = _TRIGGER_LINE_RE.fullmatch(line)
+        if match:
+            trigger = match.group(1)
+            stage = "trigger_loaded"
+            code = "0"
+            continue
+
+        match = _DEPLOY_STARTED_RE.match(line)
+        if match:
+            trigger = match.group(1)
+            stage = "deploying"
+            code = "0"
+            continue
+
+        match = _DEPLOY_FINISHED_RE.match(line)
+        if match:
+            trigger = match.group(1)
+            stage = "post_deploy_audit"
+            code = "0"
+            continue
+
+        match = _RESULT_SKIP_RE.match(line)
+        if match:
+            trigger = match.group(1)
+            stage = "result_trigger_skipped"
+            code = "0"
+            continue
+
+        match = _RESULT_LINE_RE.match(line)
+        if match:
+            prefix = match.group(1)
+            trigger = trigger if trigger.startswith(prefix) else prefix
+            stage = "result_published"
+            code = "0"
+            continue
+
+        match = _TRIGGER_UNAVAILABLE_RE.fullmatch(line)
+        if match:
+            trigger = match.group(1)
+            stage = "trigger_unavailable"
+            code = "36"
+            continue
+
+        match = _RESULT_PUBLISH_ERROR_RE.match(line)
+        if match:
+            prefix = match.group(1)
+            trigger = trigger if trigger.startswith(prefix) else prefix
+            stage = "result_publish_error"
+            code = "34"
+            continue
+
+        if (
+            line.startswith("=== production env migrations rolled back after failed deploy:")
+            and trigger != "unknown"
+        ):
+            stage = "deploy_failed"
+            code = "1"
+
+    if not (_TRIGGER_SHA_RE.fullmatch(trigger) or _SHORT_TRIGGER_RE.fullmatch(trigger)):
+        trigger = "unknown"
+    return {
+        "trigger": trigger[:12] if trigger != "unknown" else trigger,
+        "stage": stage,
+        "code": code,
+        "updated_at": updated_at,
+    }
+
+
+def _deploy_observability() -> dict[str, str]:
+    total, running = _deploy_unit_counts()
+    status = _safe_deploy_log_status()
+    status["units"] = str(total) if total is not None else "unknown"
+    status["running"] = str(running) if running is not None else "unknown"
+
+    if running == 0 and status["stage"] == "deploying":
+        status["stage"] = "deploy_exited_before_finish"
+        if status["code"] == "0":
+            status["code"] = "unknown"
+    elif running == 0 and status["stage"] == "post_deploy_audit":
+        status["stage"] = "post_deploy_audit_exited"
+        if status["code"] == "0":
+            status["code"] = "unknown"
+    return status
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body: bytes):
         self.send_response(code)
@@ -125,10 +308,17 @@ class Handler(BaseHTTPRequestHandler):
             if error is not None:
                 self._send(503, f"error: branch audit unavailable: {error}".encode("utf-8"))
                 return
+            deploy = _deploy_observability()
             body = (
                 "ok: github deploy webhook accepts POST "
                 f"local_branch_count={len(branches)} "
-                f"local_branches={','.join(branches)}"
+                f"local_branches={','.join(branches)} "
+                f"deploy_units={deploy['units']} "
+                f"deploy_running={deploy['running']} "
+                f"deploy_last_trigger={deploy['trigger']} "
+                f"deploy_last_stage={deploy['stage']} "
+                f"deploy_last_code={deploy['code']} "
+                f"deploy_log_updated_at={deploy['updated_at']}"
             )
             self._send(200, body.encode("utf-8"))
         else:
