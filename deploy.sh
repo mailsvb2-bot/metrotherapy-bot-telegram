@@ -99,6 +99,8 @@ _is_valid_commit_sha() {
 
 skip_if_trigger_already_deployed() {
   local deployed_sha=""
+  local current_sha=""
+  local current_branch=""
 
   if [ -z "$TRIGGER_SHA" ]; then
     echo "=== deploy coalescing disabled: no immutable trigger SHA ==="
@@ -124,6 +126,21 @@ skip_if_trigger_already_deployed() {
   fi
   if ! git cat-file -e "$deployed_sha^{commit}" 2>/dev/null; then
     echo "WARNING: ignoring unavailable successful deployed SHA marker: $deployed_sha"
+    return 0
+  fi
+
+  current_branch="$(git branch --show-current)"
+  if [ "$current_branch" != "main" ]; then
+    echo "=== deploy coalescing bypassed: checkout branch=$current_branch expected=main ==="
+    return 0
+  fi
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "=== deploy coalescing bypassed: production worktree is dirty ==="
+    return 0
+  fi
+  current_sha="$(git rev-parse HEAD)"
+  if [ "$current_sha" != "$deployed_sha" ]; then
+    echo "=== deploy coalescing bypassed: checkout=$current_sha successful_sha=$deployed_sha ==="
     return 0
   fi
 
