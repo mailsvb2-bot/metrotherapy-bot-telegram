@@ -12,6 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WEBHOOK = ROOT / "ops" / "deploy_webhook.py"
 WORKER = ROOT / "scripts" / "run_deploy_worker.sh"
+OBSERVED_WORKER = ROOT / "scripts" / "run_deploy_worker_observed.sh"
 
 
 def _load_webhook_module():
@@ -26,15 +27,16 @@ def _load_webhook_module():
 def test_deploy_worker_has_valid_bash_syntax_and_cleanup_trap() -> None:
     bash = shutil.which("bash")
     assert bash is not None
-    completed = subprocess.run(
-        [bash, "-n", str(WORKER)],
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert completed.returncode == 0, completed.stderr
+    for script in (WORKER, OBSERVED_WORKER):
+        completed = subprocess.run(
+            [bash, "-n", str(script)],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert completed.returncode == 0, f"{script}: {completed.stderr}"
 
     text = WORKER.read_text(encoding="utf-8")
     assert "trap cleanup EXIT INT TERM HUP" in text
@@ -59,6 +61,11 @@ def test_webhook_queues_deploy_as_independent_trigger_bound_systemd_service(monk
         "uuid4",
         lambda: SimpleNamespace(hex="1234567890abcdef"),
     )
+    monkeypatch.setattr(
+        module,
+        "_deploy_worker_path",
+        lambda: module.OBSERVED_DEPLOY_WORKER,
+    )
 
     module._run_deploy_background(trigger_sha)
 
@@ -72,7 +79,7 @@ def test_webhook_queues_deploy_as_independent_trigger_bound_systemd_service(monk
     assert f"--setenv=DEPLOY_TRIGGER_SHA={trigger_sha}" in command
     assert command[-2:] == [
         "/usr/bin/bash",
-        "/root/metrotherapy/scripts/run_deploy_worker.sh",
+        "/root/metrotherapy/scripts/run_deploy_worker_observed.sh",
     ]
     assert captured["kwargs"] == {
         "check": False,
@@ -80,6 +87,15 @@ def test_webhook_queues_deploy_as_independent_trigger_bound_systemd_service(monk
         "text": True,
         "timeout": 10,
     }
+
+
+def test_webhook_falls_back_to_base_worker_after_checkout_rollback(monkeypatch) -> None:
+    module = _load_webhook_module()
+    observed_type = type(module.OBSERVED_DEPLOY_WORKER)
+
+    monkeypatch.setattr(observed_type, "is_file", lambda _self: False)
+
+    assert module._deploy_worker_path() == module.BASE_DEPLOY_WORKER
 
 
 @pytest.mark.parametrize(
@@ -109,6 +125,11 @@ def test_webhook_normalizes_valid_trigger_sha() -> None:
 def test_webhook_maps_systemd_queue_failure_to_one_domain_exception(monkeypatch) -> None:
     module = _load_webhook_module()
 
+    monkeypatch.setattr(
+        module,
+        "_deploy_worker_path",
+        lambda: module.OBSERVED_DEPLOY_WORKER,
+    )
     monkeypatch.setattr(
         module.subprocess,
         "run",
@@ -189,6 +210,54 @@ def test_webhook_deploy_status_uses_only_allowlisted_log_markers(tmp_path) -> No
     assert "must-never-leak" not in repr(status)
 
 
+def test_webhook_deploy_status_records_explicit_worker_completion(tmp_path) -> None:
+    module = _load_webhook_module()
+    trigger = "d" * 40
+    log_file = tmp_path / "deploy.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                f"=== deploy trigger sha: {trigger} ===",
+                f"=== deploy queued started trigger={trigger}: now ===",
+                f"=== deploy queued finished trigger={trigger}: now ===",
+                f"=== deploy worker completed trigger={trigger}: now ===",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    status = module._safe_deploy_log_status(log_file)
+
+    assert status["trigger"] == trigger[:12]
+    assert status["stage"] == "worker_completed"
+    assert status["code"] == "0"
+
+
+def test_stale_completion_never_overwrites_newer_trigger_state(tmp_path) -> None:
+    module = _load_webhook_module()
+    previous = "d" * 40
+    current = "e" * 40
+    log_file = tmp_path / "deploy.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                f"=== deploy trigger sha: {previous} ===",
+                f"=== deploy queued started trigger={previous}: now ===",
+                f"=== deploy trigger sha: {current} ===",
+                f"=== deploy queued started trigger={current}: now ===",
+                f"=== deploy worker completed trigger={previous}: now ===",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    status = module._safe_deploy_log_status(log_file)
+
+    assert status["trigger"] == current[:12]
+    assert status["stage"] == "deploying"
+    assert status["code"] == "0"
+
+
 def test_webhook_deploy_status_reports_result_publish_failure_without_error_text(
     tmp_path,
 ) -> None:
@@ -220,7 +289,19 @@ def test_webhook_deploy_status_reports_result_publish_failure_without_error_text
     assert "SECRET_VALUE" not in repr(status)
 
 
-def test_webhook_observability_marks_orphaned_deploy_stage(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("raw_stage", "expected_stage"),
+    [
+        ("trigger_loaded", "trigger_loaded_exited"),
+        ("deploying", "deploy_exited_before_finish"),
+        ("post_deploy_audit", "post_deploy_audit_exited"),
+    ],
+)
+def test_webhook_observability_marks_orphaned_worker_stages(
+    monkeypatch,
+    raw_stage: str,
+    expected_stage: str,
+) -> None:
     module = _load_webhook_module()
     monkeypatch.setattr(module, "_deploy_unit_counts", lambda: (0, 0))
     monkeypatch.setattr(
@@ -228,7 +309,7 @@ def test_webhook_observability_marks_orphaned_deploy_stage(monkeypatch) -> None:
         "_safe_deploy_log_status",
         lambda: {
             "trigger": "c" * 12,
-            "stage": "deploying",
+            "stage": raw_stage,
             "code": "0",
             "updated_at": "2026-07-16T18:00:00Z",
         },
@@ -236,10 +317,43 @@ def test_webhook_observability_marks_orphaned_deploy_stage(monkeypatch) -> None:
 
     status = module._deploy_observability()
 
-    assert status["stage"] == "deploy_exited_before_finish"
+    assert status["stage"] == expected_stage
     assert status["code"] == "unknown"
     assert status["units"] == "0"
     assert status["running"] == "0"
+
+
+def test_completed_worker_remains_successful_after_transient_unit_disappears(monkeypatch) -> None:
+    module = _load_webhook_module()
+    monkeypatch.setattr(module, "_deploy_unit_counts", lambda: (0, 0))
+    monkeypatch.setattr(
+        module,
+        "_safe_deploy_log_status",
+        lambda: {
+            "trigger": "e" * 12,
+            "stage": "worker_completed",
+            "code": "0",
+            "updated_at": "2026-07-16T18:00:00Z",
+        },
+    )
+
+    status = module._deploy_observability()
+
+    assert status["stage"] == "worker_completed"
+    assert status["code"] == "0"
+    assert status["running"] == "0"
+
+
+def test_observed_worker_writes_completion_only_after_inner_worker_success() -> None:
+    source = OBSERVED_WORKER.read_text(encoding="utf-8")
+
+    inner_call = source.index('/usr/bin/bash "$INNER_WORKER"')
+    completion = source.index("deploy worker completed trigger=%s")
+
+    assert "set -Eeuo pipefail" in source
+    assert inner_call < completion
+    assert '"$TRIGGER_SHA"' in source
+    assert '>> "$LOG_FILE"' in source
 
 
 def test_webhook_no_longer_spawns_deploy_inside_its_own_cgroup() -> None:
@@ -248,7 +362,9 @@ def test_webhook_no_longer_spawns_deploy_inside_its_own_cgroup() -> None:
     assert "subprocess.Popen" not in text
     assert "start_new_session" not in text
     assert "/usr/bin/systemd-run" in text
+    assert "run_deploy_worker_observed.sh" in text
     assert "run_deploy_worker.sh" in text
+    assert "OBSERVED_DEPLOY_WORKER.is_file()" in text
     assert "DEPLOY_TRIGGER_SHA" in text
     assert 'payload.get("after")' in text
     assert "except DeployQueueError as exc" in text

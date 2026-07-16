@@ -47,6 +47,18 @@ def _assert_bash_syntax(path: Path) -> None:
     assert completed.returncode == 0, completed.stderr
 
 
+def _copy_deploy_script(tmp_path: Path, repo: Path) -> Path:
+    copied_script = tmp_path / "deploy.sh"
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    source = source.replace(
+        'APP_DIR="/root/metrotherapy"',
+        f'APP_DIR="{repo}"',
+        1,
+    )
+    copied_script.write_text(source, encoding="utf-8")
+    return copied_script
+
+
 def test_deploy_script_has_valid_bash_syntax() -> None:
     _assert_bash_syntax(DEPLOY_SCRIPT)
 
@@ -78,15 +90,7 @@ def test_older_trigger_is_coalesced_before_any_deploy_side_effect(tmp_path) -> N
     state_dir.mkdir()
     marker = state_dir / "deployed_sha"
     marker.write_text(f"{deployed_sha}\n", encoding="utf-8")
-
-    copied_script = tmp_path / "deploy.sh"
-    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-    source = source.replace(
-        'APP_DIR="/root/metrotherapy"',
-        f'APP_DIR="{repo}"',
-        1,
-    )
-    copied_script.write_text(source, encoding="utf-8")
+    copied_script = _copy_deploy_script(tmp_path, repo)
 
     env = os.environ.copy()
     env.update(
@@ -114,6 +118,68 @@ def test_older_trigger_is_coalesced_before_any_deploy_side_effect(tmp_path) -> N
     assert "git status before" not in completed.stdout
     assert "sync deploy webhook service script" not in completed.stdout
     assert "restart service" not in completed.stdout
+
+
+def test_dirty_checkout_never_trusts_successful_deploy_marker(tmp_path) -> None:
+    bash = shutil.which("bash")
+    git = shutil.which("git")
+    assert bash is not None
+    assert git is not None
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _run("git", "init", "-b", "main", cwd=repo)
+    _run("git", "config", "user.name", "Deploy Contract", cwd=repo)
+    _run("git", "config", "user.email", "deploy-contract@example.test", cwd=repo)
+    trigger_sha = _commit(repo, "one.txt", "one\n", "one")
+    deployed_sha = _commit(repo, "two.txt", "two\n", "two")
+    (repo / "two.txt").write_text("manually changed\n", encoding="utf-8")
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    marker = state_dir / "deployed_sha"
+    marker.write_text(f"{deployed_sha}\n", encoding="utf-8")
+    copied_script = _copy_deploy_script(tmp_path, repo)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DEPLOY_TRIGGER_SHA": trigger_sha,
+            "DEPLOY_STATE_DIR": str(state_dir),
+            "DEPLOYED_SHA_FILE": str(marker),
+        }
+    )
+    completed = subprocess.run(
+        [bash, str(copied_script)],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 10
+    assert "deploy coalescing bypassed: production worktree is dirty" in completed.stdout
+    assert "deploy coalesced:" not in completed.stdout
+    assert "ERROR: dirty working tree; refusing deploy" in completed.stdout
+
+
+def test_coalescing_requires_clean_main_checkout_at_recorded_sha() -> None:
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    branch_check = source.index('current_branch="$(git branch --show-current)"')
+    dirty_check = source.index('git status --porcelain')
+    head_check = source.index('current_sha="$(git rev-parse HEAD)"')
+    exact_match = source.index('if [ "$current_sha" != "$deployed_sha" ]')
+    ancestor_check = source.index(
+        'git merge-base --is-ancestor "$TRIGGER_SHA" "$deployed_sha"'
+    )
+
+    assert branch_check < dirty_check < head_check < exact_match < ancestor_check
+    assert "deploy coalescing bypassed: checkout branch=" in source
+    assert "deploy coalescing bypassed: production worktree is dirty" in source
+    assert "deploy coalescing bypassed: checkout=" in source
 
 
 def test_success_marker_is_atomic_and_written_after_all_verification() -> None:

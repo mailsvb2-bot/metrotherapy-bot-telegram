@@ -14,7 +14,8 @@ HOST = "127.0.0.1"
 PORT = 9001
 SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 APP_DIR = Path("/root/metrotherapy")
-DEPLOY_WORKER = APP_DIR / "scripts/run_deploy_worker.sh"
+OBSERVED_DEPLOY_WORKER = APP_DIR / "scripts/run_deploy_worker_observed.sh"
+BASE_DEPLOY_WORKER = APP_DIR / "scripts/run_deploy_worker.sh"
 DEPLOY_LOG = Path("/var/log/metrotherapy_deploy.log")
 SYSTEMD_RUN = "/usr/bin/systemd-run"
 SYSTEMCTL = "/usr/bin/systemctl"
@@ -37,6 +38,9 @@ _RESULT_LINE_RE = re.compile(
 )
 _RESULT_SKIP_RE = re.compile(
     r"^=== deploy skipped after published provider result trigger=([0-9a-f]{40}):"
+)
+_WORKER_COMPLETED_RE = re.compile(
+    r"^=== deploy worker completed trigger=([0-9a-f]{40}):"
 )
 _TRIGGER_UNAVAILABLE_RE = re.compile(
     r"^ERROR: deploy trigger commit is unavailable: ([0-9a-f]{40})$"
@@ -61,6 +65,12 @@ def _validated_trigger_sha(value: object) -> str | None:
     if trigger_sha == _ZERO_SHA or _TRIGGER_SHA_RE.fullmatch(trigger_sha) is None:
         return None
     return trigger_sha
+
+
+def _deploy_worker_path() -> Path:
+    """Use observability when available, but remain deployable after rollback."""
+
+    return OBSERVED_DEPLOY_WORKER if OBSERVED_DEPLOY_WORKER.is_file() else BASE_DEPLOY_WORKER
 
 
 def _run_deploy_background(trigger_sha: str) -> None:
@@ -91,7 +101,7 @@ def _run_deploy_background(trigger_sha: str) -> None:
         f"--property=WorkingDirectory={APP_DIR}",
         f"--setenv=DEPLOY_TRIGGER_SHA={validated_sha}",
         "/usr/bin/bash",
-        str(DEPLOY_WORKER),
+        str(_deploy_worker_path()),
     ]
     try:
         completed = subprocess.run(  # nosec B603
@@ -246,6 +256,14 @@ def _safe_deploy_log_status(path: Path = DEPLOY_LOG) -> dict[str, str]:
             code = "0"
             continue
 
+        match = _WORKER_COMPLETED_RE.match(line)
+        if match:
+            completed_trigger = match.group(1)
+            if trigger == completed_trigger:
+                stage = "worker_completed"
+                code = "0"
+            continue
+
         match = _TRIGGER_UNAVAILABLE_RE.fullmatch(line)
         if match:
             trigger = match.group(1)
@@ -284,7 +302,11 @@ def _deploy_observability() -> dict[str, str]:
     status["units"] = str(total) if total is not None else "unknown"
     status["running"] = str(running) if running is not None else "unknown"
 
-    if running == 0 and status["stage"] == "deploying":
+    if running == 0 and status["stage"] == "trigger_loaded":
+        status["stage"] = "trigger_loaded_exited"
+        if status["code"] == "0":
+            status["code"] = "unknown"
+    elif running == 0 and status["stage"] == "deploying":
         status["stage"] = "deploy_exited_before_finish"
         if status["code"] == "0":
             status["code"] = "unknown"
