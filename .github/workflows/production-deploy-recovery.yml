@@ -21,6 +21,7 @@ jobs:
         env:
           DEPLOY_WEBHOOK_SECRET: ${{ secrets.METRO_DEPLOY_WEBHOOK_SECRET }}
           DEPLOY_ENDPOINT: https://metrotherapy-bot.metrotherapy.ru/github-deploy
+          TRIGGER_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -28,8 +29,18 @@ jobs:
             echo "METRO_DEPLOY_WEBHOOK_SECRET is not configured in repository Actions secrets" >&2
             exit 2
           fi
+          case "$TRIGGER_SHA" in
+            ''|*[!0-9a-f]*)
+              echo "GitHub recovery trigger SHA is invalid" >&2
+              exit 4
+              ;;
+          esac
+          if [ "${#TRIGGER_SHA}" -ne 40 ] || [ "$TRIGGER_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "GitHub recovery trigger SHA is invalid" >&2
+            exit 4
+          fi
 
-          payload='{"ref":"refs/heads/main"}'
+          payload="$(printf '{\"ref\":\"refs/heads/main\",\"after\":\"%s\"}' "$TRIGGER_SHA")"
           signature="$(PAYLOAD="$payload" SECRET="$DEPLOY_WEBHOOK_SECRET" python - <<'PY'
           import hashlib
           import hmac
@@ -68,7 +79,7 @@ jobs:
               state: ok ? 'success' : 'failure',
               context: 'ops/production-deploy-recovery',
               description: ok
-                ? 'Signed production main deploy queued'
+                ? 'Signed trigger-bound production deploy queued'
                 : 'Production deploy recovery failed',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
