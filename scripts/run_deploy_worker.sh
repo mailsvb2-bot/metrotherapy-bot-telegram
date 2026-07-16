@@ -7,6 +7,7 @@ DEPLOY_SH="${DEPLOY_SH:-$APP_DIR/deploy.sh}"
 PYTHON="${PYTHON:-$APP_DIR/.venv/bin/python}"
 LOCK_FILE="${LOCK_FILE:-$APP_DIR/data/deploy/metrotherapy_deploy.lock}"
 FLOCK_BIN="${FLOCK_BIN:-/usr/bin/flock}"
+LOCK_WAIT_SECONDS="${DEPLOY_LOCK_WAIT_SECONDS:-900}"
 LOG_FILE="${LOG_FILE:-/var/log/metrotherapy_deploy.log}"
 ENV_FILE="${ENV_FILE:-/etc/metrotherapy/metrotherapy.env}"
 MIGRATION_DIR="${MIGRATION_DIR:-/var/lib/metrotherapy/deploy-migrations}"
@@ -23,15 +24,22 @@ if [ ! -x "$FLOCK_BIN" ]; then
   printf 'ERROR: flock is unavailable: %s\n' "$FLOCK_BIN" >> "$LOG_FILE"
   exit 31
 fi
+case "$LOCK_WAIT_SECONDS" in
+  ''|*[!0-9]*)
+    printf 'ERROR: DEPLOY_LOCK_WAIT_SECONDS must be a non-negative integer: %s\n' "$LOCK_WAIT_SECONDS" >> "$LOG_FILE"
+    exit 32
+    ;;
+esac
 
 # The file is only a stable inode for the kernel lock. It may persist forever.
 # The actual lock belongs to FD 9 and is released automatically if this worker
-# exits, is killed, or crashes. This prevents a stale sentinel file from
-# permanently blocking every future production deploy.
+# exits, is killed, or crashes. Workers wait in order instead of dropping an
+# authenticated push while another deploy is still validating or restarting.
 exec 9>"$LOCK_FILE"
-if ! "$FLOCK_BIN" -n 9; then
-  printf '=== deploy skipped: another worker holds flock %s ===\n' "$(date -Is)" >> "$LOG_FILE"
-  exit 0
+printf '=== deploy waiting for flock timeout=%ss: %s ===\n' "$LOCK_WAIT_SECONDS" "$(date -Is)" >> "$LOG_FILE"
+if ! "$FLOCK_BIN" -w "$LOCK_WAIT_SECONDS" 9; then
+  printf 'ERROR: deploy lock wait timed out after %ss: %s\n' "$LOCK_WAIT_SECONDS" "$(date -Is)" >> "$LOG_FILE"
+  exit 33
 fi
 printf '%s\n' "$$" 1>&9
 
@@ -83,6 +91,33 @@ sanitize_result() {
     | cut -c1-220
 }
 
+publish_result_commit() {
+  local message="$1"
+  local attempt
+
+  # Base the result on the newest remote main. This prevents a valid audit from
+  # being lost when another authenticated push arrived during the API request.
+  git -C "$APP_DIR" fetch origin main
+  git -C "$APP_DIR" merge --ff-only origin/main
+  git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Audit" \
+      -c user.email="deploy-audit@metrotherapy.local" \
+      commit --allow-empty -m "$message"
+
+  for attempt in 1 2 3; do
+    if git -C "$APP_DIR" push origin HEAD:main; then
+      printf '=== %s ===\n' "$message" >> "$LOG_FILE"
+      return 0
+    fi
+    printf '=== audit result push raced with main; retry=%s ===\n' "$attempt" >> "$LOG_FILE"
+    git -C "$APP_DIR" fetch origin main
+    git -C "$APP_DIR" rebase --keep-empty origin/main
+    sleep "$attempt"
+  done
+
+  printf 'ERROR: unable to publish audit result after retries: %s\n' "$message" >> "$LOG_FILE"
+  return 34
+}
+
 publish_max_trust_install_error() {
   local code="$1"
   local output="$2"
@@ -94,11 +129,7 @@ publish_max_trust_install_error() {
     safe_output="EMPTY_INSTALLER_RESULT"
   fi
   message="[max-trust-install-result] status=error code=$code error=$safe_output"
-  git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Audit" \
-      -c user.email="deploy-audit@metrotherapy.local" \
-      commit --allow-empty -m "$message"
-  git -C "$APP_DIR" push origin main
-  printf '=== %s ===\n' "$message" >> "$LOG_FILE"
+  publish_result_commit "$message"
 }
 
 publish_stars_provider_audit_if_requested() {
@@ -133,12 +164,7 @@ publish_stars_provider_audit_if_requested() {
     audit_output="status=error stage=runner bot=unknown code=$audit_code error=EMPTY_AUDIT_RESULT"
   fi
   audit_message="[stars-provider-audit-result] $audit_output"
-
-  git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Audit" \
-      -c user.email="deploy-audit@metrotherapy.local" \
-      commit --allow-empty -m "$audit_message"
-  git -C "$APP_DIR" push origin main
-  printf '=== %s ===\n' "$audit_message" >> "$LOG_FILE"
+  publish_result_commit "$audit_message"
 }
 
 publish_max_provider_audit_if_requested() {
@@ -173,12 +199,7 @@ publish_max_provider_audit_if_requested() {
     audit_output="status=error stage=runner bot=unknown code=$audit_code error=EMPTY_AUDIT_RESULT"
   fi
   audit_message="[max-provider-audit-result] $audit_output"
-
-  git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Audit" \
-      -c user.email="deploy-audit@metrotherapy.local" \
-      commit --allow-empty -m "$audit_message"
-  git -C "$APP_DIR" push origin main
-  printf '=== %s ===\n' "$audit_message" >> "$LOG_FILE"
+  publish_result_commit "$audit_message"
 }
 
 publish_vk_provider_audit_if_requested() {
@@ -213,12 +234,7 @@ publish_vk_provider_audit_if_requested() {
     audit_output="status=error stage=runner group=unknown code=$audit_code error=EMPTY_AUDIT_RESULT"
   fi
   audit_message="[vk-provider-audit-result] $audit_output"
-
-  git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Audit" \
-      -c user.email="deploy-audit@metrotherapy.local" \
-      commit --allow-empty -m "$audit_message"
-  git -C "$APP_DIR" push origin main
-  printf '=== %s ===\n' "$audit_message" >> "$LOG_FILE"
+  publish_result_commit "$audit_message"
 }
 
 mkdir -p "$MIGRATION_DIR"
