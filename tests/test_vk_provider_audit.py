@@ -161,13 +161,26 @@ def test_deploy_workers_wait_instead_of_dropping_provider_audits() -> None:
     assert "deploy skipped: another worker holds flock" not in source
 
 
-def test_provider_audit_results_rebase_and_retry_on_main_races() -> None:
+def test_provider_workers_are_bound_to_the_authenticated_push_sha() -> None:
+    source = WORKER.read_text(encoding="utf-8")
+
+    assert 'TRIGGER_SHA="${DEPLOY_TRIGGER_SHA:-}"' in source
+    assert 'git -C "$APP_DIR" show -s --format=%B "$TRIGGER_SHA"' in source
+    assert 'request_message="$TRIGGER_MESSAGE"' in source
+    assert "deploy skipped after published provider result trigger=" in source
+    assert 'trigger=${TRIGGER_SHA:0:12}' in source
+    assert 'LATEST_MESSAGE="$(git -C "$APP_DIR" log -1' not in source
+
+
+def test_provider_audit_results_publish_without_moving_production_checkout() -> None:
     source = WORKER.read_text(encoding="utf-8")
 
     assert "publish_result_commit()" in source
-    assert "git -C \"$APP_DIR\" fetch origin main" in source
-    assert "git -C \"$APP_DIR\" rebase --keep-empty origin/main" in source
-    assert "git -C \"$APP_DIR\" push origin HEAD:main" in source
+    assert "commit-tree" in source
+    assert 'git -C "$APP_DIR" push origin "$result_sha:refs/heads/main"' in source
     assert "for attempt in 1 2 3" in source
     assert "audit result push raced with main" in source
+    assert "git -C \"$APP_DIR\" merge --ff-only origin/main" not in source
+    assert "git -C \"$APP_DIR\" rebase --keep-empty origin/main" not in source
+    assert "commit --allow-empty" not in source
     assert 'publish_result_commit "$audit_message"' in source
