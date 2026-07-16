@@ -23,3 +23,27 @@ jobs:
           pwd
           ls -la
           test -f README.md
+      - name: Production deploy endpoint cache diagnostic
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          endpoint="https://metrotherapy-bot.metrotherapy.ru/github-deploy"
+          headers="$(mktemp)"
+          body="$(mktemp)"
+          trap 'rm -f "$headers" "$body"' EXIT
+
+          curl -sS --max-time 15 \
+            -H 'Cache-Control: no-cache, no-store, max-age=0' \
+            -H 'Pragma: no-cache' \
+            -H "X-Metrotherapy-Diagnostic: ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            -D "$headers" \
+            -o "$body" \
+            "$endpoint"
+
+          echo '=== SAFE RESPONSE HEADERS ==='
+          grep -Ei '^(HTTP/|age:|cache-control:|cf-cache-status:|x-cache:|x-proxy-cache:|via:|server:|date:)' "$headers" || true
+          echo '=== SAFE RESPONSE BODY ==='
+          cat "$body"
+          echo
+
+          grep -q 'local_branch_count=' "$body"
