@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import logging
 import re
 
@@ -51,8 +52,6 @@ def validate_background_tasks(strict: bool = False) -> None:
     """
     from services.validators.base import ValidationError
 
-    # Canonical owners allowed to encapsulate task creation.
-    # Any new file must be consciously added here, not accidentally introduced.
     allowed_files = {
         "core/task_manager.py",
         "services/db_writer.py",
@@ -67,12 +66,10 @@ def validate_background_tasks(strict: bool = False) -> None:
     for file_path, rel in _project_py_files():
         if rel in allowed_files:
             continue
-
         try:
             text = file_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             text = file_path.read_text(encoding="utf-8", errors="ignore")
-
         if forbidden_token in text:
             findings.append(rel)
 
@@ -86,13 +83,12 @@ def validate_background_tasks(strict: bool = False) -> None:
 
 
 def validate_single_scheduler(strict: bool = True) -> None:
-    """Architectural guardrails (v16.4):
+    """Architectural guardrails (v16.4).
 
     - session_timers must never be imported from runtime code
     - scheduled_jobs must not be read/written outside schema migration / deprecated module
     - jobs pipeline must not rely on unix-int run_at/time.time/datetime.now
     """
-    # 1) Forbid importing services.session_timers anywhere except itself.
     bad_imports: list[str] = []
     import_re = re.compile(r"^\s*(from\s+services\.session_timers\s+import\b|import\s+services\.session_timers\b)")
     for p, rel in _project_py_files():
@@ -112,8 +108,12 @@ def validate_single_scheduler(strict: bool = True) -> None:
             raise ValidationError(msg)
         log.warning(msg)
 
-    # 2) Forbid READ/WRITE usage of scheduled_jobs table outside schema.py + deprecated module.
-    allow = {"services/schema.py", "services/schema_tables.py", "services/migrations/scheduled_jobs_to_jobs_v1.py", "services/session_timers.py"}
+    allow = {
+        "services/schema.py",
+        "services/schema_tables.py",
+        "services/migrations/scheduled_jobs_to_jobs_v1.py",
+        "services/session_timers.py",
+    }
     bad_scheduled: list[str] = []
     sql_re = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|CREATE)\b[^\n;]*\bscheduled_jobs\b", re.IGNORECASE)
     for p, rel in _project_py_files():
@@ -132,7 +132,6 @@ def validate_single_scheduler(strict: bool = True) -> None:
             raise ValidationError(msg)
         log.warning(msg)
 
-    # 3) Forbid unix-int jobs timebase in jobs pipeline.
     jobs_pipeline = {"services/jobs.py", "core/engine.py"}
     unix_markers = ["time.time(", "datetime.now(", "run_at INTEGER", "run_at  INTEGER"]
     bad_unix: list[str] = []
@@ -143,7 +142,7 @@ def validate_single_scheduler(strict: bool = True) -> None:
             txt = p.read_text(encoding="utf-8")
         except OSError:
             continue
-        if any(m in txt for m in unix_markers):
+        if any(marker in txt for marker in unix_markers):
             bad_unix.append(rel)
 
     if bad_unix:
@@ -153,13 +152,38 @@ def validate_single_scheduler(strict: bool = True) -> None:
         log.warning(msg)
 
 
+def _function_scopes(text: str) -> list[tuple[int, int, str]]:
+    """Return source ranges for functions, innermost first during lookup."""
+
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    scopes: list[tuple[int, int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = int(getattr(node, "end_lineno", node.lineno) or node.lineno)
+            scopes.append((int(node.lineno), end, str(node.name)))
+    return scopes
+
+
+def _function_at_line(scopes: list[tuple[int, int, str]], line_number: int) -> str:
+    matching = [scope for scope in scopes if scope[0] <= line_number <= scope[1]]
+    if not matching:
+        return ""
+    start, end, name = min(matching, key=lambda item: item[1] - item[0])
+    del start, end
+    return name
+
+
 def validate_wide_except_policy(*, strict: bool = True) -> None:
     """Strict gate for accidental broad exception handling.
 
-    The rule is scoped to project-owned code only; virtualenv/site-packages are
-    ignored. A small allow-list covers deliberate fail-open ingress, delivery,
-    migration, external provider parsing and runtime boundary modules. New broad
-    catches elsewhere still fail the release gate.
+    File-wide exceptions remain supported only for legacy owners. New runtime
+    boundaries are allowed at named function scope, so one justified catch-all
+    cannot silently authorize broad exception handling elsewhere in the module.
+    A line-local suppression marker is also supported for a reviewed one-off:
+    ``# validator: allow-wide-except``.
     """
 
     allow_files = {
@@ -179,9 +203,6 @@ def validate_wide_except_policy(*, strict: bool = True) -> None:
         "services/db_writer.py",
         "services/validator.py",
         "services/db/core.py",
-        # Existing fail-open / compatibility boundaries. These should be reduced
-        # owner-by-owner later, but must not block release validation as hidden
-        # third-party or legacy noise.
         "handlers/menu.py",
         "handlers/start.py",
         "services/messenger/audio_delivery.py",
@@ -189,20 +210,22 @@ def validate_wide_except_policy(*, strict: bool = True) -> None:
         "services/migrations/_helpers.py",
         "services/mood.py",
         "services/mood_text_flow.py",
-        # External provider and JSON parsing boundaries. These normalize provider
-        # failures into safe fallbacks and should be refactored owner-by-owner,
-        # not mass-edited during this P0 release hygiene pass.
         "services/ai/client.py",
         "services/ai/pricing.py",
         "services/ai_copywriter.py",
         "services/weather.py",
     }
+    allow_functions = {
+        "runtime/messenger_ingress.py": {"_process_and_persist", "vk_webhook", "max_webhook"},
+        "services/messenger/delivery_outbox.py": {"_worker_loop"},
+    }
+    suppression_markers = {
+        "# validator: allow-wide-except",
+        "# validator: allow-except-exception",
+    }
 
     bad: list[str] = []
-
-    # Broad umbrella types that frequently hide bugs.
     forbidden_names = {"BaseException", "Exception"}
-
     bare_re = re.compile(r"^\s*except\s*:\s*(#.*)?$")
     single_re = re.compile(r"^\s*except\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b")
     tuple_re = re.compile(r"^\s*except\s*\((?P<body>[^)]*)\)\s*(?:as\s+[A-Za-z_][A-Za-z0-9_]*)?\s*:")
@@ -211,37 +234,39 @@ def validate_wide_except_policy(*, strict: bool = True) -> None:
         if rel.startswith("services/validators/"):
             continue
         try:
-            lines = pth.read_text(encoding="utf-8").splitlines()
+            text = pth.read_text(encoding="utf-8")
+            lines = text.splitlines()
         except OSError:
             continue
+        scopes = _function_scopes(text)
 
         for i, line in enumerate(lines, start=1):
-            # Bare except
+            function_allowed = _function_at_line(scopes, i) in allow_functions.get(rel, set())
+            line_allowed = any(marker in line for marker in suppression_markers)
+            allowed = rel in allow_files or function_allowed or line_allowed
+
             if bare_re.match(line):
-                if rel not in allow_files:
+                if not allowed:
                     bad.append(f"{rel}:{i} bare except not allowed")
                 continue
 
-            # Tuple except (potentially wide)
-            tm = tuple_re.match(line)
-            if tm:
-                body = tm.group("body")
-                names = [n.strip() for n in body.split(",") if n.strip()]
-                simple = [n.split(".")[-1] for n in names]
+            tuple_match = tuple_re.match(line)
+            if tuple_match:
+                names = [name.strip() for name in tuple_match.group("body").split(",") if name.strip()]
+                simple = [name.split(".")[-1] for name in names]
                 is_wide = (
                     len(simple) >= 4
                     or ("OSError" in simple and "RuntimeError" in simple)
-                    or any(n in forbidden_names for n in simple)
+                    or any(name in forbidden_names for name in simple)
                 )
-                if is_wide and rel not in allow_files:
+                if is_wide and not allowed:
                     bad.append(f"{rel}:{i} wide tuple except not allowed: ({', '.join(simple)})")
                 continue
 
-            # Single-name except
-            sm = single_re.match(line)
-            if sm:
-                name = sm.group("name")
-                if name in forbidden_names and rel not in allow_files:
+            single_match = single_re.match(line)
+            if single_match:
+                name = single_match.group("name")
+                if name in forbidden_names and not allowed:
                     bad.append(f"{rel}:{i} except {name} not allowed")
 
     if bad:
