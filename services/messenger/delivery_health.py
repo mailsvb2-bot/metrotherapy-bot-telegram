@@ -10,10 +10,15 @@ def delivery_health_snapshot() -> dict[str, Any]:
     worker = getattr(delivery_outbox, "_worker_task", None)
     stop_event = getattr(delivery_outbox, "_worker_stop", None)
     expected = stop_event is not None
-    running = bool(worker is not None and not worker.done())
+    active = bool(worker is not None and not worker.done())
+    # Before the HTTP runtime starts, this function is also used as a pure config
+    # preflight. Once start_delivery_worker() declares the worker expected, a
+    # stopped/crashed task becomes a real readiness failure.
+    healthy = active if expected else True
     return {
         "worker_expected": expected,
-        "worker_running": running,
+        "worker_active": active,
+        "worker_running": healthy,
         "pending": int(counts.get("pending", 0)),
         "retry": int(counts.get("retry", 0)),
         "sending": int(counts.get("sending", 0)),
