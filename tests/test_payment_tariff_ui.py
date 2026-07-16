@@ -47,6 +47,13 @@ def test_stars_choice_separates_existing_balance_from_topup(monkeypatch):
     assert callbacks.count("stars:terms:practice_start_7") == 2
 
     text = telegram_payment_method_text("practice_start_7")
+    assert "Почему оплата через Stars" in text
+    assert "Telegram требует оплачивать цифровые услуги внутри ботов" in text
+    assert "сначала нужно иметь достаточное количество Stars" in text
+    assert "сначала купите 1 500 Stars в Telegram" in text
+    assert "покупать их повторно не нужно" in text
+    assert "пополнение баланса Telegram" in text
+    assert "Метротерапия не получает оплату за пакет" in text
     assert "Выберите, что подходит Вам" in text
     assert "Stars уже есть" in text
     assert "Stars пока нет" in text
