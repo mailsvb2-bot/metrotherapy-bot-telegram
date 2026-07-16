@@ -53,6 +53,7 @@ def test_payment_preflight_can_be_enabled_independently(monkeypatch):
 def test_vk_preflight_warns_when_secret_missing_for_dev_webhook(monkeypatch):
     monkeypatch.setenv("APP_ENV", "dev")
     monkeypatch.delenv("VK_WEBHOOK_ENABLED", raising=False)
+    monkeypatch.delenv("VK_CALLBACK_SNACKBAR_ENABLED", raising=False)
     monkeypatch.setattr(preflight.settings, "APP_ENV", "dev", raising=False)
     monkeypatch.setattr(preflight.settings, "MESSENGER_WEBHOOK_ENABLED", True, raising=False)
     monkeypatch.setattr(preflight.settings, "MESSENGER_PUBLIC_BASE_URL", "https://bot.example.test", raising=False)
@@ -60,13 +61,19 @@ def test_vk_preflight_warns_when_secret_missing_for_dev_webhook(monkeypatch):
     monkeypatch.setattr(preflight.settings, "VK_CONFIRMATION_TOKEN", "confirm", raising=False)
     monkeypatch.setattr(preflight.settings, "VK_GROUP_ID", "123", raising=False)
     monkeypatch.setattr(preflight.settings, "VK_SECRET", "", raising=False)
+    monkeypatch.setattr(preflight.settings, "VK_API_VERSION", "5.199", raising=False)
 
     status = preflight.check_vk_preflight()
 
     assert status.ok is True
     assert status.missing == ()
     assert status.warnings == ("VK_SECRET is not configured; VK webhook secret verification is not enforced",)
-    assert status.details == {"enabled": True, "webhook_url": "https://bot.example.test/webhooks/vk"}
+    assert status.details == {
+        "enabled": True,
+        "webhook_url": "https://bot.example.test/webhooks/vk",
+        "api_version": "5.199",
+        "callback_ack_enabled": True,
+    }
 
 
 def test_vk_preflight_requires_secret_for_prod_webhook(monkeypatch):
@@ -84,6 +91,21 @@ def test_vk_preflight_requires_secret_for_prod_webhook(monkeypatch):
 
     assert status.ok is False
     assert "VK_SECRET" in status.missing
+
+
+def test_vk_preflight_rejects_non_positive_group_id(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("VK_WEBHOOK_ENABLED", "1")
+    monkeypatch.setenv("VK_GROUP_TOKEN", "group-token")
+    monkeypatch.setenv("VK_CONFIRMATION_TOKEN", "confirm")
+    monkeypatch.setenv("VK_SECRET", "secret")
+    monkeypatch.setenv("VK_GROUP_ID", "not-a-group")
+    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://bot.example.test")
+
+    status = preflight.check_vk_preflight()
+
+    assert status.ok is False
+    assert "VK_GROUP_ID(valid positive integer)" in status.missing
 
 
 def test_max_preflight_requires_public_base_when_webhook_enabled(monkeypatch):
