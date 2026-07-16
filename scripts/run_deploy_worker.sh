@@ -15,6 +15,7 @@ STARS_PRICE_MIGRATION_MARKER="$MIGRATION_DIR/telegram-stars-explicit-ladder-v1.a
 STARS_ONLY_MIGRATION_MARKER="$MIGRATION_DIR/telegram-stars-only-checkout-v1.applied"
 MAX_API2_MIGRATION_MARKER="$MIGRATION_DIR/max-platform-api2-v1.applied"
 MAX_TRUST_MIGRATION_MARKER="$MIGRATION_DIR/max-mincifry-trust-v1.applied"
+VK_CALLBACK_MIGRATION_MARKER="$MIGRATION_DIR/vk-callback-runtime-v1.applied"
 
 mkdir -p "$(dirname "$LOCK_FILE")"
 
@@ -36,8 +37,8 @@ printf '%s\n' "$$" 1>&9
 
 LATEST_MESSAGE="$(git -C "$APP_DIR" log -1 --pretty=%B 2>/dev/null || true)"
 case "$LATEST_MESSAGE" in
-  *"[max-trust-install-result]"*)
-    printf '=== deploy skipped after published MAX trust result: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+  *"[max-trust-install-result]"*|*"[stars-provider-audit-result]"*|*"[max-provider-audit-result]"*|*"[vk-provider-audit-result]"*)
+    printf '=== deploy skipped after published provider result: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
     exit 0
     ;;
 esac
@@ -48,6 +49,7 @@ STARS_PRICE_MIGRATION_PENDING=0
 STARS_ONLY_MIGRATION_PENDING=0
 MAX_API2_MIGRATION_PENDING=0
 MAX_TRUST_MIGRATION_PENDING=0
+VK_CALLBACK_MIGRATION_PENDING=0
 ENV_BACKUP=""
 
 ensure_env_backup() {
@@ -78,7 +80,7 @@ sanitize_result() {
     | tr '\r\n' ' ' \
     | sed 's/[[:space:]][[:space:]]*/ /g' \
     | sed 's/[^A-Za-z0-9_ .:=-]/_/g' \
-    | cut -c1-180
+    | cut -c1-220
 }
 
 publish_max_trust_install_error() {
@@ -171,6 +173,46 @@ publish_max_provider_audit_if_requested() {
     audit_output="status=error stage=runner bot=unknown code=$audit_code error=EMPTY_AUDIT_RESULT"
   fi
   audit_message="[max-provider-audit-result] $audit_output"
+
+  git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Audit" \
+      -c user.email="deploy-audit@metrotherapy.local" \
+      commit --allow-empty -m "$audit_message"
+  git -C "$APP_DIR" push origin main
+  printf '=== %s ===\n' "$audit_message" >> "$LOG_FILE"
+}
+
+publish_vk_provider_audit_if_requested() {
+  local request_message
+  local audit_output
+  local audit_code
+  local audit_message
+
+  request_message="$(git -C "$APP_DIR" log -1 --pretty=%B)"
+  case "$request_message" in
+    *"[vk-provider-audit-request]"*) ;;
+    *) return 0 ;;
+  esac
+
+  if [ ! -f "$ENV_FILE" ]; then
+    audit_output="status=error stage=config group=unknown code=0 error=ENV_FILE_MISSING"
+    audit_code=2
+  else
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
+    if audit_output="$("$PYTHON" "$APP_DIR/scripts/vk_provider_audit.py" 2>&1)"; then
+      audit_code=0
+    else
+      audit_code="$?"
+    fi
+  fi
+
+  audit_output="$(sanitize_result "$audit_output")"
+  if [ -z "$audit_output" ]; then
+    audit_output="status=error stage=runner group=unknown code=$audit_code error=EMPTY_AUDIT_RESULT"
+  fi
+  audit_message="[vk-provider-audit-result] $audit_output"
 
   git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Audit" \
       -c user.email="deploy-audit@metrotherapy.local" \
@@ -324,6 +366,45 @@ if [ ! -e "$MAX_TRUST_MIGRATION_MARKER" ]; then
   fi
 fi
 
+if [ ! -e "$VK_CALLBACK_MIGRATION_MARKER" ]; then
+  ensure_env_backup
+  ENV_TMP="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+  awk '
+    BEGIN {
+      values["VK_CALLBACK_SNACKBAR_ENABLED"] = "1"
+      values["VK_AUDIO_UPLOAD_RETRIES"] = "3"
+      values["VK_AUDIO_UPLOAD_RETRY_BACKOFF_SEC"] = "0.5"
+    }
+    {
+      split($0, parts, "=")
+      key = parts[1]
+      if (key in values) {
+        if (!written[key]) {
+          print key "=" values[key]
+          written[key] = 1
+        }
+        next
+      }
+      print
+    }
+    END {
+      order[1] = "VK_CALLBACK_SNACKBAR_ENABLED"
+      order[2] = "VK_AUDIO_UPLOAD_RETRIES"
+      order[3] = "VK_AUDIO_UPLOAD_RETRY_BACKOFF_SEC"
+      for (i = 1; i <= 3; i++) {
+        key = order[i]
+        if (!written[key]) {
+          print key "=" values[key]
+        }
+      }
+    }
+  ' "$ENV_FILE" > "$ENV_TMP"
+  cat "$ENV_TMP" > "$ENV_FILE"
+  rm -f "$ENV_TMP"
+  VK_CALLBACK_MIGRATION_PENDING=1
+  printf '=== configured VK callback acknowledgements and audio retries: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+fi
+
 printf '=== deploy queued started: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 /usr/bin/bash "$DEPLOY_SH" >> "$LOG_FILE" 2>&1
 printf '=== deploy queued finished: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
@@ -348,6 +429,10 @@ if [ "$MAX_TRUST_MIGRATION_PENDING" = "1" ]; then
   touch "$MAX_TRUST_MIGRATION_MARKER"
   printf '=== MAX Minцифры trust migration committed: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
 fi
+if [ "$VK_CALLBACK_MIGRATION_PENDING" = "1" ]; then
+  touch "$VK_CALLBACK_MIGRATION_MARKER"
+  printf '=== VK callback runtime migration committed: %s ===\n' "$(date -Is)" >> "$LOG_FILE"
+fi
 if [ "$MIGRATION_PENDING" = "1" ]; then
   rm -f "$ENV_BACKUP"
   ENV_BACKUP=""
@@ -356,3 +441,4 @@ fi
 
 publish_stars_provider_audit_if_requested
 publish_max_provider_audit_if_requested
+publish_vk_provider_audit_if_requested
