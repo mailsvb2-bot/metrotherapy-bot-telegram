@@ -190,10 +190,29 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       - name: Postgres payment smoke
-        run: python scripts/postgres_ci_smoke.py
+        run: |
+          set -o pipefail
+          python scripts/postgres_ci_smoke.py 2>&1 | tee "$RUNNER_TEMP/postgres-payment.log"
 
       - name: Postgres scheduler concurrency
-        run: python scripts/probe_postgres_job_concurrency.py --workers 4 --jobs 16
+        run: |
+          set -o pipefail
+          python scripts/probe_postgres_job_concurrency.py --workers 4 --jobs 16 \
+            2>&1 | tee "$RUNNER_TEMP/postgres-scheduler.log"
 
       - name: Postgres messenger outbox concurrency
-        run: python scripts/probe_postgres_messenger_outbox.py
+        run: |
+          set -o pipefail
+          python scripts/probe_postgres_messenger_outbox.py \
+            2>&1 | tee "$RUNNER_TEMP/postgres-messenger-outbox.log"
+
+      - name: Upload Postgres probe logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-probe-logs
+          path: |
+            ${{ runner.temp }}/postgres-payment.log
+            ${{ runner.temp }}/postgres-scheduler.log
+            ${{ runner.temp }}/postgres-messenger-outbox.log
+          if-no-files-found: warn
