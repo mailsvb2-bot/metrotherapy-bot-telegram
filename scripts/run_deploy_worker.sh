@@ -134,6 +134,10 @@ publish_result_commit() {
   # immutable trigger SHA, so a newer request cannot be mistaken for this result.
   for attempt in 1 2 3; do
     git -C "$APP_DIR" fetch origin main
+    if [ "$(git -C "$APP_DIR" log -1 --format=%B origin/main)" = "$message" ]; then
+      printf '=== audit result already published at remote tip: %s ===\n' "$message" >> "$LOG_FILE"
+      return 0
+    fi
     parent_sha="$(git -C "$APP_DIR" rev-parse origin/main)"
     tree_sha="$(git -C "$APP_DIR" rev-parse "$parent_sha^{tree}")"
     result_sha="$(
