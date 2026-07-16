@@ -65,6 +65,13 @@ verify_certificate "$SUB_SOURCE" "$SUB_FINGERPRINT" "CN=Russian Trusted Sub CA"
 "$OPENSSL_BIN" verify -CAfile "$ROOT_SOURCE" "$ROOT_SOURCE" >/dev/null
 "$OPENSSL_BIN" verify -CAfile "$ROOT_SOURCE" "$SUB_SOURCE" >/dev/null
 
+if [ "${MAX_TRUST_VERIFY_ONLY:-0}" = "1" ]; then
+  printf 'MAX_API2_TRUST_CERTS_OK root_fingerprint=%s sub_fingerprint=%s\n' \
+    "$ROOT_FINGERPRINT" \
+    "$SUB_FINGERPRINT"
+  exit 0
+fi
+
 if command -v update-ca-certificates >/dev/null 2>&1; then
   TRUST_DIR="${MAX_TRUST_DIR:-/usr/local/share/ca-certificates}"
   mkdir -p "$TRUST_DIR"
