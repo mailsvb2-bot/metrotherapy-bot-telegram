@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from config.settings import settings
 from runtime.ingress_flags import max_webhook_enabled, payment_http_enabled, vk_webhook_enabled
+from services.messenger.delivery_health import delivery_health_snapshot
 
 
 @dataclass(frozen=True)
@@ -24,9 +26,7 @@ def _value(name: str, default: Any = "") -> Any:
 
 def _env_or_setting(name: str, default: Any = "") -> Any:
     raw = os.getenv(name)
-    if raw is not None:
-        return raw
-    return _value(name, default)
+    return raw if raw is not None else _value(name, default)
 
 
 def _app_env() -> str:
@@ -39,9 +39,7 @@ def _deployed_env() -> bool:
 
 def _public_webhook_url(path: str) -> str:
     base = str(_value("MESSENGER_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
-    if not base:
-        return ""
-    return f"{base}{path}"
+    return f"{base}{path}" if base else ""
 
 
 def _missing(*names: str) -> tuple[str, ...]:
@@ -51,8 +49,7 @@ def _missing(*names: str) -> tuple[str, ...]:
         if isinstance(value, bool):
             if not value:
                 out.append(name)
-            continue
-        if not str(value or "").strip():
+        elif not str(value or "").strip():
             out.append(name)
     return tuple(out)
 
@@ -88,11 +85,7 @@ def check_telegram_preflight() -> MessengerPreflightStatus:
         ok=not missing,
         missing=tuple(missing),
         warnings=tuple(warnings),
-        details={
-            "enabled": _deployed_env(),
-            "transport": transport,
-            "webhook_enabled": webhook_enabled,
-        },
+        details={"enabled": _deployed_env(), "transport": transport, "webhook_enabled": webhook_enabled},
     )
 
 
@@ -222,10 +215,47 @@ def check_max_preflight() -> MessengerPreflightStatus:
     )
 
 
+def check_delivery_outbox_preflight() -> MessengerPreflightStatus:
+    enabled = bool(vk_webhook_enabled() or max_webhook_enabled())
+    if not enabled:
+        return MessengerPreflightStatus(channel="delivery_outbox", ok=True, details={"enabled": False})
+
+    try:
+        snapshot = delivery_health_snapshot()
+    except (sqlite3.Error, RuntimeError) as exc:
+        return MessengerPreflightStatus(
+            channel="delivery_outbox",
+            ok=False,
+            missing=("messenger_delivery_outbox(unavailable)",),
+            warnings=(f"delivery health unavailable: {type(exc).__name__}",),
+            details={"enabled": True, "worker_running": False},
+        )
+
+    missing: list[str] = []
+    warnings: list[str] = []
+    if not bool(snapshot.get("worker_running")):
+        missing.append("delivery_worker(running)")
+    dead = int(snapshot.get("dead") or 0)
+    retry = int(snapshot.get("retry") or 0)
+    if dead > 0:
+        missing.append(f"dead_letters={dead}")
+    if retry > 0:
+        warnings.append(f"delivery retries pending: {retry}")
+
+    return MessengerPreflightStatus(
+        channel="delivery_outbox",
+        ok=not missing,
+        missing=tuple(missing),
+        warnings=tuple(warnings),
+        details={"enabled": True, **snapshot},
+    )
+
+
 def check_all_preflights() -> tuple[MessengerPreflightStatus, ...]:
     return (
         check_telegram_preflight(),
         check_payment_preflight(),
         check_max_preflight(),
         check_vk_preflight(),
+        check_delivery_outbox_preflight(),
     )
