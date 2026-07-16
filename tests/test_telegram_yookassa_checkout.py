@@ -15,29 +15,9 @@ def _request() -> web.Request:
 
 
 @pytest.mark.asyncio
-async def test_telegram_yookassa_creates_provider_checkout_when_enabled(monkeypatch) -> None:
-    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "1")
-    captured = {}
-
-    def _create(**kwargs):
-        captured.update(kwargs)
-        return "https://yookassa.example/confirmation"
-
-    monkeypatch.setattr(payment_http, "_create_yookassa_payment", _create)
-
-    with pytest.raises(web.HTTPFound) as redirect:
-        await payment_http.pay_yookassa_web(_request())
-
-    assert redirect.value.location == "https://yookassa.example/confirmation"
-    assert captured["source"] == "telegram"
-    assert captured["user_id"] == "407"
-    assert captured["package_id"] == "practice_start_7"
-    assert captured["kind"] == "tokens"
-
-
-@pytest.mark.asyncio
-async def test_telegram_yookassa_kill_switch_rejects_existing_checkout_link(monkeypatch) -> None:
-    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
+@pytest.mark.parametrize("flag", ["0", "1"])
+async def test_telegram_yookassa_is_rejected_even_with_stale_enabled_flag(monkeypatch, flag: str) -> None:
+    monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", flag)
     monkeypatch.setattr(
         payment_http,
         "_create_yookassa_payment",
@@ -45,5 +25,7 @@ async def test_telegram_yookassa_kill_switch_rejects_existing_checkout_link(monk
     )
 
     response = await payment_http.pay_yookassa_web(_request())
+
     assert response.status == 410
-    assert "временно отключена" in response.text
+    assert "ЮKassa в Telegram отключена" in response.text
+    assert "Telegram Stars" in response.text
