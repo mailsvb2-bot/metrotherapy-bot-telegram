@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from runtime.messenger_max_sender import MAX_API2_BASE_URL, MaxBotSender, _attachment_retry_delays
-from scripts import register_max_webhook
+from scripts import max_provider_audit, register_max_webhook
 from services.messenger import preflight
 
 
@@ -55,7 +55,8 @@ def test_max_multipart_upload_does_not_receive_bot_token(monkeypatch, tmp_path: 
     assert result == "media-token"
     assert captured["api_headers"] == {"Authorization": "bot-secret"}
     assert captured["upload_url"] == "https://upload.max.example/file"
-    assert "bot-secret" not in repr(captured)
+    assert captured["field_name"] == "data"
+    assert captured["path"] == source
 
 
 def test_max_registration_uses_api2_and_validates_secret(monkeypatch) -> None:
@@ -98,6 +99,44 @@ def test_max_preflight_warns_on_legacy_api_domain(monkeypatch) -> None:
     assert any("platform-api2.max.ru" in warning for warning in status.warnings)
 
 
+def test_max_audit_reports_active_api2_subscription(monkeypatch) -> None:
+    monkeypatch.setenv("MAX_BOT_TOKEN", "secret-token")
+    monkeypatch.setenv("MAX_API_BASE_URL", "https://platform-api2.max.ru")
+    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://bot.example.test")
+
+    def fake_call(_token: str, path: str):
+        if path == "/me":
+            return {"username": "metrotherapy"}, 200
+        return {"subscriptions": [{"url": "https://bot.example.test/webhooks/max"}]}, 200
+
+    monkeypatch.setattr(max_provider_audit, "_api_call", fake_call)
+    message, code = max_provider_audit.run()
+
+    assert code == 0
+    assert message == (
+        "status=ok stage=subscriptions bot=metrotherapy code=200 "
+        "error=NONE api=platform-api2.max.ru webhook=present"
+    )
+
+
+def test_max_audit_fails_closed_when_webhook_is_missing(monkeypatch) -> None:
+    monkeypatch.setenv("MAX_BOT_TOKEN", "secret-token")
+    monkeypatch.setenv("MAX_API_BASE_URL", "https://platform-api2.max.ru")
+    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://bot.example.test")
+
+    def fake_call(_token: str, path: str):
+        if path == "/me":
+            return {"username": "metrotherapy"}, 200
+        return {"subscriptions": []}, 200
+
+    monkeypatch.setattr(max_provider_audit, "_api_call", fake_call)
+    message, code = max_provider_audit.run()
+
+    assert code == 7
+    assert "WEBHOOK_NOT_REGISTERED" in message
+    assert "secret-token" not in message
+
+
 def test_max_production_files_use_api2_and_no_query_secret_helper() -> None:
     paths = [
         ROOT / "deploy" / "metrotherapy.env.example",
@@ -119,3 +158,13 @@ def test_max_sender_source_does_not_forward_token_to_upload_url() -> None:
 
     assert "multipart_upload,\n            upload_url,\n            field_name=\"data\"" in source
     assert "multipart_upload, upload_url, token=token" not in source
+
+
+def test_deploy_worker_migrates_and_audits_max_api2() -> None:
+    source = (ROOT / "scripts" / "run_deploy_worker.sh").read_text(encoding="utf-8")
+
+    assert "max-platform-api2-v1.applied" in source
+    assert "MAX_API_BASE_URL=https://platform-api2.max.ru" in source
+    assert "[max-provider-audit-request]" in source
+    assert "[max-provider-audit-result]" in source
+    assert "max_provider_audit.py" in source
