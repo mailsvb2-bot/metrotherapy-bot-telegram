@@ -170,9 +170,9 @@ def test_stale_recovery_stops_only_the_exact_lock_holder_unit() -> None:
     assert '"$SYSTEMCTL_BIN" show "$unit" -p MainPID --value' in source
     assert 'if [ "$main_pid" = "$holder_pid" ]; then' in source
     assert '[ "$matching_count" -eq 1 ]' in source
-    assert '$SYSTEMCTL_BIN stop "$matching_unit"' in source
+    assert '"$SYSTEMCTL_BIN" stop "$matching_unit"' in source
     assert '"$FLOCK_BIN" -w "$LOCK_RELEASE_WAIT_SECONDS" 8' in source
     assert "STALE_DEPLOY_RECOVERY_OK" in source
     assert "pkill" not in source
     assert "killall" not in source
-    assert '$SYSTEMCTL_BIN stop "$UNIT_PATTERN"' not in source
+    assert '"$SYSTEMCTL_BIN" stop "$UNIT_PATTERN"' not in source
