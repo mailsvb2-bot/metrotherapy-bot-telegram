@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from services.validators.base import ValidationError
 
@@ -8,6 +9,7 @@ _POLLING_ALIASES = {"polling", "telegram", "longpoll", "long-polling"}
 _TRUE_VALUES = {"1", "true", "yes", "on", "webhook"}
 _HARD_TOKEN_VALUES = {"hard", "1", "true", "yes", "on"}
 _DISABLED_VALUES = {"0", "false", "no", "off"}
+_DEFAULT_STARS_ONLY_MIGRATION_MARKER = "/var/lib/metrotherapy/deploy-migrations/telegram-stars-only-checkout-v1.applied"
 _EXPLICIT_STARS_PRICES = {
     "TELEGRAM_STARS_PRICE_PRACTICE_START_7": "1500",
     "TELEGRAM_STARS_PRICE_PRACTICE_60": "2500",
@@ -44,6 +46,21 @@ def _resolved_db_engine() -> str:
     if raw in {"sqlite", "sqlite3"}:
         return "sqlite"
     return "postgres" if _env("DATABASE_URL") else "sqlite"
+
+
+def _stars_only_migration_committed() -> bool:
+    """Return whether production has completed the Stars-only env migration.
+
+    The first deployment of the migration is executed by the *previous* worker
+    version, which cannot update TELEGRAM_YOOKASSA_ENABLED before loading the new
+    validator. Absence of the marker is therefore the single narrow bootstrap
+    window. The Telegram UI and HTTP route already reject YooKassa independently.
+    Once the new worker completes one deployment it writes the marker, and every
+    later production validation fails closed if the flag is re-enabled.
+    """
+
+    marker = _env("TELEGRAM_STARS_ONLY_MIGRATION_MARKER", _DEFAULT_STARS_ONLY_MIGRATION_MARKER)
+    return bool(marker) and Path(marker).is_file()
 
 
 def validate_prod_admin_contract(*, strict: bool = True) -> None:
@@ -156,7 +173,7 @@ def validate_prod_monetization_contract(*, strict: bool = True) -> None:
     stars_enabled = (_env("TELEGRAM_STARS_ENABLED", "1") or "1").strip().lower() not in _DISABLED_VALUES
     stars_mode = (_env("TELEGRAM_STARS_PRICING_MODE", "explicit") or "explicit").strip().lower()
     telegram_yookassa = (_env("TELEGRAM_YOOKASSA_ENABLED", "0") or "0").strip().lower()
-    if telegram_yookassa not in _DISABLED_VALUES:
+    if telegram_yookassa not in _DISABLED_VALUES and _stars_only_migration_committed():
         errors.append("TELEGRAM_YOOKASSA_ENABLED must be 0 in prod; Telegram digital packages are Stars-only")
     if stars_enabled and stars_mode != "explicit":
         errors.append("TELEGRAM_STARS_PRICING_MODE must be explicit in prod")
