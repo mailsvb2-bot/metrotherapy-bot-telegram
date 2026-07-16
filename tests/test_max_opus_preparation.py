@@ -20,14 +20,28 @@ def test_ensure_max_opus_file_keeps_existing_opus(tmp_path: Path) -> None:
     assert ensure_max_opus_file(source) == source
 
 
+def test_ensure_max_opus_file_keeps_supported_mp3(tmp_path: Path) -> None:
+    source = tmp_path / "track.mp3"
+    source.write_bytes(b"mp3")
+
+    assert ensure_max_opus_file(source) == source
+
+
+def test_ensure_max_opus_file_keeps_supported_wav(tmp_path: Path) -> None:
+    source = tmp_path / "track.wav"
+    source.write_bytes(b"wav")
+
+    assert ensure_max_opus_file(source) == source
+
+
 def test_ensure_max_opus_file_fails_for_missing_source(tmp_path: Path) -> None:
     with pytest.raises(MaxOpusPreparationError):
         ensure_max_opus_file(tmp_path / "missing.mp3")
 
 
-def test_ensure_max_opus_file_converts_non_opus(monkeypatch, tmp_path: Path) -> None:
-    source = tmp_path / "track.mp3"
-    source.write_bytes(b"mp3")
+def test_ensure_max_opus_file_converts_unsupported_format(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "track.rawaudio"
+    source.write_bytes(b"raw")
     cache = tmp_path / "cache"
     monkeypatch.setenv("MAX_OPUS_CACHE_DIR", str(cache))
     monkeypatch.setattr("services.messenger.max_audio._ffmpeg_bin", lambda platform: "ffmpeg")
@@ -86,8 +100,8 @@ def test_ensure_vk_opus_file_converts_non_opus_with_vk_cache(monkeypatch, tmp_pa
 
 
 def test_ensure_messenger_opus_file_separates_provider_caches(monkeypatch, tmp_path: Path) -> None:
-    source = tmp_path / "track.wav"
-    source.write_bytes(b"wav")
+    source = tmp_path / "track.rawaudio"
+    source.write_bytes(b"raw")
     max_cache = tmp_path / "max-cache"
     vk_cache = tmp_path / "vk-cache"
     monkeypatch.setenv("MAX_OPUS_CACHE_DIR", str(max_cache))
