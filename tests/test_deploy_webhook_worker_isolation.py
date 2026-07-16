@@ -43,9 +43,10 @@ def test_deploy_worker_has_valid_bash_syntax_and_cleanup_trap() -> None:
     assert "deploy queued finished" in text
 
 
-def test_webhook_queues_deploy_as_independent_transient_systemd_service(monkeypatch) -> None:
+def test_webhook_queues_deploy_as_independent_trigger_bound_systemd_service(monkeypatch) -> None:
     module = _load_webhook_module()
     captured: dict[str, object] = {}
+    trigger_sha = "a" * 40
 
     def fake_run(command, **kwargs):
         captured["command"] = command
@@ -59,7 +60,7 @@ def test_webhook_queues_deploy_as_independent_transient_systemd_service(monkeypa
         lambda: SimpleNamespace(hex="1234567890abcdef"),
     )
 
-    module._run_deploy_background()
+    module._run_deploy_background(trigger_sha)
 
     command = captured["command"]
     assert command[0] == "/usr/bin/systemd-run"
@@ -68,6 +69,7 @@ def test_webhook_queues_deploy_as_independent_transient_systemd_service(monkeypa
     assert "--no-block" in command
     assert "--property=Type=exec" in command
     assert "--property=WorkingDirectory=/root/metrotherapy" in command
+    assert f"--setenv=DEPLOY_TRIGGER_SHA={trigger_sha}" in command
     assert command[-2:] == [
         "/usr/bin/bash",
         "/root/metrotherapy/scripts/run_deploy_worker.sh",
@@ -78,6 +80,30 @@ def test_webhook_queues_deploy_as_independent_transient_systemd_service(monkeypa
         "text": True,
         "timeout": 10,
     }
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "",
+        "0" * 40,
+        "a" * 39,
+        "a" * 41,
+        "g" * 40,
+        "../" + "a" * 37,
+    ],
+)
+def test_webhook_rejects_invalid_or_non_commit_trigger_sha(value) -> None:
+    module = _load_webhook_module()
+
+    assert module._validated_trigger_sha(value) is None
+
+
+def test_webhook_normalizes_valid_trigger_sha() -> None:
+    module = _load_webhook_module()
+
+    assert module._validated_trigger_sha("A" * 40) == "a" * 40
 
 
 def test_webhook_maps_systemd_queue_failure_to_one_domain_exception(monkeypatch) -> None:
@@ -94,7 +120,23 @@ def test_webhook_maps_systemd_queue_failure_to_one_domain_exception(monkeypatch)
     )
 
     with pytest.raises(module.DeployQueueError, match="unit rejected"):
-        module._run_deploy_background()
+        module._run_deploy_background("b" * 40)
+
+
+def test_webhook_rejects_invalid_sha_before_systemd(monkeypatch) -> None:
+    module = _load_webhook_module()
+    called = False
+
+    def fake_run(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("systemd-run must not be called")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    with pytest.raises(module.DeployQueueError, match="invalid deploy trigger sha"):
+        module._run_deploy_background("not-a-sha")
+    assert called is False
 
 
 def test_webhook_no_longer_spawns_deploy_inside_its_own_cgroup() -> None:
@@ -104,5 +146,7 @@ def test_webhook_no_longer_spawns_deploy_inside_its_own_cgroup() -> None:
     assert "start_new_session" not in text
     assert "/usr/bin/systemd-run" in text
     assert "run_deploy_worker.sh" in text
+    assert "DEPLOY_TRIGGER_SHA" in text
+    assert 'payload.get("after")' in text
     assert "except DeployQueueError as exc" in text
     assert "deploy queue failed" in text
