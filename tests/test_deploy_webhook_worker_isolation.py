@@ -139,6 +139,109 @@ def test_webhook_rejects_invalid_sha_before_systemd(monkeypatch) -> None:
     assert called is False
 
 
+def test_webhook_counts_only_canonical_transient_deploy_units(monkeypatch) -> None:
+    module = _load_webhook_module()
+    output = "\n".join(
+        [
+            "metrotherapy-deploy-1234567890ab.service loaded active running worker",
+            "metrotherapy-deploy-abcdef123456.service loaded activating start worker",
+            "metrotherapy-deploy-fedcba654321.service loaded failed failed worker",
+            "unrelated.service loaded active running unrelated",
+            "metrotherapy-deploy-NOTHEX.service loaded active running malformed",
+        ]
+    )
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=output,
+            stderr="",
+        ),
+    )
+
+    assert module._deploy_unit_counts() == (3, 2)
+
+
+def test_webhook_deploy_status_uses_only_allowlisted_log_markers(tmp_path) -> None:
+    module = _load_webhook_module()
+    trigger = "a" * 40
+    log_file = tmp_path / "deploy.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                "VK_GROUP_TOKEN=must-never-leak",
+                f"=== deploy trigger sha: {trigger} ===",
+                f"=== deploy queued started trigger={trigger}: 2026-07-16T18:00:00+00:00 ===",
+                "provider raw response secret=must-never-leak",
+                f"=== deploy queued finished trigger={trigger}: 2026-07-16T18:01:00+00:00 ===",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    status = module._safe_deploy_log_status(log_file)
+
+    assert status["trigger"] == trigger[:12]
+    assert status["stage"] == "post_deploy_audit"
+    assert status["code"] == "0"
+    assert status["updated_at"].endswith("Z")
+    assert "must-never-leak" not in repr(status)
+
+
+def test_webhook_deploy_status_reports_result_publish_failure_without_error_text(
+    tmp_path,
+) -> None:
+    module = _load_webhook_module()
+    trigger = "b" * 40
+    log_file = tmp_path / "deploy.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                f"=== deploy trigger sha: {trigger} ===",
+                f"=== deploy queued started trigger={trigger}: now ===",
+                f"=== deploy queued finished trigger={trigger}: now ===",
+                "ERROR: unable to publish audit result after retries: "
+                f"[vk-provider-audit-result] trigger={trigger[:12]} "
+                "status=error error=SECRET_VALUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    status = module._safe_deploy_log_status(log_file)
+
+    assert status == {
+        "trigger": trigger[:12],
+        "stage": "result_publish_error",
+        "code": "34",
+        "updated_at": status["updated_at"],
+    }
+    assert "SECRET_VALUE" not in repr(status)
+
+
+def test_webhook_observability_marks_orphaned_deploy_stage(monkeypatch) -> None:
+    module = _load_webhook_module()
+    monkeypatch.setattr(module, "_deploy_unit_counts", lambda: (0, 0))
+    monkeypatch.setattr(
+        module,
+        "_safe_deploy_log_status",
+        lambda: {
+            "trigger": "c" * 12,
+            "stage": "deploying",
+            "code": "0",
+            "updated_at": "2026-07-16T18:00:00Z",
+        },
+    )
+
+    status = module._deploy_observability()
+
+    assert status["stage"] == "deploy_exited_before_finish"
+    assert status["code"] == "unknown"
+    assert status["units"] == "0"
+    assert status["running"] == "0"
+
+
 def test_webhook_no_longer_spawns_deploy_inside_its_own_cgroup() -> None:
     text = WEBHOOK.read_text(encoding="utf-8")
 
@@ -150,3 +253,18 @@ def test_webhook_no_longer_spawns_deploy_inside_its_own_cgroup() -> None:
     assert 'payload.get("after")' in text
     assert "except DeployQueueError as exc" in text
     assert "deploy queue failed" in text
+
+
+def test_webhook_exposes_only_secret_safe_deploy_observability() -> None:
+    text = WEBHOOK.read_text(encoding="utf-8")
+
+    assert "deploy_units=" in text
+    assert "deploy_running=" in text
+    assert "deploy_last_trigger=" in text
+    assert "deploy_last_stage=" in text
+    assert "deploy_last_code=" in text
+    assert "deploy_log_updated_at=" in text
+    assert "_LOG_TAIL_BYTES" in text
+    assert "Free-form log text is never returned" in text
+    assert "DEPLOY_LOG.read_text" not in text
+    assert "completed.stderr" not in text[text.index("def _deploy_unit_counts"):]
