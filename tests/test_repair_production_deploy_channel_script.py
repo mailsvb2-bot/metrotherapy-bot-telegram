@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "repair_production_deploy_channel.sh"
 RECOVERY_WORKFLOW = ROOT / ".github" / "workflows" / "production-deploy-recovery.yml"
+TOPOLOGY_WORKFLOW = ROOT / ".github" / "workflows" / "production-server-topology-probe.yml"
 
 
 def test_production_deploy_repair_script_has_valid_bash_syntax() -> None:
@@ -79,3 +80,17 @@ def test_recovery_workflow_signs_the_same_trigger_bound_payload_it_posts() -> No
     assert "GitHub recovery trigger SHA is invalid" in text
     assert "Signed trigger-bound production deploy queued" in text
     assert "payload='{\"ref\":\"refs/heads/main\"}'" not in text
+
+
+def test_topology_probe_retries_transient_health_and_deploy_endpoint_failures() -> None:
+    text = TOPOLOGY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "for attempt in $(seq 1 24); do" in text
+    assert "health_code=\"$(curl -sS -o /dev/null -w '%{http_code}'" in text
+    assert '"$health" || true)' in text
+    assert 'response="$(curl -fsS --max-time 5 "$endpoint" 2>/dev/null || true)"' in text
+    assert '[ "$health_code" = "200" ]' in text
+    assert "sleep 5" in text
+    assert 'curl -fsS --max-time 5 "$health" >/dev/null' not in text
+    assert "SERVER_HEALTH_CODE=" in text
+    assert "Server health=${healthCode}" in text
