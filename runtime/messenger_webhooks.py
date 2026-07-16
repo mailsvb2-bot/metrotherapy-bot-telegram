@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from aiogram.exceptions import TelegramAPIError
 from aiohttp import web
@@ -51,6 +52,15 @@ def _truthy_env(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _deployed_env() -> bool:
+    return (os.getenv("APP_ENV") or getattr(settings, "APP_ENV", "") or "dev").strip().lower() in {
+        "prod",
+        "production",
+        "stage",
+        "staging",
+    }
+
+
 async def _max_webhook_with_official_secret(request: web.Request) -> web.Response:
     """Map MAX's official secret header onto the stable ingress contract.
 
@@ -76,6 +86,40 @@ async def _max_webhook_with_official_secret(request: web.Request) -> web.Respons
     return await max_webhook(request)
 
 
+def _vk_group_ok(payload: dict[str, Any]) -> bool:
+    """Fail closed when a callback belongs to another VK community.
+
+    VK Callback API includes ``group_id`` in every base callback object. The
+    secret is still validated by the stable ingress handler; this additional
+    ownership check prevents a callback for a different community from entering
+    the same business identity and payment flow.
+    """
+
+    expected_raw = str(getattr(settings, "VK_GROUP_ID", "") or "").strip()
+    if not expected_raw:
+        return not _deployed_env() and _truthy_env("ALLOW_INSECURE_MESSENGER_WEBHOOKS")
+
+    provided_raw = str(payload.get("group_id") or "").strip()
+    try:
+        expected = int(expected_raw)
+        provided = int(provided_raw)
+    except (TypeError, ValueError):
+        return False
+    return expected > 0 and provided == expected
+
+
+async def _vk_webhook_with_group_guard(request: web.Request) -> web.Response:
+    body = await request.text()
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return await vk_webhook(request)
+    if isinstance(payload, dict) and not _vk_group_ok(payload):
+        log.warning("VK webhook rejected: unexpected or missing group_id")
+        return web.Response(status=403, text="forbidden")
+    return await vk_webhook(request)
+
+
 def _register_health_routes(app: web.Application) -> None:
     app.router.add_get("/", _health)
     app.router.add_get("/health", _health)
@@ -93,7 +137,7 @@ def _register_max_routes(app: web.Application) -> None:
 
 
 def _register_vk_routes(app: web.Application) -> None:
-    app.router.add_post("/webhooks/vk", vk_webhook)
+    app.router.add_post("/webhooks/vk", _vk_webhook_with_group_guard)
 
 
 def _register_audio_routes(app: web.Application) -> None:
