@@ -259,6 +259,27 @@ async def _run_growth_conversion_bridge_tick() -> None:
         log.warning("Growth conversion bridge degraded: %s", result.error)
 
 
+async def _run_payment_reconciliation_retry_tick() -> None:
+    from services.payments.retry_queue import run_payment_retry_batch
+
+    result = await asyncio.to_thread(run_payment_retry_batch)
+    if result.dead:
+        log.error(
+            "Payment reconciliation retries dead-lettered: claimed=%s completed=%s rescheduled=%s dead=%s",
+            result.claimed,
+            result.completed,
+            result.rescheduled,
+            result.dead,
+        )
+    elif result.claimed:
+        log.info(
+            "Payment reconciliation retry tick: claimed=%s completed=%s rescheduled=%s",
+            result.claimed,
+            result.completed,
+            result.rescheduled,
+        )
+
+
 async def _background_loop(bot: 'Bot') -> None:
     """Canonical lightweight background loop with crash containment.
 
@@ -281,10 +302,13 @@ async def _background_loop(bot: 'Bot') -> None:
     last_ux_guard = 0.0
     last_reward = 0.0
     last_growth_conversion_bridge = 0.0
+    last_payment_reconciliation_retry = 0.0
     reward_interval = float(os.getenv('REWARD_TICK_INTERVAL_SEC', '60') or '60')
     reward_interval = max(10.0, reward_interval)
     growth_bridge_interval = float(os.getenv('GROWTH_CONVERSION_BRIDGE_INTERVAL_SEC', '60') or '60')
     growth_bridge_interval = max(10.0, growth_bridge_interval)
+    payment_retry_interval = float(os.getenv('PAYMENT_RETRY_INTERVAL_SEC', '30') or '30')
+    payment_retry_interval = max(5.0, payment_retry_interval)
     while True:
         await asyncio.sleep(1)
         _bg_iteration_count += 1
@@ -323,6 +347,15 @@ async def _background_loop(bot: 'Bot') -> None:
         if now_m - last_growth_conversion_bridge >= growth_bridge_interval:
             last_growth_conversion_bridge = now_m
             await _run_protected_tick("GrowthConversionBridge.tick", _run_growth_conversion_bridge_tick)
+
+        # Durable provider-verified payment side-effect retries.
+        now_m = time.monotonic()
+        if now_m - last_payment_reconciliation_retry >= payment_retry_interval:
+            last_payment_reconciliation_retry = now_m
+            await _run_protected_tick(
+                "PaymentReconciliationRetry.tick",
+                _run_payment_reconciliation_retry_tick,
+            )
 
         # UX guard (best-effort)
         # Runs rarely and MUST be read-only (SQLite query_only=ON), to avoid competing with writes.
