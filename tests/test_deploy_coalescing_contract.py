@@ -62,6 +62,9 @@ def _prepare_deploy_fixture(tmp_path: Path) -> tuple[Path, Path]:
     scripts.mkdir()
     shutil.copy2(RELEASE_MANAGER, scripts / RELEASE_MANAGER.name)
     shutil.copy2(RELEASE_BUILDER, scripts / RELEASE_BUILDER.name)
+    _run("git", "add", "scripts", cwd=repo)
+    _run("git", "commit", "-m", "fixture release tooling", cwd=repo)
+
     copied_script = tmp_path / "immutable_deploy.sh"
     shutil.copy2(IMMUTABLE_DEPLOY, copied_script)
     return repo, copied_script
@@ -260,7 +263,8 @@ def test_every_long_immutable_deploy_phase_has_a_hard_deadline() -> None:
         "HEALTH_WAIT_SECONDS",
         "PRODUCTION_GATE_TIMEOUT_SECONDS",
     ):
-        assert f'"{timeout_name}:${{{timeout_name}}}"' in source
+        expected = f'"{timeout_name}:${timeout_name}"'.replace(":", ":$", 1)
+        assert expected in source
     assert 'run_bounded "$RELEASE_BUILD_TIMEOUT_SECONDS"' in source
     assert 'run_bounded "$VALIDATOR_TIMEOUT_SECONDS"' in source
     assert 'run_bounded "$SCHEMA_COMPAT_TIMEOUT_SECONDS"' in source
