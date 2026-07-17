@@ -15,8 +15,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dev dependencies
-        run: python -m pip install -r requirements-dev.txt
+      - name: Install hash-locked dev dependencies
+        run: |
+          python -m pip install --disable-pip-version-check pip==26.1.2
+          python -m pip install --require-hashes -r requirements-dev.txt
 
       - name: Run quality gate
         run: python scripts/check_quality.py
