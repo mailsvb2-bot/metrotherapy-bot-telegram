@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import ssl
+import urllib.error
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -216,6 +217,8 @@ class MaxBotSender:
                     retries=1,
                     ssl_context=ssl_context,
                 )
+            except urllib.error.HTTPError as exc:
+                raise MessengerTransportError(f"MAX provider HTTP {int(exc.code)}") from exc
             except (OSError, ValueError, TypeError) as exc:  # pragma: no cover
                 last_error = exc
                 continue
