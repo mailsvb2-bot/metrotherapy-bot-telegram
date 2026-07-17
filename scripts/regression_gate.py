@@ -139,7 +139,13 @@ STEPS = (
     ),
     GateStep(
         "hermetic production contract validation",
-        (sys.executable, "scripts/validate_project.py"),
+        (
+            sys.executable,
+            "-c",
+            "from services.validators.prod import validate_prod_guardrails; "
+            "validate_prod_guardrails(strict=True); "
+            "print('HERMETIC_PROD_CONTRACT_OK')",
+        ),
         HERMETIC_PROD_VALIDATOR_ENV,
     ),
     GateStep(
