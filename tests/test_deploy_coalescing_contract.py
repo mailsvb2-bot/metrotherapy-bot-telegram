@@ -38,7 +38,6 @@ def _commit(repo: Path, filename: str, content: str, message: str) -> str:
 def _assert_bash_syntax(path: Path) -> None:
     bash = shutil.which("bash")
     assert bash is not None
-
     completed = subprocess.run(
         [bash, "-n", str(path)],
         cwd=ROOT,
@@ -47,7 +46,6 @@ def _assert_bash_syntax(path: Path) -> None:
         text=True,
         timeout=10,
     )
-
     assert completed.returncode == 0, completed.stderr
 
 
@@ -79,10 +77,8 @@ def test_deploy_launcher_and_immutable_pipeline_have_valid_bash_syntax() -> None
 
 def test_deploy_launcher_delegates_topology_then_immutable_pipeline() -> None:
     source = DEPLOY_LAUNCHER.read_text(encoding="utf-8")
-
     topology = source.index('bash "$SOURCE_DIR/scripts/check_remote_main_topology.sh" "$SOURCE_DIR"')
     immutable = source.index('exec bash "$SOURCE_DIR/scripts/immutable_deploy.sh" "$@"')
-
     assert topology < immutable
     assert "git reset --hard" not in source
     assert "pip install" not in source
@@ -189,14 +185,12 @@ def test_dirty_checkout_never_trusts_successful_deploy_marker(tmp_path) -> None:
 
 def test_coalescing_requires_clean_main_checkout_and_success_marker() -> None:
     source = IMMUTABLE_DEPLOY.read_text(encoding="utf-8")
-
     dirty_check = source.index('git status --porcelain')
     checkout = source.index("git checkout main")
     fetch = source.index('run_bounded "$GIT_NETWORK_TIMEOUT_SECONDS" "fetch origin"')
     marker_read = source.index('read_recorded_sha 2>/dev/null')
     ancestor_check = source.index('git merge-base --is-ancestor "$TRIGGER_SHA" "$recorded_sha"')
     runtime_creation = source.index('mkdir -p "$RUNTIME_ROOT" "$RELEASES_DIR" "$DEPLOY_STATE_DIR"')
-
     assert dirty_check < checkout < fetch < marker_read < ancestor_check < runtime_creation
     assert "IMMUTABLE_DEPLOY_FAILED dirty source worktree" in source
     assert "deploy coalesced trigger=" in source
@@ -204,14 +198,12 @@ def test_coalescing_requires_clean_main_checkout_and_success_marker() -> None:
 
 def test_success_marker_is_atomic_and_written_after_proof_and_gate() -> None:
     source = IMMUTABLE_DEPLOY.read_text(encoding="utf-8")
-
     marker_function = source.index("record_successful_deployed_sha()")
     production_gate = source.rindex('"$CURRENT_LINK/scripts/production_gate.py"')
     proof = source.rindex('"$RELEASE_MANAGER" write-proof')
     record_call = source.rindex('record_successful_deployed_sha "$NEW_SHA"')
     cleanup = source.rindex("cleanup_old_releases")
     trap_removed = source.rindex("trap - ERR TERM INT HUP")
-
     assert 'mktemp "$DEPLOY_STATE_DIR/deployed_sha.XXXXXX"' in source
     assert 'mv -f "$temp" "$DEPLOYED_SHA_FILE"' in source
     assert marker_function < production_gate < proof < record_call < cleanup < trap_removed
@@ -220,26 +212,22 @@ def test_success_marker_is_atomic_and_written_after_proof_and_gate() -> None:
 def test_coalescing_keeps_provider_audits_after_deploy_returns() -> None:
     deploy_source = IMMUTABLE_DEPLOY.read_text(encoding="utf-8")
     worker_source = WORKER.read_text(encoding="utf-8")
-
     assert 'git merge-base --is-ancestor "$TRIGGER_SHA" "$recorded_sha"' in deploy_source
     deploy_call = worker_source.index('/usr/bin/bash "$DEPLOY_SH"')
     stars_audit = worker_source.rindex("publish_stars_provider_audit_if_requested")
     max_audit = worker_source.rindex("publish_max_provider_audit_if_requested")
     vk_audit = worker_source.rindex("publish_vk_provider_audit_if_requested")
-
     assert deploy_call < stars_audit < max_audit < vk_audit
 
 
 def test_waiting_workers_never_truncate_active_lock_metadata() -> None:
     source = WORKER.read_text(encoding="utf-8")
-
     open_lock = source.index('exec 9<>"$LOCK_FILE"')
     acquire_lock = source.index('"$FLOCK_BIN" -w "$LOCK_WAIT_SECONDS" 9')
     acquisition_epoch = source.index('LOCK_ACQUIRED_EPOCH="$(date +%s)"')
     replace_metadata = source.index(': > "$LOCK_FILE"', acquisition_epoch)
     write_metadata = source.index('"$LOCK_METADATA_VERSION"', replace_metadata)
     clear_metadata = source.rindex(': > "$LOCK_FILE"')
-
     assert 'exec 9>"$LOCK_FILE"' not in source
     assert open_lock < acquire_lock < acquisition_epoch < replace_metadata < write_metadata
     assert write_metadata < clear_metadata
@@ -250,7 +238,6 @@ def test_waiting_workers_never_truncate_active_lock_metadata() -> None:
 
 def test_every_long_immutable_deploy_phase_has_a_hard_deadline() -> None:
     source = IMMUTABLE_DEPLOY.read_text(encoding="utf-8")
-
     assert 'TIMEOUT_BIN="${TIMEOUT_BIN:-/usr/bin/timeout}"' in source
     assert '"$TIMEOUT_BIN" --signal=TERM --kill-after=30s "$seconds" "$@"' in source
     for timeout_name in (
@@ -263,7 +250,7 @@ def test_every_long_immutable_deploy_phase_has_a_hard_deadline() -> None:
         "HEALTH_WAIT_SECONDS",
         "PRODUCTION_GATE_TIMEOUT_SECONDS",
     ):
-        expected = f'"{timeout_name}:${timeout_name}"'.replace(":", ":$", 1)
+        expected = f'"{timeout_name}:${timeout_name}"'
         assert expected in source
     assert 'run_bounded "$RELEASE_BUILD_TIMEOUT_SECONDS"' in source
     assert 'run_bounded "$VALIDATOR_TIMEOUT_SECONDS"' in source
@@ -278,7 +265,6 @@ def test_every_long_immutable_deploy_phase_has_a_hard_deadline() -> None:
 
 def test_stale_recovery_uses_kernel_holder_and_lock_acquisition_age() -> None:
     source = STALE_RECOVERY.read_text(encoding="utf-8")
-
     assert 'LSLOCKS_BIN="${LSLOCKS_BIN:-/usr/bin/lslocks}"' in source
     assert 'STALE_AFTER_SECONDS="${STALE_AFTER_SECONDS:-3600}"' in source
     assert 'ALLOW_LEGACY_LOCK_METADATA="${ALLOW_LEGACY_LOCK_METADATA:-0}"' in source
@@ -290,7 +276,6 @@ def test_stale_recovery_uses_kernel_holder_and_lock_acquisition_age() -> None:
     assert 'metadata_version" = "v1"' in source
     assert '"$metadata_pid" = "$holder_pid"' in source
     assert 'held_seconds="$((now_epoch - lock_acquired_epoch))"' in source
-
     legacy_gate = source.index('[ "$ALLOW_LEGACY_LOCK_METADATA" = "1" ]')
     legacy_process_age = source.index('"$PS_BIN" -o etimes= -p "$holder_pid"')
     assert legacy_gate < legacy_process_age
@@ -298,7 +283,6 @@ def test_stale_recovery_uses_kernel_holder_and_lock_acquisition_age() -> None:
 
 def test_stale_recovery_stops_only_the_exact_lock_holder_unit() -> None:
     source = STALE_RECOVERY.read_text(encoding="utf-8")
-
     assert 'kill -0 "$holder_pid"' in source
     assert 'grep -F -- "$WORKER_PATH"' in source
     assert '"$SYSTEMCTL_BIN" show "$unit" -p MainPID --value' in source
