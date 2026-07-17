@@ -8,6 +8,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramNetworkError
 
 from config.settings import settings
+from services.payments.receipt_contract import validate_receipt_contract
 
 logger = logging.getLogger(__name__)
 
@@ -26,17 +27,23 @@ def yookassa_provider_data_receipt(title: str, price_rub: int) -> str:
     """
 
     value = f"{Decimal(price_rub).quantize(Decimal('1'), rounding=ROUND_HALF_UP):.2f}"  # 10 -> "10.00"
+    tax_system_code, vat_code, payment_mode, payment_subject = validate_receipt_contract(
+        tax_system_code=getattr(settings, "YOOKASSA_TAX_SYSTEM_CODE", 2),
+        vat_code=getattr(settings, "YOOKASSA_VAT_CODE", 1),
+        payment_mode=getattr(settings, "YOOKASSA_PAYMENT_MODE", "full_payment"),
+        payment_subject=getattr(settings, "YOOKASSA_PAYMENT_SUBJECT", "service"),
+    )
     receipt = {
         "receipt": {
-            "tax_system_code": int(getattr(settings, "YOOKASSA_TAX_SYSTEM_CODE", 2)),
+            "tax_system_code": tax_system_code,
             "items": [
                 {
                     "description": (title or "Подписка").strip()[:128],
                     "quantity": "1.00",
                     "amount": {"value": value, "currency": "RUB"},
-                    "vat_code": int(getattr(settings, "YOOKASSA_VAT_CODE", 1)),
-                    "payment_subject": getattr(settings, "YOOKASSA_PAYMENT_SUBJECT", "service"),
-                    "payment_mode": getattr(settings, "YOOKASSA_PAYMENT_MODE", "full_payment"),
+                    "vat_code": vat_code,
+                    "payment_subject": payment_subject,
+                    "payment_mode": payment_mode,
                 }
             ],
         }

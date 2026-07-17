@@ -165,7 +165,7 @@ class Settings:
 
     # --- YooKassa ---
     YOOKASSA_TAX_SYSTEM_CODE: int = _env_int("YOOKASSA_TAX_SYSTEM_CODE", 2, minimum=1, maximum=6)
-    YOOKASSA_VAT_CODE: int = _env_int("YOOKASSA_VAT_CODE", 1, minimum=1, maximum=6)
+    YOOKASSA_VAT_CODE: int = _env_int("YOOKASSA_VAT_CODE", 1, minimum=1, maximum=12)
     YOOKASSA_PAYMENT_SUBJECT: str = _env("YOOKASSA_PAYMENT_SUBJECT", "service")
     YOOKASSA_PAYMENT_MODE: str = _env("YOOKASSA_PAYMENT_MODE", "full_payment")
 
