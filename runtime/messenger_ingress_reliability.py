@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+from typing import Any
+
+from aiohttp import web
+
+from runtime import messenger_ingress as legacy
+from runtime.messenger_payloads import extract_max_message, extract_vk_message, max_event_key
+from services.messenger.webhook_dedupe import InboundFailureResult, record_inbound_failure
+
+log = logging.getLogger(__name__)
+
+
+def _positive_int(name: str, default: int, *, minimum: int = 1, maximum: int = 100) -> int:
+    raw = (os.getenv(name) or str(default)).strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = int(default)
+    return min(max(value, minimum), maximum)
+
+
+def extraction_max_attempts() -> int:
+    return _positive_int("MESSENGER_WEBHOOK_EXTRACTION_MAX_ATTEMPTS", 5, minimum=1, maximum=100)
+
+
+async def _record_extraction_failure(
+    *,
+    platform: str,
+    event_key: str,
+    payload: dict[str, Any],
+    reason: str,
+) -> InboundFailureResult:
+    result = await asyncio.to_thread(
+        record_inbound_failure,
+        platform,
+        event_key,
+        payload,
+        reason,
+        max_attempts=extraction_max_attempts(),
+    )
+    log.warning(
+        "%s webhook extraction failure recorded: event_key=%s attempts=%s retryable=%s dead_lettered=%s recorded=%s",
+        platform.upper(),
+        result.event_key,
+        result.attempts,
+        result.retryable,
+        result.dead_lettered,
+        result.recorded,
+    )
+    return result
+
+
+def _payload_from_body(body: str) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+async def vk_webhook(request: web.Request) -> web.Response:
+    """Add finite extraction retries before delegating valid VK events."""
+
+    payload = _payload_from_body(await request.text())
+    if payload is None or not legacy._vk_secret_ok(payload):
+        return await legacy.vk_webhook(request)
+
+    event_type = str(payload.get("type") or "").strip()
+    if event_type not in legacy.VK_PROCESSABLE_EVENT_TYPES:
+        return await legacy.vk_webhook(request)
+
+    extracted = extract_vk_message(payload)
+    if extracted is not None:
+        return await legacy.vk_webhook(request)
+
+    if event_type == "message_event":
+        await legacy._ack_vk_message_event(payload)
+    event_key = legacy._vk_dedupe_key(payload)
+    result = await _record_extraction_failure(
+        platform="vk",
+        event_key=event_key,
+        payload=payload,
+        reason=f"extraction_failed:event_type={event_type or 'unknown'}",
+    )
+    if result.retryable:
+        return web.Response(status=503, text="retry")
+    return web.Response(text="ok")
+
+
+async def max_webhook(request: web.Request) -> web.Response:
+    """Add finite extraction retries before delegating valid MAX updates."""
+
+    payload = _payload_from_body(await request.text())
+    if payload is None or not legacy._max_secret_ok(request, payload):
+        return await legacy.max_webhook(request)
+
+    update_type = str(
+        payload.get("update_type")
+        or payload.get("type")
+        or payload.get("event_type")
+        or payload.get("event")
+        or ""
+    ).strip()
+    if update_type not in legacy._MAX_PROCESSABLE_UPDATE_TYPES:
+        return await legacy.max_webhook(request)
+
+    extracted = extract_max_message(payload)
+    if extracted is not None:
+        return await legacy.max_webhook(request)
+
+    event_key = max_event_key(payload)
+    result = await _record_extraction_failure(
+        platform="max",
+        event_key=event_key,
+        payload=payload,
+        reason=f"extraction_failed:update_type={update_type or 'unknown'}",
+    )
+    if result.retryable:
+        return web.json_response(
+            {"ok": False, "error": "retry", "attempts": result.attempts, "dead_lettered": False},
+            status=503,
+        )
+    return web.json_response(
+        {"ok": True, "attempts": result.attempts, "dead_lettered": result.dead_lettered}
+    )
+
+
+__all__ = ["extraction_max_attempts", "max_webhook", "vk_webhook"]
