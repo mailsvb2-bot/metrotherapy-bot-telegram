@@ -71,8 +71,61 @@ class ReconciliationResult:
     side_effects_done: bool = False
 
 
+@dataclass(frozen=True)
+class PaymentLedgerState:
+    provider_status: str
+    processing_status: str
+    problem: str
+    processing_error: str
+
+
+@dataclass(frozen=True)
+class PaymentFactWriteResult:
+    inserted: bool
+    preserved_refund: PaymentLedgerState | None = None
+
+
 def _problem_join(*items: str) -> str:
     return ";".join(item for item in items if item)
+
+
+def _row_value(row: Any, key: str, index: int) -> Any:
+    if hasattr(row, "keys"):
+        return row[key]
+    return row[index]
+
+
+def _refund_state(provider_status: str, processing_status: str) -> bool:
+    provider = str(provider_status or "").strip().lower()
+    processing = str(processing_status or "").strip().lower()
+    return provider == "refunded" or processing == "refunded" or processing.startswith("refund_")
+
+
+def _preserved_refund_result(
+    *,
+    payment_id: str,
+    event: str,
+    incoming_status: str,
+    state: PaymentLedgerState,
+) -> ReconciliationResult:
+    log.info(
+        "YooKassa payment event preserved refund state: payment_id=%s incoming_status=%s local_status=%s processing_status=%s",
+        payment_id,
+        incoming_status,
+        state.provider_status,
+        state.processing_status,
+    )
+    return ReconciliationResult(
+        ok=True,
+        provider="yookassa",
+        provider_payment_id=payment_id,
+        status=state.provider_status or incoming_status,
+        event=event,
+        inserted=False,
+        problem=state.problem,
+        processing_status=state.processing_status,
+        side_effects_done=state.processing_status == "refunded",
+    )
 
 
 def _is_succeeded_payment(*, event: str, status: str) -> bool:
@@ -258,21 +311,50 @@ def _record_payment_fact(
     granted_at_utc: str | None = None,
     side_effects_done_at_utc: str | None = None,
     processing_error: str = "",
-) -> bool:
-    """Insert/update the provider payment ledger fact before side-effect grants.
+) -> PaymentFactWriteResult:
+    """Insert/update the provider payment ledger before side-effect grants.
 
-    Grants are separately idempotent and may use their own DB transactions. The
-    payment fact must therefore exist first, so a process crash between fact and
-    grant is recoverable by replaying the provider webhook. The local processing
-    columns expose that resumable state to admin/reporting surfaces.
+    Refund processing is monotonic. Once the local ledger enters a completed,
+    partial or action-required refund state, a delayed payment event may refresh
+    provider evidence but cannot overwrite refund status, problems or processing
+    state. The returned preserved state lets the caller stop before any grant.
     """
+
     with db() as conn:
         with tx(conn):
             row = conn.execute(
-                "SELECT id FROM payments WHERE provider_charge_id=? OR telegram_charge_id=? LIMIT 1",
+                """
+                SELECT id, provider_status, processing_status, problem, processing_error
+                FROM payments
+                WHERE provider_charge_id=? OR telegram_charge_id=?
+                LIMIT 1
+                """.strip(),
                 (payment_id, synthetic_charge_id),
             ).fetchone()
             if row:
+                existing = PaymentLedgerState(
+                    provider_status=str(_row_value(row, "provider_status", 1) or ""),
+                    processing_status=str(_row_value(row, "processing_status", 2) or ""),
+                    problem=str(_row_value(row, "problem", 3) or ""),
+                    processing_error=str(_row_value(row, "processing_error", 4) or ""),
+                )
+                if _refund_state(existing.provider_status, existing.processing_status):
+                    conn.execute(
+                        """
+                        UPDATE payments
+                        SET provider_event_id=?, provider_raw=?, reconciled_at=?
+                        WHERE provider_charge_id=? OR telegram_charge_id=?
+                        """.strip(),
+                        (
+                            provider_event_id,
+                            raw,
+                            reconciled_at,
+                            payment_id,
+                            synthetic_charge_id,
+                        ),
+                    )
+                    return PaymentFactWriteResult(inserted=False, preserved_refund=existing)
+
                 conn.execute(
                     """
                     UPDATE payments
@@ -297,7 +379,7 @@ def _record_payment_fact(
                         synthetic_charge_id,
                     ),
                 )
-                return False
+                return PaymentFactWriteResult(inserted=False)
 
             conn.execute(
                 """
@@ -327,7 +409,7 @@ def _record_payment_fact(
                     processing_error,
                 ),
             )
-            return True
+            return PaymentFactWriteResult(inserted=True)
 
 
 def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
@@ -372,7 +454,7 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
     preliminary_problem = "" if user_id else "missing_user_id"
     processing_status = _initial_processing_status(event=event, status=status, metadata=metadata)
 
-    inserted = _record_payment_fact(
+    fact_write = _record_payment_fact(
         payment_id=payment_id,
         synthetic_charge_id=synthetic_charge_id,
         user_id=int(user_id),
@@ -387,6 +469,14 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
         processing_status=processing_status,
         processing_error=preliminary_problem,
     )
+    if fact_write.preserved_refund is not None:
+        return _preserved_refund_result(
+            payment_id=payment_id,
+            event=event,
+            incoming_status=status,
+            state=fact_write.preserved_refund,
+        )
+    inserted = fact_write.inserted
 
     grant_problem = _grant_practices_if_needed(
         event=event,
