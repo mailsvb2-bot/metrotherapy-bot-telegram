@@ -35,6 +35,7 @@ from services.migrations.premium_entitlements_v1 import apply as _apply_premium_
 from services.migrations.gift_claims_v1 import apply as _apply_gift_claims_v1
 from services.migrations.gift_claims_recipient_hint_v2 import apply as _apply_gift_claims_recipient_hint_v2
 from services.migrations.telegram_stars_refunds_v1 import apply as _apply_telegram_stars_refunds_v1
+from services.migrations.yookassa_refunds_v1 import apply as _apply_yookassa_refunds_v1
 from services.migrations.postgres_identity_bigint_v1 import apply as _apply_postgres_identity_bigint_v1
 
 
@@ -74,5 +75,6 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_gift_claims_v1(conn)
     _apply_gift_claims_recipient_hint_v2(conn)
     _apply_telegram_stars_refunds_v1(conn)
+    _apply_yookassa_refunds_v1(conn)
     _apply_postgres_identity_bigint_v1(conn)
     _apply_price(conn)

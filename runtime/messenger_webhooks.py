@@ -28,7 +28,7 @@ from runtime.telegram_webhook_runtime import (
     telegram_webhook_path,
 )
 from services.messenger.audio_links import AUDIO_ACCESS_PREFIX, AUDIO_MEDIA_PREFIX
-from services.messenger.delivery_outbox import start_delivery_worker, stop_delivery_worker
+from services.messenger.delivery_pool import start_delivery_worker, stop_delivery_worker
 
 if TYPE_CHECKING:
     from aiogram import Bot, Dispatcher

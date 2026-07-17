@@ -31,7 +31,7 @@ def provider_verification_required() -> bool:
 
     Development and hermetic tests may opt in explicitly. Production must not have
     an environment-variable bypass because an unverified successful payload can
-    otherwise reach the payment grant path.
+    otherwise reach the payment or refund access-mutation paths.
     """
 
     if _is_prod():
@@ -49,12 +49,9 @@ def _auth_header() -> str:
     return f"Basic {encoded}"
 
 
-def fetch_yookassa_payment(payment_id: str) -> dict[str, Any]:
-    payment_id = (payment_id or "").strip()
-    if not payment_id:
-        raise YooKassaProviderVerificationError("missing_provider_payment_id")
+def _fetch_provider_object(path: str, *, object_kind: str) -> dict[str, Any]:
     req = urllib.request.Request(
-        f"https://api.yookassa.ru/v3/payments/{payment_id}",
+        f"https://api.yookassa.ru/v3/{path.lstrip('/')}",
         method="GET",
         headers={"Authorization": _auth_header(), "Accept": "application/json"},
     )
@@ -63,7 +60,12 @@ def fetch_yookassa_payment(payment_id: str) -> dict[str, Any]:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")
-        log.error("YooKassa payment verification failed: status=%s body=%s", exc.code, "<redacted>" if _is_prod() else body[:1000])
+        log.error(
+            "YooKassa %s verification failed: status=%s body=%s",
+            object_kind,
+            exc.code,
+            "<redacted>" if _is_prod() else body[:1000],
+        )
         raise YooKassaProviderVerificationError(f"provider_http_{exc.code}") from exc
     except OSError as exc:
         raise YooKassaProviderVerificationError(f"provider_network:{type(exc).__name__}") from exc
@@ -74,6 +76,20 @@ def fetch_yookassa_payment(payment_id: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise YooKassaProviderVerificationError("provider_bad_payload")
     return payload
+
+
+def fetch_yookassa_payment(payment_id: str) -> dict[str, Any]:
+    payment_id = (payment_id or "").strip()
+    if not payment_id:
+        raise YooKassaProviderVerificationError("missing_provider_payment_id")
+    return _fetch_provider_object(f"payments/{payment_id}", object_kind="payment")
+
+
+def fetch_yookassa_refund(refund_id: str) -> dict[str, Any]:
+    refund_id = (refund_id or "").strip()
+    if not refund_id:
+        raise YooKassaProviderVerificationError("missing_provider_refund_id")
+    return _fetch_provider_object(f"refunds/{refund_id}", object_kind="refund")
 
 
 def _minor(amount: dict[str, Any] | None) -> int:
@@ -113,26 +129,14 @@ def _grant_candidate(payload: dict[str, Any]) -> bool:
 
 
 def webhook_requires_provider_verification(payload: dict[str, Any]) -> bool:
-    """Every persisted payment webhook must be authenticated in production.
-
-    Previously only grant-producing success events were checked against YooKassa.
-    Anyone could therefore submit a forged pending/canceled/non-package event and
-    pollute payment status, support reports and conversion analytics. A payment id
-    is enough to query the provider source of truth, so all payment facts use the
-    same verification boundary.
-    """
+    """Every persisted provider webhook must be authenticated in production."""
 
     obj = _object(payload)
     return bool(str(obj.get("id") or payload.get("id") or "").strip())
 
 
 def verify_yookassa_webhook_with_provider(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Verify a webhook and return the canonical provider payment object.
-
-    The caller must persist the returned object rather than the untrusted webhook
-    object. This also handles stale webhook delivery safely: current provider
-    status wins instead of accepting a forged or outdated event/status pair.
-    """
+    """Verify a payment webhook and return the canonical provider payment object."""
 
     if not provider_verification_required():
         return None
@@ -162,4 +166,43 @@ def verify_yookassa_webhook_with_provider(payload: dict[str, Any]) -> dict[str, 
         right = str(provider_meta.get(key) or "").strip()
         if left != right:
             raise YooKassaProviderVerificationError(f"provider_metadata_{key}_mismatch")
+    return provider
+
+
+def verify_yookassa_refund_webhook_with_provider(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Verify ``refund.succeeded`` through ``GET /v3/refunds/{refund_id}``.
+
+    The webhook body is caller-controlled input. Access revocation is allowed only
+    from the canonical refund object returned by YooKassa and only when refund id,
+    payment id, status, amount and currency all agree.
+    """
+
+    if not provider_verification_required():
+        return None
+
+    event = str(payload.get("event") or "").strip().lower()
+    obj = _object(payload)
+    refund_id = str(obj.get("id") or payload.get("id") or "").strip()
+    payment_id = str(obj.get("payment_id") or "").strip()
+    if event != "refund.succeeded":
+        raise YooKassaProviderVerificationError("unexpected_refund_event")
+    if not refund_id:
+        raise YooKassaProviderVerificationError("missing_provider_refund_id")
+    if not payment_id:
+        raise YooKassaProviderVerificationError("missing_refund_payment_id")
+
+    provider = fetch_yookassa_refund(refund_id)
+    if str(provider.get("id") or "").strip() != refund_id:
+        raise YooKassaProviderVerificationError("provider_refund_id_mismatch")
+    if str(provider.get("payment_id") or "").strip() != payment_id:
+        raise YooKassaProviderVerificationError("provider_refund_payment_id_mismatch")
+    if str(provider.get("status") or "").strip().lower() != "succeeded":
+        raise YooKassaProviderVerificationError("provider_refund_not_succeeded")
+
+    webhook_amount = _amount(obj)
+    provider_amount = _amount(provider)
+    if _minor(webhook_amount) <= 0 or _minor(webhook_amount) != _minor(provider_amount):
+        raise YooKassaProviderVerificationError("provider_refund_amount_mismatch")
+    if str(webhook_amount.get("currency") or "RUB").upper() != str(provider_amount.get("currency") or "RUB").upper():
+        raise YooKassaProviderVerificationError("provider_refund_currency_mismatch")
     return provider

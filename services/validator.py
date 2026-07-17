@@ -33,6 +33,7 @@ from services.validators.release import (
 from services.validators.architecture import validate_architecture_contracts
 from services.validators.prod import validate_prod_guardrails
 from services.validators.payment_contracts import validate_payment_contracts
+from services.validators.privacy import validate_privacy_schema
 
 
 def validate_all(strict: bool = True) -> None:
@@ -44,6 +45,7 @@ def validate_all(strict: bool = True) -> None:
     validate_demo_audio(strict=strict)
     validate_full_audio(strict=strict)
     validate_db_schema(strict=strict)
+    validate_privacy_schema(strict=strict)
     validate_background_tasks(strict=strict)
     validate_single_scheduler(strict=guardrails_strict)
     validate_schema_decomposition(strict=guardrails_strict)

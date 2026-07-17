@@ -5,7 +5,7 @@ from typing import Any
 
 from core.time_utils import utc_now
 from services.db import db
-from services.messenger import delivery_outbox
+from services.messenger import delivery_outbox, delivery_pool
 
 
 def _row_value(row: Any, key: str, index: int) -> Any:
@@ -51,18 +51,9 @@ def _queue_age_snapshot() -> dict[str, int]:
 
 def delivery_health_snapshot() -> dict[str, Any]:
     counts = delivery_outbox.outbox_snapshot()
-    worker = getattr(delivery_outbox, "_worker_task", None)
-    stop_event = getattr(delivery_outbox, "_worker_stop", None)
-    expected = stop_event is not None
-    active = bool(worker is not None and not worker.done())
-    # Before the HTTP runtime starts, this function is also used as a pure config
-    # preflight. Once start_delivery_worker() declares the worker expected, a
-    # stopped/crashed task becomes a real readiness failure.
-    healthy = active if expected else True
+    pool = delivery_pool.worker_snapshot()
     return {
-        "worker_expected": expected,
-        "worker_active": active,
-        "worker_running": healthy,
+        **pool,
         "pending": int(counts.get("pending", 0)),
         "retry": int(counts.get("retry", 0)),
         "sending": int(counts.get("sending", 0)),
