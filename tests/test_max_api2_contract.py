@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from runtime.messenger_max_sender import MAX_API2_BASE_URL, MaxBotSender, _attachment_retry_delays
+from runtime.messenger_transport_errors import MessengerTransportError
 from scripts import max_provider_audit, register_max_webhook
 from services.messenger import preflight
 
@@ -15,11 +16,31 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_max_sender_defaults_and_legacy_values_resolve_to_api2(monkeypatch) -> None:
     monkeypatch.delenv("MAX_API_BASE_URL", raising=False)
+    monkeypatch.delenv("ALLOW_CUSTOM_MAX_API_BASE_URL", raising=False)
+    monkeypatch.setenv("APP_ENV", "dev")
     monkeypatch.setattr("runtime.messenger_max_sender.settings.MAX_API_BASE_URL", "", raising=False)
 
     assert MaxBotSender()._api_base() == MAX_API2_BASE_URL
     assert MaxBotSender(api_base_url="https://platform-api.max.ru")._api_base() == MAX_API2_BASE_URL
     assert MaxBotSender(api_base_url="https://botapi.max.ru")._api_base() == MAX_API2_BASE_URL
+
+
+def test_max_sender_rejects_custom_origin_in_deployed_env(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("ALLOW_CUSTOM_MAX_API_BASE_URL", "1")
+
+    with pytest.raises(MessengerTransportError, match="platform-api2.max.ru"):
+        MaxBotSender(api_base_url="https://attacker.example")._api_base()
+
+
+def test_max_sender_allows_custom_origin_only_for_explicit_dev_tests(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.delenv("ALLOW_CUSTOM_MAX_API_BASE_URL", raising=False)
+    with pytest.raises(MessengerTransportError, match="platform-api2.max.ru"):
+        MaxBotSender(api_base_url="https://max.test")._api_base()
+
+    monkeypatch.setenv("ALLOW_CUSTOM_MAX_API_BASE_URL", "1")
+    assert MaxBotSender(api_base_url="https://max.test")._api_base() == "https://max.test"
 
 
 def test_max_attachment_retry_schedule_is_configurable(monkeypatch) -> None:
@@ -33,18 +54,24 @@ def test_max_multipart_upload_does_not_receive_bot_token(monkeypatch, tmp_path: 
     source.write_bytes(b"audio")
     captured: dict[str, object] = {}
 
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.delenv("MAX_CA_BUNDLE", raising=False)
     monkeypatch.setattr("runtime.messenger_max_sender.get_cached_media_token", lambda *args, **kwargs: None)
     monkeypatch.setattr("runtime.messenger_max_sender.store_media_token", lambda *args, **kwargs: None)
 
-    def fake_json_request(url, *, method, headers, payload):
+    def fake_json_request(url, *, method, headers, payload, retries=None, ssl_context=None):
         captured["api_headers"] = headers
+        captured["api_retries"] = retries
+        captured["api_ssl_context"] = ssl_context
         return {"url": "https://upload.max.example/file", "token": "media-token"}
 
-    def fake_multipart_upload(url, *, field_name, path, timeout=120):
+    def fake_multipart_upload(url, *, field_name, path, timeout=120, retries=None, ssl_context=None):
         captured["upload_url"] = url
         captured["field_name"] = field_name
         captured["path"] = path
         captured["timeout"] = timeout
+        captured["upload_retries"] = retries
+        captured["upload_ssl_context"] = ssl_context
         return {"token": "media-token"}
 
     monkeypatch.setattr("runtime.messenger_max_sender.json_request", fake_json_request)
@@ -54,9 +81,41 @@ def test_max_multipart_upload_does_not_receive_bot_token(monkeypatch, tmp_path: 
 
     assert result == "media-token"
     assert captured["api_headers"] == {"Authorization": "bot-secret"}
+    assert captured["api_retries"] == 1
     assert captured["upload_url"] == "https://upload.max.example/file"
     assert captured["field_name"] == "data"
     assert captured["path"] == source
+
+
+def test_max_ca_bundle_is_used_by_api_and_upload(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "audio.mp3"
+    source.write_bytes(b"audio")
+    bundle = tmp_path / "ca.pem"
+    bundle.write_text("test-ca", encoding="utf-8")
+    sentinel = object()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("MAX_CA_BUNDLE", str(bundle))
+    monkeypatch.setattr("runtime.messenger_max_sender.ssl.create_default_context", lambda *, cafile: sentinel)
+    monkeypatch.setattr("runtime.messenger_max_sender.get_cached_media_token", lambda *args, **kwargs: None)
+    monkeypatch.setattr("runtime.messenger_max_sender.store_media_token", lambda *args, **kwargs: None)
+
+    def fake_json_request(url, *, method, headers, payload, retries=None, ssl_context=None):
+        captured["api_ssl_context"] = ssl_context
+        return {"url": "https://upload.max.example/file", "token": "media-token"}
+
+    def fake_multipart_upload(url, *, field_name, path, timeout=120, retries=None, ssl_context=None):
+        captured["upload_ssl_context"] = ssl_context
+        return {"token": "media-token"}
+
+    monkeypatch.setattr("runtime.messenger_max_sender.json_request", fake_json_request)
+    monkeypatch.setattr("runtime.messenger_max_sender.multipart_upload", fake_multipart_upload)
+
+    asyncio.run(MaxBotSender(token="bot-secret")._ensure_media_token(source, media_type="audio"))
+
+    assert captured["api_ssl_context"] is sentinel
+    assert captured["upload_ssl_context"] is sentinel
 
 
 def test_max_registration_uses_api2_and_validates_secret(monkeypatch) -> None:
@@ -97,6 +156,21 @@ def test_max_preflight_warns_on_legacy_api_domain(monkeypatch) -> None:
 
     assert status.ok is True
     assert any("platform-api2.max.ru" in warning for warning in status.warnings)
+
+
+def test_max_preflight_fails_on_custom_domain_in_prod(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("MAX_WEBHOOK_ENABLED", "1")
+    monkeypatch.setenv("MAX_API_BASE_URL", "https://attacker.example")
+    monkeypatch.setattr(preflight.settings, "MESSENGER_PUBLIC_BASE_URL", "https://bot.example.test", raising=False)
+    monkeypatch.setattr(preflight.settings, "MAX_BOT_TOKEN", "token", raising=False)
+    monkeypatch.setattr(preflight.settings, "MAX_BOT_LINK_BASE", "https://max.ru/bot/{payload}", raising=False)
+    monkeypatch.setattr(preflight.settings, "MAX_WEBHOOK_SECRET", "secret", raising=False)
+
+    status = preflight.check_max_preflight()
+
+    assert status.ok is False
+    assert any("official_api2_required" in item for item in status.missing)
 
 
 def test_max_audit_reports_active_api2_subscription(monkeypatch) -> None:
@@ -156,7 +230,8 @@ def test_max_production_files_use_api2_and_no_query_secret_helper() -> None:
 def test_max_sender_source_does_not_forward_token_to_upload_url() -> None:
     source = (ROOT / "runtime" / "messenger_max_sender.py").read_text(encoding="utf-8")
 
-    assert "multipart_upload,\n            upload_url,\n            field_name=\"data\"" in source
+    assert "multipart_upload," in source
+    assert "field_name=\"data\"" in source
     assert "multipart_upload, upload_url, token=token" not in source
 
 
