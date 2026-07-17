@@ -13,6 +13,11 @@ if str(ROOT) not in sys.path:
 from services.accounts.identity import ensure_account
 from services.db import db
 from services.db.runtime import CONFIG
+from services.payments.reconciliation import ReconciliationResult
+from services.payments.retry_queue import (
+    claim_due_payment_retries,
+    enqueue_verified_payment_retry,
+)
 from services.payments.telegram_stars import (
     build_stars_payload,
     record_successful_stars_payment,
@@ -80,7 +85,6 @@ def _exercise_payment_and_refund() -> tuple[int, str]:
     return user_id, charge_id
 
 
-
 def _exercise_concurrent_payment_grant() -> None:
     user_id = 8_500_000_000 + (uuid.uuid4().int % 1_000_000_000)
     payment_id = f"postgres-ci-concurrent-{uuid.uuid4().hex}"
@@ -121,6 +125,59 @@ def _exercise_concurrent_payment_grant() -> None:
     if grant_count != 1 or lot_count != 1:
         raise SystemExit("POSTGRES_CI_SMOKE_FAILED concurrent payment provenance contract")
 
+
+def _exercise_payment_retry_claim_concurrency() -> None:
+    payment_id = f"postgres-ci-payment-retry-{uuid.uuid4().hex}"
+    payload = {
+        "event": "payment.succeeded",
+        "object": {
+            "id": payment_id,
+            "status": "succeeded",
+            "amount": {"value": "2499.00", "currency": "RUB"},
+            "metadata": {
+                "project": "metrotherapy",
+                "user_id": "885099",
+                "source": "max",
+                "kind": "tokens",
+                "package_id": "practice_start_7",
+            },
+        },
+    }
+    result = ReconciliationResult(
+        ok=True,
+        provider="yookassa",
+        provider_payment_id=payment_id,
+        status="succeeded",
+        event="payment.succeeded",
+        inserted=False,
+        problem="practice_grant_failed:RuntimeError",
+        processing_status="action_required",
+        side_effects_done=False,
+    )
+    enqueue_verified_payment_retry(payload, result)
+
+    def claim_once() -> list[int]:
+        return [item.id for item in claim_due_payment_retries(limit=1)]
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        claimed_groups = list(pool.map(lambda _: claim_once(), range(4)))
+    claimed_ids = [item for group in claimed_groups for item in group]
+    if len(claimed_ids) != 1 or len(set(claimed_ids)) != 1:
+        raise SystemExit("POSTGRES_CI_SMOKE_FAILED payment retry SKIP LOCKED contract")
+
+    with db() as conn:
+        row = conn.execute(
+            "SELECT status,lock_token FROM payment_reconciliation_retry WHERE provider=? AND provider_payment_id=?",
+            ("yookassa", payment_id),
+        ).fetchone()
+        if not row or row["status"] != "processing" or not str(row["lock_token"] or ""):
+            raise SystemExit("POSTGRES_CI_SMOKE_FAILED payment retry lease persistence contract")
+        conn.execute(
+            "DELETE FROM payment_reconciliation_retry WHERE provider=? AND provider_payment_id=?",
+            ("yookassa", payment_id),
+        )
+
+
 def _assert_ledgers(charge_id: str) -> None:
     with db() as conn:
         payment = conn.execute(
@@ -143,6 +200,7 @@ def main() -> int:
     _, charge_id = _exercise_payment_and_refund()
     _assert_ledgers(charge_id)
     _exercise_concurrent_payment_grant()
+    _exercise_payment_retry_claim_concurrency()
     print("POSTGRES_CI_SMOKE_OK")
     return 0
 
