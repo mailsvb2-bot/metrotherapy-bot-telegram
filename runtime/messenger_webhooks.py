@@ -16,7 +16,7 @@ from runtime.ingress_flags import (
     payment_http_enabled,
     vk_webhook_enabled,
 )
-from runtime.messenger_ingress import max_webhook, vk_webhook
+from runtime.messenger_ingress_reliability import max_webhook, vk_webhook
 from runtime.messenger_media_http import audio_access, audio_media
 from runtime.payment_http import payment_terms_web, pay_yookassa_web, yookassa_reconciliation_webhook
 from runtime.payment_webhook_admission import ingress_body_limit, payment_webhook_admission_middleware
