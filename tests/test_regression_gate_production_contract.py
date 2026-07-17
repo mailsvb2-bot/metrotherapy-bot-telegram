@@ -10,7 +10,9 @@ def test_hermetic_production_contract_is_mandatory() -> None:
 
     assert step.env_file is None
     assert step.skip_if_missing_env_file is False
-    assert step.cmd[-1] == "scripts/validate_project.py"
+    assert step.cmd[1] == "-c"
+    assert "validate_prod_guardrails" in step.cmd[-1]
+    assert "validate_project.py" not in step.cmd[-1]
     assert step.env is regression_gate.HERMETIC_PROD_VALIDATOR_ENV
 
 
