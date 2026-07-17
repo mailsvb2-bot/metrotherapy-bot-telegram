@@ -20,10 +20,10 @@ def test_provider_transport_does_not_retry_permanent_http_errors(monkeypatch) ->
         calls += 1
         raise _http_error(401)
 
-    with pytest.raises(urllib.error.HTTPError) as exc_info:
+    with pytest.raises(provider_transport.ProviderPermanentHTTPError) as exc_info:
         provider_transport._with_retries(operation, retries=5)
 
-    assert exc_info.value.code == 401
+    assert exc_info.value.status_code == 401
     assert calls == 1
 
 
