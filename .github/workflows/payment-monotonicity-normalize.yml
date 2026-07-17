@@ -1,0 +1,43 @@
+name: Payment Monotonicity Normalize
+
+on:
+  push:
+    branches:
+      - agent/payment-reconciliation-reliability
+
+concurrency:
+  group: payment-monotonicity-normalize
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Normalize payment reconciliation source
+        run: python ops/normalize_payment_refund_monotonicity.py
+
+      - name: Validate Python syntax
+        run: python -m py_compile services/payments/reconciliation.py
+
+      - name: Commit normalized source
+        run: |
+          changes="$(git status --porcelain -- services/payments/reconciliation.py)"
+          if [ -z "$changes" ]; then
+            echo 'PAYMENT_MONOTONICITY_SOURCE_CURRENT'
+            exit 0
+          fi
+          printf '%s\n' "$changes"
+          git config user.name 'Metrotherapy Payment Reliability'
+          git config user.email 'payment-reliability@metrotherapy.local'
+          git add services/payments/reconciliation.py
+          git commit -m 'Normalize monotonic payment refund handling'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
