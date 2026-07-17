@@ -53,6 +53,13 @@ def _new_export_path(user_id: int) -> Path:
     return path
 
 
+def _remove_export_path(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        log.exception("Temporary privacy export cleanup failed: path=%s", path)
+
+
 @router.callback_query(lambda c: (c.data or "") == "info:support")
 async def cb_support(cb: CallbackQuery):
     await safe_answer_callback(cb)
@@ -110,11 +117,19 @@ async def cmd_my_data(message: Message) -> None:
                 "Файл может содержать историю использования и платёжные записи — храните его безопасно."
             ),
         )
-    except (sqlite3.Error, RuntimeError, OSError, ValueError, TypeError):
+    except sqlite3.Error:
+        await _answer_export_failure(message, user_id)
+    except RuntimeError:
+        await _answer_export_failure(message, user_id)
+    except OSError:
+        await _answer_export_failure(message, user_id)
+    except ValueError:
+        await _answer_export_failure(message, user_id)
+    except TypeError:
         await _answer_export_failure(message, user_id)
     finally:
         if export_path is not None:
-            await asyncio.to_thread(export_path.unlink, missing_ok=True)
+            await asyncio.to_thread(_remove_export_path, export_path)
 
 
 async def _answer_erasure_failure(message: Message, user_id: int) -> None:
