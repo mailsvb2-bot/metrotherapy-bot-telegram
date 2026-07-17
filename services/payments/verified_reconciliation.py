@@ -6,8 +6,10 @@ from typing import Any
 from services.payments.reconciliation import ReconciliationResult, record_yookassa_webhook
 from services.payments.yookassa_provider import (
     YooKassaProviderVerificationError,
+    verify_yookassa_refund_webhook_with_provider,
     verify_yookassa_webhook_with_provider,
 )
+from services.payments.yookassa_refunds import record_yookassa_refund
 
 
 def _object(payload: dict[str, Any]) -> dict[str, Any]:
@@ -119,32 +121,54 @@ def _provider_canonical_payload(payload: dict[str, Any], provider_object: dict[s
     return canonical
 
 
-def record_verified_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
-    """Verify YooKassa source-of-truth before persisting any payment fact.
+def _provider_canonical_refund_payload(
+    payload: dict[str, Any], provider_object: dict[str, Any] | None
+) -> dict[str, Any]:
+    if provider_object is None:
+        return payload
+    canonical = dict(payload)
+    canonical["object"] = dict(provider_object)
+    canonical["event"] = "refund.succeeded"
+    return canonical
 
-    In production every payment webhook is resolved through YooKassa's API. The
-    canonical provider object—not the caller-controlled webhook body—is then used
-    for reconciliation and analytics. Hermetic tests/dev may explicitly disable
-    provider verification and keep using the supplied payload.
-    """
+
+def _verification_failure(payload: dict[str, Any], exc: Exception) -> ReconciliationResult:
+    obj = _object(payload)
+    event = str(payload.get("event") or "").strip()
+    is_refund = event.casefold() == "refund.succeeded"
+    payment_id = str(
+        obj.get("payment_id") if is_refund else obj.get("id") or payload.get("id") or ""
+    ).strip()
+    status = str(obj.get("status") or "unknown").strip() or "unknown"
+    return ReconciliationResult(
+        ok=False,
+        provider="yookassa",
+        provider_payment_id=payment_id,
+        status=status,
+        event=event,
+        inserted=False,
+        problem=f"provider_verification_failed:{exc}",
+        processing_status="action_required",
+        side_effects_done=False,
+    )
+
+
+def record_verified_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
+    """Verify YooKassa source-of-truth before persisting payment or refund facts."""
+
+    event = str(payload.get("event") or "").strip().casefold()
+    if event == "refund.succeeded":
+        try:
+            provider_refund = verify_yookassa_refund_webhook_with_provider(payload)
+        except YooKassaProviderVerificationError as exc:
+            return _verification_failure(payload, exc)
+        canonical_refund = _provider_canonical_refund_payload(payload, provider_refund)
+        return record_yookassa_refund(canonical_refund)
+
     try:
         provider_object = verify_yookassa_webhook_with_provider(payload)
     except YooKassaProviderVerificationError as exc:
-        obj = _object(payload)
-        payment_id = str(obj.get("id") or payload.get("id") or "").strip()
-        status = str(obj.get("status") or "unknown").strip() or "unknown"
-        event = str(payload.get("event") or "").strip()
-        return ReconciliationResult(
-            ok=False,
-            provider="yookassa",
-            provider_payment_id=payment_id,
-            status=status,
-            event=event,
-            inserted=False,
-            problem=f"provider_verification_failed:{exc}",
-            processing_status="action_required",
-            side_effects_done=False,
-        )
+        return _verification_failure(payload, exc)
 
     canonical_payload = _provider_canonical_payload(payload, provider_object)
     result = record_yookassa_webhook(canonical_payload)
