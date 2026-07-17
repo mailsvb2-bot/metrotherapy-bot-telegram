@@ -13,6 +13,7 @@ READY_TABLES = {
     'schema_migrations',
     'practice_wallets',
     'payment_token_grants',
+    'payment_reconciliation_retry',
     'premium_entitlements',
     'premium_delivery_outbox',
     'consultation_requests',
