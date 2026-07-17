@@ -17,7 +17,9 @@ def test_recent_payment_privacy_and_messenger_boundaries_are_covered() -> None:
         "services/payments/verified_reconciliation.py",
         "services/privacy_controls.py",
     }
-    required_security_paths = required_type_files | {"services/payments"}
+    required_security_paths = (
+        required_type_files - {"services/payments/verified_reconciliation.py"}
+    ) | {"services/payments"}
 
     assert required_type_files <= set(critical_static_gate.TYPE_CONTRACT_FILES)
     assert required_security_paths <= set(critical_static_gate.SECURITY_SCAN_PATHS)
