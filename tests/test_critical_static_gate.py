@@ -14,11 +14,16 @@ def test_recent_payment_privacy_and_messenger_boundaries_are_covered() -> None:
         "runtime/payment_webhook_admission.py",
         "services/messenger/audio_access.py",
         "services/messenger/webhook_dedupe.py",
+        "services/payments/retry_queue.py",
         "services/payments/verified_reconciliation.py",
         "services/privacy_controls.py",
     }
     required_security_paths = (
-        required_type_files - {"services/payments/verified_reconciliation.py"}
+        required_type_files
+        - {
+            "services/payments/retry_queue.py",
+            "services/payments/verified_reconciliation.py",
+        }
     ) | {"services/payments"}
 
     assert required_type_files <= set(critical_static_gate.TYPE_CONTRACT_FILES)

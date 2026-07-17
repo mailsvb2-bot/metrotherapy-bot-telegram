@@ -112,6 +112,19 @@ def _scheduler_readiness(scheduler: dict[str, Any]) -> tuple[bool, list[str], di
     running = bool(scheduler.get('scheduler_loop_task_running'))
     recent_error = _scheduler_recent_error(scheduler)
     stale = _scheduler_stale(scheduler)
+    try:
+        payment_retry_active = int(scheduler.get('payment_retry_active') or 0)
+    except (TypeError, ValueError):
+        payment_retry_active = -1
+    try:
+        payment_retry_dead_count = int(scheduler.get('payment_retry_dead') or 0)
+    except (TypeError, ValueError):
+        payment_retry_dead_count = -1
+    max_active = _int_env('PAYMENT_RETRY_READY_MAX_ACTIVE', 1000)
+    max_dead = _int_env('PAYMENT_RETRY_READY_MAX_DEAD', 0)
+    payment_retry_unavailable = payment_retry_active < 0 or payment_retry_dead_count < 0
+    payment_retry_backlog = payment_retry_active > max_active
+    payment_retry_dead = payment_retry_dead_count > max_dead
 
     errors: list[str] = []
     if not running:
@@ -120,14 +133,30 @@ def _scheduler_readiness(scheduler: dict[str, Any]) -> tuple[bool, list[str], di
         errors.append('scheduler:recent_owner_tick_error')
     if stale:
         errors.append('scheduler:stale_tick')
+    if payment_retry_unavailable:
+        errors.append('payment_retry:unavailable')
+    if payment_retry_backlog:
+        errors.append('payment_retry:backlog')
+    if payment_retry_dead:
+        errors.append('payment_retry:dead_letter')
 
+    degraded = bool(
+        recent_error
+        or stale
+        or payment_retry_unavailable
+        or payment_retry_backlog
+        or payment_retry_dead
+    )
     return (
-        bool(running and not recent_error and not stale),
+        bool(running and not degraded),
         errors,
         {
             'scheduler_recent_error': recent_error,
             'scheduler_stale': stale,
-            'scheduler_degraded': bool(recent_error or stale),
+            'payment_retry_unavailable': payment_retry_unavailable,
+            'payment_retry_backlog': payment_retry_backlog,
+            'payment_retry_dead_letter': payment_retry_dead,
+            'scheduler_degraded': degraded,
         },
     )
 
