@@ -20,6 +20,7 @@ TYPE_CONTRACT_FILES = (
     "services/messenger/text_ui.py",
     "services/messenger/webhook_dedupe.py",
     "services/payments/checkout_intent.py",
+    "services/payments/retry_queue.py",
     "services/payments/telegram_stars.py",
     "services/payments/telegram_stars_refunds.py",
     "services/payments/verified_reconciliation.py",
