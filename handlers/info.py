@@ -90,9 +90,13 @@ async def cmd_my_data(message: Message) -> None:
         )
     except sqlite3.Error:
         await _answer_export_failure(message, user_id)
-    except (RuntimeError, OSError):
+    except RuntimeError:
         await _answer_export_failure(message, user_id)
-    except (ValueError, TypeError):
+    except OSError:
+        await _answer_export_failure(message, user_id)
+    except ValueError:
+        await _answer_export_failure(message, user_id)
+    except TypeError:
         await _answer_export_failure(message, user_id)
 
 
@@ -130,7 +134,10 @@ async def cmd_delete_my_data(message: Message) -> None:
     except RuntimeError:
         await _answer_erasure_failure(message, user_id)
         return
-    except (ValueError, TypeError):
+    except ValueError:
+        await _answer_erasure_failure(message, user_id)
+        return
+    except TypeError:
         await _answer_erasure_failure(message, user_id)
         return
 
