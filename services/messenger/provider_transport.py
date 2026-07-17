@@ -15,6 +15,14 @@ from uuid import uuid4
 _T = TypeVar("_T")
 
 
+class ProviderPermanentHTTPError(RuntimeError):
+    """A provider HTTP response that must not be retried by the HTTP client."""
+
+    def __init__(self, status_code: int):
+        self.status_code = int(status_code)
+        super().__init__(f"provider_http_{self.status_code}")
+
+
 def _retry_count() -> int:
     raw = (os.getenv("MESSENGER_PROVIDER_RETRIES") or "3").strip()
     try:
@@ -51,7 +59,7 @@ def _with_retries(operation: Callable[[], _T], *, retries: int | None = None) ->
             return operation()
         except urllib.error.HTTPError as exc:
             if not _retryable_http_status(int(exc.code)):
-                raise
+                raise ProviderPermanentHTTPError(int(exc.code)) from exc
             last_exc = _maybe_retry(attempt, max_attempts, exc)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             last_exc = _maybe_retry(attempt, max_attempts, exc)
