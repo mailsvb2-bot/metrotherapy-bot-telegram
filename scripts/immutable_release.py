@@ -9,9 +9,11 @@ release contents are never changed during rollback.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -29,6 +31,7 @@ class ReleaseInfo:
     python: str
     lock_file: str
     lock_sha256: str
+    tree_sha256: str
     built_at_utc: str
 
 
@@ -62,6 +65,49 @@ def _load_marker(path: Path) -> dict[str, Any]:
     return loaded
 
 
+def release_tree_sha256(path: str | Path) -> str:
+    """Hash all release entries except the self-referential marker.
+
+    The digest includes relative paths, file type, permission bits, symlink
+    targets and regular-file bytes. It therefore detects dependency or source
+    mutation while remaining stable after the release directory is renamed.
+    """
+
+    root = Path(path).resolve(strict=True)
+    digest = hashlib.sha256()
+    entries = sorted(
+        (item for item in root.rglob("*") if item.relative_to(root).as_posix() != _MARKER),
+        key=lambda item: item.relative_to(root).as_posix(),
+    )
+    for item in entries:
+        relative = item.relative_to(root).as_posix()
+        metadata = item.lstat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if item.is_symlink():
+            kind = b"L"
+            payload = os.readlink(item).encode("utf-8", errors="surrogateescape")
+        elif item.is_dir():
+            kind = b"D"
+            payload = b""
+        elif item.is_file():
+            kind = b"F"
+            hasher = hashlib.sha256()
+            with item.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+            payload = hasher.digest()
+        else:
+            raise ValueError(f"unsupported release entry: {item}")
+        digest.update(relative.encode("utf-8", errors="surrogateescape"))
+        digest.update(b"\0")
+        digest.update(kind)
+        digest.update(f"{mode:o}".encode("ascii"))
+        digest.update(b"\0")
+        digest.update(payload)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def validate_release(path: str | Path) -> ReleaseInfo:
     release = Path(path).resolve(strict=True)
     if not release.is_dir():
@@ -79,11 +125,19 @@ def validate_release(path: str | Path) -> ReleaseInfo:
 
     lock_file = str(marker.get("lock_file") or "").strip()
     lock_sha256 = str(marker.get("lock_sha256") or "").strip()
+    tree_sha256 = str(marker.get("tree_sha256") or "").strip()
     built_at = str(marker.get("built_at_utc") or "").strip()
-    if not lock_file or not (release / lock_file).is_file():
+    lock_path = release / lock_file
+    if not lock_file or not lock_path.is_file():
         raise ValueError(f"release dependency lock is missing: {lock_file or '<empty>'}")
     if not re.fullmatch(r"[0-9a-f]{64}", lock_sha256):
         raise ValueError("release lock SHA-256 is invalid")
+    if hashlib.sha256(lock_path.read_bytes()).hexdigest() != lock_sha256:
+        raise ValueError("release dependency lock content changed after build")
+    if not re.fullmatch(r"[0-9a-f]{64}", tree_sha256):
+        raise ValueError("release tree SHA-256 is invalid")
+    if release_tree_sha256(release) != tree_sha256:
+        raise ValueError("release tree changed after immutable publication")
     if not built_at:
         raise ValueError("release build timestamp is missing")
 
@@ -93,6 +147,7 @@ def validate_release(path: str | Path) -> ReleaseInfo:
         python=str(python_path),
         lock_file=lock_file,
         lock_sha256=lock_sha256,
+        tree_sha256=tree_sha256,
         built_at_utc=built_at,
     )
 
@@ -175,8 +230,10 @@ def write_deployment_proof(
         "release_python": current.python,
         "dependency_lock": current.lock_file,
         "dependency_lock_sha256": current.lock_sha256,
+        "release_tree_sha256": current.tree_sha256,
         "previous_sha": previous.sha if previous is not None else "",
         "previous_release_dir": previous.path if previous is not None else "",
+        "previous_release_tree_sha256": previous.tree_sha256 if previous is not None else "",
         "production_gate": str(production_gate),
         "health_url": str(health_url),
         "readiness_url": str(readiness_url),
@@ -208,6 +265,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Manage immutable Metrotherapy runtime releases")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    digest = sub.add_parser("tree-digest")
+    digest.add_argument("release_dir")
+
     validate = sub.add_parser("validate")
     validate.add_argument("release_dir")
 
@@ -233,7 +293,9 @@ def main() -> int:
     proof.add_argument("--readiness-url", required=True)
 
     args = parser.parse_args()
-    if args.command == "validate":
+    if args.command == "tree-digest":
+        _print({"tree_sha256": release_tree_sha256(args.release_dir)})
+    elif args.command == "validate":
         _print(validate_release(args.release_dir))
     elif args.command == "inspect":
         _print(resolve_link(args.link, required=args.required))
