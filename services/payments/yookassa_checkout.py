@@ -100,13 +100,26 @@ def _receipt_customer_email() -> str:
     return "support@metrotherapy.ru"
 
 
+def _receipt_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = _env_value(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise YooKassaCheckoutError(f"{name} must be an integer") from exc
+    if value < minimum or value > maximum:
+        raise YooKassaCheckoutError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
 def build_yookassa_receipt(*, amount_value: str, description: str) -> dict:
     customer_email = _receipt_customer_email()
-    vat_code = int((os.environ.get("YOOKASSA_VAT_CODE") or "1").strip())
-    payment_mode = (os.environ.get("YOOKASSA_PAYMENT_MODE") or "full_prepayment").strip()
-    payment_subject = (os.environ.get("YOOKASSA_PAYMENT_SUBJECT") or "service").strip()
+    tax_system_code = _receipt_int("YOOKASSA_TAX_SYSTEM_CODE", 2, minimum=1, maximum=6)
+    vat_code = _receipt_int("YOOKASSA_VAT_CODE", 1, minimum=1, maximum=6)
+    payment_mode = _env_value("YOOKASSA_PAYMENT_MODE", "full_payment")
+    payment_subject = _env_value("YOOKASSA_PAYMENT_SUBJECT", "service")
     return {
         "customer": {"email": customer_email},
+        "tax_system_code": tax_system_code,
         "items": [
             {
                 "description": (description or "Metrotherapy")[:128],
