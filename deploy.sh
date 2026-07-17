@@ -238,7 +238,7 @@ require_single_local_main_branch() {
   echo "=== production branch topology OK: count=1 branch=main ==="
 }
 
-publish_server_branch_audit_if_requested() {
+audit_server_branch_topology_if_requested() {
   local request_message
   local local_branch_list
   local local_branch_count
@@ -246,7 +246,6 @@ publish_server_branch_audit_if_requested() {
   local remote_branch_list
   local remote_branch_count
   local remote_branch_csv
-  local audit_message
 
   request_message="$(git log -1 --pretty=%B)"
   case "$request_message" in
@@ -254,7 +253,7 @@ publish_server_branch_audit_if_requested() {
     *) return 0 ;;
   esac
 
-  echo "=== explicit server branch audit requested ==="
+  echo "=== explicit read-only server branch audit requested ==="
   local_branch_list="$(git for-each-ref --format='%(refname:short)' refs/heads | sort)"
   local_branch_count="$(printf '%s\n' "$local_branch_list" | sed '/^$/d' | wc -l | tr -d ' ')"
   local_branch_csv="$(printf '%s\n' "$local_branch_list" | sed '/^$/d' | paste -sd, -)"
@@ -279,14 +278,7 @@ publish_server_branch_audit_if_requested() {
     exit 13
   fi
 
-  audit_message="[server-branch-audit-result] local_count=$local_branch_count local_branches=$local_branch_csv remote_count=$remote_branch_count remote_branches=$remote_branch_csv"
-  git -c user.name="Metrotherapy Deploy Audit" \
-      -c user.email="deploy-audit@metrotherapy.local" \
-      commit --allow-empty -m "$audit_message"
-  run_bounded "$GIT_NETWORK_TIMEOUT_SECONDS" \
-    "publish server branch audit result" \
-    git push origin main
-  echo "=== $audit_message ==="
+  echo "=== SERVER_BRANCH_AUDIT_OK local_count=$local_branch_count local_branches=$local_branch_csv remote_count=$remote_branch_count remote_branches=$remote_branch_csv ==="
 }
 
 for timeout_pair in \
@@ -399,7 +391,7 @@ require_single_local_main_branch
 run_bounded "$GIT_NETWORK_TIMEOUT_SECONDS" \
   "prune remote origin" \
   git remote prune origin
-publish_server_branch_audit_if_requested
+audit_server_branch_topology_if_requested
 
 NEW_SHA="$(git rev-parse HEAD)"
 echo "=== new sha: $NEW_SHA ==="
