@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from services.db import db
+from services.payments import reconciliation
 from services.payments.reconciliation import record_yookassa_webhook
 from services.payments.yookassa_refunds import record_yookassa_refund
 from services.practice_tokens import get_wallet, reserve_practice
@@ -50,7 +51,7 @@ def _payment_row(payment_id: str):
         ).fetchone()
 
 
-def test_late_succeeded_event_cannot_reopen_completed_refund() -> None:
+def test_late_succeeded_event_cannot_reopen_completed_refund(monkeypatch) -> None:
     user_id = 884001
     payment_id = "yk-monotonic-refunded-884001"
     payment = _payment(payment_id=payment_id, user_id=user_id)
@@ -62,6 +63,10 @@ def test_late_succeeded_event_cannot_reopen_completed_refund() -> None:
     assert completed.processing_status == "refunded"
     assert get_wallet(user_id).available_tokens == 0
 
+    def grant_must_not_run(**_kwargs):
+        raise AssertionError("late payment event must stop before grant side effects")
+
+    monkeypatch.setattr(reconciliation, "_grant_practices_if_needed", grant_must_not_run)
     late = record_yookassa_webhook(payment)
 
     assert late.ok is True
