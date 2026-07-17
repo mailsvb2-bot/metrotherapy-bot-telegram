@@ -210,7 +210,7 @@ def complete_payment_retry_if_present(payload: dict[str, Any], result: Reconcili
                 UPDATE payment_reconciliation_retry
                 SET status='completed',completed_at=COALESCE(completed_at,?),updated_at=?,
                     locked_at=NULL,lock_token=NULL,last_error=''
-                WHERE provider=? AND provider_payment_id=? AND event=? AND status<>'dead'
+                WHERE provider=? AND provider_payment_id=? AND event=?
                 """.strip(),
                 (now, now, _PROVIDER, payment_id, event),
             )
