@@ -10,26 +10,26 @@ permissions:
   contents: write
 
 jobs:
-  lock-py312:
+  lock:
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
-    name: deterministic lock bootstrap / py3.12
+    timeout-minutes: 30
+    name: deterministic lock bootstrap / py3.12+py3.13
     steps:
       - name: Checkout branch
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.ref_name }}
 
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
           cache: pip
 
-      - name: Install deterministic compiler
+      - name: Install deterministic compiler for Python 3.12
         run: python -m pip install --disable-pip-version-check pip==26.1.2 pip-tools==7.5.3
 
-      - name: Compile hash-locked requirements
+      - name: Compile Python 3.12 hash locks
         run: |
           python -m piptools compile \
             --generate-hashes \
@@ -44,27 +44,49 @@ jobs:
             --output-file=requirements-dev.txt \
             requirements-dev.in
 
-      - name: Prove runtime lock installation
+      - name: Prove Python 3.12 runtime lock installation
         run: python -m pip install --require-hashes -r requirements.txt
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install deterministic compiler for Python 3.13
+        run: python -m pip install --disable-pip-version-check pip==26.1.2 pip-tools==7.5.3
+
+      - name: Compile Python 3.13 runtime hash lock
+        run: |
+          python -m piptools compile \
+            --generate-hashes \
+            --resolver=backtracking \
+            --strip-extras \
+            --output-file=requirements-py313.txt \
+            requirements.in
+
+      - name: Prove Python 3.13 runtime lock installation
+        run: python -m pip install --require-hashes -r requirements-py313.txt
 
       - name: Upload generated lock evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: python312-dependency-locks
+          name: python-dependency-locks
           path: |
             requirements.txt
             requirements-dev.txt
+            requirements-py313.txt
           if-no-files-found: error
 
       - name: Commit generated locks to bootstrap branch
         run: |
-          if git diff --quiet -- requirements.txt requirements-dev.txt; then
+          if git diff --quiet -- requirements.txt requirements-dev.txt requirements-py313.txt; then
             echo 'DEPENDENCY_LOCK_ALREADY_CURRENT'
             exit 0
           fi
           git config user.name 'Metrotherapy Dependency Lock'
           git config user.email 'dependency-lock@metrotherapy.local'
-          git add requirements.txt requirements-dev.txt
+          git add requirements.txt requirements-dev.txt requirements-py313.txt
           git commit -m 'Regenerate Python dependency locks'
           git push origin "HEAD:${GITHUB_REF_NAME}"
