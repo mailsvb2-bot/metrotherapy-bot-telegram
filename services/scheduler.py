@@ -187,6 +187,12 @@ def scheduler_health_snapshot() -> dict[str, bool | int | float | str]:
     precise_task_running = bool(precise_task is not None and not precise_task.done())
     queue_size = int(len(getattr(precise, '_queue', ())))
     now_m = time.monotonic()
+    try:
+        from services.payments.retry_queue import payment_retry_health_snapshot
+
+        payment_retry = payment_retry_health_snapshot()
+    except (ImportError, AttributeError, RuntimeError, OSError, ValueError, TypeError):
+        payment_retry = {'payment_retry_active': -1, 'payment_retry_dead': -1}
     return {
         'scheduler_loop_task_running': bg_running,
         'precise_scheduler_running': precise_running,
@@ -199,6 +205,7 @@ def scheduler_health_snapshot() -> dict[str, bool | int | float | str]:
         'scheduler_loop_last_error': _bg_last_error,
         'scheduler_loop_last_error_age_sec': int(now_m - _bg_last_error_at_monotonic) if _bg_last_error_at_monotonic else 0,
         'scheduler_loop_last_tick_age_sec': int(now_m - _bg_last_tick_at_monotonic) if _bg_last_tick_at_monotonic else 0,
+        **payment_retry,
     }
 
 
