@@ -21,6 +21,7 @@ def apply(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             provider TEXT NOT NULL,
             provider_payment_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL DEFAULT 0,
             event TEXT NOT NULL,
             payload_json TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
@@ -43,6 +44,10 @@ def apply(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_payment_reconciliation_retry_payment "
         "ON payment_reconciliation_retry(provider, provider_payment_id, id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_payment_reconciliation_retry_user "
+        "ON payment_reconciliation_retry(user_id, id)"
     )
     mark_migration(conn, NAME)
     log.info("Migration applied: %s", NAME)
