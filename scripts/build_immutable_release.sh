@@ -7,6 +7,11 @@ RELEASES_DIR="${RELEASES_DIR:-$RUNTIME_ROOT/releases}"
 SYSTEM_PYTHON="${SYSTEM_PYTHON:-/usr/bin/python3}"
 PIP_BOOTSTRAP_VERSION="${PIP_BOOTSTRAP_VERSION:-26.1.2}"
 SHARED_AUDIO_DIR="${SHARED_AUDIO_DIR:-$(dirname "$RUNTIME_ROOT")/audio}"
+# Convert the legacy source-tree default supplied by older deploy callers into
+# the runtime asset store that is readable by the non-root systemd service.
+if [ "$SHARED_AUDIO_DIR" = "$SOURCE_DIR/audio" ]; then
+  SHARED_AUDIO_DIR="$(dirname "$RUNTIME_ROOT")/audio"
+fi
 SHA="${1:-${RELEASE_SHA:-}}"
 
 is_valid_sha() {
