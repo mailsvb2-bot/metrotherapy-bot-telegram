@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+import logging
+import re
+import sqlite3
+from pathlib import Path
+
+from core.paths import ROOT as PROJECT_ROOT
+from services.db import DB_PATH, get_connection
+from services.validators.base import ValidationError
+
+log = logging.getLogger(__name__)
+
 EXCLUDED_SCAN_DIR_NAMES = {
     ".git",
     ".hg",
@@ -29,166 +40,172 @@ def _is_excluded_scan_path(path: Path, project_root: Path) -> bool:
     return bool(set(rel.parts) & EXCLUDED_SCAN_DIR_NAMES)
 
 
-import logging
-import re
-from pathlib import Path
-
-import sqlite3
-
-from services.db import get_connection, DB_PATH
-from core.paths import ROOT as PROJECT_ROOT
-
-log = logging.getLogger(__name__)
-
-
-from services.validators.base import ValidationError
-
 def validate_no_real_db(*, strict: bool = True) -> None:
-    """Critical hygiene rule: never ship a stateful DB file.
+    """Never ship a stateful SQLite database in the source/release."""
 
-    We forbid shipping a real SQLite file in the repo/release. The application must
-    create the DB from schema/migrations at runtime.
-
-    Enforced when strict=True (default in prod/CI) and also during local runs,
-    because a bundled DB silently breaks reproducibility.
-    """
-    # Historically the project used both layouts:
-    # - ./data.db
-    # - ./data/data.db
-    # Any shipped SQLite state breaks reproducibility and is a data leak risk.
     candidates = [
         PROJECT_ROOT / "data.db",
         PROJECT_ROOT / "data" / "data.db",
     ]
-
-    found = [p for p in candidates if p.exists()]
+    found = [path for path in candidates if path.exists() and not path.name.endswith(".template")]
     if not found:
         return
 
-    # Allow templates only (empty placeholder files).
-    found = [p for p in found if not p.name.endswith(".template")]
-
-    details = []
-    for p in found:
-        # skip validator self-scan
-        if "services/validators/" in str(p).replace("\\","/"):
+    details: list[str] = []
+    for path in found:
+        if "services/validators/" in str(path).replace("\\", "/"):
             continue
-        if "services/validators" in p.as_posix():
+        if "services/validators" in path.as_posix():
             continue
         try:
-            size = p.stat().st_size
+            size = path.stat().st_size
         except OSError:
             size = -1
-        details.append(f"{p} (size={size})")
+        details.append(f"{path} (size={size})")
 
-    msg_strict = "Release hygiene failed: stateful DB file(s) must not be shipped: " + ", ".join(details)
+    if not details:
+        return
     if strict:
-        raise ValidationError(msg_strict)
-    # В dev-режиме мы не должны пугать словом "failed" — это всего лишь предупреждение.
-    msg = "Release hygiene warning: stateful DB file(s) present (remove before release): " + ", ".join(details)
-    log.warning(msg)
+        raise ValidationError(
+            "Release hygiene failed: stateful DB file(s) must not be shipped: "
+            + ", ".join(details)
+        )
+    log.warning(
+        "Release hygiene warning: stateful DB file(s) present (remove before release): %s",
+        ", ".join(details),
+    )
+
+
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return {r[1] for r in rows}  # name is at index 1
+    return {str(row[1]) for row in rows}
+
+
 def validate_db_schema(strict: bool = True) -> None:
-    # DB is created by init_db(), so here we only verify contracts.
     required_tables = {
         "users",
         "plans",
         "plan_price_history",
         "payments",
         "telegram_stars_refunds",
+        "yookassa_refunds",
         "selected_plan",
         "mood_sessions",
     }
 
     with get_connection() as conn:
-        existing = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        existing = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
         missing = sorted(required_tables - existing)
         if missing:
-            msg = f"DB schema missing required tables: {missing}. DB: {DB_PATH}"
+            message = f"DB schema missing required tables: {missing}. DB: {DB_PATH}"
             if strict:
-                raise ValidationError(msg)
-            log.warning(msg)
+                raise ValidationError(message)
+            log.warning(message)
 
-        # Payments must have these
         if "payments" in existing:
-            cols = _table_columns(conn, "payments")
-            required_cols = {"id", "user_id", "payload", "amount", "currency", "created_at"}
-            miss_cols = sorted(required_cols - cols)
-            if miss_cols:
-                msg = f"DB schema table payments missing columns: {miss_cols}. Existing: {sorted(cols)}"
+            columns = _table_columns(conn, "payments")
+            required_columns = {
+                "id",
+                "user_id",
+                "payload",
+                "amount",
+                "currency",
+                "created_at",
+            }
+            missing_columns = sorted(required_columns - columns)
+            if missing_columns:
+                message = (
+                    "DB schema table payments missing columns: "
+                    f"{missing_columns}. Existing: {sorted(columns)}"
+                )
                 if strict:
-                    raise ValidationError(msg)
-                log.warning(msg)
-def validate_schema_decomposition(strict: bool = True) -> None:
-    """Guardrails for schema decomposition (v16.8).
+                    raise ValidationError(message)
+                log.warning(message)
 
-    Rules:
-    - services/schema_tables.py must not be imported from runtime code.
-      Only services/schema_core.py is allowed to import it.
-    - Runtime modules must not perform schema migration SQL (DDL / schema_migrations writes).
-      Allowed only in services/schema_core.py and services/migrations/*.
+
+def validate_schema_decomposition(strict: bool = True) -> None:
+    """Forbid runtime schema ownership and migration-ledger mutations.
+
+    Reading schema metadata is allowed. Runtime files may not import the canonical
+    schema builder, execute DDL, or write to the migration ledger. The previous
+    scanner rejected any literal mention of the migration table, which falsely
+    blocked read-only schema validation such as the privacy manifest.
     """
 
     base_dir = PROJECT_ROOT
-
-    # 1) schema_tables import only from schema_core
     allow_importers = {"services/schema_core.py", "services/schema_tables.py"}
-    import_re = re.compile(r"^\s*(from\s+services\.schema_tables\s+import\b|import\s+services\.schema_tables\b)")
-    bad: list[str] = []
-    for p in base_dir.rglob("*.py"):
-        rel = str(p.relative_to(base_dir)).replace("\\", "/")
-        if set(Path(rel).parts) & EXCLUDED_SCAN_DIR_NAMES:
+    import_re = re.compile(
+        r"^\s*(from\s+services\.schema_tables\s+import\b|import\s+services\.schema_tables\b)"
+    )
+    bad_imports: list[str] = []
+    for path in base_dir.rglob("*.py"):
+        rel = str(path.relative_to(base_dir)).replace("\\", "/")
+        if _is_excluded_scan_path(path, base_dir):
             continue
         if rel.startswith("services/validators/") or rel.startswith("tests/"):
             continue
         if rel in allow_importers:
             continue
         try:
-            txt = p.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        # Best-effort line number
-        for i, line in enumerate(txt.splitlines(), start=1):
+        for line_number, line in enumerate(text.splitlines(), start=1):
             if import_re.search(line):
-                bad.append(f"{rel}:{i}")
+                bad_imports.append(f"{rel}:{line_number}")
                 break
 
-    if bad:
-        msg = "Forbidden import of schema_tables (only schema_core may import it): " + ", ".join(bad[:30])
+    if bad_imports:
+        message = (
+            "Forbidden import of schema_tables (only schema_core may import it): "
+            + ", ".join(bad_imports[:30])
+        )
         if strict:
-            raise ValidationError(msg)
-        log.warning(msg)
+            raise ValidationError(message)
+        log.warning(message)
 
-    # 2) forbid schema-migration SQL from runtime modules
-    # Allowed: schema_core + migrations/*
-    allow_sql = {"services/schema_core.py", "services/schema_tables.py", "services/validator.py", "services/db/core.py"}
-    # Also allow decomposed schema modules
-    # (DDL lives here by design; runtime modules must not import them directly).
+    allow_sql = {
+        "services/schema_core.py",
+        "services/schema_tables.py",
+        "services/validator.py",
+        "services/db/core.py",
+    }
     allow_sql_prefixes = ("services/db/schema/",)
-
-    # All files under services/migrations are allowed.
-    ddl_re = re.compile(r"\b(CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE)\b", re.IGNORECASE)
-    mig_re = re.compile(r"\b(schema_migrations)\b", re.IGNORECASE)
+    ddl_re = re.compile(
+        r"\b(?:CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE)\b",
+        re.IGNORECASE,
+    )
+    migration_write_re = re.compile(
+        r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+schema_migrations\b",
+        re.IGNORECASE,
+    )
     bad_sql: list[str] = []
-    for p in base_dir.rglob("*.py"):
-        rel = str(p.relative_to(base_dir)).replace("\\", "/")
-        if set(Path(rel).parts) & EXCLUDED_SCAN_DIR_NAMES:
+    for path in base_dir.rglob("*.py"):
+        rel = str(path.relative_to(base_dir)).replace("\\", "/")
+        if _is_excluded_scan_path(path, base_dir):
             continue
         if rel.startswith("services/validators/") or rel.startswith("tests/"):
             continue
-        if rel in allow_sql or rel.startswith("services/migrations/") or rel.startswith(allow_sql_prefixes):
+        if (
+            rel in allow_sql
+            or rel.startswith("services/migrations/")
+            or rel.startswith(allow_sql_prefixes)
+        ):
             continue
         try:
-            txt = p.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        if ddl_re.search(txt) or mig_re.search(txt):
+        if ddl_re.search(text) or migration_write_re.search(text):
             bad_sql.append(rel)
 
     if bad_sql:
-        msg = f"Forbidden migration/DDL SQL in runtime modules: {sorted(set(bad_sql))}"
+        message = f"Forbidden migration/DDL SQL in runtime modules: {sorted(set(bad_sql))}"
         if strict:
-            raise ValidationError(msg)
-        log.warning(msg)
+            raise ValidationError(message)
+        log.warning(message)
