@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import sqlite3
+import tempfile
+from pathlib import Path
 
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from core.callback_utils import safe_answer_callback
 from keyboards.inline import kb_back_main
-from services.privacy_controls import erase_user_behavioral_data, export_user_data_snapshot
+from services.privacy_controls import erase_user_behavioral_data, write_user_data_export_gzip
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -39,6 +40,17 @@ def _message_user_id(message: Message) -> int | None:
 def _delete_confirmed(text: str | None) -> bool:
     parts = str(text or "").strip().split(maxsplit=1)
     return len(parts) == 2 and parts[1].strip().upper() == "CONFIRM"
+
+
+def _new_export_path(user_id: int) -> Path:
+    handle = tempfile.NamedTemporaryFile(
+        prefix=f"metrotherapy-user-data-{int(user_id)}-",
+        suffix=".json.gz",
+        delete=False,
+    )
+    path = Path(handle.name)
+    handle.close()
+    return path
 
 
 @router.callback_query(lambda c: (c.data or "") == "info:support")
@@ -77,27 +89,32 @@ async def cmd_my_data(message: Message) -> None:
     user_id = _message_user_id(message)
     if user_id is None:
         return
+
+    export_path: Path | None = None
     try:
-        snapshot = await asyncio.to_thread(export_user_data_snapshot, user_id)
-        payload = json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
-        document = BufferedInputFile(payload, filename=f"metrotherapy-user-data-{user_id}.json")
+        export_path = _new_export_path(user_id)
+        result = await asyncio.to_thread(
+            write_user_data_export_gzip,
+            user_id,
+            export_path,
+        )
+        document = FSInputFile(
+            result.path,
+            filename=f"metrotherapy-user-data-{user_id}.json.gz",
+        )
         await message.answer_document(
             document,
             caption=(
-                "🔐 Это экспорт данных, связанных с Вашим аккаунтом. "
+                "🔐 Это сжатый JSON-экспорт данных, связанных с Вашим аккаунтом. "
+                f"Записей: {result.total_rows}. "
                 "Файл может содержать историю использования и платёжные записи — храните его безопасно."
             ),
         )
-    except sqlite3.Error:
+    except (sqlite3.Error, RuntimeError, OSError, ValueError, TypeError):
         await _answer_export_failure(message, user_id)
-    except RuntimeError:
-        await _answer_export_failure(message, user_id)
-    except OSError:
-        await _answer_export_failure(message, user_id)
-    except ValueError:
-        await _answer_export_failure(message, user_id)
-    except TypeError:
-        await _answer_export_failure(message, user_id)
+    finally:
+        if export_path is not None:
+            await asyncio.to_thread(export_path.unlink, missing_ok=True)
 
 
 async def _answer_erasure_failure(message: Message, user_id: int) -> None:
