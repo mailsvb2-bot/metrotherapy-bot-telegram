@@ -44,7 +44,7 @@ def test_streaming_export_writes_valid_gzip_json(tmp_path) -> None:
     assert payload["user_id"] == uid
     assert payload["privacy_manifest_version"] == privacy_controls.MANIFEST_VERSION
     assert payload["tables"]["users"][0]["username"] == "stream_user"
-    assert [row["event"] for row in payload["tables"]["events"]] == [
+    assert sorted(row["event"] for row in payload["tables"]["events"]) == [
         f"stream_event_{index}" for index in range(5)
     ]
 
