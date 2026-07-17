@@ -12,7 +12,7 @@ jobs:
   critical-static:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
-    name: expanded mypy and bandit / py3.12
+    name: expanded mypy, Bandit and deploy governance / py3.12
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       LOAD_DOTENV: '0'
@@ -33,6 +33,11 @@ jobs:
 
       - name: Validate critical path manifest
         run: python scripts/critical_static_gate.py manifest
+
+      - name: Validate deploy governance and shell syntax
+        run: |
+          python scripts/check_deploy_governance.py
+          bash -n deploy.sh
 
       - name: Expanded critical type contracts
         run: |
