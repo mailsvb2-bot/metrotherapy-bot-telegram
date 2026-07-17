@@ -12,6 +12,7 @@ from services.practice_tokens import grant_tokens_for_payment
 from services.premium_entitlements import grant_premium_entitlements_for_payment
 
 _GIFT_TOKEN_RE = re.compile(r"^gift_[a-f0-9]{32}$")
+_PROTECTED_CLAIM_STATUSES = {"claiming", "claimed"}
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,6 @@ def is_gift_token(raw: str | None) -> bool:
     return bool(_GIFT_TOKEN_RE.match(normalize_gift_token(raw)))
 
 
-
 def mark_gift_paid(
     *,
     gift_token: str,
@@ -110,27 +110,27 @@ def mark_gift_paid(
                 ) VALUES(?,?,?,?,?,?, 'paid', CURRENT_TIMESTAMP)
                 ON CONFLICT(gift_token) DO UPDATE SET
                     buyer_user_id=CASE
-                        WHEN gift_claims.status='claimed' THEN gift_claims.buyer_user_id
+                        WHEN gift_claims.status IN ('claiming','claimed') THEN gift_claims.buyer_user_id
                         ELSE excluded.buyer_user_id
                     END,
                     package_id=CASE
-                        WHEN gift_claims.status='claimed' THEN gift_claims.package_id
+                        WHEN gift_claims.status IN ('claiming','claimed') THEN gift_claims.package_id
                         ELSE excluded.package_id
                     END,
                     provider=CASE
-                        WHEN gift_claims.status='claimed' THEN gift_claims.provider
+                        WHEN gift_claims.status IN ('claiming','claimed') THEN gift_claims.provider
                         ELSE excluded.provider
                     END,
                     provider_payment_id=CASE
-                        WHEN gift_claims.status='claimed' THEN gift_claims.provider_payment_id
+                        WHEN gift_claims.status IN ('claiming','claimed') THEN gift_claims.provider_payment_id
                         ELSE excluded.provider_payment_id
                     END,
                     source_platform=CASE
-                        WHEN gift_claims.status='claimed' THEN gift_claims.source_platform
+                        WHEN gift_claims.status IN ('claiming','claimed') THEN gift_claims.source_platform
                         ELSE excluded.source_platform
                     END,
                     status=CASE
-                        WHEN gift_claims.status='claimed' THEN gift_claims.status
+                        WHEN gift_claims.status IN ('claiming','claimed') THEN gift_claims.status
                         ELSE 'paid'
                     END,
                     paid_at=COALESCE(gift_claims.paid_at, CURRENT_TIMESTAMP)
@@ -148,34 +148,66 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     return {key: row[idx] for idx, key in enumerate(keys)}
 
 
+def _gift_row_in_conn(conn: Any, token: str) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT gift_token, buyer_user_id, recipient_user_id, package_id, provider,
+               provider_payment_id, source_platform, status
+        FROM gift_claims
+        WHERE gift_token=?
+        """.strip(),
+        (token,),
+    ).fetchone()
+    return _row_to_dict(row)
+
+
+def _acquire_gift_claim(*, token: str, recipient_user_id: int) -> GiftClaimResult | dict[str, Any]:
+    recipient_id = int(recipient_user_id)
+    with db() as conn:
+        with tx(conn):
+            data = _gift_row_in_conn(conn, token)
+            if not data:
+                return GiftClaimResult(False, "not_paid", "Подарок пока не найден как оплаченный. Проверьте ссылку после успешной оплаты.")
+
+            status = str(data.get("status") or "").strip()
+            package_id = str(data.get("package_id") or "").strip()
+            owner_id = int(data.get("recipient_user_id") or 0)
+            if status == "claimed":
+                if owner_id == recipient_id:
+                    return GiftClaimResult(True, "already_claimed", "Этот подарок уже закреплён за вашим профилем.", package_id)
+                return GiftClaimResult(False, "claimed_by_other", "Этот подарок уже был активирован другим профилем.", package_id)
+            if status == "claiming":
+                if owner_id == recipient_id:
+                    return data
+                return GiftClaimResult(False, "claim_in_progress", "Этот подарок уже активируется другим профилем.", package_id)
+            if status != "paid":
+                return GiftClaimResult(False, status or "not_ready", "Подарок ещё не готов к активации.", package_id)
+
+            updated = conn.execute(
+                """
+                UPDATE gift_claims
+                SET recipient_user_id=?, status='claiming'
+                WHERE gift_token=? AND status='paid'
+                """.strip(),
+                (recipient_id, token),
+            )
+            if int(getattr(updated, "rowcount", 0) or 0) != 1:
+                return GiftClaimResult(False, "claim_race", "Подарок уже активируется. Обновите статус профиля.", package_id)
+            data["recipient_user_id"] = recipient_id
+            data["status"] = "claiming"
+            return data
+
+
 def claim_gift_token(*, gift_token: str, recipient_user_id: int, platform: str) -> GiftClaimResult:
     token = normalize_gift_token(gift_token)
     if not is_gift_token(token):
         return GiftClaimResult(False, "invalid", "Подарочная ссылка повреждена или неполная.")
 
-    with db() as conn:
-        row = conn.execute(
-            """
-            SELECT gift_token, buyer_user_id, recipient_user_id, package_id, provider,
-                   provider_payment_id, source_platform, status
-            FROM gift_claims
-            WHERE gift_token=?
-            """.strip(),
-            (token,),
-        ).fetchone()
-    data = _row_to_dict(row)
-    if not data:
-        return GiftClaimResult(False, "not_paid", "Подарок пока не найден как оплаченный. Проверьте ссылку после успешной оплаты.")
+    acquired = _acquire_gift_claim(token=token, recipient_user_id=int(recipient_user_id))
+    if isinstance(acquired, GiftClaimResult):
+        return acquired
 
-    status = str(data.get("status") or "").strip()
-    package_id = str(data.get("package_id") or "").strip()
-    if status == "claimed":
-        if int(data.get("recipient_user_id") or 0) == int(recipient_user_id):
-            return GiftClaimResult(True, "already_claimed", "Этот подарок уже закреплён за вашим профилем.", package_id)
-        return GiftClaimResult(False, "claimed_by_other", "Этот подарок уже был активирован другим профилем.", package_id)
-    if status != "paid":
-        return GiftClaimResult(False, status or "not_ready", "Подарок ещё не готов к активации.", package_id)
-
+    package_id = str(acquired.get("package_id") or "").strip()
     try:
         package = package_by_id(package_id)
         inserted, wallet, _ledger_id = grant_tokens_for_payment(
@@ -194,6 +226,9 @@ def claim_gift_token(*, gift_token: str, recipient_user_id: int, platform: str) 
             fallback_platform=platform,
         )
     except (RuntimeError, ValueError) as exc:
+        # Keep the claim pinned to this recipient. A retry by the same profile is
+        # safe because both token and premium grants are provider-idempotent. Reopening
+        # the gift here could grant it to a second user after a partial first grant.
         return GiftClaimResult(False, "grant_failed", f"Не удалось активировать подарок: {type(exc).__name__}", package_id)
 
     with db() as conn:
@@ -201,12 +236,15 @@ def claim_gift_token(*, gift_token: str, recipient_user_id: int, platform: str) 
             updated = conn.execute(
                 """
                 UPDATE gift_claims
-                SET recipient_user_id=?, status='claimed', claimed_at=CURRENT_TIMESTAMP
-                WHERE gift_token=? AND status='paid'
+                SET status='claimed', claimed_at=COALESCE(claimed_at, CURRENT_TIMESTAMP)
+                WHERE gift_token=? AND status='claiming' AND recipient_user_id=?
                 """.strip(),
-                (int(recipient_user_id), token),
+                (token, int(recipient_user_id)),
             )
-            if getattr(updated, "rowcount", 0) == 0:
+            if int(getattr(updated, "rowcount", 0) or 0) != 1:
+                current = _gift_row_in_conn(conn, token)
+                if str(current.get("status") or "") == "claimed" and int(current.get("recipient_user_id") or 0) == int(recipient_user_id):
+                    return GiftClaimResult(True, "already_claimed", "Этот подарок уже закреплён за вашим профилем.", package_id)
                 return GiftClaimResult(False, "claim_race", "Подарок уже активирован. Обновите статус профиля.", package_id)
 
     premium_tail = ""

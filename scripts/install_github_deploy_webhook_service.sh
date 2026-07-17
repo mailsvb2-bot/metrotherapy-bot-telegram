@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 APP_DIR="${APP_DIR:-/root/metrotherapy}"
 HOOK_SERVICE="${HOOK_SERVICE:-github-deploy-webhook.service}"
-HOOK_SOURCE="$APP_DIR/ops/deploy_webhook.py"
+HOOK_SOURCE="$APP_DIR/ops/deploy_webhook_hardened.py"
 HOOK_TARGET="/root/deploy_webhook.py"
 UNIT_SOURCE="$APP_DIR/deploy/github-deploy-webhook.service"
 UNIT_TARGET="/etc/systemd/system/$HOOK_SERVICE"
@@ -35,13 +35,14 @@ done
 
 [ -x "$PYTHON_BIN" ] || fail_with_diagnostics "production Python is not executable: $PYTHON_BIN"
 [ -f "$HOOK_SOURCE" ] || fail_with_diagnostics "webhook source is missing: $HOOK_SOURCE"
+[ -f "$APP_DIR/ops/deploy_webhook.py" ] || fail_with_diagnostics "canonical webhook logic is missing: $APP_DIR/ops/deploy_webhook.py"
 [ -f "$UNIT_SOURCE" ] || fail_with_diagnostics "canonical systemd unit is missing: $UNIT_SOURCE"
 [ -s "$ENV_FILE" ] || fail_with_diagnostics "webhook environment file is missing or empty: $ENV_FILE"
 
 grep -Eq '^GITHUB_WEBHOOK_SECRET=.+$' "$ENV_FILE" \
   || fail_with_diagnostics "GITHUB_WEBHOOK_SECRET is missing from $ENV_FILE"
 
-log "install canonical webhook runtime and systemd unit"
+log "install hardened webhook runtime and systemd unit"
 install -m 0644 "$HOOK_SOURCE" "$HOOK_TARGET"
 install -m 0644 "$UNIT_SOURCE" "$UNIT_TARGET"
 rm -f "$LEGACY_DROPIN"

@@ -108,6 +108,69 @@ def _proposed_account_id(
     return _platform_scoped_account_id(norm, raw)
 
 
+def _link_channel_to_account_in_conn(
+    conn: Any,
+    account_id: int,
+    platform: str,
+    external_user_id: str | None,
+    *,
+    username: str | None = None,
+    display_name: str | None = None,
+    verified: bool = False,
+    link_source: str = "runtime",
+    replace_existing: bool = False,
+) -> int:
+    """Link an identity using the caller's transaction.
+
+    Bridge-token consumption uses this primitive so claiming the token and
+    linking the external identity either commit together or both roll back.
+    """
+
+    norm = parse_platform(platform)
+    if norm is None:
+        raise ValueError("invalid platform")
+    ext = (external_user_id or "").strip()
+    aid = int(account_id)
+    now = _iso_now()
+    verified_at = now if verified else None
+    uname = (username or "").strip() or None
+    dname = (display_name or "").strip() or None
+    source = (link_source or "runtime").strip() or "runtime"
+
+    if not ext:
+        return _ensure_account_in_conn(conn, aid)
+
+    existing = _identity_row_in_conn(conn, norm, ext)
+    if existing is not None and int(existing["account_id"]) != aid:
+        if not replace_existing:
+            raise AccountIdentityConflict(
+                f"{norm}:{ext} already belongs to account_id={int(existing['account_id'])}"
+            )
+        conn.execute(
+            "DELETE FROM account_channel_identities WHERE platform=? AND external_user_id=?",
+            (norm, ext),
+        )
+
+    _ensure_account_in_conn(conn, aid)
+    conn.execute(
+        """
+        INSERT INTO account_channel_identities(
+            account_id, platform, external_user_id, username, display_name,
+            linked_at, last_seen_at, verified_at, link_source
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(account_id, platform) DO UPDATE SET
+            external_user_id=excluded.external_user_id,
+            username=COALESCE(excluded.username, account_channel_identities.username),
+            display_name=COALESCE(excluded.display_name, account_channel_identities.display_name),
+            last_seen_at=excluded.last_seen_at,
+            verified_at=COALESCE(account_channel_identities.verified_at, excluded.verified_at),
+            link_source=excluded.link_source
+        """.strip(),
+        (aid, norm, ext, uname, dname, now, now, verified_at, source),
+    )
+    return aid
+
+
 def link_channel_to_account(
     account_id: int,
     platform: str,
@@ -128,52 +191,19 @@ def link_channel_to_account(
     original owner.
     """
 
-    norm = parse_platform(platform)
-    if norm is None:
-        raise ValueError("invalid platform")
-    ext = (external_user_id or "").strip()
-    aid = int(account_id)
-
-    now = _iso_now()
-    verified_at = now if verified else None
-    uname = (username or "").strip() or None
-    dname = (display_name or "").strip() or None
-    source = (link_source or "runtime").strip() or "runtime"
-
     with db() as conn:
         with tx(conn):
-            if not ext:
-                return _ensure_account_in_conn(conn, aid)
-
-            existing = _identity_row_in_conn(conn, norm, ext)
-            if existing is not None and int(existing["account_id"]) != aid:
-                if not replace_existing:
-                    raise AccountIdentityConflict(
-                        f"{norm}:{ext} already belongs to account_id={int(existing['account_id'])}"
-                    )
-                conn.execute(
-                    "DELETE FROM account_channel_identities WHERE platform=? AND external_user_id=?",
-                    (norm, ext),
-                )
-
-            _ensure_account_in_conn(conn, aid)
-            conn.execute(
-                """
-                INSERT INTO account_channel_identities(
-                    account_id, platform, external_user_id, username, display_name,
-                    linked_at, last_seen_at, verified_at, link_source
-                ) VALUES(?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(account_id, platform) DO UPDATE SET
-                    external_user_id=excluded.external_user_id,
-                    username=COALESCE(excluded.username, account_channel_identities.username),
-                    display_name=COALESCE(excluded.display_name, account_channel_identities.display_name),
-                    last_seen_at=excluded.last_seen_at,
-                    verified_at=COALESCE(account_channel_identities.verified_at, excluded.verified_at),
-                    link_source=excluded.link_source
-                """.strip(),
-                (aid, norm, ext, uname, dname, now, now, verified_at, source),
+            return _link_channel_to_account_in_conn(
+                conn,
+                int(account_id),
+                platform,
+                external_user_id,
+                username=username,
+                display_name=display_name,
+                verified=verified,
+                link_source=link_source,
+                replace_existing=replace_existing,
             )
-    return aid
 
 
 def resolve_account_for_identity(
