@@ -6,6 +6,7 @@ RUNTIME_ROOT="${RUNTIME_ROOT:-/var/lib/metrotherapy/runtime}"
 RELEASES_DIR="${RELEASES_DIR:-$RUNTIME_ROOT/releases}"
 SYSTEM_PYTHON="${SYSTEM_PYTHON:-/usr/bin/python3}"
 PIP_BOOTSTRAP_VERSION="${PIP_BOOTSTRAP_VERSION:-26.1.2}"
+SHARED_AUDIO_DIR="${SHARED_AUDIO_DIR:-$SOURCE_DIR/audio}"
 SHA="${1:-${RELEASE_SHA:-}}"
 
 is_valid_sha() {
@@ -51,6 +52,15 @@ trap cleanup EXIT TERM INT HUP
 # The source snapshot is detached from the mutable production worktree.
 git -C "$SOURCE_DIR" archive --format=tar "$SHA" | tar -xf - -C "$BUILD_DIR"
 
+# Licensed production media is state, not release code. Keep one shared content
+# directory while every code/dependency release remains independently sealed.
+SHARED_AUDIO_MARKER=""
+if [ -d "$SHARED_AUDIO_DIR" ]; then
+  rm -rf "$BUILD_DIR/audio"
+  ln -s "$SHARED_AUDIO_DIR" "$BUILD_DIR/audio"
+  SHARED_AUDIO_MARKER="$SHARED_AUDIO_DIR"
+fi
+
 "$SYSTEM_PYTHON" -m venv "$BUILD_DIR/.venv"
 RELEASE_PYTHON="$BUILD_DIR/.venv/bin/python"
 RELEASE_PIP="$BUILD_DIR/.venv/bin/pip"
@@ -82,6 +92,7 @@ PYTHONDONTWRITEBYTECODE=0 "$RELEASE_PYTHON" -m compileall -q \
   "$BUILD_DIR/scripts"
 
 LOCK_SHA256="$(sha256sum "$BUILD_DIR/$LOCK_FILE" | awk '{print $1}')"
+TREE_SHA256="$($SYSTEM_PYTHON "$MANAGER" tree-digest "$BUILD_DIR" | "$SYSTEM_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["tree_sha256"])')"
 BUILT_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cat > "$BUILD_DIR/.release.json" <<EOF
 {
@@ -90,7 +101,9 @@ cat > "$BUILD_DIR/.release.json" <<EOF
   "python_version": "$PY_MINOR",
   "pip_bootstrap_version": "$PIP_BOOTSTRAP_VERSION",
   "lock_file": "$LOCK_FILE",
-  "lock_sha256": "$LOCK_SHA256"
+  "lock_sha256": "$LOCK_SHA256",
+  "tree_sha256": "$TREE_SHA256",
+  "shared_audio_dir": "$SHARED_AUDIO_MARKER"
 }
 EOF
 
@@ -101,4 +114,4 @@ mv "$BUILD_DIR" "$FINAL_DIR"
 trap - EXIT TERM INT HUP
 
 "$SYSTEM_PYTHON" "$MANAGER" validate "$FINAL_DIR" >/dev/null
-echo "IMMUTABLE_RELEASE_BUILT sha=$SHA path=$FINAL_DIR lock=$LOCK_FILE lock_sha256=$LOCK_SHA256"
+echo "IMMUTABLE_RELEASE_BUILT sha=$SHA path=$FINAL_DIR lock=$LOCK_FILE lock_sha256=$LOCK_SHA256 tree_sha256=$TREE_SHA256"
