@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import time
 from collections import deque
@@ -36,12 +37,61 @@ def _trust_proxy_headers() -> bool:
     return (os.getenv("TRUST_PROXY_HEADERS") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _ip_address(raw: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    if value.startswith("[") and value.endswith("]"):
+        value = value[1:-1]
+    try:
+        return ipaddress.ip_address(value)
+    except ValueError:
+        return None
+
+
+def _trusted_proxy_networks() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    raw = (os.getenv("PAYMENT_WEBHOOK_TRUSTED_PROXY_CIDRS") or "").strip()
+    if not raw:
+        return ()
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for item in raw.split(","):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(candidate, strict=False))
+        except ValueError:
+            continue
+    return tuple(networks)
+
+
+def _proxy_headers_allowed(request: web.Request) -> bool:
+    remote = _ip_address(request.remote)
+    if remote is None:
+        return False
+    if remote.is_loopback:
+        return True
+    networks = _trusted_proxy_networks()
+    if networks:
+        return any(remote in network for network in networks if remote.version == network.version)
+    return _trust_proxy_headers()
+
+
+def _forwarded_client_address(request: web.Request) -> str:
+    forwarded = (request.headers.get("X-Forwarded-For") or "").split(",", 1)[0].strip()
+    candidate = _ip_address(forwarded)
+    if candidate is None:
+        candidate = _ip_address(request.headers.get("X-Real-IP"))
+    return str(candidate) if candidate is not None else ""
+
+
 def _client_key(request: web.Request) -> str:
-    if _trust_proxy_headers():
-        forwarded = (request.headers.get("X-Forwarded-For") or "").split(",", 1)[0].strip()
+    if _proxy_headers_allowed(request):
+        forwarded = _forwarded_client_address(request)
         if forwarded:
-            return forwarded[:128]
-    return str(request.remote or "unknown")[:128]
+            return f"client:{forwarded}"[:128]
+    remote = _ip_address(request.remote)
+    return f"peer:{remote or 'unknown'}"[:128]
 
 
 def _rate_allowed(client_key: str, *, now: float | None = None) -> bool:
