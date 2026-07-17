@@ -6,7 +6,7 @@ RUNTIME_ROOT="${RUNTIME_ROOT:-/var/lib/metrotherapy/runtime}"
 RELEASES_DIR="${RELEASES_DIR:-$RUNTIME_ROOT/releases}"
 SYSTEM_PYTHON="${SYSTEM_PYTHON:-/usr/bin/python3}"
 PIP_BOOTSTRAP_VERSION="${PIP_BOOTSTRAP_VERSION:-26.1.2}"
-SHARED_AUDIO_DIR="${SHARED_AUDIO_DIR:-$SOURCE_DIR/audio}"
+SHARED_AUDIO_DIR="${SHARED_AUDIO_DIR:-$(dirname "$RUNTIME_ROOT")/audio}"
 SHA="${1:-${RELEASE_SHA:-}}"
 
 is_valid_sha() {
@@ -52,8 +52,12 @@ trap cleanup EXIT TERM INT HUP
 # The source snapshot is detached from the mutable production worktree.
 git -C "$SOURCE_DIR" archive --format=tar "$SHA" | tar -xf - -C "$BUILD_DIR"
 
-# Licensed production media is state, not release code. Keep one shared content
-# directory while every code/dependency release remains independently sealed.
+# Licensed production media is state, not release code. Migrate the existing
+# source-tree content into /var/lib once, then keep one shared asset directory.
+if [ -d "$SOURCE_DIR/audio" ] && [ "$(readlink -f "$SOURCE_DIR/audio")" != "$(readlink -m "$SHARED_AUDIO_DIR")" ]; then
+  mkdir -p "$SHARED_AUDIO_DIR"
+  cp -a "$SOURCE_DIR/audio/." "$SHARED_AUDIO_DIR/"
+fi
 SHARED_AUDIO_MARKER=""
 if [ -d "$SHARED_AUDIO_DIR" ]; then
   rm -rf "$BUILD_DIR/audio"
