@@ -74,7 +74,7 @@ def _delete_owned_rows(conn: Any, policy: PrivacyPolicy, user_id: int) -> int:
         raise RuntimeError(f"privacy_manifest_runtime_column_missing:{policy.table}")
     clause, params = ownership
     cursor = conn.execute(
-        f"DELETE FROM {policy.table} WHERE {clause}",  # nosec B608 - table and columns come from validated manifest
+        f"DELETE FROM {policy.table} WHERE {clause}",  # nosec B608 - validated manifest only
         params,
     )
     return max(0, int(getattr(cursor, "rowcount", 0) or 0))
@@ -100,27 +100,34 @@ def _anonymize_owned_rows(conn: Any, policy: PrivacyPolicy, user_id: int) -> boo
     ownership = _ownership_where(conn, policy, user_id)
     if ownership is None:
         raise RuntimeError(f"privacy_manifest_runtime_column_missing:{policy.table}")
-    clause, params = ownership
+    clause, ownership_params = ownership
     available = table_columns(conn, policy.table)
-    anonymize_columns = tuple(
+    null_columns = tuple(
         column
         for column in policy.anonymize_columns
         if column in available
     )
-    if not anonymize_columns:
+    literal_values = tuple(
+        (column, value)
+        for column, value in policy.anonymize_literals
+        if column in available
+    )
+    if not null_columns and not literal_values:
         return False
-    assignments = [f"{column}=NULL" for column in anonymize_columns]
+
+    assignments = [f"{column}=NULL" for column in null_columns]
+    assignments.extend(f"{column}=?" for column, _value in literal_values)
+    assignment_params = tuple(value for _column, value in literal_values)
     if policy.table == "users" and "demo_uses" in available:
         assignments.append("demo_uses=0")
     cursor = conn.execute(
         f"UPDATE {policy.table} SET {', '.join(assignments)} WHERE {clause}",  # nosec B608 - validated manifest only
-        params,
+        (*assignment_params, *ownership_params),
     )
     return max(0, int(getattr(cursor, "rowcount", 0) or 0)) > 0
 
 
 def _retained_table_names() -> tuple[str, ...]:
-    # Anonymized routing/profile shells are retained alongside financial facts.
     return tuple(
         sorted(
             policy.table
@@ -156,12 +163,7 @@ def erase_user_behavioral_data(
     *,
     reason: str = "user_request",
 ) -> UserDataEraseResult:
-    """Erase all manifest-declared behavioral data in one transaction.
-
-    Financial/provider facts and the minimum routing identity needed to fulfil,
-    refund or dispute an existing purchase are retained. Human-readable profile
-    metadata is anonymized according to the same versioned manifest.
-    """
+    """Erase behavioral data and anonymize retained routing/accounting shells."""
 
     uid = int(user_id)
     deleted: dict[str, int] = {}
