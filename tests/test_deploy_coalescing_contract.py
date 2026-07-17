@@ -7,7 +7,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEPLOY_SCRIPT = ROOT / "deploy.sh"
+DEPLOY_LAUNCHER = ROOT / "deploy.sh"
+IMMUTABLE_DEPLOY = ROOT / "scripts" / "immutable_deploy.sh"
+RELEASE_MANAGER = ROOT / "scripts" / "immutable_release.py"
+RELEASE_BUILDER = ROOT / "scripts" / "build_immutable_release.sh"
+REMOTE_TOPOLOGY = ROOT / "scripts" / "check_remote_main_topology.sh"
 WORKER = ROOT / "scripts" / "run_deploy_worker.sh"
 STALE_RECOVERY = ROOT / "scripts" / "recover_stale_deploy_worker.sh"
 
@@ -47,20 +51,38 @@ def _assert_bash_syntax(path: Path) -> None:
     assert completed.returncode == 0, completed.stderr
 
 
-def _copy_deploy_script(tmp_path: Path, repo: Path) -> Path:
-    copied_script = tmp_path / "deploy.sh"
-    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-    source = source.replace(
-        'APP_DIR="/root/metrotherapy"',
-        f'APP_DIR="{repo}"',
-        1,
-    )
-    copied_script.write_text(source, encoding="utf-8")
-    return copied_script
+def _prepare_deploy_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _run("git", "init", "-b", "main", cwd=repo)
+    _run("git", "config", "user.name", "Deploy Contract", cwd=repo)
+    _run("git", "config", "user.email", "deploy-contract@example.test", cwd=repo)
+
+    scripts = repo / "scripts"
+    scripts.mkdir()
+    shutil.copy2(RELEASE_MANAGER, scripts / RELEASE_MANAGER.name)
+    shutil.copy2(RELEASE_BUILDER, scripts / RELEASE_BUILDER.name)
+    copied_script = tmp_path / "immutable_deploy.sh"
+    shutil.copy2(IMMUTABLE_DEPLOY, copied_script)
+    return repo, copied_script
 
 
-def test_deploy_script_has_valid_bash_syntax() -> None:
-    _assert_bash_syntax(DEPLOY_SCRIPT)
+def test_deploy_launcher_and_immutable_pipeline_have_valid_bash_syntax() -> None:
+    _assert_bash_syntax(DEPLOY_LAUNCHER)
+    _assert_bash_syntax(IMMUTABLE_DEPLOY)
+    _assert_bash_syntax(RELEASE_BUILDER)
+    _assert_bash_syntax(REMOTE_TOPOLOGY)
+
+
+def test_deploy_launcher_delegates_topology_then_immutable_pipeline() -> None:
+    source = DEPLOY_LAUNCHER.read_text(encoding="utf-8")
+
+    topology = source.index('bash "$SOURCE_DIR/scripts/check_remote_main_topology.sh" "$SOURCE_DIR"')
+    immutable = source.index('exec bash "$SOURCE_DIR/scripts/immutable_deploy.sh" "$@"')
+
+    assert topology < immutable
+    assert "git reset --hard" not in source
+    assert "pip install" not in source
 
 
 def test_deploy_worker_has_valid_bash_syntax() -> None:
@@ -72,32 +94,35 @@ def test_stale_deploy_recovery_has_valid_bash_syntax() -> None:
     _assert_bash_syntax(STALE_RECOVERY)
 
 
-def test_older_trigger_is_coalesced_before_any_deploy_side_effect(tmp_path) -> None:
+def test_older_trigger_is_coalesced_before_release_build_or_switch(tmp_path) -> None:
     bash = shutil.which("bash")
     git = shutil.which("git")
     assert bash is not None
     assert git is not None
 
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _run("git", "init", "-b", "main", cwd=repo)
-    _run("git", "config", "user.name", "Deploy Contract", cwd=repo)
-    _run("git", "config", "user.email", "deploy-contract@example.test", cwd=repo)
+    repo, copied_script = _prepare_deploy_fixture(tmp_path)
     trigger_sha = _commit(repo, "one.txt", "one\n", "one")
     deployed_sha = _commit(repo, "two.txt", "two\n", "two")
+    _run("git", "remote", "add", "origin", str(repo), cwd=repo)
 
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     marker = state_dir / "deployed_sha"
     marker.write_text(f"{deployed_sha}\n", encoding="utf-8")
-    copied_script = _copy_deploy_script(tmp_path, repo)
+    runtime_root = tmp_path / "runtime"
 
     env = os.environ.copy()
     env.update(
         {
+            "APP_DIR": str(repo),
             "DEPLOY_TRIGGER_SHA": trigger_sha,
             "DEPLOY_STATE_DIR": str(state_dir),
             "DEPLOYED_SHA_FILE": str(marker),
+            "METRO_RUNTIME_ROOT": str(runtime_root),
+            "METRO_RELEASES_DIR": str(runtime_root / "releases"),
+            "METRO_CURRENT_RELEASE_LINK": str(runtime_root / "current"),
+            "METRO_PREVIOUS_RELEASE_LINK": str(runtime_root / "previous"),
+            "METRO_IMMUTABLE_SYSTEMD_OVERRIDE": str(tmp_path / "immutable-release.conf"),
         }
     )
     completed = subprocess.run(
@@ -111,13 +136,10 @@ def test_older_trigger_is_coalesced_before_any_deploy_side_effect(tmp_path) -> N
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert (
-        f"deploy coalesced: trigger={trigger_sha} "
-        f"already covered by successful_sha={deployed_sha}"
-    ) in completed.stdout
-    assert "git status before" not in completed.stdout
-    assert "sync deploy webhook service script" not in completed.stdout
-    assert "restart service" not in completed.stdout
+    assert f"deploy coalesced trigger={trigger_sha} deployed={deployed_sha}" in completed.stdout
+    assert "build immutable release" not in completed.stdout
+    assert "mandatory production backup" not in completed.stdout
+    assert not runtime_root.exists()
 
 
 def test_dirty_checkout_never_trusts_successful_deploy_marker(tmp_path) -> None:
@@ -126,27 +148,25 @@ def test_dirty_checkout_never_trusts_successful_deploy_marker(tmp_path) -> None:
     assert bash is not None
     assert git is not None
 
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _run("git", "init", "-b", "main", cwd=repo)
-    _run("git", "config", "user.name", "Deploy Contract", cwd=repo)
-    _run("git", "config", "user.email", "deploy-contract@example.test", cwd=repo)
+    repo, copied_script = _prepare_deploy_fixture(tmp_path)
     trigger_sha = _commit(repo, "one.txt", "one\n", "one")
     deployed_sha = _commit(repo, "two.txt", "two\n", "two")
+    _run("git", "remote", "add", "origin", str(repo), cwd=repo)
     (repo / "two.txt").write_text("manually changed\n", encoding="utf-8")
 
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     marker = state_dir / "deployed_sha"
     marker.write_text(f"{deployed_sha}\n", encoding="utf-8")
-    copied_script = _copy_deploy_script(tmp_path, repo)
 
     env = os.environ.copy()
     env.update(
         {
+            "APP_DIR": str(repo),
             "DEPLOY_TRIGGER_SHA": trigger_sha,
             "DEPLOY_STATE_DIR": str(state_dir),
             "DEPLOYED_SHA_FILE": str(marker),
+            "METRO_RUNTIME_ROOT": str(tmp_path / "runtime"),
         }
     )
     completed = subprocess.run(
@@ -160,46 +180,45 @@ def test_dirty_checkout_never_trusts_successful_deploy_marker(tmp_path) -> None:
     )
 
     assert completed.returncode == 10
-    assert "deploy coalescing bypassed: production worktree is dirty" in completed.stdout
-    assert "deploy coalesced:" not in completed.stdout
-    assert "ERROR: dirty working tree; refusing deploy" in completed.stdout
+    assert "IMMUTABLE_DEPLOY_FAILED dirty source worktree" in completed.stderr
+    assert "deploy coalesced" not in completed.stdout
 
 
-def test_coalescing_requires_clean_main_checkout_at_recorded_sha() -> None:
-    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+def test_coalescing_requires_clean_main_checkout_and_success_marker() -> None:
+    source = IMMUTABLE_DEPLOY.read_text(encoding="utf-8")
 
-    branch_check = source.index('current_branch="$(git branch --show-current)"')
     dirty_check = source.index('git status --porcelain')
-    head_check = source.index('current_sha="$(git rev-parse HEAD)"')
-    exact_match = source.index('if [ "$current_sha" != "$deployed_sha" ]')
-    ancestor_check = source.index(
-        'git merge-base --is-ancestor "$TRIGGER_SHA" "$deployed_sha"'
-    )
+    checkout = source.index("git checkout main")
+    fetch = source.index('run_bounded "$GIT_NETWORK_TIMEOUT_SECONDS" "fetch origin"')
+    marker_read = source.index('read_recorded_sha 2>/dev/null')
+    ancestor_check = source.index('git merge-base --is-ancestor "$TRIGGER_SHA" "$recorded_sha"')
+    runtime_creation = source.index('mkdir -p "$RUNTIME_ROOT" "$RELEASES_DIR" "$DEPLOY_STATE_DIR"')
 
-    assert branch_check < dirty_check < head_check < exact_match < ancestor_check
-    assert "deploy coalescing bypassed: checkout branch=" in source
-    assert "deploy coalescing bypassed: production worktree is dirty" in source
-    assert "deploy coalescing bypassed: checkout=" in source
+    assert dirty_check < checkout < fetch < marker_read < ancestor_check < runtime_creation
+    assert "IMMUTABLE_DEPLOY_FAILED dirty source worktree" in source
+    assert "deploy coalesced trigger=" in source
 
 
-def test_success_marker_is_atomic_and_written_after_all_verification() -> None:
-    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+def test_success_marker_is_atomic_and_written_after_proof_and_gate() -> None:
+    source = IMMUTABLE_DEPLOY.read_text(encoding="utf-8")
 
     marker_function = source.index("record_successful_deployed_sha()")
-    post_deploy_verify = source.index('"$PYTHON" scripts/post_deploy_verify.py --skip-pytest')
+    production_gate = source.rindex('"$CURRENT_LINK/scripts/production_gate.py"')
+    proof = source.rindex('"$RELEASE_MANAGER" write-proof')
     record_call = source.rindex('record_successful_deployed_sha "$NEW_SHA"')
+    cleanup = source.rindex("cleanup_old_releases")
     trap_removed = source.rindex("trap - ERR TERM INT HUP")
 
     assert 'mktemp "$DEPLOY_STATE_DIR/deployed_sha.XXXXXX"' in source
-    assert 'mv -f "$tmp_file" "$DEPLOYED_SHA_FILE"' in source
-    assert marker_function < post_deploy_verify < record_call < trap_removed
+    assert 'mv -f "$temp" "$DEPLOYED_SHA_FILE"' in source
+    assert marker_function < production_gate < proof < record_call < cleanup < trap_removed
 
 
 def test_coalescing_keeps_provider_audits_after_deploy_returns() -> None:
-    deploy_source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    deploy_source = IMMUTABLE_DEPLOY.read_text(encoding="utf-8")
     worker_source = WORKER.read_text(encoding="utf-8")
 
-    assert 'git merge-base --is-ancestor "$TRIGGER_SHA" "$deployed_sha"' in deploy_source
+    assert 'git merge-base --is-ancestor "$TRIGGER_SHA" "$recorded_sha"' in deploy_source
     deploy_call = worker_source.index('/usr/bin/bash "$DEPLOY_SH"')
     stars_audit = worker_source.rindex("publish_stars_provider_audit_if_requested")
     max_audit = worker_source.rindex("publish_max_provider_audit_if_requested")
@@ -226,22 +245,28 @@ def test_waiting_workers_never_truncate_active_lock_metadata() -> None:
     assert '"$LOCK_ACQUIRED_EPOCH"' in source[replace_metadata:write_metadata + 300]
 
 
-def test_every_long_production_deploy_phase_has_a_hard_deadline() -> None:
-    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+def test_every_long_immutable_deploy_phase_has_a_hard_deadline() -> None:
+    source = IMMUTABLE_DEPLOY.read_text(encoding="utf-8")
 
     assert 'TIMEOUT_BIN="${TIMEOUT_BIN:-/usr/bin/timeout}"' in source
     assert '"$TIMEOUT_BIN" --signal=TERM --kill-after=30s "$seconds" "$@"' in source
-    assert 'PIP_INSTALL_TIMEOUT_SECONDS="${PIP_INSTALL_TIMEOUT_SECONDS:-600}"' in source
-    assert 'VALIDATOR_TIMEOUT_SECONDS="${VALIDATOR_TIMEOUT_SECONDS:-300}"' in source
-    assert 'POST_DEPLOY_VERIFY_TIMEOUT_SECONDS="${POST_DEPLOY_VERIFY_TIMEOUT_SECONDS:-600}"' in source
-    assert 'run_bounded "$GIT_NETWORK_TIMEOUT_SECONDS"' in source
-    assert 'run_bounded "$PIP_INSTALL_TIMEOUT_SECONDS"' in source
-    assert 'run_bounded "$COMPILE_TIMEOUT_SECONDS"' in source
+    for timeout_name in (
+        "GIT_NETWORK_TIMEOUT_SECONDS",
+        "WEBHOOK_RESTART_TIMEOUT_SECONDS",
+        "RELEASE_BUILD_TIMEOUT_SECONDS",
+        "VALIDATOR_TIMEOUT_SECONDS",
+        "SCHEMA_COMPAT_TIMEOUT_SECONDS",
+        "SERVICE_RESTART_TIMEOUT_SECONDS",
+        "HEALTH_WAIT_SECONDS",
+        "PRODUCTION_GATE_TIMEOUT_SECONDS",
+    ):
+        assert f'"{timeout_name}:${{{timeout_name}}}"' in source
+    assert 'run_bounded "$RELEASE_BUILD_TIMEOUT_SECONDS"' in source
     assert 'run_bounded "$VALIDATOR_TIMEOUT_SECONDS"' in source
-    assert 'run_bounded "$RUFF_TIMEOUT_SECONDS"' in source
+    assert 'run_bounded "$SCHEMA_COMPAT_TIMEOUT_SECONDS"' in source
     assert 'run_bounded "$SERVICE_RESTART_TIMEOUT_SECONDS"' in source
-    assert 'run_bounded "$POST_DEPLOY_VERIFY_TIMEOUT_SECONDS"' in source
-    assert "bounded command timed out" in source
+    assert 'run_bounded "$PRODUCTION_GATE_TIMEOUT_SECONDS"' in source
+    assert "IMMUTABLE_DEPLOY_FAILED command=" in source
     assert "trap 'rollback 143' TERM" in source
     assert "trap 'rollback 130' INT" in source
     assert "trap 'rollback 129' HUP" in source
