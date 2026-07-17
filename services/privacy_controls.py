@@ -207,6 +207,8 @@ def write_user_data_export_gzip(
     path.parent.mkdir(parents=True, exist_ok=True)
     exported_at = _utc_now_iso()
     row_counts: dict[str, int] = {}
+    completed = False
+    compressed_size = 0
 
     try:
         with db() as conn:
@@ -240,15 +242,17 @@ def write_user_data_export_gzip(
                     stream.write("]")
                     row_counts[table] = count
                 stream.write("}}")
-    except Exception:
-        path.unlink(missing_ok=True)
-        raise
+        compressed_size = int(path.stat().st_size)
+        completed = True
+    finally:
+        if not completed:
+            path.unlink(missing_ok=True)
 
     return UserDataExportResult(
         user_id=uid,
         path=path,
         table_rows=row_counts,
-        compressed_size_bytes=int(path.stat().st_size),
+        compressed_size_bytes=compressed_size,
     )
 
 
