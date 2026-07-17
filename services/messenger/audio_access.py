@@ -5,6 +5,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from core.time_utils import utc_now
 from services.db import db, tx
@@ -33,12 +34,21 @@ class AudioAccessGrant:
 
 
 def _audio_access_ttl_hours() -> int:
-    raw = (os.getenv("AUDIO_ACCESS_TOKEN_TTL_HOURS") or "24").strip()
+    raw = (os.getenv("AUDIO_ACCESS_TOKEN_TTL_HOURS") or "6").strip()
     try:
         parsed = int(raw)
     except (TypeError, ValueError):
-        return 24
-    return max(1, min(parsed, 24 * 7))
+        return 6
+    return max(1, min(parsed, 12))
+
+
+def _audio_access_max_requests() -> int:
+    raw = (os.getenv("AUDIO_ACCESS_TOKEN_MAX_REQUESTS") or "32").strip()
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return 32
+    return max(4, min(parsed, 256))
 
 
 def _grant_expired(created_at: str, *, now: datetime | None = None) -> bool:
@@ -118,7 +128,22 @@ def issue_or_reuse_audio_access_token(
     return issue_audio_access_token(int(user_id), item=item, platform=platform, sequence_key=sequence_key)
 
 
-def get_audio_access_grant(token: str) -> AudioAccessGrant | None:
+def _row_to_grant(row: Any) -> AudioAccessGrant:
+    return AudioAccessGrant(
+        token=str(row["token"]),
+        user_id=int(row["user_id"]),
+        sequence_key=str(row["sequence_key"]),
+        anchor=int(row["anchor"]),
+        title=str(row["title"]) if row["title"] is not None else None,
+        file_path=Path(str(row["file_path"])),
+        platform=str(row["platform"]),
+        created_at=str(row["created_at"] or ""),
+        first_accessed_at=str(row["first_accessed_at"]) if row["first_accessed_at"] is not None else None,
+        access_count=int(row["access_count"] or 0),
+    )
+
+
+def _load_audio_access_grant(token: str, *, allow_exhausted: bool = False) -> AudioAccessGrant | None:
     raw = (token or "").strip()
     if not raw:
         return None
@@ -134,54 +159,56 @@ def get_audio_access_grant(token: str) -> AudioAccessGrant | None:
         ).fetchone()
     if not row:
         return None
-    created_at = str(row["created_at"] or "")
-    if _grant_expired(created_at):
+    grant = _row_to_grant(row)
+    if _grant_expired(grant.created_at):
         return None
-    return AudioAccessGrant(
-        token=str(row["token"]),
-        user_id=int(row["user_id"]),
-        sequence_key=str(row["sequence_key"]),
-        anchor=int(row["anchor"]),
-        title=str(row["title"]) if row["title"] is not None else None,
-        file_path=Path(str(row["file_path"])),
-        platform=str(row["platform"]),
-        created_at=created_at,
-        first_accessed_at=str(row["first_accessed_at"]) if row["first_accessed_at"] is not None else None,
-        access_count=int(row["access_count"] or 0),
-    )
+    if not allow_exhausted and grant.access_count >= _audio_access_max_requests():
+        return None
+    return grant
+
+
+def get_audio_access_grant(token: str) -> AudioAccessGrant | None:
+    return _load_audio_access_grant(token)
 
 
 def register_audio_access(token: str) -> AudioAccessGrant | None:
-    """Record that the protected file URL was fetched without completing progress.
+    """Atomically register one permitted protected-file request.
 
     Link-preview bots, antivirus scanners and proxies can issue GET requests without
     the user listening to the audio. Completion therefore remains an explicit user
-    action handled by ``confirm_pending_audio_delivery``.
+    action handled by ``confirm_pending_audio_delivery``. Absolute lifetime and a
+    bounded request budget limit exposure if a bearer URL is copied or leaked.
     """
 
-    grant = get_audio_access_grant(token)
+    grant = _load_audio_access_grant(token)
     if grant is None:
         return None
     now = utc_now().replace(microsecond=0).isoformat()
+    max_requests = _audio_access_max_requests()
     with db() as conn:
         with tx(conn):
-            conn.execute(
+            cursor = conn.execute(
                 '''
                 UPDATE user_audio_access_tokens
                 SET first_accessed_at=COALESCE(first_accessed_at, ?),
                     last_accessed_at=?,
-                    access_count=access_count + 1
-                WHERE token=?
+                    access_count=COALESCE(access_count, 0) + 1
+                WHERE token=? AND COALESCE(access_count, 0) < ?
                 '''.strip(),
-                (now, now, grant.token),
+                (now, now, grant.token, max_requests),
             )
+            if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                return None
+    registered = _load_audio_access_grant(token, allow_exhausted=True)
+    if registered is None:
+        return None
     log_audio_timeline_event(
-        int(grant.user_id),
+        int(registered.user_id),
         event_type="accessed",
-        sequence_key=grant.sequence_key,
-        anchor=int(grant.anchor),
-        title=grant.title or grant.file_path.stem,
-        platform=grant.platform,
-        token=grant.token,
+        sequence_key=registered.sequence_key,
+        anchor=int(registered.anchor),
+        title=registered.title or registered.file_path.stem,
+        platform=registered.platform,
+        token=registered.token,
     )
-    return get_audio_access_grant(token)
+    return registered
