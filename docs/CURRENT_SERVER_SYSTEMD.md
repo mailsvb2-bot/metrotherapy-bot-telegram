@@ -1,86 +1,95 @@
-# Current server systemd contract
+# Production systemd contract
 
-This document records the effective production unit currently used on the Timeweb
-server for the Metrotherapy bot. It exists to prevent drift between repository
-expectations and the real service that is restarted during deploys.
+This file preserves the known legacy Timeweb unit and defines the immutable
+runtime contract that must replace it during the next verified production
+rollout.
 
-The canonical repository service template is still `deploy/metrotherapy.service`.
-The current server runs from `/root/metrotherapy` and uses an override file.
+## Legacy evidence before immutable rollout
 
-## Effective unit shape
+The previously observed server unit executed the mutable source checkout:
 
 ```ini
-# /etc/systemd/system/metrotherapy.service
-[Unit]
-Description=Metrotherapy Telegram Bot
-After=network-online.target
-Wants=network-online.target
-
 [Service]
-Type=simple
 WorkingDirectory=/root/metrotherapy
-EnvironmentFile=/root/metrotherapy/.env
-ExecStart=/root/metrotherapy/.venv/bin/python /root/metrotherapy/main.py
-Restart=always
-RestartSec=5
-User=root
-
-[Install]
-WantedBy=multi-user.target
-
-# /etc/systemd/system/metrotherapy.service.d/override.conf
-[Service]
-EnvironmentFile=
 EnvironmentFile=/etc/metrotherapy/metrotherapy.env
-Environment=MPLCONFIGDIR=/var/lib/metrotherapy/mplcache
-WorkingDirectory=/root/metrotherapy
-ExecStart=
 ExecStart=/root/metrotherapy/.venv/bin/python /root/metrotherapy/main.py
-Restart=always
-RestartSec=5
+User=root
 ```
 
-## Required post-change commands
+That shape is retained here only as migration evidence. It is not an acceptable
+post-rollout production invariant because dependency installation and rollback
+mutate one shared `.venv`.
+
+## Required effective unit after rollout
+
+`scripts/immutable_deploy.sh` installs:
+
+```text
+/etc/systemd/system/metrotherapy.service.d/immutable-release.conf
+```
+
+with this runtime boundary:
+
+```ini
+[Service]
+WorkingDirectory=/var/lib/metrotherapy/runtime/current
+ExecStart=
+ExecStart=/var/lib/metrotherapy/runtime/current/.venv/bin/python /var/lib/metrotherapy/runtime/current/main.py
+Environment=PYTHONDONTWRITEBYTECODE=1
+```
+
+The existing production environment-file override remains authoritative:
+
+```ini
+EnvironmentFile=/etc/metrotherapy/metrotherapy.env
+Environment=MPLCONFIGDIR=/var/lib/metrotherapy/mplcache
+```
+
+The repository template `deploy/metrotherapy.service` uses the same immutable
+`current` path.
+
+## Required post-rollout evidence
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl restart metrotherapy.service
-sleep 8
-sudo systemctl show metrotherapy.service -p Environment
-curl -sS http://127.0.0.1:8082/health
-curl -sS http://127.0.0.1:8082/healthz
-curl -sS http://127.0.0.1:8082/readyz
+sudo systemctl show metrotherapy.service \
+  -p WorkingDirectory \
+  -p ExecStart \
+  -p EnvironmentFiles
+readlink -f /var/lib/metrotherapy/runtime/current
+readlink -f /var/lib/metrotherapy/runtime/previous
+cat /var/lib/metrotherapy/deploy-state/deployment-proof.json
+cat /var/lib/metrotherapy/deploy-state/deployed_sha
+curl -fsS http://127.0.0.1:8082/healthz
+curl -fsS http://127.0.0.1:8082/readyz
 ```
 
 Expected proof:
 
-- `Environment=MPLCONFIGDIR=/var/lib/metrotherapy/mplcache`
-- `/health` and `/healthz` return `ok: true`
-- `/readyz` returns `ok: true`
-- readiness has `db_ready`, `schema_ready`, `scheduler_ready`, `webhook_ready` all true
+- `WorkingDirectory=/var/lib/metrotherapy/runtime/current`;
+- `ExecStart` uses `current/.venv/bin/python` and `current/main.py`;
+- `current` resolves to the exact deployed Git SHA;
+- `previous` resolves to the independently sealed rollback SHA;
+- `deployment-proof.json` records both release-tree hashes and `PRODUCTION_GATE_OK`;
+- `deployed_sha` equals the `current` release and was written after the proof;
+- `/healthz` and `/readyz` return HTTP 200;
+- readiness has database, schema, scheduler, webhook, messenger outbox, and payment retry checks green.
 
-## Health endpoint aliases
+## Production invariants after acceptance
 
-The health runtime intentionally exposes both historical and conventional probe
-paths:
+- Source/control checkout: `/root/metrotherapy`;
+- Runtime code: `/var/lib/metrotherapy/runtime/current`;
+- Immutable releases: `/var/lib/metrotherapy/runtime/releases/<sha>`;
+- Shared licensed audio: `/var/lib/metrotherapy/audio` unless explicitly overridden;
+- Environment file: `/etc/metrotherapy/metrotherapy.env`;
+- Health runtime: `127.0.0.1:8082`;
+- Messenger HTTP ingress: `127.0.0.1:8081`;
+- Telegram transport: polling;
+- Database engine: PostgreSQL;
+- Matplotlib cache: `/var/lib/metrotherapy/mplcache`.
 
-- liveness: `/health` and `/healthz`
-- readiness: `/ready` and `/readyz`
-
-Operator docs and post-deploy scripts should prefer `/health` for the current
-Timeweb server because that is the endpoint used in manual production evidence,
-while still accepting `/healthz` for load balancers and conventional probes.
-
-## Production invariants
-
-- Runtime source directory: `/root/metrotherapy`
-- Environment file: `/etc/metrotherapy/metrotherapy.env`
-- Python entrypoint: `/root/metrotherapy/main.py`
-- Health endpoint: `127.0.0.1:8082`
-- Messenger webhook runtime: `8081`
-- Telegram transport: polling
-- Database engine: Postgres
-- Matplotlib cache: `/var/lib/metrotherapy/mplcache`
-
-Do not remove the override until the server has been migrated to the repository
-service path or `/opt/metrotherapy` is made the real runtime path.
+The legacy `/root/metrotherapy/.venv` path must not appear in the effective
+post-rollout `ExecStart`. Issue `#143` remains open until this effective-unit,
+backup, restore-drill, exact-SHA, and rollback evidence is captured from the real
+server.
