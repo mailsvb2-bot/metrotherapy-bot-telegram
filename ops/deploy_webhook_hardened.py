@@ -18,7 +18,11 @@ import time
 # The production installer copies this file to /root/deploy_webhook.py while the
 # canonical implementation remains in /root/metrotherapy/ops.
 _REPO_ROOT = Path(os.getenv("METROTHERAPY_APP_DIR", "/root/metrotherapy"))
-if not (_REPO_ROOT / "ops" / "deploy_webhook.py").is_file():
+try:
+    _PRODUCTION_SOURCE_AVAILABLE = (_REPO_ROOT / "ops" / "deploy_webhook.py").is_file()
+except OSError:
+    _PRODUCTION_SOURCE_AVAILABLE = False
+if not _PRODUCTION_SOURCE_AVAILABLE:
     _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
