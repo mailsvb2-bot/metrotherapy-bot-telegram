@@ -98,7 +98,8 @@ find "$BUILD_DIR" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
 # Venv console scripts and pyvenv.cfg are generated with the temporary build
 # path. Rewrite text launchers to the deterministic final release path before
-# calculating the release tree digest.
+# calculating the release tree digest. Symlinks are intentionally excluded so
+# this step can never follow `.venv/bin/python` into the system interpreter.
 BUILD_DIR_VALUE="$BUILD_DIR" FINAL_DIR_VALUE="$FINAL_DIR" "$SYSTEM_PYTHON" - <<'PY'
 from __future__ import annotations
 
@@ -108,8 +109,12 @@ from pathlib import Path
 old = os.environ["BUILD_DIR_VALUE"].encode()
 new = os.environ["FINAL_DIR_VALUE"].encode()
 venv = Path(os.environ["BUILD_DIR_VALUE"]) / ".venv"
-paths = [venv / "pyvenv.cfg", *(path for path in (venv / "bin").iterdir() if path.is_file())]
-for path in paths:
+launchers = [
+    path
+    for path in (venv / "bin").iterdir()
+    if path.is_file() and not path.is_symlink()
+]
+for path in [venv / "pyvenv.cfg", *launchers]:
     data = path.read_bytes()
     if old in data:
         path.write_bytes(data.replace(old, new))
