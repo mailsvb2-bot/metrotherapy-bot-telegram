@@ -71,6 +71,15 @@ def _explicitly_disabled(name: str) -> bool:
     return raw is not None and str(raw).strip().lower() in {"0", "false", "no", "off"}
 
 
+def _positive_int_env(name: str, default: int, *, minimum: int = 1, maximum: int = 1_000_000) -> int:
+    raw = (os.getenv(name) or str(default)).strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = int(default)
+    return min(max(value, minimum), maximum)
+
+
 def check_telegram_preflight() -> MessengerPreflightStatus:
     missing: list[str] = []
     warnings: list[str] = []
@@ -256,14 +265,39 @@ def check_delivery_outbox_preflight() -> MessengerPreflightStatus:
 
     missing: list[str] = []
     warnings: list[str] = []
+    worker_expected = bool(snapshot.get("worker_expected"))
     if not bool(snapshot.get("worker_running")):
         missing.append("delivery_worker(running)")
     dead = int(snapshot.get("dead") or 0)
+    pending = int(snapshot.get("pending") or 0)
     retry = int(snapshot.get("retry") or 0)
     if dead > 0:
         missing.append(f"dead_letters={dead}")
     if retry > 0:
         warnings.append(f"delivery retries pending: {retry}")
+
+    pending_age = int(snapshot.get("oldest_pending_age_sec") or 0)
+    retry_age = int(snapshot.get("oldest_retry_age_sec") or 0)
+    sending_age = int(snapshot.get("oldest_sending_age_sec") or 0)
+    pending_limit = _positive_int_env("MESSENGER_OUTBOX_READY_MAX_PENDING_AGE_SEC", 300, minimum=10, maximum=86_400)
+    retry_limit = _positive_int_env("MESSENGER_OUTBOX_READY_MAX_RETRY_AGE_SEC", 1800, minimum=30, maximum=604_800)
+    lock_ttl = _positive_int_env("MESSENGER_OUTBOX_LOCK_TTL_SEC", 900, minimum=30, maximum=86_400)
+    backlog_limit = _positive_int_env("MESSENGER_OUTBOX_READY_MAX_BACKLOG", 1000, minimum=1, maximum=1_000_000)
+
+    lag_problems: list[str] = []
+    if pending_age > pending_limit:
+        lag_problems.append(f"oldest_pending_age_sec={pending_age}")
+    if retry_age > retry_limit:
+        lag_problems.append(f"oldest_retry_age_sec={retry_age}")
+    if sending_age > lock_ttl + 60:
+        lag_problems.append(f"oldest_sending_age_sec={sending_age}")
+    if pending + retry > backlog_limit:
+        lag_problems.append(f"delivery_backlog={pending + retry}")
+
+    if worker_expected:
+        missing.extend(lag_problems)
+    else:
+        warnings.extend(f"prestart delivery lag: {problem}" for problem in lag_problems)
 
     return MessengerPreflightStatus(
         channel="delivery_outbox",
