@@ -27,12 +27,17 @@ def _truthy(raw: str | None) -> bool:
 
 
 def provider_verification_required() -> bool:
+    """Require provider source-of-truth verification unconditionally in production.
+
+    Development and hermetic tests may opt in explicitly. Production must not have
+    an environment-variable bypass because an unverified successful payload can
+    otherwise reach the payment grant path.
+    """
+
+    if _is_prod():
+        return True
     raw = os.getenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED")
-    if raw is not None:
-        return _truthy(raw)
-    if _is_prod() and _truthy(os.getenv("ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD")):
-        return False
-    return _is_prod()
+    return _truthy(raw) if raw is not None else False
 
 
 def _auth_header() -> str:
