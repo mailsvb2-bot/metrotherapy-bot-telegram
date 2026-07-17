@@ -544,11 +544,13 @@ def _finalize_direct_access(
 
 def record_yookassa_refund(payload: dict[str, Any]) -> ReconciliationResult:
     event = str(payload.get("event") or "").strip().lower()
-    obj = payload.get("object") if isinstance(payload.get("object"), dict) else {}
+    raw_object = payload.get("object")
+    obj: dict[str, Any] = raw_object if isinstance(raw_object, dict) else {}
     refund_id = str(obj.get("id") or "").strip()
     payment_id = str(obj.get("payment_id") or "").strip()
     status = str(obj.get("status") or "").strip().lower()
-    amount = obj.get("amount") if isinstance(obj.get("amount"), dict) else {}
+    raw_amount = obj.get("amount")
+    amount: dict[str, Any] = raw_amount if isinstance(raw_amount, dict) else {}
     amount_minor = _minor(amount)
     currency = str(amount.get("currency") or "RUB").strip().upper()
 
