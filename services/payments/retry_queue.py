@@ -92,7 +92,10 @@ def is_local_retryable_payment_problem(problem: str) -> bool:
     return normalized.startswith(_LOCAL_RETRYABLE_PREFIXES)
 
 
-def _payment_identity(payload: dict[str, Any], result: ReconciliationResult | None = None) -> tuple[str, str]:
+def _payment_identity(
+    payload: dict[str, Any],
+    result: ReconciliationResult | None = None,
+) -> tuple[str, str]:
     obj = payload.get("object")
     provider_object = obj if isinstance(obj, dict) else {}
     payment_id = str(
@@ -101,26 +104,12 @@ def _payment_identity(payload: dict[str, Any], result: ReconciliationResult | No
         or payload.get("id")
         or ""
     ).strip()
-    event = str(payload.get("event") or (result.event if result is not None else "payment.unknown") or "payment.unknown").strip()
+    event = str(
+        payload.get("event")
+        or (result.event if result is not None else "payment.unknown")
+        or "payment.unknown"
+    ).strip()
     return payment_id, event or "payment.unknown"
-
-
-def _payment_user_id(payload: dict[str, Any]) -> int:
-    obj = payload.get("object")
-    provider_object = obj if isinstance(obj, dict) else {}
-    metadata = provider_object.get("metadata")
-    meta = metadata if isinstance(metadata, dict) else {}
-    for key in ("external_user_id", "user_id", "telegram_user_id"):
-        raw = str(meta.get(key) or "").strip()
-        if not raw:
-            continue
-        try:
-            parsed = int(raw, 10)
-        except ValueError:
-            continue
-        if parsed > 0 and str(parsed) == raw:
-            return parsed
-    return 0
 
 
 def _payment_user_id(payload: dict[str, Any]) -> int:
@@ -241,10 +230,19 @@ def _claimed_from_rows(rows: list[Any], token: str) -> list[ClaimedPaymentRetry]
     ]
 
 
-def claim_due_payment_retries(*, limit: int = 10, lock_ttl_sec: int | None = None) -> list[ClaimedPaymentRetry]:
+def claim_due_payment_retries(
+    *,
+    limit: int = 10,
+    lock_ttl_sec: int | None = None,
+) -> list[ClaimedPaymentRetry]:
     now = utc_now().replace(microsecond=0)
     now_iso = now.isoformat()
-    ttl = lock_ttl_sec or _positive_int("PAYMENT_RETRY_LOCK_TTL_SEC", 900, minimum=30, maximum=86_400)
+    ttl = lock_ttl_sec or _positive_int(
+        "PAYMENT_RETRY_LOCK_TTL_SEC",
+        900,
+        minimum=30,
+        maximum=86_400,
+    )
     stale_before = (now - timedelta(seconds=int(ttl))).isoformat()
     token = uuid.uuid4().hex
     bounded_limit = max(1, min(int(limit), 100))
@@ -327,40 +325,28 @@ def _mark_dead(item: ClaimedPaymentRetry, error: str) -> None:
     )
 
 
-def _mark_dead(item: ClaimedPaymentRetry, error: str) -> None:
-    now = utc_now_iso()
-    with db() as conn:
-        with tx(conn):
-            cursor = conn.execute(
-                """
-                UPDATE payment_reconciliation_retry
-                SET status='dead',attempts=?,updated_at=?,locked_at=NULL,lock_token=NULL,last_error=?
-                WHERE id=? AND lock_token=? AND status='processing'
-                """.strip(),
-                (
-                    int(item.attempts) + 1,
-                    now,
-                    str(error or "non_retryable_result")[:500],
-                    int(item.id),
-                    item.lock_token,
-                ),
-            )
-            if int(getattr(cursor, "rowcount", 0) or 0) != 1:
-                raise RuntimeError("payment_retry_lease_lost")
-    log.error(
-        "Payment reconciliation retry permanently failed: payment_id=%s error=%s",
-        item.provider_payment_id,
-        str(error or "")[:180],
-    )
-
-
 def _reschedule_or_dead(item: ClaimedPaymentRetry, error: str) -> bool:
     attempts = int(item.attempts) + 1
-    max_attempts = _positive_int("PAYMENT_RETRY_MAX_ATTEMPTS", 48, minimum=1, maximum=200)
+    max_attempts = _positive_int(
+        "PAYMENT_RETRY_MAX_ATTEMPTS",
+        48,
+        minimum=1,
+        maximum=200,
+    )
     terminal = attempts >= max_attempts
     now = utc_now().replace(microsecond=0)
-    base_delay = _positive_int("PAYMENT_RETRY_BASE_DELAY_SEC", 30, minimum=1, maximum=3600)
-    max_delay = _positive_int("PAYMENT_RETRY_MAX_DELAY_SEC", 3600, minimum=30, maximum=86_400)
+    base_delay = _positive_int(
+        "PAYMENT_RETRY_BASE_DELAY_SEC",
+        30,
+        minimum=1,
+        maximum=3600,
+    )
+    max_delay = _positive_int(
+        "PAYMENT_RETRY_MAX_DELAY_SEC",
+        3600,
+        minimum=30,
+        maximum=86_400,
+    )
     delay = min(base_delay * (2 ** max(0, attempts - 1)), max_delay)
     available_at = (now + timedelta(seconds=delay)).isoformat()
     status = "dead" if terminal else "retry"
@@ -414,7 +400,12 @@ def _process_claimed_retry(item: ClaimedPaymentRetry) -> str:
 
 
 def run_payment_retry_batch(*, limit: int | None = None) -> PaymentRetryBatchResult:
-    batch_limit = limit or _positive_int("PAYMENT_RETRY_BATCH_SIZE", 10, minimum=1, maximum=100)
+    batch_limit = limit or _positive_int(
+        "PAYMENT_RETRY_BATCH_SIZE",
+        10,
+        minimum=1,
+        maximum=100,
+    )
     claimed = claim_due_payment_retries(limit=batch_limit)
     completed = 0
     rescheduled = 0
@@ -423,8 +414,15 @@ def run_payment_retry_batch(*, limit: int | None = None) -> PaymentRetryBatchRes
         try:
             outcome = _process_claimed_retry(item)
         except Exception as exc:  # validator: allow-wide-except - durable worker boundary
-            log.exception("Payment retry processing crashed: payment_id=%s", item.provider_payment_id)
-            outcome = "dead" if _reschedule_or_dead(item, f"worker_exception:{type(exc).__name__}:{exc}") else "rescheduled"
+            log.exception(
+                "Payment retry processing crashed: payment_id=%s",
+                item.provider_payment_id,
+            )
+            terminal = _reschedule_or_dead(
+                item,
+                f"worker_exception:{type(exc).__name__}:{exc}",
+            )
+            outcome = "dead" if terminal else "rescheduled"
         if outcome == "completed":
             completed += 1
         elif outcome == "dead":
