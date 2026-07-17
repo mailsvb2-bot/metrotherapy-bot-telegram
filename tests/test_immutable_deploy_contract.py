@@ -32,7 +32,7 @@ def test_builder_creates_per_sha_hash_locked_release() -> None:
     assert 'FINAL_DIR="$RELEASES_DIR/$SHA"' in builder
     assert 'git -C "$SOURCE_DIR" archive --format=tar "$SHA"' in builder
     assert '"$SYSTEM_PYTHON" -m venv "$BUILD_DIR/.venv"' in builder
-    assert 'install --require-hashes -r "$BUILD_DIR/$LOCK_FILE"' in builder
+    assert 'install --no-compile --require-hashes -r "$BUILD_DIR/$LOCK_FILE"' in builder
     assert 'tree-digest "$BUILD_DIR"' in builder
     assert 'mv "$BUILD_DIR" "$FINAL_DIR"' in builder
     assert '"$SYSTEM_PYTHON" "$MANAGER" validate "$FINAL_DIR"' in builder
