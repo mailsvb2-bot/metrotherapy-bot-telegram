@@ -11,6 +11,7 @@ import uuid
 
 from services.gift_claims import is_gift_token, normalize_gift_token
 from services.practice_token_contract import package_by_id
+from services.payments.receipt_contract import validate_receipt_contract
 
 log = logging.getLogger(__name__)
 
@@ -113,10 +114,15 @@ def _receipt_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
 
 def build_yookassa_receipt(*, amount_value: str, description: str) -> dict:
     customer_email = _receipt_customer_email()
-    tax_system_code = _receipt_int("YOOKASSA_TAX_SYSTEM_CODE", 2, minimum=1, maximum=6)
-    vat_code = _receipt_int("YOOKASSA_VAT_CODE", 1, minimum=1, maximum=6)
-    payment_mode = _env_value("YOOKASSA_PAYMENT_MODE", "full_payment")
-    payment_subject = _env_value("YOOKASSA_PAYMENT_SUBJECT", "service")
+    try:
+        tax_system_code, vat_code, payment_mode, payment_subject = validate_receipt_contract(
+            tax_system_code=_env_value("YOOKASSA_TAX_SYSTEM_CODE", "2"),
+            vat_code=_env_value("YOOKASSA_VAT_CODE", "1"),
+            payment_mode=_env_value("YOOKASSA_PAYMENT_MODE", "full_payment"),
+            payment_subject=_env_value("YOOKASSA_PAYMENT_SUBJECT", "service"),
+        )
+    except ValueError as exc:
+        raise YooKassaCheckoutError(str(exc)) from exc
     return {
         "customer": {"email": customer_email},
         "tax_system_code": tax_system_code,

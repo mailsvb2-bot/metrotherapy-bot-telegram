@@ -14,6 +14,7 @@ def test_recent_payment_privacy_and_messenger_boundaries_are_covered() -> None:
         "runtime/payment_webhook_admission.py",
         "services/messenger/audio_access.py",
         "services/messenger/webhook_dedupe.py",
+        "services/payments/receipt_contract.py",
         "services/payments/retry_queue.py",
         "services/payments/verified_reconciliation.py",
         "services/privacy_controls.py",
@@ -21,6 +22,7 @@ def test_recent_payment_privacy_and_messenger_boundaries_are_covered() -> None:
     required_security_paths = (
         required_type_files
         - {
+            "services/payments/receipt_contract.py",
             "services/payments/retry_queue.py",
             "services/payments/verified_reconciliation.py",
         }
