@@ -66,6 +66,11 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "webhook"}
 
 
+def _explicitly_disabled(name: str) -> bool:
+    raw = os.getenv(name)
+    return raw is not None and str(raw).strip().lower() in {"0", "false", "no", "off"}
+
+
 def check_telegram_preflight() -> MessengerPreflightStatus:
     missing: list[str] = []
     warnings: list[str] = []
@@ -115,6 +120,15 @@ def check_payment_preflight() -> MessengerPreflightStatus:
     warnings: list[str] = []
     if _deployed_env():
         _https_warning("PAYMENT_PUBLIC_BASE_URL", public_base, warnings)
+        for name in ("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "PAYMENT_CHECKOUT_INTENT_REQUIRED"):
+            if _explicitly_disabled(name):
+                missing.append(f"{name}(must_be_enabled)")
+        for name in (
+            "ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD",
+            "ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD",
+        ):
+            if _truthy(os.getenv(name)):
+                missing.append(f"{name}(forbidden)")
 
     return MessengerPreflightStatus(
         channel="payment",
@@ -180,7 +194,7 @@ def check_max_preflight() -> MessengerPreflightStatus:
     required = ["MAX_BOT_TOKEN", "MAX_BOT_LINK_BASE", "MESSENGER_PUBLIC_BASE_URL"]
     if _deployed_env():
         required.append("MAX_WEBHOOK_SECRET")
-    missing = _missing(*required)
+    missing = list(_missing(*required))
     warnings: list[str] = []
     if not str(_value("MAX_WEBHOOK_SECRET", "") or "").strip():
         warnings.append("MAX_WEBHOOK_SECRET is not configured; MAX webhook secret verification is not enforced")
@@ -193,18 +207,27 @@ def check_max_preflight() -> MessengerPreflightStatus:
         or "https://platform-api2.max.ru"
     ).strip().rstrip("/")
     if api_base in {"https://platform-api.max.ru", "https://botapi.max.ru"}:
-        warnings.append("MAX_API_BASE_URL uses a legacy domain; migrate to https://platform-api2.max.ru")
+        if _deployed_env():
+            missing.append("MAX_API_BASE_URL(official_api2_required)")
+        else:
+            warnings.append("MAX_API_BASE_URL uses a legacy domain; migrate to https://platform-api2.max.ru")
     elif api_base != "https://platform-api2.max.ru":
-        warnings.append("MAX_API_BASE_URL should use the official https://platform-api2.max.ru domain")
+        if _deployed_env():
+            missing.append("MAX_API_BASE_URL(official_api2_required)")
+        else:
+            warnings.append("MAX_API_BASE_URL should use the official https://platform-api2.max.ru domain")
 
     ca_bundle = str(os.getenv("MAX_CA_BUNDLE") or _value("MAX_CA_BUNDLE", "") or "").strip()
     if ca_bundle and not Path(ca_bundle).is_file():
-        warnings.append("MAX_CA_BUNDLE points to a missing file")
+        if _deployed_env():
+            missing.append("MAX_CA_BUNDLE(existing_file)")
+        else:
+            warnings.append("MAX_CA_BUNDLE points to a missing file")
 
     return MessengerPreflightStatus(
         channel="max",
         ok=not missing,
-        missing=missing,
+        missing=tuple(sorted(set(missing))),
         warnings=tuple(warnings),
         details={
             "enabled": True,
