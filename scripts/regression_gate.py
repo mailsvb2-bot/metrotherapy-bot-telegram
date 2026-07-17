@@ -75,6 +75,34 @@ PROD_LIKE_VALIDATOR_ENV = {
     "VALIDATOR_SKIP_AUDIO": "1",
 }
 
+HERMETIC_PROD_VALIDATOR_ENV = {
+    **PROD_LIKE_VALIDATOR_ENV,
+    "APP_ENV": "prod",
+    "METRO_DB_ENGINE": "postgres",
+    "DATABASE_URL": "postgresql://ci:ci@127.0.0.1:5432/metrotherapy_ci_contract",
+    "BOT_TOKEN": "000000:CI",
+    "ADMIN_IDS": "1",
+    "TELEGRAM_TRANSPORT": "polling",
+    "TELEGRAM_WEBHOOK_ENABLED": "0",
+    "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
+    "TOKEN_ECONOMY_ENABLED": "1",
+    "TOKEN_ENFORCEMENT_MODE": "hard",
+    "PAYMENT_HTTP_ENABLED": "1",
+    "PAYMENT_PUBLIC_BASE_URL": "https://metrotherapy.example",
+    "PAYMENT_CHECKOUT_SIGNING_KEY": "ci-checkout-signing-key-32-bytes-minimum",
+    "PAYMENT_CHECKOUT_INTENT_REQUIRED": "1",
+    "YOOKASSA_SHOP_ID": "ci-shop",
+    "YOOKASSA_SECRET_KEY": "ci-yookassa-secret-key",
+    "YOOKASSA_PROVIDER_VERIFICATION_REQUIRED": "1",
+    "YOOKASSA_RECEIPT_EMAIL": "quality-check@metrotherapy.example",
+    "YOOKASSA_TAX_SYSTEM_CODE": "2",
+    "YOOKASSA_VAT_CODE": "1",
+    "YOOKASSA_PAYMENT_MODE": "full_payment",
+    "YOOKASSA_PAYMENT_SUBJECT": "service",
+    "TELEGRAM_STARS_ENABLED": "1",
+    "TELEGRAM_YOOKASSA_ENABLED": "0",
+}
+
 STEPS = (
     GateStep(
         "release hygiene before checks",
@@ -108,6 +136,17 @@ STEPS = (
         "strict validation",
         (sys.executable, "scripts/validate_project.py"),
         STRICT_VALIDATOR_ENV,
+    ),
+    GateStep(
+        "hermetic production contract validation",
+        (
+            sys.executable,
+            "-c",
+            "from services.validators.prod import validate_prod_guardrails; "
+            "validate_prod_guardrails(strict=True); "
+            "print('HERMETIC_PROD_CONTRACT_OK')",
+        ),
+        HERMETIC_PROD_VALIDATOR_ENV,
     ),
     GateStep(
         "optional prod-config validation",
