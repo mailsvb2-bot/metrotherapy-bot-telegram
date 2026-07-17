@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import urllib.error
 
 import pytest
 
 from runtime.messenger_max_sender import MaxBotSender
 from runtime.messenger_transport_errors import MessengerTransportError
+from services.messenger.provider_transport import ProviderPermanentHTTPError
 
 
 def test_max_media_permanent_http_error_does_not_enter_attachment_retry_loop(monkeypatch) -> None:
@@ -15,13 +15,7 @@ def test_max_media_permanent_http_error_does_not_enter_attachment_retry_loop(mon
     def fake_json_request(*args, **kwargs):
         nonlocal calls
         calls += 1
-        raise urllib.error.HTTPError(
-            "https://platform-api2.max.ru/messages",
-            401,
-            "unauthorized",
-            hdrs=None,
-            fp=None,
-        )
+        raise ProviderPermanentHTTPError(401)
 
     async def no_sleep(_delay: float) -> None:
         return None
