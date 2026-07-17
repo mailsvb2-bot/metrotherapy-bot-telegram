@@ -222,6 +222,8 @@ async def start_messenger_webhook_runtime(
             delivery_worker_started = True
 
         if telegram_enabled:
+            if bot is None:
+                raise RuntimeError("Telegram webhook bot disappeared after route registration")
             await bot.set_webhook(
                 url=telegram_public_url,
                 secret_token=(getattr(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "") or "") or None,
