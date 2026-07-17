@@ -143,6 +143,12 @@ _RETAINED: tuple[tuple[str, tuple[str, ...], str, bool], ...] = (
         True,
     ),
     (
+        "payment_reconciliation_retry",
+        ("user_id",),
+        "provider-verified payment fulfilment retry and audit fact",
+        True,
+    ),
+    (
         "gift_codes",
         ("created_by", "recipient_id", "redeemed_by", "claimed_by"),
         "gift accounting and ownership fact",

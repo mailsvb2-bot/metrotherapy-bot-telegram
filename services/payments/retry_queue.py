@@ -123,6 +123,24 @@ def _payment_user_id(payload: dict[str, Any]) -> int:
     return 0
 
 
+def _payment_user_id(payload: dict[str, Any]) -> int:
+    obj = payload.get("object")
+    provider_object = obj if isinstance(obj, dict) else {}
+    metadata = provider_object.get("metadata")
+    meta = metadata if isinstance(metadata, dict) else {}
+    for key in ("external_user_id", "user_id", "telegram_user_id"):
+        raw = str(meta.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            parsed = int(raw, 10)
+        except ValueError:
+            continue
+        if parsed > 0 and str(parsed) == raw:
+            return parsed
+    return 0
+
+
 def enqueue_verified_payment_retry(payload: dict[str, Any], result: ReconciliationResult) -> bool:
     """Persist a provider-verified payment event for local side-effect replay."""
 
@@ -280,6 +298,33 @@ def _mark_completed(item: ClaimedPaymentRetry) -> None:
             )
             if int(getattr(cursor, "rowcount", 0) or 0) != 1:
                 raise RuntimeError("payment_retry_lease_lost")
+
+
+def _mark_dead(item: ClaimedPaymentRetry, error: str) -> None:
+    now = utc_now_iso()
+    with db() as conn:
+        with tx(conn):
+            cursor = conn.execute(
+                """
+                UPDATE payment_reconciliation_retry
+                SET status='dead',attempts=?,updated_at=?,locked_at=NULL,lock_token=NULL,last_error=?
+                WHERE id=? AND lock_token=? AND status='processing'
+                """.strip(),
+                (
+                    int(item.attempts) + 1,
+                    now,
+                    str(error or "non_retryable_result")[:500],
+                    int(item.id),
+                    item.lock_token,
+                ),
+            )
+            if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                raise RuntimeError("payment_retry_lease_lost")
+    log.error(
+        "Payment reconciliation retry permanently failed: payment_id=%s error=%s",
+        item.provider_payment_id,
+        str(error or "")[:180],
+    )
 
 
 def _mark_dead(item: ClaimedPaymentRetry, error: str) -> None:
