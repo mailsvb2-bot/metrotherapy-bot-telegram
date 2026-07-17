@@ -15,13 +15,14 @@ import os
 import re
 import stat
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _MARKER = ".release.json"
+_ALLOWED_LOCK_FILES = frozenset({"requirements.txt", "requirements-py313.txt"})
 
 
 @dataclass(frozen=True)
@@ -65,16 +66,41 @@ def _load_marker(path: Path) -> dict[str, Any]:
     return loaded
 
 
+def _digest_entry(
+    digest: Any,
+    *,
+    relative: str,
+    kind: bytes,
+    mode: int,
+    payload: bytes,
+) -> None:
+    digest.update(relative.encode("utf-8", errors="surrogateescape"))
+    digest.update(b"\0")
+    digest.update(kind)
+    digest.update(f"{mode:o}".encode("ascii"))
+    digest.update(b"\0")
+    digest.update(payload)
+    digest.update(b"\0")
+
+
 def release_tree_sha256(path: str | Path) -> str:
-    """Hash all release entries except the self-referential marker.
+    """Hash the root and all release entries except the self-referential marker.
 
     The digest includes relative paths, file type, permission bits, symlink
-    targets and regular-file bytes. It therefore detects dependency or source
-    mutation while remaining stable after the release directory is renamed.
+    targets and regular-file bytes. It therefore detects dependency, source, or
+    service-readability mutation while remaining stable after publication.
     """
 
     root = Path(path).resolve(strict=True)
     digest = hashlib.sha256()
+    root_metadata = root.lstat()
+    _digest_entry(
+        digest,
+        relative=".",
+        kind=b"D",
+        mode=stat.S_IMODE(root_metadata.st_mode),
+        payload=b"",
+    )
     entries = sorted(
         (item for item in root.rglob("*") if item.relative_to(root).as_posix() != _MARKER),
         key=lambda item: item.relative_to(root).as_posix(),
@@ -98,13 +124,13 @@ def release_tree_sha256(path: str | Path) -> str:
             payload = hasher.digest()
         else:
             raise ValueError(f"unsupported release entry: {item}")
-        digest.update(relative.encode("utf-8", errors="surrogateescape"))
-        digest.update(b"\0")
-        digest.update(kind)
-        digest.update(f"{mode:o}".encode("ascii"))
-        digest.update(b"\0")
-        digest.update(payload)
-        digest.update(b"\0")
+        _digest_entry(
+            digest,
+            relative=relative,
+            kind=kind,
+            mode=mode,
+            payload=payload,
+        )
     return digest.hexdigest()
 
 
@@ -127,9 +153,16 @@ def validate_release(path: str | Path) -> ReleaseInfo:
     lock_sha256 = str(marker.get("lock_sha256") or "").strip()
     tree_sha256 = str(marker.get("tree_sha256") or "").strip()
     built_at = str(marker.get("built_at_utc") or "").strip()
-    lock_path = release / lock_file
-    if not lock_file or not lock_path.is_file():
-        raise ValueError(f"release dependency lock is missing: {lock_file or '<empty>'}")
+    lock_relative = Path(lock_file)
+    if (
+        lock_file not in _ALLOWED_LOCK_FILES
+        or lock_relative.is_absolute()
+        or len(lock_relative.parts) != 1
+    ):
+        raise ValueError(f"release dependency lock path is not canonical: {lock_file or '<empty>'}")
+    lock_path = release / lock_relative
+    if not lock_path.is_file():
+        raise ValueError(f"release dependency lock is missing: {lock_file}")
     if not re.fullmatch(r"[0-9a-f]{64}", lock_sha256):
         raise ValueError("release lock SHA-256 is invalid")
     if hashlib.sha256(lock_path.read_bytes()).hexdigest() != lock_sha256:
@@ -256,7 +289,7 @@ def write_deployment_proof(
 
 
 def _print(value: Any) -> None:
-    if hasattr(value, "__dataclass_fields__"):
+    if is_dataclass(value) and not isinstance(value, type):
         value = asdict(value)
     print(json.dumps(value, ensure_ascii=False, sort_keys=True))
 
