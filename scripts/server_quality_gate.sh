@@ -48,8 +48,8 @@ fi
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 
-python -m pip install --upgrade pip >"$LOG_DIR/pip_upgrade.log" 2>&1
-python -m pip install -r requirements-dev.txt >"$LOG_DIR/pip_install.log" 2>&1
+python -m pip install --disable-pip-version-check pip==26.1.2 >"$LOG_DIR/pip_upgrade.log" 2>&1
+python -m pip install --require-hashes -r requirements-dev.txt >"$LOG_DIR/pip_install.log" 2>&1
 
 export PYTHONDONTWRITEBYTECODE=1
 export VALIDATOR_SKIP_AUDIO=1
