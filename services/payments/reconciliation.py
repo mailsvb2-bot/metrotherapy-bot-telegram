@@ -71,8 +71,50 @@ class ReconciliationResult:
     side_effects_done: bool = False
 
 
+@dataclass(frozen=True)
+class PaymentLedgerState:
+    provider_status: str
+    processing_status: str
+    problem: str
+    processing_error: str
+
+
 def _problem_join(*items: str) -> str:
     return ";".join(item for item in items if item)
+
+
+def _row_value(row: Any, key: str, index: int) -> Any:
+    if hasattr(row, "keys"):
+        return row[key]
+    return row[index]
+
+
+def _refund_state(provider_status: str, processing_status: str) -> bool:
+    provider = str(provider_status or "").strip().lower()
+    processing = str(processing_status or "").strip().lower()
+    return provider == "refunded" or processing == "refunded" or processing.startswith("refund_")
+
+
+def _existing_refund_state(payment_id: str, synthetic_charge_id: str) -> PaymentLedgerState | None:
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT provider_status, processing_status, problem, processing_error
+            FROM payments
+            WHERE provider_charge_id=? OR telegram_charge_id=?
+            LIMIT 1
+            """.strip(),
+            (payment_id, synthetic_charge_id),
+        ).fetchone()
+    if row is None:
+        return None
+    state = PaymentLedgerState(
+        provider_status=str(_row_value(row, "provider_status", 0) or ""),
+        processing_status=str(_row_value(row, "processing_status", 1) or ""),
+        problem=str(_row_value(row, "problem", 2) or ""),
+        processing_error=str(_row_value(row, "processing_error", 3) or ""),
+    )
+    return state if _refund_state(state.provider_status, state.processing_status) else None
 
 
 def _is_succeeded_payment(*, event: str, status: str) -> bool:
@@ -269,10 +311,33 @@ def _record_payment_fact(
     with db() as conn:
         with tx(conn):
             row = conn.execute(
-                "SELECT id FROM payments WHERE provider_charge_id=? OR telegram_charge_id=? LIMIT 1",
+                """
+                SELECT id, provider_status, processing_status
+                FROM payments
+                WHERE provider_charge_id=? OR telegram_charge_id=?
+                LIMIT 1
+                """.strip(),
                 (payment_id, synthetic_charge_id),
             ).fetchone()
             if row:
+                existing_provider_status = str(_row_value(row, "provider_status", 1) or "")
+                existing_processing_status = str(_row_value(row, "processing_status", 2) or "")
+                if _refund_state(existing_provider_status, existing_processing_status):
+                    conn.execute(
+                        """
+                        UPDATE payments
+                        SET provider_event_id=?, provider_raw=?, reconciled_at=?
+                        WHERE provider_charge_id=? OR telegram_charge_id=?
+                        """.strip(),
+                        (
+                            provider_event_id,
+                            raw,
+                            reconciled_at,
+                            payment_id,
+                            synthetic_charge_id,
+                        ),
+                    )
+                    return False
                 conn.execute(
                     """
                     UPDATE payments
@@ -369,6 +434,42 @@ def record_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationResult:
     provider_event_id = f"yookassa:{payment_id}:{event or status}"
     synthetic_charge_id = f"yookassa:{payment_id}"
     created_at = _utc_now_iso()
+    existing_refund = _existing_refund_state(payment_id, synthetic_charge_id)
+    if existing_refund is not None:
+        _record_payment_fact(
+            payment_id=payment_id,
+            synthetic_charge_id=synthetic_charge_id,
+            user_id=int(user_id),
+            kind=kind,
+            amount_minor=amount_minor,
+            currency=currency,
+            status=status,
+            provider_event_id=provider_event_id,
+            raw=raw,
+            reconciled_at=created_at,
+            problem=existing_refund.problem,
+            processing_status=existing_refund.processing_status,
+            processing_error=existing_refund.processing_error,
+        )
+        log.info(
+            "YooKassa payment event preserved refund state: payment_id=%s incoming_status=%s local_status=%s processing_status=%s",
+            payment_id,
+            status,
+            existing_refund.provider_status,
+            existing_refund.processing_status,
+        )
+        return ReconciliationResult(
+            ok=True,
+            provider="yookassa",
+            provider_payment_id=payment_id,
+            status=existing_refund.provider_status or status,
+            event=event,
+            inserted=False,
+            problem=existing_refund.problem,
+            processing_status=existing_refund.processing_status,
+            side_effects_done=existing_refund.processing_status == "refunded",
+        )
+
     preliminary_problem = "" if user_id else "missing_user_id"
     processing_status = _initial_processing_status(event=event, status=status, metadata=metadata)
 
