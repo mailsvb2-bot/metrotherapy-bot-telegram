@@ -57,9 +57,10 @@ SCENARIO_TESTS = (
     "tests/test_telegram_stars_payments.py",
     "tests/test_telegram_stars_premium.py",
     "tests/test_telegram_stars_refunds.py",
-    # YooKassa checkout/reconciliation and recipient gift activation.
+    # YooKassa checkout/reconciliation, refunds and recipient gift activation.
     "tests/test_payment_emulation_access_contract.py",
     "tests/test_yookassa_webhook_idempotency.py",
+    "tests/test_yookassa_refunds.py",
     "tests/test_gift_checkout_contract.py",
     "tests/test_gift_claim_contract.py",
     "tests/test_gift_claim_concurrency.py",
@@ -68,13 +69,15 @@ SCENARIO_TESTS = (
     "tests/test_bridge_atomic_link.py",
     "tests/test_messenger_bridge_text.py",
     "tests/test_account_native_premium_entitlements.py",
-    # Delivery failure/retry/readiness and automatic channel selection.
+    # Delivery failure/retry/readiness, ordered parallelism and automatic channel selection.
     "tests/test_messenger_durable_delivery.py",
     "tests/test_messenger_delivery_health.py",
+    "tests/test_messenger_delivery_pool.py",
     "tests/test_auto_delivery_channels.py",
     "tests/test_messenger_text_ui_delivery_channels.py",
-    # User data export/erasure contract.
+    # User data export/erasure and schema-completeness contracts.
     "tests/test_privacy_controls.py",
+    "tests/test_privacy_manifest.py",
 )
 
 STEPS = (
