@@ -75,9 +75,10 @@ SCENARIO_TESTS = (
     "tests/test_messenger_delivery_pool.py",
     "tests/test_auto_delivery_channels.py",
     "tests/test_messenger_text_ui_delivery_channels.py",
-    # User data export/erasure and schema-completeness contracts.
+    # User data export/erasure, public commands and schema-completeness contracts.
     "tests/test_privacy_controls.py",
     "tests/test_privacy_manifest.py",
+    "tests/test_privacy_user_commands.py",
 )
 
 STEPS = (

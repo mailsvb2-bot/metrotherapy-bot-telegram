@@ -15,6 +15,7 @@ from services.migrations.user_audio_access_tokens_v1 import apply as _apply_audi
 from services.migrations.user_audio_progress_state_v2 import apply as _apply_audio_progress_state_v2
 from services.migrations.user_messenger_runtime_v3 import apply as _apply_messenger_runtime_v3
 from services.migrations.messenger_delivery_outbox_v1 import apply as _apply_messenger_delivery_outbox_v1
+from services.migrations.messenger_delivery_reply_progress_v2 import apply as _apply_messenger_delivery_reply_progress_v2
 from services.migrations.user_audio_timeline_v4 import apply as _apply_audio_timeline_v4
 from services.migrations.messenger_media_assets_v5 import apply as _apply_messenger_media_assets_v5
 from services.migrations.messenger_media_assets_v6 import apply as _apply_messenger_media_assets_v6
@@ -55,6 +56,7 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_audio_progress_state_v2(conn)
     _apply_messenger_runtime_v3(conn)
     _apply_messenger_delivery_outbox_v1(conn)
+    _apply_messenger_delivery_reply_progress_v2(conn)
     _apply_audio_timeline_v4(conn)
     _apply_messenger_media_assets_v5(conn)
     _apply_messenger_media_assets_v6(conn)

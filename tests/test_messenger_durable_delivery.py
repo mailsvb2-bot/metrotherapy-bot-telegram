@@ -1,6 +1,8 @@
 import importlib
 import json
 
+import pytest
+
 
 def _reload(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_ENV", "test")
@@ -128,6 +130,60 @@ def test_delivery_failure_is_rescheduled(monkeypatch, tmp_path):
     assert row["status"] == "retry"
     assert int(row["attempts"]) == 1
     assert "transport down" in row["last_error"]
+
+
+@pytest.mark.asyncio
+async def test_retry_resumes_after_last_completed_reply(monkeypatch, tmp_path):
+    dedupe, outbox, db_core = _reload(monkeypatch, tmp_path)
+    from services.messenger.text_ui import MessengerReply
+
+    event_key = "max-partial-bundle-1"
+    payload = {"type": "message_created", "message": {"id": event_key}}
+    assert dedupe.claim_inbound_event("max", event_key, payload) is True
+    assert outbox.persist_reply_bundle(
+        platform="max",
+        external_user_id="max-55",
+        canonical_user_id=55,
+        event_key=event_key,
+        replies=[MessengerReply(text="first"), MessengerReply(text="second")],
+        action="menu",
+    ) is True
+
+    sent: list[str] = []
+    fail_second_once = True
+
+    async def fake_send_reply_bundle(platform, external_user_id, canonical_user_id, replies):
+        nonlocal fail_second_once
+        assert platform == "max"
+        assert external_user_id == "max-55"
+        assert canonical_user_id == 55
+        assert len(replies) == 1
+        text = replies[0].text
+        sent.append(text)
+        if text == "second" and fail_second_once:
+            fail_second_once = False
+            raise RuntimeError("synthetic second reply failure")
+
+    monkeypatch.setattr(outbox, "send_reply_bundle", fake_send_reply_bundle)
+    first_lease = outbox.claim_due_deliveries(limit=1)[0]
+    with pytest.raises(RuntimeError, match="synthetic second reply failure"):
+        await outbox._deliver_one(first_lease)
+
+    assert sent == ["first", "second"]
+    assert outbox.reply_progress_index(first_lease.id) == 1
+    outbox.reschedule_delivery(first_lease, "synthetic second reply failure")
+    with db_core.db() as conn:
+        conn.execute(
+            "UPDATE messenger_delivery_outbox SET available_at=? WHERE id=?",
+            ("2000-01-01T00:00:00+00:00", first_lease.id),
+        )
+
+    second_lease = outbox.claim_due_deliveries(limit=1)[0]
+    await outbox._deliver_one(second_lease)
+
+    assert sent == ["first", "second", "second"]
+    assert outbox.reply_progress_index(second_lease.id) == 2
+    assert outbox.outbox_snapshot()["sent"] == 1
 
 
 def test_stale_sending_lease_is_reclaimed_after_worker_crash(monkeypatch, tmp_path):

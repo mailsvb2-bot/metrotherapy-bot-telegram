@@ -14,7 +14,6 @@ from services.messenger.audio_progress import (
     get_pending_audio_item,
     get_pending_audio_token,
     mark_pending_audio_delivery,
-    record_audio_delivery,
 )
 from services.messenger.timeline import log_audio_timeline_event
 
@@ -82,7 +81,15 @@ def issue_audio_access_token(
                 ),
             )
     mark_pending_audio_delivery(int(user_id), item=item, platform=platform, token=token, sequence_key=sequence_key)
-    log_audio_timeline_event(int(user_id), event_type="issued_pending", sequence_key=sequence_key, anchor=int(item.anchor), title=item.title, platform=str(platform), token=token)
+    log_audio_timeline_event(
+        int(user_id),
+        event_type="issued_pending",
+        sequence_key=sequence_key,
+        anchor=int(item.anchor),
+        title=item.title,
+        platform=str(platform),
+        token=token,
+    )
     return token
 
 
@@ -97,14 +104,22 @@ def issue_or_reuse_audio_access_token(
     pending_token = get_pending_audio_token(int(user_id), sequence_key=sequence_key)
     if pending_item is not None and pending_token and int(pending_item.anchor) == int(item.anchor):
         grant = get_audio_access_grant(pending_token)
-        if grant is not None and grant.first_accessed_at is None and str(grant.platform) == str(platform):
-            log_audio_timeline_event(int(user_id), event_type="reused_pending", sequence_key=sequence_key, anchor=int(item.anchor), title=item.title, platform=str(platform), token=pending_token)
+        if grant is not None and str(grant.platform) == str(platform):
+            log_audio_timeline_event(
+                int(user_id),
+                event_type="reused_pending",
+                sequence_key=sequence_key,
+                anchor=int(item.anchor),
+                title=item.title,
+                platform=str(platform),
+                token=pending_token,
+            )
             return pending_token
     return issue_audio_access_token(int(user_id), item=item, platform=platform, sequence_key=sequence_key)
 
 
 def get_audio_access_grant(token: str) -> AudioAccessGrant | None:
-    raw = (token or '').strip()
+    raw = (token or "").strip()
     if not raw:
         return None
     with db() as conn:
@@ -119,29 +134,35 @@ def get_audio_access_grant(token: str) -> AudioAccessGrant | None:
         ).fetchone()
     if not row:
         return None
-    created_at = str(row['created_at'] or '')
+    created_at = str(row["created_at"] or "")
     if _grant_expired(created_at):
         return None
     return AudioAccessGrant(
-        token=str(row['token']),
-        user_id=int(row['user_id']),
-        sequence_key=str(row['sequence_key']),
-        anchor=int(row['anchor']),
-        title=str(row['title']) if row['title'] is not None else None,
-        file_path=Path(str(row['file_path'])),
-        platform=str(row['platform']),
+        token=str(row["token"]),
+        user_id=int(row["user_id"]),
+        sequence_key=str(row["sequence_key"]),
+        anchor=int(row["anchor"]),
+        title=str(row["title"]) if row["title"] is not None else None,
+        file_path=Path(str(row["file_path"])),
+        platform=str(row["platform"]),
         created_at=created_at,
-        first_accessed_at=str(row['first_accessed_at']) if row['first_accessed_at'] is not None else None,
-        access_count=int(row['access_count'] or 0),
+        first_accessed_at=str(row["first_accessed_at"]) if row["first_accessed_at"] is not None else None,
+        access_count=int(row["access_count"] or 0),
     )
 
 
 def register_audio_access(token: str) -> AudioAccessGrant | None:
+    """Record that the protected file URL was fetched without completing progress.
+
+    Link-preview bots, antivirus scanners and proxies can issue GET requests without
+    the user listening to the audio. Completion therefore remains an explicit user
+    action handled by ``confirm_pending_audio_delivery``.
+    """
+
     grant = get_audio_access_grant(token)
     if grant is None:
         return None
     now = utc_now().replace(microsecond=0).isoformat()
-    first_access = grant.first_accessed_at is None
     with db() as conn:
         with tx(conn):
             conn.execute(
@@ -154,18 +175,13 @@ def register_audio_access(token: str) -> AudioAccessGrant | None:
                 '''.strip(),
                 (now, now, grant.token),
             )
-    if first_access:
-        item = AudioProgressItem(
-            ordinal=0,
-            anchor=int(grant.anchor),
-            title=grant.title or grant.file_path.stem,
-            path=grant.file_path,
-        )
-        record_audio_delivery(
-            int(grant.user_id),
-            item=item,
-            platform=grant.platform,
-            sequence_key=grant.sequence_key,
-        )
-        log_audio_timeline_event(int(grant.user_id), event_type="access_confirmed", sequence_key=grant.sequence_key, anchor=int(grant.anchor), title=item.title, platform=grant.platform, token=grant.token)
+    log_audio_timeline_event(
+        int(grant.user_id),
+        event_type="accessed",
+        sequence_key=grant.sequence_key,
+        anchor=int(grant.anchor),
+        title=grant.title or grant.file_path.stem,
+        platform=grant.platform,
+        token=grant.token,
+    )
     return get_audio_access_grant(token)
