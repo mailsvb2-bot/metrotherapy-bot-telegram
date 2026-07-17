@@ -5,7 +5,6 @@ SOURCE_DIR="${SOURCE_DIR:-/root/metrotherapy}"
 RUNTIME_ROOT="${RUNTIME_ROOT:-/var/lib/metrotherapy/runtime}"
 RELEASES_DIR="${RELEASES_DIR:-$RUNTIME_ROOT/releases}"
 SYSTEM_PYTHON="${SYSTEM_PYTHON:-/usr/bin/python3}"
-PIP_BOOTSTRAP_VERSION="${PIP_BOOTSTRAP_VERSION:-26.1.2}"
 SHARED_AUDIO_DIR="${SHARED_AUDIO_DIR:-$(dirname "$RUNTIME_ROOT")/audio}"
 # Convert the legacy source-tree default supplied by older deploy callers into
 # the runtime asset store that is readable by the non-root systemd service.
@@ -53,6 +52,7 @@ cleanup() {
   rm -rf "$BUILD_DIR"
 }
 trap cleanup EXIT TERM INT HUP
+chmod 0755 "$BUILD_DIR"
 
 # The source snapshot is detached from the mutable production worktree.
 git -C "$SOURCE_DIR" archive --format=tar "$SHA" | tar -xf - -C "$BUILD_DIR"
@@ -62,6 +62,7 @@ git -C "$SOURCE_DIR" archive --format=tar "$SHA" | tar -xf - -C "$BUILD_DIR"
 if [ -d "$SOURCE_DIR/audio" ] && [ "$(readlink -f "$SOURCE_DIR/audio")" != "$(readlink -m "$SHARED_AUDIO_DIR")" ]; then
   mkdir -p "$SHARED_AUDIO_DIR"
   cp -a "$SOURCE_DIR/audio/." "$SHARED_AUDIO_DIR/"
+  chmod -R a+rX "$SHARED_AUDIO_DIR"
 fi
 SHARED_AUDIO_MARKER=""
 if [ -d "$SHARED_AUDIO_DIR" ]; then
@@ -73,7 +74,7 @@ fi
 "$SYSTEM_PYTHON" -m venv "$BUILD_DIR/.venv"
 RELEASE_PYTHON="$BUILD_DIR/.venv/bin/python"
 RELEASE_PIP="$BUILD_DIR/.venv/bin/pip"
-"$RELEASE_PYTHON" -m pip install --disable-pip-version-check "pip==$PIP_BOOTSTRAP_VERSION"
+PIP_VERSION="$($RELEASE_PYTHON -m pip --version | awk '{print $2}')"
 
 PY_MINOR="$($RELEASE_PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 case "$PY_MINOR" in
@@ -89,9 +90,35 @@ if [ ! -f "$BUILD_DIR/$LOCK_FILE" ]; then
   exit 7
 fi
 
-"$RELEASE_PIP" install --require-hashes -r "$BUILD_DIR/$LOCK_FILE"
+"$RELEASE_PIP" install --no-compile --require-hashes -r "$BUILD_DIR/$LOCK_FILE"
+# Remove any bytecode created by ensurepip/pip. Production runs with
+# PYTHONDONTWRITEBYTECODE=1, so release contents remain sealed after publication.
+find "$BUILD_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
+find "$BUILD_DIR" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
+# Venv console scripts and pyvenv.cfg are generated with the temporary build
+# path. Rewrite text launchers to the deterministic final release path before
+# calculating the release tree digest.
+BUILD_DIR_VALUE="$BUILD_DIR" FINAL_DIR_VALUE="$FINAL_DIR" "$SYSTEM_PYTHON" - <<'PY'
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+old = os.environ["BUILD_DIR_VALUE"].encode()
+new = os.environ["FINAL_DIR_VALUE"].encode()
+venv = Path(os.environ["BUILD_DIR_VALUE"]) / ".venv"
+paths = [venv / "pyvenv.cfg", *(path for path in (venv / "bin").iterdir() if path.is_file())]
+for path in paths:
+    data = path.read_bytes()
+    if old in data:
+        path.write_bytes(data.replace(old, new))
+PY
+
+# Compile project code with deterministic final co_filename values. Third-party
+# packages stay source-only to avoid temporary-path bytecode in the sealed venv.
 PYTHONDONTWRITEBYTECODE=0 "$RELEASE_PYTHON" -m compileall -q \
+  -s "$BUILD_DIR" -p "$FINAL_DIR" \
   "$BUILD_DIR/main.py" \
   "$BUILD_DIR/app.py" \
   "$BUILD_DIR/runtime" \
@@ -108,7 +135,7 @@ cat > "$BUILD_DIR/.release.json" <<EOF
   "sha": "$SHA",
   "built_at_utc": "$BUILT_AT_UTC",
   "python_version": "$PY_MINOR",
-  "pip_bootstrap_version": "$PIP_BOOTSTRAP_VERSION",
+  "pip_version": "$PIP_VERSION",
   "lock_file": "$LOCK_FILE",
   "lock_sha256": "$LOCK_SHA256",
   "tree_sha256": "$TREE_SHA256",
