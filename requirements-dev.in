@@ -1,0 +1,9 @@
+-r requirements.in
+
+# Development / quality gates. Not required for production runtime.
+pytest==8.2.2
+pytest-asyncio>=0.23,<1
+ruff==0.6.9
+mypy==1.11.2
+bandit[toml]>=1.7.10,<2
+pip-audit>=2.7,<3
