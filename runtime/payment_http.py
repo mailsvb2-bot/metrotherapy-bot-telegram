@@ -14,7 +14,10 @@ from services.payments.checkout_intent import (
     verify_checkout_intent,
 )
 from services.payments.terms import payment_terms_html
-from services.payments.verified_reconciliation import record_verified_yookassa_webhook
+from services.payments.verified_reconciliation import (
+    record_verified_yookassa_webhook,
+    yookassa_webhook_http_status,
+)
 from services.payments.yookassa_checkout import YooKassaCheckoutError, create_yookassa_confirmation_url
 from services.practice_token_contract import package_by_id
 
@@ -277,7 +280,8 @@ async def yookassa_reconciliation_webhook(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": "bad_payload"}, status=400)
 
     result = await asyncio.to_thread(record_verified_yookassa_webhook, payload)
-    status = 200 if result.ok else 400
+    status, retryable = yookassa_webhook_http_status(result)
+    headers = {"Retry-After": "5"} if retryable else None
     return web.json_response(
         {
             "ok": result.ok,
@@ -289,6 +293,8 @@ async def yookassa_reconciliation_webhook(request: web.Request) -> web.Response:
             "problem": result.problem,
             "processing_status": result.processing_status,
             "side_effects_done": result.side_effects_done,
+            "retryable": retryable,
         },
         status=status,
+        headers=headers,
     )
