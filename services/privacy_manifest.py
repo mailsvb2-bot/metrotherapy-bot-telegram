@@ -5,11 +5,8 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 Disposition = Literal["erase", "retain", "anonymize"]
-MANIFEST_VERSION = "2026-07-17.v1"
+MANIFEST_VERSION = "2026-07-17.v2"
 
-# Any table using one of these columns is user-owned and must have an explicit
-# privacy policy below. This is deliberately broader than the current schema so
-# a future feature cannot silently escape export/erasure coverage.
 OWNERSHIP_COLUMN_CANDIDATES = frozenset(
     {
         "user_id",
@@ -43,6 +40,7 @@ class PrivacyPolicy:
     disposition: Disposition
     reason: str
     anonymize_columns: tuple[str, ...] = ()
+    anonymize_literals: tuple[tuple[str, str], ...] = ()
     required: bool = False
 
 
@@ -62,6 +60,7 @@ def _policy(
     reason: str,
     *,
     anonymize: tuple[str, ...] = (),
+    literals: tuple[tuple[str, str], ...] = (),
     required: bool = False,
 ) -> PrivacyPolicy:
     return PrivacyPolicy(
@@ -70,17 +69,106 @@ def _policy(
         disposition=disposition,
         reason=reason,
         anonymize_columns=anonymize,
+        anonymize_literals=literals,
         required=required,
     )
 
 
+_BEHAVIORAL: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("events", ("user_id",), "behavioral event history"),
+    ("jobs", ("user_id",), "scheduled behavioral delivery state"),
+    ("idempotency", ("user_id",), "behavioral command deduplication"),
+    ("pending_actions", ("user_id",), "pending interactive state"),
+    ("deliveries", ("user_id",), "historical delivery schedule"),
+    ("probe_runs", ("user_id",), "synthetic or operational user probe evidence"),
+    ("progress", ("user_id",), "audio progress state"),
+    ("demo_events", ("user_id",), "demo behavior history"),
+    ("user_state_log", ("user_id",), "interaction state diagnostics"),
+    ("interaction_log", ("user_id",), "raw interaction timing history"),
+    ("user_behavior", ("user_id",), "derived behavioral rhythm profile"),
+    ("user_funnel", ("user_id",), "personalized funnel state"),
+    ("user_bricks", ("user_id",), "personalized content exposure history"),
+    ("micro_answers", ("user_id",), "personalized questionnaire answers"),
+    ("ai_decisions", ("user_id",), "personalized decision history"),
+    ("selected_plan", ("user_id",), "pre-purchase behavioral choice"),
+    ("weather_prefs", ("user_id",), "location preference"),
+    ("user_settings", ("user_id",), "location and UX settings"),
+    ("mood_sessions", ("user_id",), "self-assessment history"),
+    ("state_ratings", ("user_id",), "self-assessment history"),
+    ("body_feedback", ("user_id",), "body feedback history"),
+    ("user_daily_state", ("user_id",), "daily behavioral state"),
+    ("user_dynamic_profile", ("user_id",), "derived behavioral profile"),
+    ("system_reactions_log", ("user_id",), "automated behavioral reactions"),
+    ("sla_metrics", ("user_id",), "per-user UX telemetry"),
+    ("decision_rewards", ("user_id",), "per-user decision reward analytics"),
+    ("funnel_events", ("user_id",), "marketing funnel behavior"),
+    ("daily_audio_log", ("user_id",), "daily audio delivery behavior"),
+    ("bonus_grants", ("user_id", "related_user_id"), "referral behavior and bonus history"),
+    ("gift_bonus_log", ("user_id",), "gift marketing bonus history"),
+    ("referrals", ("referred_id", "referrer_id"), "referral relationship graph"),
+    ("practice_token_audit", ("user_id",), "behavioral access audit"),
+    ("trial_analytics", ("user_id",), "trial behavior analytics"),
+    ("audio_progress", ("user_id",), "legacy audio progress"),
+    ("messenger_audio_progress", ("user_id",), "messenger audio progress"),
+    ("user_audio_progress", ("user_id",), "legacy user audio progress"),
+    ("user_audio_timeline", ("user_id",), "audio interaction timeline"),
+    ("user_audio_access_tokens", ("user_id",), "expiring media access capability"),
+    ("user_channel_links", ("user_id",), "legacy cross-channel relationship"),
+    ("user_channel_preferences", ("user_id",), "legacy delivery preference"),
+    ("user_delivery_preferences", ("user_id",), "delivery preferences"),
+    (
+        "user_channel_bridge_tokens",
+        ("user_id", "account_id", "consumed_account_id"),
+        "temporary channel-link capabilities",
+    ),
+    ("account_audio_progress", ("account_id",), "canonical audio progress"),
+    ("account_audio_deliveries", ("account_id",), "canonical audio delivery history"),
+    ("account_audio_completions", ("account_id",), "canonical completion history"),
+    ("messenger_delivery_outbox", ("canonical_user_id",), "message bodies and delivery attempts"),
+    ("growth_conversion_outbox", ("user_id",), "marketing conversion attribution"),
+    ("growth_apply_review_confirmations", ("user_id",), "legacy growth review state"),
+    ("sales_desk_contacts", ("user_id",), "legacy sales contact profile"),
+    ("sales_desk_events", ("user_id",), "legacy sales interaction history"),
+    ("sales_desk_tasks", ("user_id",), "legacy sales follow-up state"),
+)
+
+_RETAINED: tuple[tuple[str, tuple[str, ...], str, bool], ...] = (
+    ("subscriptions", ("user_id",), "legacy purchased-access fact", True),
+    ("payments", ("user_id",), "payment, refund, dispute and accounting fact", True),
+    ("payment_events", ("user_id",), "provider payment idempotency fact", True),
+    (
+        "gift_codes",
+        ("created_by", "recipient_id", "redeemed_by", "claimed_by"),
+        "gift accounting and ownership fact",
+        False,
+    ),
+    ("gift_claims", ("buyer_user_id", "recipient_user_id"), "paid gift ownership and refund fact", True),
+    ("practice_wallets", ("user_id",), "current purchased balance", True),
+    ("practice_ledger", ("user_id",), "immutable token accounting ledger", True),
+    ("payment_token_grants", ("user_id",), "payment-to-entitlement provenance", True),
+    ("practice_reservations", ("user_id",), "purchased-token reservation accounting", True),
+    ("user_practice_preferences", ("user_id",), "fulfilment setting for purchased access", True),
+    ("practice_token_lots", ("user_id",), "exact payment-lot provenance and refunds", True),
+    ("premium_entitlements", ("user_id",), "purchased premium entitlement", True),
+    ("premium_delivery_outbox", ("user_id",), "premium fulfilment evidence", True),
+    ("consultation_requests", ("user_id",), "paid consultation fulfilment", True),
+    (
+        "telegram_stars_refunds",
+        ("payment_user_id", "beneficiary_user_id", "requested_by"),
+        "provider refund state and audit",
+        True,
+    ),
+    ("yookassa_refunds", ("user_id",), "provider refund state and audit", True),
+    ("sales_lead_revenue", ("user_id",), "currency-specific revenue accounting fact", True),
+    ("privacy_erasure_log", ("user_id",), "compliance evidence that erasure occurred", True),
+)
+
 _POLICIES = (
-    # Canonical profile and routing identities.
     _policy(
         "users",
         ("user_id",),
         "anonymize",
-        "profile shell is retained for account continuity; human-readable fields are removed",
+        "profile shell retained for account continuity",
         anonymize=(
             "username",
             "first_name",
@@ -95,14 +183,14 @@ _POLICIES = (
         "accounts",
         ("account_id", "primary_user_id"),
         "retain",
-        "canonical paid-account routing must survive behavioral erasure",
+        "canonical paid-account routing",
         required=True,
     ),
     _policy(
         "account_channel_identities",
         ("account_id",),
         "anonymize",
-        "external routing id is retained to fulfil purchases; display metadata is removed",
+        "external routing id retained for fulfilment",
         anonymize=("username", "display_name"),
         required=True,
     ),
@@ -110,96 +198,35 @@ _POLICIES = (
         "user_channel_identities",
         ("user_id",),
         "anonymize",
-        "legacy routing identity retained only for delivery compatibility",
+        "legacy routing identity",
         anonymize=("username", "display_name"),
     ),
-
-    # Behavioral, diagnostic, state, messaging and marketing data.
-    *(
-        _policy(table, columns, "erase", reason)
-        for table, columns, reason in (
-            ("events", ("user_id",), "behavioral event history"),
-            ("jobs", ("user_id",), "scheduled behavioral delivery state"),
-            ("idempotency", ("user_id",), "behavioral command deduplication"),
-            ("pending_actions", ("user_id",), "pending interactive state"),
-            ("deliveries", ("user_id",), "historical delivery schedule"),
-            ("probe_runs", ("user_id",), "synthetic or operational user probe evidence"),
-            ("progress", ("user_id",), "audio progress state"),
-            ("demo_events", ("user_id",), "demo behavior history"),
-            ("user_state_log", ("user_id",), "interaction state diagnostics"),
-            ("ai_decisions", ("user_id",), "personalized decision history"),
-            ("selected_plan", ("user_id",), "pre-purchase behavioral choice"),
-            ("weather_prefs", ("user_id",), "location preference"),
-            ("user_settings", ("user_id",), "location and UX settings"),
-            ("mood_sessions", ("user_id",), "self-assessment history"),
-            ("state_ratings", ("user_id",), "self-assessment history"),
-            ("body_feedback", ("user_id",), "body feedback history"),
-            ("user_daily_state", ("user_id",), "daily behavioral state"),
-            ("user_dynamic_profile", ("user_id",), "derived behavioral profile"),
-            ("system_reactions_log", ("user_id",), "automated behavioral reactions"),
-            ("sla_metrics", ("user_id",), "per-user UX telemetry"),
-            ("decision_rewards", ("user_id",), "per-user decision reward analytics"),
-            ("funnel_events", ("user_id",), "marketing funnel behavior"),
-            ("daily_audio_log", ("user_id",), "daily audio delivery behavior"),
-            ("bonus_grants", ("user_id", "related_user_id"), "referral behavior and bonus history"),
-            ("gift_bonus_log", ("user_id",), "gift marketing bonus history"),
-            ("referrals", ("referred_id", "referrer_id"), "referral relationship graph"),
-            ("practice_token_audit", ("user_id",), "behavioral access audit"),
-            ("trial_analytics", ("user_id",), "trial behavior analytics"),
-            ("audio_progress", ("user_id",), "legacy audio progress"),
-            ("messenger_audio_progress", ("user_id",), "messenger audio progress"),
-            ("user_audio_progress", ("user_id",), "legacy user audio progress"),
-            ("user_audio_timeline", ("user_id",), "audio interaction timeline"),
-            ("user_audio_access_tokens", ("user_id",), "expiring media access capability"),
-            ("user_channel_links", ("user_id",), "legacy cross-channel relationship"),
-            ("user_delivery_preferences", ("user_id",), "delivery preferences"),
-            (
-                "user_channel_bridge_tokens",
-                ("user_id", "account_id", "consumed_account_id"),
-                "temporary channel-link capabilities",
-            ),
-            ("account_audio_progress", ("account_id",), "canonical audio progress"),
-            ("account_audio_deliveries", ("account_id",), "canonical audio delivery history"),
-            ("account_audio_completions", ("account_id",), "canonical completion history"),
-            ("messenger_delivery_outbox", ("canonical_user_id",), "message bodies and delivery attempts"),
-            ("growth_conversion_outbox", ("user_id",), "marketing conversion attribution"),
-            ("growth_apply_review_confirmations", ("user_id",), "growth action review state"),
-            ("sales_desk_contacts", ("user_id",), "sales contact profile"),
-            ("sales_desk_events", ("user_id",), "sales interaction history"),
-            ("sales_desk_tasks", ("user_id",), "sales follow-up state"),
-        )
+    _policy(
+        "sales_leads",
+        ("user_id", "account_id"),
+        "anonymize",
+        "revenue and stage audit retained without human-readable identity",
+        anonymize=("username", "campaign", "creative", "closed_reason"),
+        literals=(("display_name", "[deleted user]"),),
+        required=True,
     ),
-
-    # Financial, fulfilment, dispute and compliance facts.
+    _policy(
+        "growth_apply_requests",
+        ("requested_by",),
+        "retain",
+        "administrative approval and security audit",
+    ),
+    _policy(
+        "growth_apply_confirmations",
+        ("admin_id",),
+        "retain",
+        "administrative confirmation security audit",
+    ),
+    *(_policy(table, columns, "erase", reason) for table, columns, reason in _BEHAVIORAL),
     *(
         _policy(table, columns, "retain", reason, required=required)
-        for table, columns, reason, required in (
-            ("subscriptions", ("user_id",), "legacy purchased-access fact", True),
-            ("payments", ("user_id",), "payment, refund, dispute and accounting fact", True),
-            ("payment_events", ("user_id",), "provider payment idempotency fact", True),
-            ("gift_codes", ("created_by", "recipient_id", "redeemed_by", "claimed_by"), "gift accounting and ownership fact", False),
-            ("gift_claims", ("buyer_user_id", "recipient_user_id"), "paid gift ownership and refund fact", True),
-            ("practice_wallets", ("user_id",), "current purchased balance", True),
-            ("practice_ledger", ("user_id",), "immutable token accounting ledger", True),
-            ("payment_token_grants", ("user_id",), "payment-to-entitlement provenance", True),
-            ("practice_reservations", ("user_id",), "purchased-token reservation accounting", True),
-            ("user_practice_preferences", ("user_id",), "fulfilment setting for purchased access", True),
-            ("practice_token_lots", ("user_id",), "exact payment-lot provenance and refunds", True),
-            ("premium_entitlements", ("user_id",), "purchased premium entitlement", True),
-            ("premium_delivery_outbox", ("user_id",), "premium fulfilment evidence", True),
-            ("consultation_requests", ("user_id",), "paid consultation fulfilment", True),
-            (
-                "telegram_stars_refunds",
-                ("payment_user_id", "beneficiary_user_id", "requested_by"),
-                "provider refund state and audit",
-                True,
-            ),
-            ("yookassa_refunds", ("user_id",), "provider refund state and audit", True),
-            ("privacy_erasure_log", ("user_id",), "compliance evidence that erasure occurred", True),
-        )
+        for table, columns, reason, required in _RETAINED
     ),
-
-    # Administrative authorship is retained as a security/audit fact.
     _policy("user_roles", ("user_id",), "retain", "authorization assignment"),
     _policy("admin_permissions", ("admin_id", "updated_by"), "retain", "authorization audit"),
     _policy("plan_price_history", ("changed_by",), "retain", "pricing audit"),
@@ -216,13 +243,14 @@ def _table_names(conn: Any) -> set[str]:
     return {
         str(row["name"] if hasattr(row, "keys") else row[0])
         for row in rows
-        if str(row["name"] if hasattr(row, "keys") else row[0]) not in {"sqlite_sequence", "schema_migrations"}
+        if str(row["name"] if hasattr(row, "keys") else row[0])
+        not in {"sqlite_sequence", "schema_migrations"}
     }
 
 
 def table_columns(conn: Any, table: str) -> set[str]:
     try:
-        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()  # nosec B608 - manifest/discovered table only
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()  # nosec B608
     except sqlite3.Error:
         return set()
     return {
@@ -256,7 +284,9 @@ def validate_privacy_manifest(conn: Any, *, strict: bool = True) -> PrivacyManif
     for table in sorted(existing & set(POLICIES)):
         policy = POLICIES[table]
         columns = table_columns(conn, table)
-        declared_present = tuple(column for column in policy.ownership_columns if column in columns)
+        declared_present = tuple(
+            column for column in policy.ownership_columns if column in columns
+        )
         discovered_columns = discovered.get(table, ())
         if not declared_present:
             invalid.append(f"{table}:missing_declared_ownership_column")
@@ -265,9 +295,14 @@ def validate_privacy_manifest(conn: Any, *, strict: bool = True) -> PrivacyManif
                 f"{table}:undeclared_ownership_columns="
                 f"{','.join(sorted(set(discovered_columns) - set(policy.ownership_columns)))}"
             )
-        missing_anonymize = set(policy.anonymize_columns) - columns
+        declared_anonymize = set(policy.anonymize_columns) | {
+            column for column, _value in policy.anonymize_literals
+        }
+        missing_anonymize = declared_anonymize - columns
         if missing_anonymize:
-            invalid.append(f"{table}:missing_anonymize_columns={','.join(sorted(missing_anonymize))}")
+            invalid.append(
+                f"{table}:missing_anonymize_columns={','.join(sorted(missing_anonymize))}"
+            )
 
     report = PrivacyManifestReport(
         ok=not unknown and not invalid and not missing_required,
@@ -283,7 +318,9 @@ def validate_privacy_manifest(conn: Any, *, strict: bool = True) -> PrivacyManif
         if report.invalid_policies:
             parts.append(f"invalid={';'.join(report.invalid_policies)}")
         if report.missing_required_tables:
-            parts.append(f"missing_required={','.join(report.missing_required_tables)}")
+            parts.append(
+                f"missing_required={','.join(report.missing_required_tables)}"
+            )
         raise RuntimeError("privacy_manifest_invalid:" + "|".join(parts))
     return report
 
