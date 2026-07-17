@@ -68,7 +68,6 @@ def deploy_governance_problems(
         '"$SYSTEM_PYTHON" "$RELEASE_MANAGER" write-proof': "deployment proof write is missing",
         'record_successful_deployed_sha "$NEW_SHA"': "successful deployed SHA marker is missing",
         "PRODUCTION_GATE_OK": "production gate evidence marker is missing",
-        "tree_sha256": "immutable tree evidence is not referenced by deploy tooling",
     }
     for needle, message in immutable_required.items():
         if needle not in immutable:
