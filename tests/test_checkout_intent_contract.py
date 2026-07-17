@@ -84,6 +84,15 @@ def test_checkout_intent_required_defaults_to_prod(monkeypatch):
     assert checkout_intent_required() is True
 
 
+def test_checkout_intent_cannot_be_disabled_in_prod(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("PAYMENT_CHECKOUT_INTENT_REQUIRED", "0")
+    monkeypatch.setenv("ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD", "1")
+    monkeypatch.setenv("PAYMENT_DANGEROUS_OVERRIDES_ALLOWED", "1")
+
+    assert checkout_intent_required() is True
+
+
 def test_checkout_intent_rejects_source_mismatch(monkeypatch):
     monkeypatch.setenv("APP_ENV", "dev")
     token = sign_checkout_intent(

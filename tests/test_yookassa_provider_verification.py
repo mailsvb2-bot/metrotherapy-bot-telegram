@@ -35,6 +35,15 @@ def test_provider_verification_required_defaults_to_prod(monkeypatch):
     assert provider_verification_required() is True
 
 
+def test_provider_verification_cannot_be_disabled_in_prod(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "0")
+    monkeypatch.setenv("ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD", "1")
+    monkeypatch.setenv("PAYMENT_DANGEROUS_OVERRIDES_ALLOWED", "1")
+
+    assert provider_verification_required() is True
+
+
 def test_provider_verification_compares_provider_payload(monkeypatch):
     monkeypatch.setenv("APP_ENV", "prod")
     monkeypatch.setenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "1")

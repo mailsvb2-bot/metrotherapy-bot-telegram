@@ -34,6 +34,25 @@ def test_webhook_service_unit_uses_current_production_paths() -> None:
     assert "/root/bot/" not in text
 
 
+def test_webhook_service_unit_has_root_process_sandbox() -> None:
+    text = UNIT.read_text(encoding="utf-8")
+
+    required = {
+        "NoNewPrivileges=true",
+        "PrivateTmp=true",
+        "PrivateDevices=true",
+        "ProtectSystem=strict",
+        "ProtectHome=read-only",
+        "ProtectKernelTunables=true",
+        "ProtectKernelModules=true",
+        "ProtectControlGroups=true",
+        "RestrictSUIDSGID=true",
+        "LockPersonality=true",
+        "UMask=0077",
+    }
+    assert required.issubset(set(text.splitlines()))
+
+
 def test_installer_waits_for_real_listener_and_prints_diagnostics() -> None:
     text = INSTALLER.read_text(encoding="utf-8")
 

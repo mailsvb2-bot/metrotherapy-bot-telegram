@@ -27,6 +27,11 @@ def _truthy(name: str, default: str = "0") -> bool:
     return (_env(name, default) or default).strip().lower() in _TRUE_VALUES
 
 
+def _explicitly_disabled(name: str) -> bool:
+    raw = os.getenv(name)
+    return raw is not None and str(raw).strip().lower() in _DISABLED_VALUES
+
+
 def _prod() -> bool:
     return (_env("APP_ENV", "dev") or "dev").strip().lower() in {"prod", "production"}
 
@@ -169,6 +174,17 @@ def validate_prod_monetization_contract(*, strict: bool = True) -> None:
         errors.append("TOKEN_ENFORCEMENT_MODE must be hard in prod")
     if not _first_env("YOOKASSA_RECEIPT_EMAIL", "PAYMENT_RECEIPT_EMAIL", "ADMIN_EMAIL"):
         errors.append("YOOKASSA_RECEIPT_EMAIL or PAYMENT_RECEIPT_EMAIL or ADMIN_EMAIL is required in prod")
+
+    for name in ("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "PAYMENT_CHECKOUT_INTENT_REQUIRED"):
+        if _explicitly_disabled(name):
+            errors.append(f"{name} must not be disabled in prod")
+
+    for name in (
+        "ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD",
+        "ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD",
+    ):
+        if _truthy(name):
+            errors.append(f"{name} is forbidden in prod")
 
     stars_enabled = (_env("TELEGRAM_STARS_ENABLED", "1") or "1").strip().lower() not in _DISABLED_VALUES
     stars_mode = (_env("TELEGRAM_STARS_PRICING_MODE", "explicit") or "explicit").strip().lower()

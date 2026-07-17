@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -66,6 +67,61 @@ def test_bridge_links_second_messenger_to_same_account(tmp_path, monkeypatch):
 
     legacy_snapshot = prefs.get_channel_snapshot(10001)
     assert {row["platform"] for row in legacy_snapshot["identities"]} == {"telegram", "vk"}
+
+
+def test_bridge_token_is_single_use_and_cannot_replace_linked_identity(tmp_path, monkeypatch):
+    modules = _fresh_modules(tmp_path, monkeypatch)
+    entrypoints = modules["services.messenger.entrypoints"]
+    bridge = modules["services.messenger.bridge"]
+    identity = modules["services.accounts.identity"]
+
+    entrypoints.register_user_entry(10001, platform="telegram", external_user_id="tg-10001")
+    token = bridge.issue_bridge_token(10001, target_platform="vk")
+
+    first = entrypoints.register_user_entry(
+        20002,
+        platform="vk",
+        external_user_id="vk-first",
+        start_payload=f"bridge_{token}",
+    )
+    replay = entrypoints.register_user_entry(
+        30003,
+        platform="vk",
+        external_user_id="vk-replay",
+        start_payload=f"bridge_{token}",
+    )
+
+    assert first.user_id == 10001
+    assert first.linked_via_bridge is True
+    assert replay.user_id != 10001
+    assert replay.linked_via_bridge is False
+
+    original = identity.get_account_snapshot(10001)
+    vk_identity = next(row for row in original["identities"] if row["platform"] == "vk")
+    assert vk_identity["external_user_id"] == "vk-first"
+
+    replay_account = identity.get_account_snapshot(replay.user_id)
+    assert replay_account["identities"][0]["external_user_id"] == "vk-replay"
+
+
+def test_bridge_token_concurrent_consumption_has_one_winner(tmp_path, monkeypatch):
+    modules = _fresh_modules(tmp_path, monkeypatch)
+    bridge = modules["services.messenger.bridge"]
+
+    bridge.issue_bridge_token(10001, target_platform="vk")
+    token = bridge.issue_bridge_token(10001, target_platform="vk")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(bridge.consume_bridge_token, token, platform="vk", external_user_id="vk-a"),
+            executor.submit(bridge.consume_bridge_token, token, platform="vk", external_user_id="vk-b"),
+        ]
+        results = [future.result(timeout=10) for future in futures]
+
+    winners = [result for result in results if result is not None]
+    assert len(winners) == 1
+    assert winners[0].consumed is True
+    assert bridge.resolve_bridge_token(token).consumed is True
 
 
 def test_plain_returning_messenger_resolves_existing_account(tmp_path, monkeypatch):

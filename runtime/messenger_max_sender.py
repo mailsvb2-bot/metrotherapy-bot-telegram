@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import ssl
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +12,11 @@ from config.settings import settings
 from runtime import messenger_max_ui as max_ui
 from runtime.messenger_transport_errors import MessengerMediaNotReadyError, MessengerTransportError
 from services.messenger.media_assets import get_cached_media_token, store_media_token
-from services.messenger.provider_transport import json_request, multipart_upload
+from services.messenger.provider_transport import (
+    ProviderPermanentHTTPError,
+    json_request,
+    multipart_upload,
+)
 
 
 MAX_API2_BASE_URL = "https://platform-api2.max.ru"
@@ -44,6 +49,19 @@ def _max_error_code(data: Any) -> str:
     return str(code or "").strip()
 
 
+def _deployed_env() -> bool:
+    return (os.getenv("APP_ENV") or getattr(settings, "APP_ENV", "") or "dev").strip().lower() in {
+        "prod",
+        "production",
+        "stage",
+        "staging",
+    }
+
+
+def _truthy_env(name: str) -> bool:
+    return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass
 class MaxBotSender:
     token: str | None = None
@@ -69,9 +87,29 @@ class MaxBotSender:
         clean = str(base or "").strip().rstrip("/")
         if clean in LEGACY_MAX_API_BASE_URLS:
             clean = MAX_API2_BASE_URL
+        if clean == MAX_API2_BASE_URL:
+            return clean
         if not clean.startswith("https://"):
             raise MessengerTransportError("MAX_API_BASE_URL must start with https://")
+        if _deployed_env() or not _truthy_env("ALLOW_CUSTOM_MAX_API_BASE_URL"):
+            raise MessengerTransportError("MAX_API_BASE_URL must use https://platform-api2.max.ru")
         return clean
+
+    def _ssl_context(self) -> ssl.SSLContext | None:
+        bundle = str(os.getenv("MAX_CA_BUNDLE") or getattr(settings, "MAX_CA_BUNDLE", "") or "").strip()
+        if not bundle:
+            return None
+        path = Path(bundle)
+        if not path.is_file():
+            raise MessengerTransportError("MAX_CA_BUNDLE points to a missing file")
+        try:
+            return ssl.create_default_context(cafile=str(path))
+        except (OSError, ssl.SSLError) as exc:
+            raise MessengerTransportError(f"MAX_CA_BUNDLE is invalid: {type(exc).__name__}") from exc
+
+    @staticmethod
+    def _permanent_http_error(exc: ProviderPermanentHTTPError) -> MessengerTransportError:
+        return MessengerTransportError(f"MAX provider HTTP {exc.status_code}")
 
     @staticmethod
     def _upload_payload(upload_meta: dict[str, Any], uploaded: Any, *, media_type: str) -> dict[str, Any]:
@@ -107,13 +145,18 @@ class MaxBotSender:
             payload["format"] = kwargs["format"]
         if kwargs.get("notify") is not None:
             payload["notify"] = bool(kwargs["notify"])
-        data = await asyncio.to_thread(
-            json_request,
-            url,
-            method="POST",
-            headers={"Authorization": token},
-            payload=payload,
-        )
+        try:
+            data = await asyncio.to_thread(
+                json_request,
+                url,
+                method="POST",
+                headers={"Authorization": token},
+                payload=payload,
+                retries=1,
+                ssl_context=self._ssl_context(),
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
         if isinstance(data, dict) and data.get("error"):
             raise MessengerTransportError(str(data["error"]))
         return data["message"] if isinstance(data, dict) and data.get("message") is not None else data
@@ -123,22 +166,32 @@ class MaxBotSender:
         if cached is not None:
             return cached.remote_token
         token = self._token()
-        upload_meta = await asyncio.to_thread(
-            json_request,
-            f"{self._api_base()}/uploads?type={urllib.parse.quote(media_type)}",
-            method="POST",
-            headers={"Authorization": token},
-            payload=None,
-        )
+        ssl_context = self._ssl_context()
+        try:
+            upload_meta = await asyncio.to_thread(
+                json_request,
+                f"{self._api_base()}/uploads?type={urllib.parse.quote(media_type)}",
+                method="POST",
+                headers={"Authorization": token},
+                payload=None,
+                retries=1,
+                ssl_context=ssl_context,
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
         upload_url = str(upload_meta.get("url") or "").strip()
         if not upload_url:
             raise MessengerTransportError(f"Unexpected MAX {media_type} upload response: {upload_meta}")
-        uploaded = await asyncio.to_thread(
-            multipart_upload,
-            upload_url,
-            field_name="data",
-            path=file_path,
-        )
+        try:
+            uploaded = await asyncio.to_thread(
+                multipart_upload,
+                upload_url,
+                field_name="data",
+                path=file_path,
+                ssl_context=ssl_context,
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
         media_token = str(self._upload_payload(upload_meta, uploaded, media_type=media_type).get("token") or "").strip()
         if not media_token:
             raise MessengerTransportError(
@@ -166,6 +219,7 @@ class MaxBotSender:
             payload["notify"] = bool(notify)
         delays = _attachment_retry_delays()
         last_error: Exception | None = None
+        ssl_context = self._ssl_context()
         for delay in delays:
             if delay:
                 await asyncio.sleep(delay)
@@ -176,7 +230,11 @@ class MaxBotSender:
                     method="POST",
                     headers={"Authorization": token},
                     payload=payload,
+                    retries=1,
+                    ssl_context=ssl_context,
                 )
+            except ProviderPermanentHTTPError as exc:
+                raise self._permanent_http_error(exc) from exc
             except (OSError, ValueError, TypeError) as exc:  # pragma: no cover
                 last_error = exc
                 continue

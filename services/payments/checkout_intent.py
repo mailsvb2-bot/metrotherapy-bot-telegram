@@ -24,12 +24,12 @@ def _truthy(value: str | None) -> bool:
 
 
 def checkout_intent_required() -> bool:
+    """Require signed checkout intents unconditionally in production."""
+
+    if _is_prod():
+        return True
     raw = os.getenv("PAYMENT_CHECKOUT_INTENT_REQUIRED")
-    if raw is not None:
-        return _truthy(raw)
-    if _is_prod() and _truthy(os.getenv("ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD")):
-        return False
-    return _is_prod()
+    return _truthy(raw) if raw is not None else False
 
 
 def checkout_intent_key() -> str:
@@ -194,8 +194,6 @@ def verify_checkout_intent(
         expected_amount_minor,
         expected_currency,
     )
-    # Known public packages always bind price and currency. Test/legacy fake ids
-    # may explicitly pass an amount when they need the same guarantee.
     if expected_amount_minor is not None or expected_amount > 0:
         checks["amount_minor"] = str(expected_amount)
         checks["currency"] = expected_currency_value
