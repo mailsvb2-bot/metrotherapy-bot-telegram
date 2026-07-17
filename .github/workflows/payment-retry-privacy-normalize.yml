@@ -1,0 +1,40 @@
+name: Payment Retry Privacy Normalize
+
+on:
+  push:
+    branches:
+      - agent/payment-reconciliation-reliability
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    if: github.event.head_commit.message == 'Normalize payment retry privacy manifest'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Normalize retained privacy policies
+        run: python ops/normalize_payment_retry_privacy_manifest.py
+
+      - name: Validate Python syntax
+        run: python -m py_compile services/privacy_manifest.py
+
+      - name: Commit normalized manifest
+        run: |
+          changes="$(git status --porcelain -- services/privacy_manifest.py)"
+          if [ -z "$changes" ]; then
+            echo 'PAYMENT_RETRY_PRIVACY_MANIFEST_CURRENT'
+            exit 0
+          fi
+          printf '%s\n' "$changes"
+          git config user.name 'Metrotherapy Privacy Contract'
+          git config user.email 'privacy-contract@metrotherapy.local'
+          git add services/privacy_manifest.py
+          git commit -m 'Normalize payment retry privacy manifest'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
