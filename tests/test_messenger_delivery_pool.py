@@ -6,6 +6,7 @@ from datetime import timedelta
 import pytest
 
 from core.time_utils import utc_now, utc_now_iso
+from services.bg import tm
 from services.db import db
 from services.messenger import delivery_outbox, delivery_pool
 
@@ -25,7 +26,7 @@ def _insert_outbox(
     updated = updated_at or created
     available = created
     with db() as conn:
-        cursor = conn.execute(
+        conn.execute(
             """
             INSERT INTO messenger_delivery_outbox(
                 platform,external_user_id,canonical_user_id,event_key,action,replies_json,
@@ -52,15 +53,6 @@ def _insert_outbox(
             (platform, event_key),
         ).fetchone()
     return int(row["id"])
-
-
-def _status(item_id: int) -> str:
-    with db() as conn:
-        row = conn.execute(
-            "SELECT status FROM messenger_delivery_outbox WHERE id=?",
-            (int(item_id),),
-        ).fetchone()
-    return str(row["status"])
 
 
 def test_stream_head_preserves_order_inside_one_user() -> None:
@@ -137,9 +129,15 @@ async def test_slow_delivery_does_not_block_unrelated_user(monkeypatch) -> None:
         lock_token="fast-token",
     )
 
-    slow_task = asyncio.create_task(delivery_pool._process_item(slow))  # noqa: SLF001
+    slow_task = tm().create(
+        delivery_pool._process_item(slow),  # noqa: SLF001
+        name="test_delivery_pool_slow",
+    )
     await asyncio.wait_for(slow_started.wait(), timeout=2)
-    fast_task = asyncio.create_task(delivery_pool._process_item(fast))  # noqa: SLF001
+    fast_task = tm().create(
+        delivery_pool._process_item(fast),  # noqa: SLF001
+        name="test_delivery_pool_fast",
+    )
     await asyncio.wait_for(fast_task, timeout=2)
 
     assert completed == ["pool-fast"]
