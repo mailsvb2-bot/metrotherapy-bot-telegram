@@ -105,6 +105,24 @@ def _payment_identity(payload: dict[str, Any], result: ReconciliationResult | No
     return payment_id, event or "payment.unknown"
 
 
+def _payment_user_id(payload: dict[str, Any]) -> int:
+    obj = payload.get("object")
+    provider_object = obj if isinstance(obj, dict) else {}
+    metadata = provider_object.get("metadata")
+    meta = metadata if isinstance(metadata, dict) else {}
+    for key in ("external_user_id", "user_id", "telegram_user_id"):
+        raw = str(meta.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            parsed = int(raw, 10)
+        except ValueError:
+            continue
+        if parsed > 0 and str(parsed) == raw:
+            return parsed
+    return 0
+
+
 def enqueue_verified_payment_retry(payload: dict[str, Any], result: ReconciliationResult) -> bool:
     """Persist a provider-verified payment event for local side-effect replay."""
 
@@ -121,10 +139,15 @@ def enqueue_verified_payment_retry(payload: dict[str, Any], result: Reconciliati
             cursor = conn.execute(
                 """
                 INSERT INTO payment_reconciliation_retry(
-                    provider,provider_payment_id,event,payload_json,status,attempts,
+                    provider,provider_payment_id,user_id,event,payload_json,status,attempts,
                     available_at,locked_at,lock_token,last_error,created_at,updated_at,completed_at
-                ) VALUES(?,?,?,?,'pending',0,?,NULL,NULL,?,?,?,NULL)
+                ) VALUES(?,?,?,?,?,'pending',0,?,NULL,NULL,?,?,?,NULL)
                 ON CONFLICT(provider,provider_payment_id,event) DO UPDATE SET
+                    user_id=CASE
+                        WHEN payment_reconciliation_retry.user_id<>0
+                        THEN payment_reconciliation_retry.user_id
+                        ELSE excluded.user_id
+                    END,
                     payload_json=excluded.payload_json,
                     status=CASE
                         WHEN payment_reconciliation_retry.status IN ('completed','dead')
@@ -156,6 +179,7 @@ def enqueue_verified_payment_retry(payload: dict[str, Any], result: Reconciliati
                 (
                     _PROVIDER,
                     payment_id,
+                    _payment_user_id(payload),
                     event,
                     encoded,
                     now,
@@ -258,6 +282,33 @@ def _mark_completed(item: ClaimedPaymentRetry) -> None:
                 raise RuntimeError("payment_retry_lease_lost")
 
 
+def _mark_dead(item: ClaimedPaymentRetry, error: str) -> None:
+    now = utc_now_iso()
+    with db() as conn:
+        with tx(conn):
+            cursor = conn.execute(
+                """
+                UPDATE payment_reconciliation_retry
+                SET status='dead',attempts=?,updated_at=?,locked_at=NULL,lock_token=NULL,last_error=?
+                WHERE id=? AND lock_token=? AND status='processing'
+                """.strip(),
+                (
+                    int(item.attempts) + 1,
+                    now,
+                    str(error or "non_retryable_result")[:500],
+                    int(item.id),
+                    item.lock_token,
+                ),
+            )
+            if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                raise RuntimeError("payment_retry_lease_lost")
+    log.error(
+        "Payment reconciliation retry permanently failed: payment_id=%s error=%s",
+        item.provider_payment_id,
+        str(error or "")[:180],
+    )
+
+
 def _reschedule_or_dead(item: ClaimedPaymentRetry, error: str) -> bool:
     attempts = int(item.attempts) + 1
     max_attempts = _positive_int("PAYMENT_RETRY_MAX_ATTEMPTS", 48, minimum=1, maximum=200)
@@ -310,6 +361,9 @@ def _process_claimed_retry(item: ClaimedPaymentRetry) -> str:
     if is_local_retryable_payment_problem(result.problem):
         dead = _reschedule_or_dead(item, result.problem)
         return "dead" if dead else "rescheduled"
+    if not result.ok or result.problem:
+        _mark_dead(item, result.problem or "non_retryable_reconciliation_result")
+        return "dead"
     _mark_completed(item)
     return "completed"
 
