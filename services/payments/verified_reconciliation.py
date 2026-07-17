@@ -5,6 +5,11 @@ from typing import Any
 
 from services.db import db
 from services.payments.reconciliation import ReconciliationResult, record_yookassa_webhook
+from services.payments.retry_queue import (
+    complete_payment_retry_if_present,
+    enqueue_verified_payment_retry,
+    is_local_retryable_payment_problem,
+)
 from services.payments.yookassa_provider import (
     YooKassaProviderVerificationError,
     verify_yookassa_refund_webhook_with_provider,
@@ -282,8 +287,13 @@ def record_verified_yookassa_webhook(payload: dict[str, Any]) -> ReconciliationR
     canonical_payload = _provider_canonical_payload(payload, provider_object)
     preserved_refund = _preserved_refund_result(canonical_payload)
     if preserved_refund is not None:
+        complete_payment_retry_if_present(canonical_payload, preserved_refund)
         return preserved_refund
 
     result = record_yookassa_webhook(canonical_payload)
+    if is_local_retryable_payment_problem(result.problem):
+        enqueue_verified_payment_retry(canonical_payload, result)
+    elif result.ok and not result.problem:
+        complete_payment_retry_if_present(canonical_payload, result)
     _record_verified_conversion_dry_run(canonical_payload, result)
     return result
