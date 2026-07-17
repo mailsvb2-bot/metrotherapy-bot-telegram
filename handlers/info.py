@@ -64,6 +64,14 @@ async def cb_policy(cb: CallbackQuery):
     )
 
 
+async def _answer_export_failure(message: Message, user_id: int) -> None:
+    log.exception("User data export failed: user_id=%s", user_id)
+    await message.answer(
+        "Не удалось подготовить экспорт данных. Повторите позже или напишите в поддержку: "
+        "@metrotherapysupportbot"
+    )
+
+
 @router.message(Command("mydata"))
 async def cmd_my_data(message: Message) -> None:
     user_id = _message_user_id(message)
@@ -80,12 +88,20 @@ async def cmd_my_data(message: Message) -> None:
                 "Файл может содержать историю использования и платёжные записи — храните его безопасно."
             ),
         )
-    except (sqlite3.Error, RuntimeError, ValueError, TypeError, OSError):
-        log.exception("User data export failed: user_id=%s", user_id)
-        await message.answer(
-            "Не удалось подготовить экспорт данных. Повторите позже или напишите в поддержку: "
-            "@metrotherapysupportbot"
-        )
+    except sqlite3.Error:
+        await _answer_export_failure(message, user_id)
+    except (RuntimeError, OSError):
+        await _answer_export_failure(message, user_id)
+    except (ValueError, TypeError):
+        await _answer_export_failure(message, user_id)
+
+
+async def _answer_erasure_failure(message: Message, user_id: int) -> None:
+    log.exception("User data erasure failed: user_id=%s", user_id)
+    await message.answer(
+        "Не удалось выполнить удаление данных. Повторите позже или напишите в поддержку: "
+        "@metrotherapysupportbot"
+    )
 
 
 @router.message(Command("deletemydata"))
@@ -108,12 +124,14 @@ async def cmd_delete_my_data(message: Message) -> None:
             user_id,
             reason="telegram_user_request",
         )
-    except (sqlite3.Error, RuntimeError, ValueError, TypeError):
-        log.exception("User data erasure failed: user_id=%s", user_id)
-        await message.answer(
-            "Не удалось выполнить удаление данных. Повторите позже или напишите в поддержку: "
-            "@metrotherapysupportbot"
-        )
+    except sqlite3.Error:
+        await _answer_erasure_failure(message, user_id)
+        return
+    except RuntimeError:
+        await _answer_erasure_failure(message, user_id)
+        return
+    except (ValueError, TypeError):
+        await _answer_erasure_failure(message, user_id)
         return
 
     deleted_rows = sum(int(value) for value in result.deleted_tables.values())
