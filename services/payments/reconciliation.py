@@ -79,8 +79,50 @@ class PaymentLedgerState:
     processing_error: str
 
 
+@dataclass(frozen=True)
+class PaymentLedgerState:
+    provider_status: str
+    processing_status: str
+    problem: str
+    processing_error: str
+
+
 def _problem_join(*items: str) -> str:
     return ";".join(item for item in items if item)
+
+
+def _row_value(row: Any, key: str, index: int) -> Any:
+    if hasattr(row, "keys"):
+        return row[key]
+    return row[index]
+
+
+def _refund_state(provider_status: str, processing_status: str) -> bool:
+    provider = str(provider_status or "").strip().lower()
+    processing = str(processing_status or "").strip().lower()
+    return provider == "refunded" or processing == "refunded" or processing.startswith("refund_")
+
+
+def _existing_refund_state(payment_id: str, synthetic_charge_id: str) -> PaymentLedgerState | None:
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT provider_status, processing_status, problem, processing_error
+            FROM payments
+            WHERE provider_charge_id=? OR telegram_charge_id=?
+            LIMIT 1
+            """.strip(),
+            (payment_id, synthetic_charge_id),
+        ).fetchone()
+    if row is None:
+        return None
+    state = PaymentLedgerState(
+        provider_status=str(_row_value(row, "provider_status", 0) or ""),
+        processing_status=str(_row_value(row, "processing_status", 1) or ""),
+        problem=str(_row_value(row, "problem", 2) or ""),
+        processing_error=str(_row_value(row, "processing_error", 3) or ""),
+    )
+    return state if _refund_state(state.provider_status, state.processing_status) else None
 
 
 def _row_value(row: Any, key: str, index: int) -> Any:
