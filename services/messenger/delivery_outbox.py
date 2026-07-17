@@ -11,7 +11,6 @@ from typing import Any
 
 from core.time_utils import utc_now, utc_now_iso
 from runtime.messenger_senders import provider_delivery_scope
-from services.bg import tm
 from services.db import db, tx
 from services.db.runtime import CONFIG
 from services.events import log_event
@@ -21,8 +20,6 @@ from services.messenger.text_ui import MessengerReply
 
 log = logging.getLogger(__name__)
 _ALLOWED_PLATFORMS = {"vk", "max"}
-_worker_task: asyncio.Task | None = None
-_worker_stop: asyncio.Event | None = None
 
 _POSTGRES_CLAIM_SQL = """
 WITH due AS (
@@ -297,10 +294,63 @@ def reschedule_delivery(item: ClaimedDelivery, error: str) -> None:
         )
 
 
+def reply_progress_index(outbox_id: int) -> int:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT next_reply_index FROM messenger_delivery_reply_progress WHERE outbox_id=?",
+            (int(outbox_id),),
+        ).fetchone()
+    if row is None:
+        return 0
+    return max(0, int(_row_value(row, "next_reply_index", 0) or 0))
+
+
+def checkpoint_reply_progress(item: ClaimedDelivery, next_reply_index: int) -> None:
+    """Persist the first not-yet-delivered reply while the lease is still owned."""
+
+    index = max(0, int(next_reply_index))
+    now = utc_now_iso()
+    with db() as conn:
+        with tx(conn):
+            cursor = conn.execute(
+                "UPDATE messenger_delivery_outbox SET updated_at=? "
+                "WHERE id=? AND lock_token=? AND status='sending'",
+                (now, int(item.id), item.lock_token),
+            )
+            if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                raise RuntimeError("messenger_delivery_lease_lost")
+            conn.execute(
+                """
+                INSERT INTO messenger_delivery_reply_progress(outbox_id,next_reply_index,updated_at)
+                VALUES(?,?,?)
+                ON CONFLICT(outbox_id) DO UPDATE SET
+                    next_reply_index=CASE
+                        WHEN excluded.next_reply_index > messenger_delivery_reply_progress.next_reply_index
+                        THEN excluded.next_reply_index
+                        ELSE messenger_delivery_reply_progress.next_reply_index
+                    END,
+                    updated_at=excluded.updated_at
+                """.strip(),
+                (int(item.id), index, now),
+            )
+
+
 async def _deliver_one(item: ClaimedDelivery) -> None:
     replies = deserialize_replies(item.replies_json)
-    with provider_delivery_scope(f"{item.platform}:{item.event_key}"):
-        await send_reply_bundle(item.platform, item.external_user_id, item.canonical_user_id, replies)
+    start_index = await asyncio.to_thread(reply_progress_index, item.id)
+    if start_index > len(replies):
+        raise ValueError("messenger_delivery_reply_progress_out_of_range")
+
+    for reply_index in range(start_index, len(replies)):
+        with provider_delivery_scope(f"{item.platform}:{item.event_key}:{reply_index + 1}"):
+            await send_reply_bundle(
+                item.platform,
+                item.external_user_id,
+                item.canonical_user_id,
+                [replies[reply_index]],
+            )
+        await asyncio.to_thread(checkpoint_reply_progress, item, reply_index + 1)
+
     await asyncio.to_thread(mark_delivery_sent, item)
     await asyncio.to_thread(
         log_action_completed,
@@ -312,74 +362,20 @@ async def _deliver_one(item: ClaimedDelivery) -> None:
     )
 
 
-async def _worker_loop(stop_event: asyncio.Event) -> None:
-    try:
-        idle_sleep = max(0.1, float(os.getenv("MESSENGER_OUTBOX_IDLE_SLEEP_SEC", "0.5") or "0.5"))
-    except ValueError:
-        idle_sleep = 0.5
-    lock_ttl = _positive_int("MESSENGER_OUTBOX_LOCK_TTL_SEC", 900, minimum=30, maximum=86_400)
-
-    while not stop_event.is_set():
-        try:
-            claimed = await asyncio.to_thread(claim_due_deliveries, limit=1, lock_ttl_sec=lock_ttl)
-            if not claimed:
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=idle_sleep)
-                except asyncio.TimeoutError:
-                    pass
-                continue
-
-            item = claimed[0]
-            if stop_event.is_set():
-                await asyncio.to_thread(release_delivery_lease, item)
-                return
-            try:
-                await _deliver_one(item)
-            except asyncio.CancelledError:
-                await asyncio.to_thread(release_delivery_lease, item)
-                raise
-            except Exception as exc:  # validator: allow-wide-except
-                log.exception(
-                    "%s durable delivery failed event_key=%s attempt=%s",
-                    item.platform.upper(),
-                    item.event_key,
-                    int(item.attempts) + 1,
-                )
-                await asyncio.to_thread(reschedule_delivery, item, f"{type(exc).__name__}: {exc}")
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # validator: allow-wide-except
-            log.exception("Messenger durable delivery worker tick failed")
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=idle_sleep)
-            except asyncio.TimeoutError:
-                pass
-
-
 def start_delivery_worker() -> asyncio.Task:
-    global _worker_task, _worker_stop
-    if _worker_task is not None and not _worker_task.done():
-        return _worker_task
-    _worker_stop = asyncio.Event()
-    task = tm().create(_worker_loop(_worker_stop), name="messenger_durable_delivery_worker")
-    _worker_task = task
-    return task
+    """Compatibility facade; the pool is the only worker implementation."""
+
+    from services.messenger.delivery_pool import start_delivery_worker as start_pool
+
+    return start_pool()
 
 
 async def stop_delivery_worker() -> None:
-    global _worker_task, _worker_stop
-    task = _worker_task
-    if task is None:
-        return
-    if _worker_stop is not None:
-        _worker_stop.set()
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-    _worker_task = None
-    _worker_stop = None
+    """Compatibility facade; the pool is the only worker implementation."""
+
+    from services.messenger.delivery_pool import stop_delivery_worker as stop_pool
+
+    await stop_pool()
 
 
 def outbox_snapshot() -> dict[str, int]:
