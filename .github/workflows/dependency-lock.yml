@@ -1,24 +1,27 @@
-name: Dependency Lock Bootstrap
+name: Dependency Lock
 
 on:
-  push:
-    branches:
-      - agent/payment-reconciliation-reliability
+  pull_request:
+    paths:
+      - 'requirements.in'
+      - 'requirements-dev.in'
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - 'requirements-py313.txt'
+      - '.github/workflows/dependency-lock.yml'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   lock:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
-    name: deterministic lock bootstrap / py3.12+py3.13
+    name: deterministic locks / py3.12+py3.13
     steps:
-      - name: Checkout branch
+      - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          ref: ${{ github.ref_name }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -79,16 +82,12 @@ jobs:
             requirements-py313.txt
           if-no-files-found: error
 
-      - name: Commit generated locks to bootstrap branch
+      - name: Reject tracked or untracked lock drift
         run: |
           changes="$(git status --porcelain -- requirements.txt requirements-dev.txt requirements-py313.txt)"
-          if [ -z "$changes" ]; then
-            echo 'DEPENDENCY_LOCK_ALREADY_CURRENT'
-            exit 0
+          if [ -n "$changes" ]; then
+            printf '%s\n' "$changes"
+            echo 'DEPENDENCY_LOCK_DRIFT'
+            exit 1
           fi
-          printf '%s\n' "$changes"
-          git config user.name 'Metrotherapy Dependency Lock'
-          git config user.email 'dependency-lock@metrotherapy.local'
-          git add requirements.txt requirements-dev.txt requirements-py313.txt
-          git commit -m 'Regenerate Python dependency locks'
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo 'DEPENDENCY_LOCK_CURRENT'
