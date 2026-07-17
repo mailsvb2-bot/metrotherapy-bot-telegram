@@ -46,6 +46,7 @@ ALLOWED_ROOT_FILES = {
     ".env.example",
     ".gitignore",
     ".pre-commit-config.yaml",
+    ".release.json",
     "README.md",
     "VERSION",
     "SOVEREIGNTY_BUILD_MANIFEST.json",
