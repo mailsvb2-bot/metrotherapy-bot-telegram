@@ -64,6 +64,8 @@ async def test_delete_without_confirmation_does_not_mutate(monkeypatch) -> None:
     assert called is False
     assert message.answers
     assert "/deletemydata CONFIRM" in message.answers[0]
+    assert "Технический идентификатор канала" in message.answers[0]
+    assert "обезличит профиль" not in message.answers[0]
 
 
 @pytest.mark.asyncio
@@ -82,3 +84,5 @@ async def test_confirmed_delete_uses_authenticated_message_user(monkeypatch) -> 
     assert seen == [(91003, "telegram_user_request")]
     assert message.answers
     assert "Удалено записей: 5" in message.answers[-1]
+    assert "Технический идентификатор канала" in message.answers[-1]
+    assert "профиль обезличен" not in message.answers[-1]
