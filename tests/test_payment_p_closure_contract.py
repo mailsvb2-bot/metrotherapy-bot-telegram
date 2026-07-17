@@ -15,6 +15,10 @@ def _set_valid_prod_monetization_env(monkeypatch) -> None:
     monkeypatch.setenv("TOKEN_ECONOMY_ENABLED", "1")
     monkeypatch.setenv("TOKEN_ENFORCEMENT_MODE", "hard")
     monkeypatch.setenv("YOOKASSA_RECEIPT_EMAIL", "billing@example.com")
+    monkeypatch.delenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", raising=False)
+    monkeypatch.delenv("PAYMENT_CHECKOUT_INTENT_REQUIRED", raising=False)
+    monkeypatch.delenv("ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD", raising=False)
+    monkeypatch.delenv("ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD", raising=False)
 
 
 def test_prod_monetization_guard_requires_hard_token_enforcement(monkeypatch):
@@ -48,6 +52,33 @@ def test_prod_monetization_guard_requires_explicit_receipt_email(monkeypatch):
     monkeypatch.delenv("ADMIN_EMAIL", raising=False)
 
     with pytest.raises(ValidationError, match="RECEIPT_EMAIL|ADMIN_EMAIL"):
+        validate_prod_monetization_contract(strict=True)
+
+
+def test_prod_monetization_guard_rejects_direct_security_disable_flags(monkeypatch):
+    _set_valid_prod_monetization_env(monkeypatch)
+    monkeypatch.setenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "0")
+
+    with pytest.raises(ValidationError, match="YOOKASSA_PROVIDER_VERIFICATION_REQUIRED"):
+        validate_prod_monetization_contract(strict=True)
+
+    monkeypatch.setenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "1")
+    monkeypatch.setenv("PAYMENT_CHECKOUT_INTENT_REQUIRED", "off")
+    with pytest.raises(ValidationError, match="PAYMENT_CHECKOUT_INTENT_REQUIRED"):
+        validate_prod_monetization_contract(strict=True)
+
+
+def test_prod_monetization_guard_rejects_legacy_payment_bypasses_even_with_drill_flag(monkeypatch):
+    _set_valid_prod_monetization_env(monkeypatch)
+    monkeypatch.setenv("PAYMENT_DANGEROUS_OVERRIDES_ALLOWED", "1")
+    monkeypatch.setenv("ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD", "1")
+
+    with pytest.raises(ValidationError, match="ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD"):
+        validate_prod_monetization_contract(strict=True)
+
+    monkeypatch.delenv("ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD", raising=False)
+    monkeypatch.setenv("ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD", "1")
+    with pytest.raises(ValidationError, match="ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD"):
         validate_prod_monetization_contract(strict=True)
 
 
