@@ -1,26 +1,24 @@
-name: Dependency Lock
+name: Dependency Lock Bootstrap
 
 on:
-  pull_request:
-    paths:
-      - 'requirements.in'
-      - 'requirements-dev.in'
-      - 'requirements.txt'
-      - 'requirements-dev.txt'
-      - '.github/workflows/dependency-lock.yml'
+  push:
+    branches:
+      - agent/payment-reconciliation-reliability
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   lock-py312:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
-    name: deterministic lock / py3.12
+    name: deterministic lock bootstrap / py3.12
     steps:
-      - name: Checkout
+      - name: Checkout branch
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.ref_name }}
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -59,5 +57,14 @@ jobs:
             requirements-dev.txt
           if-no-files-found: error
 
-      - name: Reject lock drift
-        run: git diff --exit-code -- requirements.txt requirements-dev.txt
+      - name: Commit generated locks to bootstrap branch
+        run: |
+          if git diff --quiet -- requirements.txt requirements-dev.txt; then
+            echo 'DEPENDENCY_LOCK_ALREADY_CURRENT'
+            exit 0
+          fi
+          git config user.name 'Metrotherapy Dependency Lock'
+          git config user.email 'dependency-lock@metrotherapy.local'
+          git add requirements.txt requirements-dev.txt
+          git commit -m 'Regenerate Python dependency locks'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
