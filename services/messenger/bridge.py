@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -94,7 +93,7 @@ def resolve_bridge_token(token: str) -> BridgeResolution | None:
             if datetime.fromisoformat(str(expires_at)) < utc_now():
                 return None
         except (ValueError, TypeError):
-            pass
+            return None
     elif created_at:
         try:
             created = datetime.fromisoformat(str(created_at))
@@ -102,7 +101,7 @@ def resolve_bridge_token(token: str) -> BridgeResolution | None:
             if created + timedelta(hours=ttl_hours) < utc_now():
                 return None
         except (ValueError, TypeError):
-            pass
+            return None
     account_id = _row_value(row, 'account_id') or _row_value(row, 'user_id')
     target_platform = _row_value(row, 'target_platform')
     return BridgeResolution(
@@ -114,28 +113,42 @@ def resolve_bridge_token(token: str) -> BridgeResolution | None:
 
 
 def consume_bridge_token(token: str, *, platform: str, external_user_id: str | None) -> BridgeResolution | None:
-    resolved = resolve_bridge_token(token)
-    if resolved is None:
-        return None
+    raw = (token or '').strip()
     norm = parse_platform(platform)
-    if norm is None:
+    if not raw or norm is None:
+        return None
+
+    resolved = resolve_bridge_token(raw)
+    if resolved is None or resolved.consumed:
         return None
     if resolved.target_platform and resolved.target_platform != norm:
         return None
+
     now = utc_now().replace(microsecond=0).isoformat()
+    external_id = (external_user_id or '').strip() or None
     with db() as conn:
         with tx(conn):
-            conn.execute(
+            cursor = conn.execute(
                 '''
                 UPDATE user_channel_bridge_tokens
-                SET used_at=COALESCE(used_at, ?),
-                    used_platform=COALESCE(used_platform, ?),
-                    used_external_user_id=COALESCE(used_external_user_id, ?),
-                    consumed_account_id=COALESCE(consumed_account_id, ?)
-                WHERE token=?
+                SET used_at=?,
+                    used_platform=?,
+                    used_external_user_id=?,
+                    consumed_account_id=?
+                WHERE token=? AND purpose=? AND used_at IS NULL
                 '''.strip(),
-                (now, norm, (external_user_id or '').strip() or None, int(resolved.canonical_user_id), token),
+                (
+                    now,
+                    norm,
+                    external_id,
+                    int(resolved.canonical_user_id),
+                    raw,
+                    PURPOSE_SWITCH,
+                ),
             )
+            if int(getattr(cursor, 'rowcount', 0) or 0) != 1:
+                return None
+
     return BridgeResolution(
         canonical_user_id=resolved.canonical_user_id,
         token=resolved.token,
