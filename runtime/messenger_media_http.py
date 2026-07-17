@@ -22,4 +22,12 @@ async def audio_access(request: web.Request) -> web.StreamResponse:
     registered = register_audio_access(token)
     if registered is None:
         raise web.HTTPNotFound()
-    return web.FileResponse(registered.file_path)
+    return web.FileResponse(
+        registered.file_path,
+        headers={
+            "Cache-Control": "private, no-store, max-age=0",
+            "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
