@@ -28,8 +28,13 @@ Allowed lightweight checks on production:
 python scripts/user_scenario_gate.py
 curl -fsS http://127.0.0.1:8082/healthz
 curl -fsS http://127.0.0.1:8082/readyz
-python scripts/post_deploy_verify.py --skip-pytest
+METRO_PROBE_ALLOW_LIVE_DB_MUTATION=1 python scripts/post_deploy_verify.py --skip-pytest
 ```
+
+The environment variable authorizes only reserved synthetic probe rows inside the
+post-deploy bundle. Without it, mutating scheduler and auto-audio probes stop before
+schema initialization or probe-ledger writes. `production_gate.py` scopes this
+authorization automatically after the restore-target preflight.
 
 `regression_gate.py` refuses to run on the live production host by default. The emergency override is deliberately noisy:
 

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Mapping
 
 ROOT = Path(__file__).resolve().parents[1]
+PROBE_MUTATION_AUTH_ENV = "METRO_PROBE_ALLOW_LIVE_DB_MUTATION"
 
 
 def _load_env_file(path: str | Path | None) -> dict[str, str]:
@@ -126,6 +127,11 @@ def main() -> int:
 
     if not _restore_target_configured(gate_env):
         raise SystemExit("PRODUCTION_GATE_FAILED restore target is required")
+
+    # This scoped authorization exists only for children of the non-bypassable
+    # production gate. Standalone probe invocations still require an explicit
+    # CLI flag and fail before DB access otherwise.
+    gate_env[PROBE_MUTATION_AUTH_ENV] = "1"
 
     print("==> handler DB boundary audit", flush=True)
     _run([sys.executable, "scripts/handler_db_boundary_audit.py"], env=gate_env)
