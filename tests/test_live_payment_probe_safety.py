@@ -118,7 +118,7 @@ def test_cleanup_targets_exact_payment_prefix_and_canonical_account_rows(
             return None
 
     monkeypatch.setattr(probe_module, "db", lambda: Context())
-    payment_id = "synthetic-probe-yookassa-test"
+    payment_id = "synthetic-probe-yookassa-practice_personal_month-test"
 
     touched = probe_module._cleanup_probe_rows(user_id=-910_000_301, payment_id=payment_id)
 
@@ -127,8 +127,19 @@ def test_cleanup_targets_exact_payment_prefix_and_canonical_account_rows(
     assert "DELETE FROM account_channel_identities" in sql_text
     assert "DELETE FROM accounts" in sql_text
     assert "DELETE FROM account_audio_progress" in sql_text
-    outbox_params = [params for sql, params in executed if "premium_delivery_outbox WHERE idempotency_key" in sql]
-    assert outbox_params == [(f"premium_delivery:yookassa:{payment_id}:%",)]
+    assert " LIKE " not in sql_text
+    outbox = [
+        (sql, params)
+        for sql, params in executed
+        if "DELETE FROM premium_delivery_outbox WHERE substr(idempotency_key" in sql
+    ]
+    prefix = f"premium_delivery:yookassa:{payment_id}:"
+    assert outbox == [
+        (
+            "DELETE FROM premium_delivery_outbox WHERE substr(idempotency_key, 1, ?)=?",
+            (len(prefix), prefix),
+        )
+    ]
 
 
 def test_applied_probe_records_clean_only_after_zero_residual(monkeypatch: pytest.MonkeyPatch) -> None:
