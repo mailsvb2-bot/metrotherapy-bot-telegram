@@ -20,9 +20,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from services.probe_safety import new_synthetic_user_id
 
-ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROD_ENV_FILE = "/etc/metrotherapy/metrotherapy.env"
 
 
