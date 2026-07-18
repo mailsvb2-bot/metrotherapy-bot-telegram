@@ -2,11 +2,11 @@ from __future__ import annotations
 
 """User Scenario Gate.
 
-Hermetic acceptance gate for the critical user path. The default mode does not
-load production env, does not call Telegram, does not call YooKassa, and uses a
-private temporary SQLite database. Production mode reuses the same synthetic
-journey probe against the configured deployment DB and still avoids provider
-etwork calls and Telegram sends.
+Hermetic mode does not load production env, call Telegram, or call YooKassa. It
+uses a private temporary SQLite database and explicitly authorizes mutation only
+inside that disposable database. Production mode reuses the same synthetic
+journey probe against the configured deployment DB and therefore requires the
+scoped production authorization environment established by ``production_gate``.
 """
 
 import argparse
@@ -20,8 +20,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from services.probe_safety import new_synthetic_user_id
+
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SYNTHETIC_USER_ID = -910_000_701
 DEFAULT_PROD_ENV_FILE = "/etc/metrotherapy/metrotherapy.env"
 
 
@@ -110,6 +111,7 @@ def _build_checks(payload: dict[str, Any], *, returncode: int, keep_artifacts: b
         "probe_ok": payload.get("ok") is True,
         "no_problems": not payload.get("problems"),
         "cleanup_clean_or_kept": cleanup_status in ({"clean", "kept"} if keep_artifacts else {"clean"}),
+        "zero_residual_after_cleanup": keep_artifacts or _int(payload, "residual_rows") == 0,
         "demo_ack_ok": payload.get("demo_ack_ok") is True,
         "payment_granted_tokens": _int(payload, "wallet_delta_after_payment") > 0,
         "payment_created_entitlement": _int(payload, "entitlement_rows_delta") > 0,
@@ -121,7 +123,15 @@ def _build_checks(payload: dict[str, Any], *, returncode: int, keep_artifacts: b
     return checks
 
 
-def run_gate(*, mode: str, env_file: str, user_id: int, keep_artifacts: bool, timeout_sec: int) -> UserScenarioGateResult:
+def run_gate(
+    *,
+    mode: str,
+    env_file: str,
+    user_id: int | None,
+    keep_artifacts: bool,
+    timeout_sec: int,
+) -> UserScenarioGateResult:
+    resolved_user_id = int(user_id) if user_id is not None else int(new_synthetic_user_id())
     temp_dir = Path(tempfile.mkdtemp(prefix="metro_user_scenario_gate_"))
     temp_db = temp_dir / "scenario.db"
     try:
@@ -138,9 +148,11 @@ def run_gate(*, mode: str, env_file: str, user_id: int, keep_artifacts: bool, ti
             "--env-file",
             probe_env_file,
             "--user-id",
-            str(int(user_id)),
+            str(resolved_user_id),
             "--json",
         ]
+        if mode == "hermetic":
+            cmd.append("--allow-live-db-mutation")
         if keep_artifacts:
             cmd.append("--keep-artifacts")
 
@@ -157,12 +169,12 @@ def run_gate(*, mode: str, env_file: str, user_id: int, keep_artifacts: bool, ti
         try:
             payload = _last_json_object(output)
         except (json.JSONDecodeError, ValueError) as exc:
-            detail = f"probe_json_error:{type(exc).__name__}:{exc}\n{_tail(output)}"
+            detail = f"probe_json_error:{type(exc).__name__}\n{_tail(output)}"
             checks = {"probe_json_found": False, "probe_exit_zero": proc.returncode == 0}
             return UserScenarioGateResult(
                 ok=False,
                 mode=mode,
-                user_id=int(user_id),
+                user_id=resolved_user_id,
                 checks=checks,
                 probe={},
                 probe_returncode=int(proc.returncode),
@@ -176,21 +188,21 @@ def run_gate(*, mode: str, env_file: str, user_id: int, keep_artifacts: bool, ti
         return UserScenarioGateResult(
             ok=ok,
             mode=mode,
-            user_id=int(user_id),
+            user_id=resolved_user_id,
             checks=checks,
             probe=payload,
             probe_returncode=int(proc.returncode),
             detail=detail,
         )
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
         return UserScenarioGateResult(
             ok=False,
             mode=mode,
-            user_id=int(user_id),
+            user_id=resolved_user_id,
             checks={"probe_timeout": False},
             probe={},
             probe_returncode=124,
-            detail=f"TimeoutExpired:{exc}",
+            detail="probe_timeout",
         )
     finally:
         if not keep_artifacts or mode != "hermetic":
@@ -201,7 +213,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run hermetic critical user scenario acceptance gate")
     parser.add_argument("--mode", choices=("hermetic", "prod"), default="hermetic")
     parser.add_argument("--env-file", default=DEFAULT_PROD_ENV_FILE)
-    parser.add_argument("--user-id", type=int, default=DEFAULT_SYNTHETIC_USER_ID)
+    parser.add_argument("--user-id", type=int, default=None)
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--timeout-sec", type=int, default=120)
     parser.add_argument("--json", action="store_true")
@@ -210,7 +222,7 @@ def main() -> int:
     result = run_gate(
         mode=str(args.mode),
         env_file=str(args.env_file),
-        user_id=int(args.user_id),
+        user_id=int(args.user_id) if args.user_id is not None else None,
         keep_artifacts=bool(args.keep_artifacts),
         timeout_sec=int(args.timeout_sec),
     )
@@ -222,8 +234,8 @@ def main() -> int:
         print(
             "USER_SCENARIO_GATE_OK "
             f"mode={result.mode} user_id={result.user_id} "
-            f"cleanup={probe.get('cleanup_status')} rows_touched={probe.get('rows_touched')} "
-            f"wallet_delta={probe.get('wallet_delta_after_payment')} "
+            f"cleanup={probe.get('cleanup_status')} residual={probe.get('residual_rows')} "
+            f"rows_touched={probe.get('rows_touched')} wallet_delta={probe.get('wallet_delta_after_payment')} "
             f"used_tokens={probe.get('used_tokens_after_paid_audio')}"
         )
     else:
