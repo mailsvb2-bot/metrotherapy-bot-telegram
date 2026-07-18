@@ -2,11 +2,10 @@ from __future__ import annotations
 
 """User Scenario Gate.
 
-Hermetic mode does not load production env, call Telegram, or call YooKassa. It
-uses a private temporary SQLite database and explicitly authorizes mutation only
-inside that disposable database. Production mode reuses the same synthetic
-journey probe against the configured deployment DB and therefore requires the
-scoped production authorization environment established by ``production_gate``.
+Hermetic mode owns a private temporary SQLite database and explicitly authorizes
+its synthetic writes. Production mode reuses the same probe against configured
+storage but accepts mutation authorization only from the scoped production gate
+or an operator-provided environment variable.
 """
 
 import argparse
@@ -21,11 +20,6 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from services.probe_safety import new_synthetic_user_id
-
 DEFAULT_PROD_ENV_FILE = "/etc/metrotherapy/metrotherapy.env"
 
 
@@ -42,11 +36,6 @@ class UserScenarioGateResult:
 
 def _smoke_bot_token() -> str:
     return "".join(("1234", "56789", ":", "ABCDE", "FGHIJ", "KLMNO", "PQRST", "UVWXY", "Zabcd", "efghi"))
-
-
-def _tail(text: str, *, max_lines: int = 80) -> str:
-    lines = (text or "").splitlines()
-    return "\n".join(lines[-max_lines:])
 
 
 def _last_json_object(text: str) -> dict[str, Any]:
@@ -134,9 +123,9 @@ def run_gate(
     keep_artifacts: bool,
     timeout_sec: int,
 ) -> UserScenarioGateResult:
-    resolved_user_id = int(user_id) if user_id is not None else int(new_synthetic_user_id())
     temp_dir = Path(tempfile.mkdtemp(prefix="metro_user_scenario_gate_"))
     temp_db = temp_dir / "scenario.db"
+    requested_user_id = int(user_id) if user_id is not None else 0
     try:
         if mode == "prod":
             probe_env = _prod_env()
@@ -150,14 +139,14 @@ def run_gate(
             "scripts/probe_user_journey_e2e.py",
             "--env-file",
             probe_env_file,
-            "--user-id",
-            str(resolved_user_id),
             "--json",
         ]
-        if mode == "hermetic":
-            cmd.append("--allow-live-db-mutation")
+        if user_id is not None:
+            cmd.extend(("--user-id", str(int(user_id))))
         if keep_artifacts:
             cmd.append("--keep-artifacts")
+        if mode == "hermetic":
+            cmd.append("--allow-live-db-mutation")
 
         proc = subprocess.run(  # nosec B603 - fixed local probe command, no shell
             cmd,
@@ -172,22 +161,22 @@ def run_gate(
         try:
             payload = _last_json_object(output)
         except (json.JSONDecodeError, ValueError) as exc:
-            detail = f"probe_json_error:{type(exc).__name__}\n{_tail(output)}"
             checks = {"probe_json_found": False, "probe_exit_zero": proc.returncode == 0}
             return UserScenarioGateResult(
                 ok=False,
                 mode=mode,
-                user_id=resolved_user_id,
+                user_id=requested_user_id,
                 checks=checks,
                 probe={},
                 probe_returncode=int(proc.returncode),
-                detail=detail,
+                detail=f"probe_json_error:{type(exc).__name__}",
             )
 
+        resolved_user_id = _int(payload, "user_id") or requested_user_id
         checks = _build_checks(payload, returncode=int(proc.returncode), keep_artifacts=keep_artifacts)
         ok = all(checks.values())
         failed = [name for name, passed in checks.items() if not passed]
-        detail = "ok" if ok else f"failed_checks={failed}; probe_tail={_tail(output)}"
+        detail = "ok" if ok else f"failed_checks={failed}"
         return UserScenarioGateResult(
             ok=ok,
             mode=mode,
@@ -201,7 +190,7 @@ def run_gate(
         return UserScenarioGateResult(
             ok=False,
             mode=mode,
-            user_id=resolved_user_id,
+            user_id=requested_user_id,
             checks={"probe_timeout": False},
             probe={},
             probe_returncode=124,
@@ -236,9 +225,9 @@ def main() -> int:
         probe = result.probe
         print(
             "USER_SCENARIO_GATE_OK "
-            f"mode={result.mode} user_id={result.user_id} "
-            f"cleanup={probe.get('cleanup_status')} residual={probe.get('residual_rows')} "
-            f"rows_touched={probe.get('rows_touched')} wallet_delta={probe.get('wallet_delta_after_payment')} "
+            f"mode={result.mode} user_id={result.user_id} cleanup={probe.get('cleanup_status')} "
+            f"residual={probe.get('residual_rows')} rows_touched={probe.get('rows_touched')} "
+            f"wallet_delta={probe.get('wallet_delta_after_payment')} "
             f"used_tokens={probe.get('used_tokens_after_paid_audio')}"
         )
     else:
