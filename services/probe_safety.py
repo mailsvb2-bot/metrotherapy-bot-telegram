@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Shared safety primitives for synthetic probes that can mutate live storage."""
 
+import os
 import uuid
 
 from services.probe_ledger import (
@@ -10,6 +11,8 @@ from services.probe_ledger import (
     assert_synthetic_user_id,
 )
 
+PROBE_MUTATION_AUTH_ENV = "METRO_PROBE_ALLOW_LIVE_DB_MUTATION"
+
 
 class ProbeMutationAuthorizationRequired(RuntimeError):
     """Raised before any DB access when a mutating probe was not authorized."""
@@ -17,6 +20,10 @@ class ProbeMutationAuthorizationRequired(RuntimeError):
 
 class ProbeInvariantError(RuntimeError):
     """Raised when a synthetic probe observes a broken production invariant."""
+
+
+def mutation_authorized(explicit: bool) -> bool:
+    return bool(explicit) or (os.getenv(PROBE_MUTATION_AUTH_ENV) or "").strip() == "1"
 
 
 def require_live_db_mutation(allowed: bool) -> None:
