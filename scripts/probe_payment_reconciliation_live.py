@@ -90,13 +90,14 @@ def _wallet(conn: Any, user_id: int) -> int:
     return int(row[0]) if row else 0
 
 
-def _outbox_pattern(payment_id: str) -> str:
-    return f"premium_delivery:{PROVIDER}:{payment_id}:%"
+def _outbox_prefix(payment_id: str) -> str:
+    return f"premium_delivery:{PROVIDER}:{payment_id}:"
 
 
 def _snapshot(*, user_id: int, payment_id: str) -> dict[str, int]:
     uid = int(user_id)
     external_uid = str(uid)
+    outbox_prefix = _outbox_prefix(payment_id)
     with db() as conn:
         return {
             "wallet": _wallet(conn, uid),
@@ -118,8 +119,8 @@ def _snapshot(*, user_id: int, payment_id: str) -> dict[str, int]:
             ),
             "outbox": _row_count(
                 conn,
-                "SELECT COUNT(*) FROM premium_delivery_outbox WHERE idempotency_key LIKE ?",
-                (_outbox_pattern(payment_id),),
+                "SELECT COUNT(*) FROM premium_delivery_outbox WHERE substr(idempotency_key, 1, ?)=?",
+                (len(outbox_prefix), outbox_prefix),
             ),
             "consultation": _row_count(
                 conn,
@@ -176,6 +177,7 @@ def _cleanup_probe_rows(*, user_id: int, payment_id: str) -> int:
     assert_synthetic_user_id(int(user_id))
     uid = int(user_id)
     external_uid = str(uid)
+    outbox_prefix = _outbox_prefix(payment_id)
     touched = 0
     with db() as conn:
         payment_statements = (
@@ -184,8 +186,8 @@ def _cleanup_probe_rows(*, user_id: int, payment_id: str) -> int:
                 (PROVIDER, payment_id),
             ),
             (
-                "DELETE FROM premium_delivery_outbox WHERE idempotency_key LIKE ?",
-                (_outbox_pattern(payment_id),),
+                "DELETE FROM premium_delivery_outbox WHERE substr(idempotency_key, 1, ?)=?",
+                (len(outbox_prefix), outbox_prefix),
             ),
             (
                 "DELETE FROM premium_entitlements WHERE provider=? AND provider_payment_id=?",
