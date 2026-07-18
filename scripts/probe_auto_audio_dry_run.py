@@ -4,7 +4,7 @@ from __future__ import annotations
 
 The historical filename contains ``dry_run`` because the probe never sends a
 Telegram message or calls a provider. It does mutate synthetic rows in the
-active DB, so callers must now authorize that mutation explicitly.
+active DB, so callers must explicitly authorize that mutation.
 """
 
 import argparse
@@ -30,6 +30,7 @@ from services.probe_ledger import assert_synthetic_user_id, finish_probe_run, st
 from services.probe_safety import (
     ProbeInvariantError,
     ProbeMutationAuthorizationRequired,
+    mutation_authorized,
     new_synthetic_user_id,
     require_live_db_mutation,
     safe_probe_error_code,
@@ -63,8 +64,6 @@ def _delete_with_count(conn: Any, sql: str, params: tuple[Any, ...]) -> int:
 
 
 def _cleanup_probe_rows(*, user_id: int) -> int:
-    """Remove every durable row the reserved synthetic identity can create."""
-
     assert_synthetic_user_id(int(user_id))
     uid = int(user_id)
     external_uid = str(uid)
@@ -138,8 +137,6 @@ def _ensure_probe_user(*, user_id: int) -> None:
 
 
 def _grant_probe_access(*, user_id: int, run_id: str) -> str:
-    """Grant access through the authority currently used by production."""
-
     uid = int(user_id)
     if token_access_authoritative():
         inserted, wallet, _ = grant_tokens(
@@ -154,7 +151,6 @@ def _grant_probe_access(*, user_id: int, run_id: str) -> str:
         if not inserted or int(wallet.available_tokens) < 1:
             raise ProbeInvariantError("canonical_token_grant_not_persisted")
         return "practice_tokens"
-
     grant(uid, "both", 1, source=PROBE_SOURCE)
     return "legacy_subscription"
 
@@ -183,7 +179,9 @@ def _safe_finish_failure(
         )
     except sqlite3.Error:
         return
-    except (RuntimeError, ValueError):
+    except RuntimeError:
+        return
+    except ValueError:
         return
 
 
@@ -201,8 +199,35 @@ def _cleanup_after_failure(
         return touched, "clean" if residual == 0 else "residual"
     except sqlite3.Error:
         return rows_touched, "cleanup_failed"
-    except (RuntimeError, ValueError):
+    except RuntimeError:
         return rows_touched, "cleanup_failed"
+    except ValueError:
+        return rows_touched, "cleanup_failed"
+
+
+def _record_failure(
+    *,
+    user_id: int,
+    run_id: str,
+    rows_touched: int,
+    keep_artifacts: bool,
+    error: BaseException,
+    slot: str,
+    access_backend: str,
+) -> None:
+    touched, cleanup_status = _cleanup_after_failure(
+        user_id=user_id,
+        rows_touched=rows_touched,
+        keep_artifacts=keep_artifacts,
+    )
+    _safe_finish_failure(
+        run_id=run_id,
+        rows_touched=touched,
+        cleanup_status=cleanup_status,
+        error=error,
+        slot=slot,
+        access_backend=access_backend,
+    )
 
 
 def run_probe(
@@ -233,10 +258,8 @@ def run_probe(
 
     try:
         rows_touched += _cleanup_probe_rows(user_id=int(user_id))
-
         _ensure_probe_user(user_id=int(user_id))
         rows_touched += 1
-
         access_backend = _grant_probe_access(user_id=int(user_id), run_id=run_id)
         rows_touched += 1
         if not has_access(int(user_id), normalized_slot):
@@ -249,7 +272,6 @@ def run_probe(
         local_day = datetime.now(timezone.utc).date().isoformat()
         scheduled_at = for_pre_score(int(user_id), local_day, normalized_slot)
         kind = _kind_for_slot(normalized_slot)
-
         if not mark_delivery_once(int(user_id), kind, "pre_score", scheduled_at):
             raise ProbeInvariantError("pre_score_idempotency_duplicate")
         rows_touched += 1
@@ -308,30 +330,22 @@ def run_probe(
             rows_touched=rows_touched,
         )
     except sqlite3.Error as exc:
-        touched, cleanup_status = _cleanup_after_failure(
+        _record_failure(
             user_id=int(user_id),
+            run_id=run_id,
             rows_touched=rows_touched,
             keep_artifacts=keep_artifacts,
-        )
-        _safe_finish_failure(
-            run_id=run_id,
-            rows_touched=touched,
-            cleanup_status=cleanup_status,
             error=exc,
             slot=normalized_slot,
             access_backend=access_backend,
         )
         raise
     except RuntimeError as exc:
-        touched, cleanup_status = _cleanup_after_failure(
+        _record_failure(
             user_id=int(user_id),
+            run_id=run_id,
             rows_touched=rows_touched,
             keep_artifacts=keep_artifacts,
-        )
-        _safe_finish_failure(
-            run_id=run_id,
-            rows_touched=touched,
-            cleanup_status=cleanup_status,
             error=exc,
             slot=normalized_slot,
             access_backend=access_backend,
@@ -354,17 +368,12 @@ def main() -> int:
             user_id=user_id,
             slot=str(args.slot),
             keep_artifacts=bool(args.keep_artifacts),
-            allow_live_db_mutation=bool(args.allow_live_db_mutation),
+            allow_live_db_mutation=mutation_authorized(bool(args.allow_live_db_mutation)),
         )
     except ProbeMutationAuthorizationRequired as exc:
         print(
             json.dumps(
-                {
-                    "ok": False,
-                    "applied": False,
-                    "database_touched": False,
-                    "error_code": str(exc),
-                },
+                {"ok": False, "applied": False, "database_touched": False, "error_code": str(exc)},
                 ensure_ascii=False,
                 sort_keys=True,
             )
