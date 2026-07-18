@@ -6,21 +6,20 @@ This document preserves useful ideas from old donor branches without merging sta
 
 ### Live payment closure probe
 
-Goal: provide an explicit, manual proof that public checkout and local YooKassa webhook reconciliation work end-to-end.
+Implemented on current `main` through `scripts/probe_payment_reconciliation_live.py`.
 
-Required safety properties:
+The helper now:
 
-- must require `--allow-live-db-mutation` before writing to the configured app DB;
-- must write synthetic payment ids with a visible prefix;
-- must emit a JSON report;
-- must not contain production secrets;
-- must not default to mutating production state silently.
+- requires paired explicit mutation authorization before writing;
+- uses visibly synthetic payment and reserved user ids;
+- verifies duplicate-webhook idempotency;
+- emits sanitized JSON;
+- performs exact cleanup and zero-residual verification;
+- defaults to a true no-DB dry-run.
 
 ### Live duplicate-webhook idempotency probe
 
-Goal: prove that duplicate successful YooKassa webhooks do not double-grant wallet balance, payment rows, token grants, ledger rows, premium entitlements, delivery outbox rows or consultation requests.
-
-Current main already has unit coverage in `tests/test_yookassa_webhook_idempotency.py`. A live probe may be added later with the same explicit mutation guard.
+Implemented as part of the guarded live payment closure probe. The same synthetic webhook is replayed twice and the second application must not create another wallet grant, payment row, token grant, ledger row, premium entitlement, delivery outbox row or consultation request.
 
 ### DB stress diagnostic
 
@@ -55,16 +54,18 @@ Acceptance criteria for that future branch:
 
 ## P2 — MAX webhook registration tool
 
-Donor branches contained a `register_max_webhook.py` tool. Preserve the idea, but do not add an auto-mutating production tool without guardrails.
+Implemented on current `main` through `scripts/register_max_webhook.py`.
 
-Future implementation requirements:
+Current contract:
 
-- explicit `--apply` flag;
-- dry-run default;
-- no secrets in stdout;
-- clear JSON report;
-- validates `MAX_BOT_TOKEN`, public webhook URL and expected endpoint before registering;
-- never runs from startup automatically.
+- explicit `--apply` flag is required before provider network access or mutation;
+- dry-run is the default and performs no network calls;
+- bot token, webhook secret, request headers and raw provider bodies never appear in stdout;
+- output is a sanitized JSON report;
+- `MAX_BOT_TOKEN`, a bare HTTPS public origin, exact `/webhooks/max` endpoint, secret format and official API2 origin are validated;
+- existing exact subscriptions are detected and do not trigger a duplicate POST;
+- a newly created subscription is re-read and must be visible before success;
+- the helper is operator-invoked only and never runs from application startup.
 
 ## P2 — split messenger webhook runtime
 
