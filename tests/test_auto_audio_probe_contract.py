@@ -15,7 +15,8 @@ def test_auto_audio_probe_uses_current_paid_access_authority() -> None:
     assert 'return "practice_tokens"' in text
     assert 'return "legacy_subscription"' in text
     assert "synthetic subscription did not grant access" not in text
-    assert "paid access was not visible backend=" in text
+    assert 'ProbeInvariantError("paid_access_not_visible")' in text
+    assert '"access_backend": access_backend' in text
 
 
 def test_auto_audio_probe_cleans_token_wallet_artifacts() -> None:
