@@ -312,10 +312,57 @@ def _safe_finish_failure(
                 "error_code": error_code,
             },
         )
-    except (sqlite3.Error, RuntimeError, ValueError, TypeError, KeyError, AttributeError, OSError):
-        # The original exception remains authoritative. Never replace it with a
-        # secondary ledger-write failure or print connection details.
+    except sqlite3.Error:
         return
+    except (RuntimeError, ValueError):
+        return
+
+
+def _attempt_failure_cleanup(
+    *,
+    user_id: int,
+    payment_id: str,
+    rows_touched: int,
+    cleanup_status: str,
+    cleanup: bool,
+) -> tuple[int, str]:
+    if not cleanup:
+        return rows_touched, cleanup_status
+    try:
+        touched = rows_touched + _cleanup_probe_rows(user_id=user_id, payment_id=payment_id)
+        residual = _residual_row_count(user_id=user_id, payment_id=payment_id)
+        return touched, "clean" if residual == 0 else "residual"
+    except sqlite3.Error:
+        return rows_touched, "cleanup_failed"
+    except (RuntimeError, ValueError):
+        return rows_touched, "cleanup_failed"
+
+
+def _record_probe_failure(
+    *,
+    run_id: str,
+    user_id: int,
+    payment_id: str,
+    rows_touched: int,
+    cleanup_status: str,
+    cleanup: bool,
+    exc: BaseException,
+) -> None:
+    touched, final_cleanup_status = _attempt_failure_cleanup(
+        user_id=user_id,
+        payment_id=payment_id,
+        rows_touched=rows_touched,
+        cleanup_status=cleanup_status,
+        cleanup=cleanup,
+    )
+    _safe_finish_failure(
+        run_id=run_id,
+        user_id=user_id,
+        payment_id=payment_id,
+        rows_touched=touched,
+        cleanup_status=final_cleanup_status,
+        exc=exc,
+    )
 
 
 def probe(
@@ -428,20 +475,25 @@ def probe(
             evidence=asdict(result),
         )
         return result
-    except (sqlite3.Error, RuntimeError, ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
-        if cleanup:
-            try:
-                rows_touched += _cleanup_probe_rows(user_id=uid, payment_id=payment_id)
-                residual = _residual_row_count(user_id=uid, payment_id=payment_id)
-                cleanup_status = "clean" if residual == 0 else "residual"
-            except (sqlite3.Error, RuntimeError, ValueError, TypeError, KeyError, AttributeError, OSError):
-                cleanup_status = "cleanup_failed"
-        _safe_finish_failure(
+    except sqlite3.Error as exc:
+        _record_probe_failure(
             run_id=run_id,
             user_id=uid,
             payment_id=payment_id,
             rows_touched=rows_touched,
             cleanup_status=cleanup_status,
+            cleanup=cleanup,
+            exc=exc,
+        )
+        raise
+    except (RuntimeError, ValueError) as exc:
+        _record_probe_failure(
+            run_id=run_id,
+            user_id=uid,
+            payment_id=payment_id,
+            rows_touched=rows_touched,
+            cleanup_status=cleanup_status,
+            cleanup=cleanup,
             exc=exc,
         )
         raise
@@ -480,6 +532,22 @@ def _result_ok(item: LiveReconciliationProbeResult) -> bool:
         and item.cleanup_status in {"clean", "kept"}
         and (item.cleanup_status != "clean" or item.residual_rows == 0)
     )
+
+
+def _print_probe_failure(*, apply: bool, exc: BaseException) -> int:
+    print(
+        json.dumps(
+            {
+                "ok": False,
+                "applied": apply,
+                "database_touched": apply,
+                "error_code": f"probe_failed:{type(exc).__name__}",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 2
 
 
 def main() -> int:
@@ -532,20 +600,10 @@ def main() -> int:
             )
             for package_id in packages
         ]
-    except (sqlite3.Error, RuntimeError, ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "applied": apply,
-                    "database_touched": apply,
-                    "error_code": f"probe_failed:{type(exc).__name__}",
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-        return 2
+    except sqlite3.Error as exc:
+        return _print_probe_failure(apply=apply, exc=exc)
+    except (RuntimeError, ValueError) as exc:
+        return _print_probe_failure(apply=apply, exc=exc)
 
     report = {
         "ok": all(_result_ok(item) for item in results),
