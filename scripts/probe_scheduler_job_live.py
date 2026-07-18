@@ -4,8 +4,8 @@ from __future__ import annotations
 
 The probe never sends messages. Because it writes synthetic rows to the active
 storage, callers must explicitly authorize live DB mutation. Production deploy
-passes that authorization deliberately; an accidental standalone invocation
-fails before schema initialization or probe-ledger writes.
+passes a scoped authorization environment variable; an accidental standalone
+invocation fails before schema initialization or probe-ledger writes.
 """
 
 import argparse
@@ -29,6 +29,7 @@ from services.probe_ledger import assert_synthetic_user_id, finish_probe_run, st
 from services.probe_safety import (
     ProbeInvariantError,
     ProbeMutationAuthorizationRequired,
+    mutation_authorized,
     new_synthetic_user_id,
     require_live_db_mutation,
     safe_probe_error_code,
@@ -69,8 +70,6 @@ def _delete_with_count(conn: Any, sql: str, params: tuple[Any, ...]) -> int:
 
 
 def _cleanup_probe_rows(*, user_id: int, run_id: str, job_key: str) -> int:
-    """Delete only rows owned by one reserved synthetic probe identity."""
-
     assert_synthetic_user_id(int(user_id))
     touched = 0
     with db() as conn:
@@ -135,7 +134,9 @@ def _safe_finish_failure(
         )
     except sqlite3.Error:
         return
-    except (RuntimeError, ValueError):
+    except RuntimeError:
+        return
+    except ValueError:
         return
 
 
@@ -155,8 +156,35 @@ def _cleanup_after_failure(
         return touched, "clean" if residual == 0 else "residual"
     except sqlite3.Error:
         return rows_touched, "cleanup_failed"
-    except (RuntimeError, ValueError):
+    except RuntimeError:
         return rows_touched, "cleanup_failed"
+    except ValueError:
+        return rows_touched, "cleanup_failed"
+
+
+def _record_failure(
+    *,
+    user_id: int,
+    run_id: str,
+    job_key: str,
+    rows_touched: int,
+    keep_artifacts: bool,
+    error: BaseException,
+) -> None:
+    touched, cleanup_status = _cleanup_after_failure(
+        user_id=user_id,
+        run_id=run_id,
+        job_key=job_key,
+        rows_touched=rows_touched,
+        keep_artifacts=keep_artifacts,
+    )
+    _safe_finish_failure(
+        run_id=run_id,
+        rows_touched=touched,
+        cleanup_status=cleanup_status,
+        error=error,
+        job_key=job_key,
+    )
 
 
 def run_probe(
@@ -183,7 +211,6 @@ def run_probe(
 
     try:
         rows_touched += _cleanup_probe_rows(user_id=user_id, run_id=run_id, job_key=job_key)
-
         inserted = add_job(int(user_id), PROBE_JOB_TYPE, run_at, payload, job_key=job_key)
         if not inserted:
             raise ProbeInvariantError("enqueue_returned_duplicate")
@@ -194,16 +221,13 @@ def run_probe(
         if target is None:
             raise ProbeInvariantError("probe_job_not_claimed")
 
-        idempotency_ok = mark_delivery_once(int(user_id), "job", PROBE_JOB_TYPE, job_key)
-        if not idempotency_ok:
+        if not mark_delivery_once(int(user_id), "job", PROBE_JOB_TYPE, job_key):
             raise ProbeInvariantError("compatibility_idempotency_returned_false")
         if was_delivered(int(user_id), "job", PROBE_JOB_TYPE, job_key):
             raise ProbeInvariantError("pre_effect_marker_written")
-
         if not mark_done(int(target.id), str(target.lock_token)):
             raise ProbeInvariantError("mark_done_returned_false")
         rows_touched += 1
-
         if not was_delivered(int(user_id), "job", PROBE_JOB_TYPE, job_key):
             raise ProbeInvariantError("final_idempotency_row_missing")
 
@@ -212,7 +236,6 @@ def run_probe(
                 "SELECT done_at, lock_token, last_error FROM jobs WHERE id=? AND job_key=?",
                 (int(target.id), job_key),
             ).fetchone()
-
         if row is None:
             raise ProbeInvariantError("probe_job_disappeared_before_verification")
         if not _row_value(row, "done_at", 0):
@@ -236,11 +259,7 @@ def run_probe(
             status="ok",
             cleanup_status=cleanup_status,
             rows_touched=rows_touched,
-            evidence={
-                "job_id": int(target.id),
-                "job_key": job_key,
-                "residual_rows": residual_rows,
-            },
+            evidence={"job_id": int(target.id), "job_key": job_key, "residual_rows": residual_rows},
         )
         return ProbeResult(
             job_id=int(target.id),
@@ -252,35 +271,33 @@ def run_probe(
             rows_touched=rows_touched,
         )
     except sqlite3.Error as exc:
-        touched, cleanup_status = _cleanup_after_failure(
+        _record_failure(
             user_id=user_id,
             run_id=run_id,
             job_key=job_key,
             rows_touched=rows_touched,
             keep_artifacts=keep_artifacts,
-        )
-        _safe_finish_failure(
-            run_id=run_id,
-            rows_touched=touched,
-            cleanup_status=cleanup_status,
             error=exc,
-            job_key=job_key,
         )
         raise
-    except (ProbeInvariantError, RuntimeError, ValueError) as exc:
-        touched, cleanup_status = _cleanup_after_failure(
+    except RuntimeError as exc:
+        _record_failure(
             user_id=user_id,
             run_id=run_id,
             job_key=job_key,
             rows_touched=rows_touched,
             keep_artifacts=keep_artifacts,
-        )
-        _safe_finish_failure(
-            run_id=run_id,
-            rows_touched=touched,
-            cleanup_status=cleanup_status,
             error=exc,
+        )
+        raise
+    except ValueError as exc:
+        _record_failure(
+            user_id=user_id,
+            run_id=run_id,
             job_key=job_key,
+            rows_touched=rows_touched,
+            keep_artifacts=keep_artifacts,
+            error=exc,
         )
         raise
 
@@ -298,16 +315,16 @@ def main() -> int:
         result = run_probe(
             user_id=user_id,
             keep_artifacts=bool(args.keep_artifacts),
-            allow_live_db_mutation=bool(args.allow_live_db_mutation),
+            allow_live_db_mutation=mutation_authorized(bool(args.allow_live_db_mutation)),
         )
     except ProbeMutationAuthorizationRequired as exc:
-        payload = {
-            "ok": False,
-            "applied": False,
-            "database_touched": False,
-            "error_code": str(exc),
-        }
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        print(
+            json.dumps(
+                {"ok": False, "applied": False, "database_touched": False, "error_code": str(exc)},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
         return 2
 
     if args.json:
