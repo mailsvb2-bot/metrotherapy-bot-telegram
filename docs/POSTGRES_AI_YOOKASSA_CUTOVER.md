@@ -114,6 +114,8 @@ Expected AI fields:
 
 ## 7. YooKassa reconciliation probe
 
+The probe never contacts YooKassa and never charges money. It verifies the local reconciliation and entitlement path with synthetic identifiers only.
+
 Dry-run first:
 
 ```bash
@@ -121,8 +123,17 @@ cd /root/metrotherapy
 set -a
 source /etc/metrotherapy/metrotherapy.env
 set +a
-python scripts/probe_payment_reconciliation_live.py --package practice_start_7 --source vk --user-id 990000001
+python scripts/probe_payment_reconciliation_live.py \
+  --package practice_start_7 \
+  --source vk
 ```
+
+Dry-run performs no schema initialization, no probe-ledger write and no application-table mutation. Expected report fields:
+
+- `ok: true`
+- `mode: "dry_run"`
+- `applied: false`
+- `database_touched: false`
 
 Controlled mutation probe:
 
@@ -130,18 +141,34 @@ Controlled mutation probe:
 python scripts/probe_payment_reconciliation_live.py \
   --package practice_start_7 \
   --source vk \
-  --user-id 990000001 \
   --apply-webhooks \
-  --allow-live-db-mutation \
-  --duplicate
+  --allow-live-db-mutation
 ```
+
+The two mutation flags are inseparable. Supplying only one fails closed before the probe touches the database. A unique negative user id from the reserved synthetic namespace is generated automatically. To make the id explicit, use a value from `-999999999` through `-900000000`, for example:
+
+```bash
+python scripts/probe_payment_reconciliation_live.py \
+  --package practice_start_7 \
+  --source vk \
+  --user-id -910000301 \
+  --apply-webhooks \
+  --allow-live-db-mutation
+```
+
+The mutation probe always replays the same synthetic webhook twice. No separate duplicate flag exists or is needed.
 
 Expected:
 
 - first webhook is inserted/applied;
 - duplicate webhook is not inserted again;
 - wallet/token delta matches package token count;
+- canonical account and payment-side rows are observed;
+- cleanup removes all synthetic payment, wallet, entitlement, outbox, consultation and account rows;
+- `residual_rows` is zero;
 - report returns `ok: true`.
+
+Use `--keep-artifacts` only together with both mutation flags when an operator explicitly needs retained synthetic evidence. The report then uses `cleanup_status: "kept"` and the probe ledger remains visibly non-clean until the artifacts are removed.
 
 ## 8. Final restart and probes
 
