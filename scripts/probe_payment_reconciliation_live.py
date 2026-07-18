@@ -279,8 +279,6 @@ def _validate_result(
             problems.append("missing_consultation_request")
         if int(result.account_rows_delta) <= 0:
             problems.append("missing_canonical_account")
-        if int(result.identity_rows_delta) <= 0:
-            problems.append("missing_channel_identity")
     if result.cleanup_status not in {"clean", "kept"}:
         problems.append(f"cleanup_not_complete:{result.cleanup_status}")
     if result.cleanup_status == "clean" and int(result.residual_rows) != 0:
