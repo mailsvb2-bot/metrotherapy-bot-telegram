@@ -12,6 +12,7 @@ operator explicitly asks to keep it.
 
 import argparse
 import json
+import sqlite3
 import sys
 import uuid
 from dataclasses import asdict, dataclass
@@ -309,7 +310,7 @@ def _safe_finish_failure(
                 "error_code": error_code,
             },
         )
-    except Exception:
+    except (sqlite3.Error, RuntimeError, ValueError, TypeError, KeyError, AttributeError, OSError):
         # The original exception remains authoritative. Never replace it with a
         # secondary ledger-write failure or print connection details.
         return
@@ -425,13 +426,13 @@ def probe(
             evidence=asdict(result),
         )
         return result
-    except Exception as exc:
+    except (sqlite3.Error, RuntimeError, ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
         if cleanup:
             try:
                 rows_touched += _cleanup_probe_rows(user_id=uid, payment_id=payment_id)
                 residual = _residual_row_count(user_id=uid, payment_id=payment_id)
                 cleanup_status = "clean" if residual == 0 else "residual"
-            except Exception:
+            except (sqlite3.Error, RuntimeError, ValueError, TypeError, KeyError, AttributeError, OSError):
                 cleanup_status = "cleanup_failed"
         _safe_finish_failure(
             run_id=run_id,
@@ -529,7 +530,7 @@ def main() -> int:
             )
             for package_id in packages
         ]
-    except Exception as exc:
+    except (sqlite3.Error, RuntimeError, ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
         print(
             json.dumps(
                 {
