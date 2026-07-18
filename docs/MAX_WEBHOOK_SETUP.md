@@ -71,7 +71,7 @@ When trust installation fails, the worker publishes one sanitized commit beginni
 
 ## Register or refresh the subscription
 
-Load the server environment and run the canonical helper:
+Load the server environment and run the canonical helper in dry-run mode first:
 
 ```bash
 set -a
@@ -80,14 +80,34 @@ set +a
 python scripts/register_max_webhook.py
 ```
 
-The helper:
+Dry-run is the default. It validates configuration and prints a sanitized JSON plan with:
+
+- `mode: "dry_run"`;
+- `applied: false`;
+- `network_called: false`;
+- the official API2 origin;
+- the exact public `/webhooks/max` endpoint;
+- configured update types.
+
+It does not contact MAX and does not create or change subscriptions.
+
+Apply only after reviewing the dry-run report:
+
+```bash
+python scripts/register_max_webhook.py --apply
+```
+
+Apply mode:
 
 - calls `https://platform-api2.max.ru` only;
 - sends the bot token only in the API `Authorization` header;
-- creates the subscription through `POST /subscriptions`;
+- reads existing subscriptions before mutation;
+- skips `POST /subscriptions` when the exact webhook URL is already active;
+- otherwise creates the subscription through `POST /subscriptions`;
 - passes the webhook secret in the JSON `secret` field;
-- verifies that `/webhooks/max` appears in active subscriptions;
-- never prints the bot token or webhook secret.
+- verifies that `/webhooks/max` appears in active subscriptions after the operation;
+- emits only sanitized status codes and bot summary fields;
+- never prints the bot token, webhook secret, request headers or raw provider response.
 
 The old query-secret registration helper was removed. Do not place webhook secrets into URLs, access logs or operational screenshots.
 
