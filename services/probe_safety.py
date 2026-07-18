@@ -28,7 +28,7 @@ def mutation_authorized(explicit: bool) -> bool:
 
 def require_live_db_mutation(allowed: bool) -> None:
     if not bool(allowed):
-        raise ProbeMutationAuthorizationRequired("live_db_mutation_authorization_required")
+        raise ProbeMutationAuthorizationRequired("probe_mutation_authorization_required")
 
 
 def new_synthetic_user_id() -> int:
