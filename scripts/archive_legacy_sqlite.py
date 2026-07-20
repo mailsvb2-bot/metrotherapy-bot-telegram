@@ -2,21 +2,21 @@ from __future__ import annotations
 
 """Archive the legacy SQLite artifact after Postgres migration.
 
-The script is intentionally conservative:
-- loads the production env file before importing project storage settings;
-- refuses to run unless active storage is Postgres with DATABASE_URL configured;
-- verifies the SQLite artifact can be opened read-only and passes integrity_check;
-- defaults to dry-run and only moves the file with --apply;
-- moves, never deletes, so rollback evidence remains available.
+The command is dry-run by default. Apply mode requires confirmed Postgres storage
+and an operator confirmation that the legacy SQLite file is no longer active.
+The source is copied through SQLite's backup API into a verified hidden artifact,
+published without overwriting an existing archive, verified again, and only then
+removed together with stale WAL/SHM sidecars.
 """
 
 import argparse
 import json
 import os
 import shlex
-import shutil
 import sqlite3
 import sys
+import uuid
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +25,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
 DEFAULT_ARCHIVE_DIRNAME = "legacy_sqlite_archive"
+ARCHIVE_CONFIRMATION = "I_CONFIRM_LEGACY_SQLITE_IS_INACTIVE_AND_POSTGRES_IS_PRIMARY"
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,9 @@ class LegacySqliteArchivePlan:
     integrity_ok: bool | None
     sqlite_page_count: int | None
     sqlite_table_count: int | None
+    archive_verified: bool = False
+    source_removed: bool = False
+    sidecars_removed: int = 0
     reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -53,8 +57,19 @@ class LegacySqliteArchivePlan:
             "integrity_ok": self.integrity_ok,
             "sqlite_page_count": self.sqlite_page_count,
             "sqlite_table_count": self.sqlite_table_count,
+            "archive_verified": self.archive_verified,
+            "source_removed": self.source_removed,
+            "sidecars_removed": self.sidecars_removed,
             "reason": self.reason,
         }
+
+
+@dataclass(frozen=True)
+class _SourceIdentity:
+    device: int
+    inode: int
+    size: int
+    mtime_ns: int
 
 
 def _load_env_file(path: Path | None) -> dict[str, str]:
@@ -87,34 +102,177 @@ def _apply_env(loaded: dict[str, str]) -> None:
         os.environ.setdefault(str(key), str(value))
 
 
+def _resolved(path: Path) -> Path:
+    return path.expanduser().resolve(strict=False)
+
+
+def _readonly_connection(path: Path) -> sqlite3.Connection:
+    uri = _resolved(path).as_uri() + "?mode=ro"
+    return sqlite3.connect(uri, uri=True, timeout=30, check_same_thread=False)
+
+
 def _read_sqlite_metadata(path: Path) -> tuple[bool, int | None, int | None, str]:
-    uri = "file:" + str(path) + "?mode=ro"
     try:
-        conn = sqlite3.connect(uri, uri=True)
-    except sqlite3.Error as exc:
-        return False, None, None, f"sqlite_open_failed:{type(exc).__name__}:{exc}"
-    try:
-        integrity_row = conn.execute("PRAGMA integrity_check").fetchone()
-        integrity_ok = bool(integrity_row and str(integrity_row[0]).lower() == "ok")
-        page_row = conn.execute("PRAGMA page_count").fetchone()
-        table_row = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()
-        page_count = int(page_row[0]) if page_row and page_row[0] is not None else None
-        table_count = int(table_row[0]) if table_row and table_row[0] is not None else None
-        if not integrity_ok:
-            return False, page_count, table_count, "sqlite_integrity_check_failed"
-        return True, page_count, table_count, ""
-    except sqlite3.Error as exc:
-        return False, None, None, f"sqlite_integrity_query_failed:{type(exc).__name__}:{exc}"
-    finally:
-        conn.close()
+        with closing(_readonly_connection(path)) as conn:
+            integrity_row = conn.execute("PRAGMA integrity_check").fetchone()
+            integrity_ok = bool(
+                integrity_row and str(integrity_row[0]).strip().casefold() == "ok"
+            )
+            page_row = conn.execute("PRAGMA page_count").fetchone()
+            table_row = conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+            ).fetchone()
+            page_count = (
+                int(page_row[0])
+                if page_row and page_row[0] is not None
+                else None
+            )
+            table_count = (
+                int(table_row[0])
+                if table_row and table_row[0] is not None
+                else None
+            )
+    except sqlite3.Error:
+        return False, None, None, "sqlite_metadata_read_failed:SQLiteError"
+    except OSError:
+        return False, None, None, "sqlite_metadata_read_failed:OSError"
+    if not integrity_ok:
+        return False, page_count, table_count, "sqlite_integrity_check_failed"
+    return True, page_count, table_count, ""
 
 
 def _archive_target(source: Path, archive_dir: Path) -> Path:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return archive_dir / f"{source.stem}.{stamp}{source.suffix or '.db'}"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return archive_dir / (
+        f"{source.stem}.{stamp}.{uuid.uuid4().hex[:10]}{source.suffix or '.db'}"
+    )
 
 
-def build_archive_plan(*, archive_dir: Path | None, dry_run: bool) -> LegacySqliteArchivePlan:
+def _partial_target(target: Path) -> Path:
+    return target.parent / f".{target.name}.{uuid.uuid4().hex}.partial"
+
+
+def _source_identity(path: Path) -> _SourceIdentity:
+    stat = path.stat()
+    return _SourceIdentity(
+        device=int(stat.st_dev),
+        inode=int(stat.st_ino),
+        size=int(stat.st_size),
+        mtime_ns=int(stat.st_mtime_ns),
+    )
+
+
+def _source_unchanged(path: Path, expected: _SourceIdentity) -> bool:
+    try:
+        return _source_identity(path) == expected
+    except OSError:
+        return False
+
+
+def _quiesce_source(path: Path) -> None:
+    try:
+        with closing(
+            sqlite3.connect(
+                str(path),
+                timeout=1,
+                check_same_thread=False,
+                isolation_level=None,
+            )
+        ) as conn:
+            conn.execute("PRAGMA busy_timeout=1000")
+            mode_row = conn.execute("PRAGMA journal_mode").fetchone()
+            mode = str(mode_row[0] if mode_row else "").strip().casefold()
+            if mode == "wal":
+                checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                if checkpoint and int(checkpoint[0] or 0) != 0:
+                    raise RuntimeError("legacy_sqlite_busy")
+            conn.execute("BEGIN EXCLUSIVE")
+            conn.execute("ROLLBACK")
+    except RuntimeError:
+        raise
+    except sqlite3.Error as exc:
+        raise RuntimeError("legacy_sqlite_busy") from exc
+    except OSError as exc:
+        raise RuntimeError("legacy_sqlite_unavailable") from exc
+
+
+def _copy_database(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.unlink(missing_ok=True)
+    try:
+        with closing(_readonly_connection(source)) as src:
+            with closing(
+                sqlite3.connect(
+                    str(target),
+                    timeout=30,
+                    check_same_thread=False,
+                )
+            ) as dst:
+                src.backup(dst)
+                dst.commit()
+    except sqlite3.Error as exc:
+        target.unlink(missing_ok=True)
+        raise RuntimeError("archive_copy_failed") from exc
+    except OSError as exc:
+        target.unlink(missing_ok=True)
+        raise RuntimeError("archive_copy_failed") from exc
+
+
+def _publish_without_replace(partial: Path, target: Path) -> None:
+    try:
+        os.link(partial, target)
+        partial.unlink()
+    except FileExistsError as exc:
+        raise RuntimeError("archive_target_collision") from exc
+    except OSError as exc:
+        raise RuntimeError("archive_publish_failed") from exc
+
+
+def _remove_source_sidecars(source: Path) -> int:
+    removed = 0
+    for sidecar in (Path(str(source) + "-wal"), Path(str(source) + "-shm")):
+        try:
+            if sidecar.exists():
+                sidecar.unlink()
+                removed += 1
+        except OSError as exc:
+            raise RuntimeError("legacy_sidecar_remove_failed") from exc
+    return removed
+
+
+def _result_from_plan(
+    plan: LegacySqliteArchivePlan,
+    *,
+    ok: bool,
+    action: str,
+    archive_verified: bool = False,
+    source_removed: bool = False,
+    sidecars_removed: int = 0,
+    reason: str = "",
+) -> LegacySqliteArchivePlan:
+    return LegacySqliteArchivePlan(
+        ok=ok,
+        action=action,
+        dry_run=False,
+        source_path=plan.source_path,
+        archive_path=plan.archive_path,
+        active_engine=plan.active_engine,
+        database_url_configured=plan.database_url_configured,
+        integrity_ok=plan.integrity_ok,
+        sqlite_page_count=plan.sqlite_page_count,
+        sqlite_table_count=plan.sqlite_table_count,
+        archive_verified=archive_verified,
+        source_removed=source_removed,
+        sidecars_removed=sidecars_removed,
+        reason=reason,
+    )
+
+
+def build_archive_plan(
+    *,
+    archive_dir: Path | None,
+    dry_run: bool,
+) -> LegacySqliteArchivePlan:
     from services.storage_legacy_audit import storage_legacy_audit
 
     audit = storage_legacy_audit()
@@ -146,7 +304,7 @@ def build_archive_plan(*, archive_dir: Path | None, dry_run: bool) -> LegacySqli
             sqlite_table_count=None,
             reason="no_legacy_path_in_postgres_mode",
         )
-    source = Path(audit.legacy_sqlite_path)
+    source = _resolved(Path(audit.legacy_sqlite_path))
     if not source.exists():
         return LegacySqliteArchivePlan(
             ok=True,
@@ -160,6 +318,20 @@ def build_archive_plan(*, archive_dir: Path | None, dry_run: bool) -> LegacySqli
             sqlite_page_count=None,
             sqlite_table_count=None,
             reason="legacy_sqlite_not_present",
+        )
+    if not source.is_file():
+        return LegacySqliteArchivePlan(
+            ok=False,
+            action="refuse",
+            dry_run=dry_run,
+            source_path=str(source),
+            archive_path=None,
+            active_engine=audit.active_engine,
+            database_url_configured=audit.database_url_configured,
+            integrity_ok=False,
+            sqlite_page_count=None,
+            sqlite_table_count=None,
+            reason="legacy_sqlite_not_a_file",
         )
 
     integrity_ok, page_count, table_count, reason = _read_sqlite_metadata(source)
@@ -178,7 +350,9 @@ def build_archive_plan(*, archive_dir: Path | None, dry_run: bool) -> LegacySqli
             reason=reason,
         )
 
-    target_dir = archive_dir or source.parent / DEFAULT_ARCHIVE_DIRNAME
+    target_dir = _resolved(
+        archive_dir or source.parent / DEFAULT_ARCHIVE_DIRNAME
+    )
     target = _archive_target(source, target_dir)
     return LegacySqliteArchivePlan(
         ok=True,
@@ -194,41 +368,102 @@ def build_archive_plan(*, archive_dir: Path | None, dry_run: bool) -> LegacySqli
     )
 
 
-def archive_legacy_sqlite(*, archive_dir: Path | None = None, dry_run: bool = True) -> LegacySqliteArchivePlan:
+def archive_legacy_sqlite(
+    *,
+    archive_dir: Path | None = None,
+    dry_run: bool = True,
+) -> LegacySqliteArchivePlan:
     plan = build_archive_plan(archive_dir=archive_dir, dry_run=dry_run)
     if not plan.ok or plan.action != "archive" or dry_run:
         return plan
 
     source = Path(str(plan.source_path))
     target = Path(str(plan.archive_path))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(target.parent, 0o700)
-    shutil.move(str(source), str(target))
+    partial = _partial_target(target)
+    published = False
     try:
-        os.chmod(target, 0o600)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(target.parent, 0o700)
+        _quiesce_source(source)
+        identity = _source_identity(source)
+        _copy_database(source, partial)
+        copied_ok, _pages, _tables, copied_reason = _read_sqlite_metadata(partial)
+        if not copied_ok:
+            raise RuntimeError(copied_reason or "archive_partial_integrity_failed")
+        os.chmod(partial, 0o600)
+        _publish_without_replace(partial, target)
+        published = True
+        archived_ok, _pages, _tables, archived_reason = _read_sqlite_metadata(target)
+        if not archived_ok:
+            raise RuntimeError(archived_reason or "archive_final_integrity_failed")
+        if not _source_unchanged(source, identity):
+            raise RuntimeError("legacy_sqlite_changed_during_archive")
+        source.unlink()
+        sidecars_removed = _remove_source_sidecars(source)
+        return _result_from_plan(
+            plan,
+            ok=True,
+            action="archived",
+            archive_verified=True,
+            source_removed=True,
+            sidecars_removed=sidecars_removed,
+        )
+    except RuntimeError as exc:
+        reason = str(exc) if str(exc) else "archive_failed"
+        if published and source.exists():
+            target.unlink(missing_ok=True)
+            published = False
+        if published and not source.exists():
+            return _result_from_plan(
+                plan,
+                ok=False,
+                action="archive_incomplete",
+                archive_verified=True,
+                source_removed=True,
+                reason=reason,
+            )
+        return _result_from_plan(
+            plan,
+            ok=False,
+            action="refuse",
+            archive_verified=False,
+            source_removed=False,
+            reason=reason,
+        )
     except OSError:
-        pass
-
-    return LegacySqliteArchivePlan(
-        ok=True,
-        action="archived",
-        dry_run=False,
-        source_path=str(source),
-        archive_path=str(target),
-        active_engine=plan.active_engine,
-        database_url_configured=plan.database_url_configured,
-        integrity_ok=plan.integrity_ok,
-        sqlite_page_count=plan.sqlite_page_count,
-        sqlite_table_count=plan.sqlite_table_count,
-    )
+        if published and source.exists():
+            target.unlink(missing_ok=True)
+        return _result_from_plan(
+            plan,
+            ok=False,
+            action="refuse",
+            archive_verified=False,
+            source_removed=not source.exists(),
+            reason="archive_filesystem_failed",
+        )
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Archive legacy SQLite artifact after confirmed Postgres migration")
-    parser.add_argument("--apply", action="store_true", help="Move the legacy SQLite file into the archive directory")
+    parser = argparse.ArgumentParser(
+        description="Archive legacy SQLite artifact after confirmed Postgres migration"
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Create a verified archive and remove the inactive legacy SQLite file",
+    )
+    parser.add_argument("--confirm-legacy-inactive", default="")
     parser.add_argument("--json", action="store_true", help="Print JSON only")
-    parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
-    parser.add_argument("--archive-dir", default=os.getenv("METRO_LEGACY_SQLITE_ARCHIVE_DIR", ""))
+    parser.add_argument(
+        "--env-file",
+        default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)),
+    )
+    parser.add_argument(
+        "--archive-dir",
+        default=os.getenv("METRO_LEGACY_SQLITE_ARCHIVE_DIR", ""),
+    )
     args = parser.parse_args()
 
     env_file = Path(args.env_file) if args.env_file else None
@@ -237,8 +472,31 @@ def main() -> int:
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
 
-    archive_dir = Path(args.archive_dir) if str(args.archive_dir or "").strip() else None
-    result = archive_legacy_sqlite(archive_dir=archive_dir, dry_run=not bool(args.apply))
+    if args.apply and str(args.confirm_legacy_inactive or "") != ARCHIVE_CONFIRMATION:
+        result = LegacySqliteArchivePlan(
+            ok=False,
+            action="refuse",
+            dry_run=False,
+            source_path=None,
+            archive_path=None,
+            active_engine="unknown",
+            database_url_configured=bool(os.getenv("DATABASE_URL")),
+            integrity_ok=None,
+            sqlite_page_count=None,
+            sqlite_table_count=None,
+            reason="legacy_inactive_confirmation_invalid",
+        )
+    else:
+        archive_dir = (
+            Path(args.archive_dir)
+            if str(args.archive_dir or "").strip()
+            else None
+        )
+        result = archive_legacy_sqlite(
+            archive_dir=archive_dir,
+            dry_run=not bool(args.apply),
+        )
+
     payload = result.to_dict()
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
@@ -246,9 +504,7 @@ def main() -> int:
         mode = "APPLY" if args.apply else "DRY-RUN"
         print(f"LEGACY_SQLITE_ARCHIVE_{mode} action={result.action} ok={result.ok}")
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    if not result.ok:
-        return 1
-    return 0
+    return 0 if result.ok else 1
 
 
 if __name__ == "__main__":
