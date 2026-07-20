@@ -7,6 +7,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+_RUNTIME_HARDENING_FILES = (
+    "core/middlewares.py",
+    "core/runtime_env.py",
+    "core/telegram_bot.py",
+    "runtime/messenger_ingress.py",
+    "runtime/messenger_max_sender.py",
+    "runtime/messenger_transport_errors.py",
+    "runtime/messenger_vk_sender.py",
+    "services/auto_audio.py",
+    "services/messenger/media_assets.py",
+    "services/messenger/observability.py",
+    "services/messenger/provider_transport.py",
+    "services/scheduler.py",
+)
+
 TYPE_CONTRACT_FILES = (
     "check_db.py",
     "dashboard/sla_dashboard.py",
@@ -52,6 +67,7 @@ TYPE_CONTRACT_FILES = (
     "services/sales_desk.py",
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
+    *_RUNTIME_HARDENING_FILES,
 )
 
 SECURITY_SCAN_PATHS = (
@@ -92,6 +108,7 @@ SECURITY_SCAN_PATHS = (
     "services/sales_desk_db.py",
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
+    *_RUNTIME_HARDENING_FILES,
 )
 
 
