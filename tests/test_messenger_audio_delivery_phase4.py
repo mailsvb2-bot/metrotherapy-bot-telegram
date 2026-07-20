@@ -9,7 +9,6 @@ import pytest
 
 from services.messenger import audio_delivery as delivery
 from services.messenger.outbound import DeliveryPlan, SenderRegistry, UnsupportedMessengerDelivery
-from services.messenger.platforms import MessengerPlatform
 
 
 class Sender:
@@ -42,7 +41,7 @@ def snapshot(**kwargs: Any) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
-def test_audio_delivery_text_and_keyboard_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_audio_delivery_text_and_keyboard_helpers() -> None:
     err = delivery._native_audio_failure_meta(ValueError("x" * 900))
     decoded = json.loads(err)
     assert decoded["error_type"] == "ValueError"
@@ -57,6 +56,7 @@ def test_audio_delivery_text_and_keyboard_helpers(monkeypatch: pytest.MonkeyPatc
     assert "ВКонтакте" in delivery._queue_finished_message("vk", done)
     assert "MAX" in delivery._queue_finished_message("max", done)
     assert "Последний подтверждённый" in delivery._queue_finished_message("telegram", done)
+    assert "Последний подтверждённый" not in delivery._queue_finished_message("telegram", snapshot())
 
     keyboard = json.loads(delivery._vk_post_audio_keyboard_json())
     assert keyboard["buttons"][0][0]["action"]["label"] == "✅ Прослушал"
@@ -85,6 +85,8 @@ def test_replay_item_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     assert delivery._replay_item_for_finished_queue("vk", snapshot(last_anchor=4)) is current
 
     assert delivery._explicit_replay_item(snapshot(), anchor=4) is current
+    assert delivery._explicit_replay_item(snapshot(), anchor="bad") is None
+    assert delivery._explicit_replay_item(snapshot(), anchor=99) is None
     pending = item(3)
     assert delivery._explicit_replay_item(snapshot(pending_item=pending), anchor=99) is pending
     assert delivery._explicit_replay_item(snapshot(last_anchor=4)) is current
@@ -140,7 +142,6 @@ async def test_non_telegram_native_success_and_notice_failure(monkeypatch: pytes
     sender = Sender(text_exc=RuntimeError("notice failed"))
     marks: list[Any] = []
     events: list[dict[str, Any]] = []
-    monkeypatch.setattr(delivery, "_prepare_native_audio_path", lambda *_args: None)
 
     async def prepared(_platform: str, _item: Any) -> Path:
         return Path("prepared.opus")
@@ -283,6 +284,13 @@ async def test_send_next_telegram_success_warning_and_failure_rollback(monkeypat
         await delivery.send_next_audio_to_user(7, senders=SenderRegistry(), telegram_bot=None)
     assert finished[-1] == (False, decision)
 
+    patch_plan_and_snapshot(monkeypatch, platform="telegram", external_user_id=None, progress=snapshot())
+    with pytest.raises(UnsupportedMessengerDelivery, match="No Telegram external id"):
+        await delivery.send_next_audio_to_user(
+            7, senders=SenderRegistry(), telegram_bot=SimpleNamespace()
+        )
+    assert finished[-1] == (False, decision)
+
 
 @pytest.mark.asyncio
 async def test_send_next_nontelegram_routes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -294,6 +302,11 @@ async def test_send_next_nontelegram_routes(monkeypatch: pytest.MonkeyPatch) -> 
         await delivery.send_next_audio_to_user(7, senders=SenderRegistry())
 
     sender = Sender()
+    patch_plan_and_snapshot(monkeypatch, platform="max", external_user_id=None, progress=snapshot(pending_item=current))
+    with pytest.raises(UnsupportedMessengerDelivery, match="No external user id"):
+        await delivery.send_next_audio_to_user(7, senders=SenderRegistry(max=sender))
+
+    patch_plan_and_snapshot(monkeypatch, platform="max", external_user_id="max-7", progress=snapshot(pending_item=current))
     expected = delivery.AudioDeliveryResult(7, "max", current, "max_native_audio_pending", "ok")
 
     async def native(**_kwargs: Any) -> delivery.AudioDeliveryResult:
@@ -341,6 +354,11 @@ async def test_send_replay_routes(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(UnsupportedMessengerDelivery, match="No sender registered"):
         await delivery.send_replay_audio_to_user(7, senders=SenderRegistry())
 
+    patch_plan_and_snapshot(monkeypatch, platform="vk", external_user_id=None, progress=snapshot(pending_item=current))
+    with pytest.raises(UnsupportedMessengerDelivery, match="No external user id"):
+        await delivery.send_replay_audio_to_user(7, senders=SenderRegistry(vk=Sender()))
+
+    patch_plan_and_snapshot(monkeypatch, platform="vk", external_user_id="vk-7", progress=snapshot(pending_item=current))
     expected = delivery.AudioDeliveryResult(7, "vk", current, "vk_native_audio_replay", "ok")
 
     async def native(**_kwargs: Any) -> delivery.AudioDeliveryResult:
