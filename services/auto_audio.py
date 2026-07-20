@@ -342,14 +342,9 @@ async def _run_candidate_workers(
             finally:
                 queue.task_done()
 
-    workers = [asyncio.create_task(_worker()) for _ in range(worker_count)]
-    try:
-        await asyncio.gather(*workers)
-    finally:
-        for worker in workers:
-            if not worker.done():
-                worker.cancel()
-        await asyncio.gather(*workers, return_exceptions=True)
+    async with asyncio.TaskGroup() as task_group:
+        for _ in range(worker_count):
+            task_group.create_task(_worker())
 
 
 async def tick(bot: Bot) -> None:
