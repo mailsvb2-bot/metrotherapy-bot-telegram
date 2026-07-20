@@ -89,47 +89,18 @@ jobs:
           python -m pip install --disable-pip-version-check pip==26.1.2
           python -m pip install --require-hashes -r requirements-dev.txt
 
+      - name: Critical static manifest
+        run: python scripts/critical_static_gate.py manifest
+
       - name: Critical type contracts
         run: |
           set -o pipefail
-          python -m mypy --follow-imports=skip --check-untyped-defs \
-            services/accounts/identity.py \
-            services/messenger/text_ui.py \
-            services/messenger/delivery_outbox.py \
-            services/payments/checkout_intent.py \
-            services/payments/telegram_stars.py \
-            services/payments/telegram_stars_refunds.py \
-            services/payments/verified_reconciliation.py \
-            services/practice_token_lots.py \
-            services/practice_tokens_access_core.py \
-            services/practice_tokens_wallet.py \
-            services/premium_entitlements.py \
-            services/sales_desk.py \
-            services/sales_desk_repository.py \
-            services/sales_desk_sync.py \
-            runtime/payment_http.py \
-            runtime/payment_webhook_admission.py \
-            2>&1 | tee "$RUNNER_TEMP/mypy-critical.log"
+          python scripts/critical_static_gate.py mypy 2>&1 | tee "$RUNNER_TEMP/mypy-critical.log"
 
       - name: Critical security scan
         run: |
           set -o pipefail
-          python -m bandit -q -r -c pyproject.toml \
-            services/payments \
-            services/accounts/identity.py \
-            services/messenger/text_ui.py \
-            services/messenger/delivery_outbox.py \
-            services/practice_token_lots.py \
-            services/practice_tokens_access_core.py \
-            services/practice_tokens_wallet.py \
-            services/premium_entitlements.py \
-            services/sales_desk.py \
-            services/sales_desk_db.py \
-            services/sales_desk_repository.py \
-            services/sales_desk_sync.py \
-            runtime/payment_http.py \
-            runtime/payment_webhook_admission.py \
-            2>&1 | tee "$RUNNER_TEMP/bandit-critical.log"
+          python scripts/critical_static_gate.py bandit 2>&1 | tee "$RUNNER_TEMP/bandit-critical.log"
 
       - name: Dependency vulnerability audit
         run: |
@@ -150,7 +121,7 @@ jobs:
 
   postgres:
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     name: postgres / payment and concurrency
     services:
       postgres:
@@ -171,7 +142,7 @@ jobs:
       LOAD_DOTENV: '0'
       METRO_DB_ENGINE: postgres
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/metrotherapy_ci
-      POSTGRES_REUSE_CONNECTIONS: '0'
+      POSTGRES_REUSE_CONNECTIONS: '1'
       POSTGRES_CI_SMOKE: '1'
       TELEGRAM_STARS_ENABLED: '1'
       BOT_TOKEN: '000000:CI'
@@ -192,10 +163,26 @@ jobs:
           python -m pip install --disable-pip-version-check pip==26.1.2
           python -m pip install --require-hashes -r requirements-dev.txt
 
-      - name: Postgres payment smoke
+      - name: Postgres payment smoke without connection reuse
+        env:
+          POSTGRES_REUSE_CONNECTIONS: '0'
         run: |
           set -o pipefail
-          python scripts/postgres_ci_smoke.py 2>&1 | tee "$RUNNER_TEMP/postgres-payment.log"
+          python scripts/postgres_ci_smoke.py 2>&1 | tee "$RUNNER_TEMP/postgres-payment-no-reuse.log"
+
+      - name: Reset Postgres smoke database
+        run: |
+          python - <<'PY'
+          import psycopg
+          with psycopg.connect('postgresql://postgres:postgres@127.0.0.1:5432/postgres', autocommit=True) as conn:
+              conn.execute('DROP DATABASE IF EXISTS metrotherapy_ci WITH (FORCE)')
+              conn.execute('CREATE DATABASE metrotherapy_ci')
+          PY
+
+      - name: Postgres payment smoke with production connection reuse
+        run: |
+          set -o pipefail
+          python scripts/postgres_ci_smoke.py 2>&1 | tee "$RUNNER_TEMP/postgres-payment-reuse.log"
 
       - name: Postgres scheduler concurrency
         run: |
@@ -215,7 +202,8 @@ jobs:
         with:
           name: postgres-probe-logs
           path: |
-            ${{ runner.temp }}/postgres-payment.log
+            ${{ runner.temp }}/postgres-payment-no-reuse.log
+            ${{ runner.temp }}/postgres-payment-reuse.log
             ${{ runner.temp }}/postgres-scheduler.log
             ${{ runner.temp }}/postgres-messenger-outbox.log
           if-no-files-found: warn
