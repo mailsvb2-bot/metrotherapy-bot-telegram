@@ -61,8 +61,14 @@ def test_mood_audio_send_path_uses_canonical_lock_and_token_effects() -> None:
 
 
 def test_auto_audio_prompt_path_uses_reclaimable_pre_score_lock() -> None:
-    source = inspect.getsource(auto_audio.tick)
-    assert "acquire_delivery_lock" in source
-    assert "pre_score_lock" in source
-    assert 'final_stage="pre_score"' in source
-    assert "auto_audio_stale_lock_reclaimed" in source
+    tick_source = inspect.getsource(auto_audio.tick)
+    effect_source = inspect.getsource(auto_audio._process_due_candidate)
+
+    assert "_run_candidate_workers" in tick_source
+    assert "_process_due_candidate" in inspect.getsource(auto_audio._run_candidate_workers)
+    assert "acquire_delivery_lock" in effect_source
+    assert "pre_score_lock" in effect_source
+    assert 'final_stage="pre_score"' in effect_source
+    assert "auto_audio_stale_lock_reclaimed" in effect_source
+    assert "finally:" in effect_source
+    assert "_unmark_pre_score_lock" in effect_source
