@@ -1,0 +1,2 @@
+# Coverage tooling is isolated from production/runtime dependencies.
+coverage==7.15.2
