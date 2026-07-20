@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import shutil
@@ -12,10 +13,21 @@ from pathlib import Path
 from typing import Any
 
 from config.settings import settings
-from runtime.messenger_transport_errors import MessengerTransportError
+from runtime.messenger_transport_errors import (
+    MessengerMediaTokenRejectedError,
+    MessengerTransportError,
+)
 from runtime.messenger_vk_ui import prepare_vk_keyboard_json
-from services.messenger.media_assets import get_cached_media_token, store_media_token
-from services.messenger.provider_transport import form_request, multipart_upload
+from services.messenger.media_assets import (
+    get_cached_media_token,
+    invalidate_media_token,
+    store_media_token,
+)
+from services.messenger.provider_transport import (
+    ProviderUploadURLRejected,
+    form_request,
+    multipart_upload,
+)
 
 VK_MAX_BUTTONS_PER_ROW = 5
 VK_MAX_BUTTON_ROWS = 6
@@ -43,22 +55,27 @@ def _button_count(rows: list[list[dict[str, Any]]]) -> int:
     return sum(len(row) for row in rows)
 
 
-
 def _vk_upload_attempt_count() -> int:
     raw = (os.getenv("VK_AUDIO_UPLOAD_RETRIES") or os.getenv("MESSENGER_PROVIDER_RETRIES") or "3").strip()
     try:
-        return max(1, int(raw))
+        return min(max(1, int(raw)), 20)
     except ValueError:
         return 3
 
 
 def _vk_upload_retry_backoff_sec(attempt: int) -> float:
-    raw = (os.getenv("VK_AUDIO_UPLOAD_RETRY_BACKOFF_SEC") or os.getenv("MESSENGER_PROVIDER_RETRY_BACKOFF_SEC") or "0.5").strip()
+    raw = (
+        os.getenv("VK_AUDIO_UPLOAD_RETRY_BACKOFF_SEC")
+        or os.getenv("MESSENGER_PROVIDER_RETRY_BACKOFF_SEC")
+        or "0.5"
+    ).strip()
     try:
-        base = max(0.05, float(raw))
+        base = float(raw)
     except ValueError:
         base = 0.5
-    return min(base * (2 ** max(0, attempt - 1)), 3.0)
+    if not math.isfinite(base) or base <= 0:
+        base = 0.5
+    return min(max(0.05, base) * (2 ** max(0, attempt - 1)), 3.0)
 
 
 def _vk_upload_response_is_retryable(data: dict[str, Any]) -> bool:
@@ -66,7 +83,30 @@ def _vk_upload_response_is_retryable(data: dict[str, Any]) -> bool:
     error_descr = str(data.get("error_descr") or "").strip().casefold()
     if not error and not error_descr:
         return False
-    return any(token in error or token in error_descr for token in ("unknown", "temporary", "timeout", "try_again", "internal"))
+    return any(
+        token in error or token in error_descr
+        for token in ("unknown", "temporary", "timeout", "try_again", "internal")
+    )
+
+
+def _vk_error_code(data: Any) -> str:
+    if not isinstance(data, dict):
+        return "provider_error"
+    error = data.get("error")
+    if isinstance(error, dict):
+        value = error.get("error_code") or error.get("code")
+        if value is not None:
+            return str(value).strip().casefold()[:80]
+    value = data.get("error_code") or data.get("code")
+    return str(value or "provider_error").strip().casefold()[:80]
+
+
+def _vk_error(operation: str, code: str) -> MessengerTransportError:
+    safe_code = str(code or "provider_error").strip().casefold().replace(" ", "_")[:100]
+    return MessengerTransportError(
+        f"VK provider {operation} failed",
+        code=f"vk.{operation}.{safe_code}",
+    )
 
 
 def _vk_audio_message_upload_path(file_path: Path) -> Path:
@@ -87,8 +127,6 @@ def _cleanup_vk_upload_path(upload_path: Path, source_path: Path) -> None:
         tmp_dir.rmdir()
     except OSError:
         pass
-
-
 
 
 def _strip_raw_vk_payment_links(text: str) -> str:
@@ -117,12 +155,7 @@ def _strip_raw_vk_payment_links(text: str) -> str:
 
 
 def _strip_unsupported_vk_button_color(button: dict[str, Any]) -> dict[str, Any]:
-    """Remove VK keyboard color from action types that do not support it.
-
-    VK rejects open_link buttons with `color` using error_code=911. This guard
-    keeps payment/audio fallback links deliverable even when upstream keyboard
-    builders accidentally attach a color.
-    """
+    """Remove VK keyboard color from action types that do not support it."""
 
     action = button.get("action")
     if isinstance(action, dict) and action.get("type") == "open_link":
@@ -184,9 +217,6 @@ def _callback_keyboard_json(keyboard_json: str) -> str:
             normalized_rows.append(normalized_row)
 
     if _button_count(normalized_rows) > VK_MAX_INLINE_CALLBACK_BUTTONS:
-        # VK rejects oversized inline callback keyboards with error_code=911.
-        # Preserve full user functionality by sending the keyboard as regular
-        # text buttons; VK includes payload in message_new, so routing still works.
         return _as_text_keyboard_json(keyboard, rows)
 
     normalized = dict(keyboard)
@@ -203,7 +233,7 @@ class VkBotSender:
     def _token(self) -> str:
         value = (self.token or settings.VK_GROUP_TOKEN or "").strip()
         if not value:
-            raise MessengerTransportError("VK_GROUP_TOKEN is empty")
+            raise MessengerTransportError("VK_GROUP_TOKEN is empty", code="vk.config.token_empty")
         return value
 
     def _api_version(self) -> str:
@@ -212,17 +242,42 @@ class VkBotSender:
     async def _vk_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         auth_key = "access" + "_token"
         request_params = {**params, auth_key: self._token(), "v": self._api_version()}
-        data = await asyncio.to_thread(form_request, f"https://api.vk.com/method/{method}", request_params)
+        data = await asyncio.to_thread(
+            form_request,
+            f"https://api.vk.com/method/{method}",
+            request_params,
+        )
         if isinstance(data, dict) and data.get("error"):
-            raise MessengerTransportError(str(data["error"]))
+            error = data.get("error")
+            error_message = str(error.get("error_msg") or "") if isinstance(error, dict) else ""
+            code = _vk_error_code(data)
+            if method == "messages.send" and code == "100" and any(
+                token in error_message.casefold()
+                for token in ("attachment", "access_key", "invalid doc", "invalid photo")
+            ):
+                raise MessengerMediaTokenRejectedError(
+                    "VK media token rejected",
+                    code="vk.messages.send.attachment_rejected",
+                )
+            raise _vk_error(method.replace(".", "_"), code)
         return data
 
-    async def answer_message_event(self, *, event_id: str, user_id: str, peer_id: str | None = None, text: str = "Открываю…") -> dict[str, Any]:
+    async def answer_message_event(
+        self,
+        *,
+        event_id: str,
+        user_id: str,
+        peer_id: str | None = None,
+        text: str = "Открываю…",
+    ) -> dict[str, Any]:
         clean_event_id = str(event_id or "").strip()
         clean_user_id = str(user_id or "").strip()
         if not clean_event_id or not clean_user_id:
             return {}
-        event_data = json.dumps({"type": "show_snackbar", "text": str(text or "Открываю…")[:90]}, ensure_ascii=False)
+        event_data = json.dumps(
+            {"type": "show_snackbar", "text": str(text or "Открываю…")[:90]},
+            ensure_ascii=False,
+        )
         params = {
             "event_id": clean_event_id,
             "user_id": clean_user_id,
@@ -237,20 +292,19 @@ class VkBotSender:
             random_id = int(time.time_ns() % 2147483647)
 
         message_text = str(text or "")
-        params = {"user_id": str(external_user_id), "random_id": int(random_id), "message": message_text}
+        params = {
+            "user_id": str(external_user_id),
+            "random_id": int(random_id),
+            "message": message_text,
+        }
 
         if kwargs.get("keyboard_json"):
-            # Build VK buttons from the full original text first. Payment keyboards
-            # need raw URLs here so they can become open_link buttons.
             keyboard_json = prepare_vk_keyboard_json(
                 str(kwargs["keyboard_json"]),
                 external_user_id=str(external_user_id),
                 text=message_text,
             )
             params["keyboard"] = _callback_keyboard_json(keyboard_json)
-
-            # After keyboard construction, remove raw checkout links from the
-            # message body. The user sees clean tariff copy + VK buttons.
             message_text = _strip_raw_vk_payment_links(message_text)
             params["message"] = message_text
 
@@ -277,12 +331,12 @@ class VkBotSender:
                 doc = candidate
                 break
         if not doc:
-            raise MessengerTransportError(f"Unexpected VK docs.save response: {data}")
+            raise _vk_error("docs_save", "attachment_missing")
         owner_id = doc.get("owner_id")
         doc_id = doc.get("id")
         access_key = str(doc.get("access_key") or "").strip()
         if owner_id is None or doc_id is None:
-            raise MessengerTransportError(f"VK saved doc has no owner_id/id: {data}")
+            raise _vk_error("docs_save", "identity_missing")
         attachment = f"doc{owner_id}_{doc_id}"
         if access_key:
             attachment += f"_{access_key}"
@@ -300,12 +354,12 @@ class VkBotSender:
                 photo = candidate
                 break
         if not photo:
-            raise MessengerTransportError(f"Unexpected VK photos.saveMessagesPhoto response: {data}")
+            raise _vk_error("photos_save", "attachment_missing")
         owner_id = photo.get("owner_id")
         photo_id = photo.get("id")
         access_key = str(photo.get("access_key") or "").strip()
         if owner_id is None or photo_id is None:
-            raise MessengerTransportError(f"VK saved photo has no owner_id/id: {data}")
+            raise _vk_error("photos_save", "identity_missing")
         attachment = f"photo{owner_id}_{photo_id}"
         if access_key:
             attachment += f"_{access_key}"
@@ -315,23 +369,41 @@ class VkBotSender:
     def _vk_upload_type_for_audio(file_path: Path) -> str:
         return "audio_message" if file_path.suffix.lower() in {".opus", ".ogg"} else "doc"
 
-    async def _upload_doc_attachment(self, external_user_id: str, file_path: Path, *, upload_type: str, cache_media_type: str) -> str:
+    async def _upload_doc_attachment(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        upload_type: str,
+        cache_media_type: str,
+    ) -> str:
         cached = get_cached_media_token("vk", file_path, media_type=cache_media_type)
         if cached is not None:
             return cached.remote_token
 
         attempts = _vk_upload_attempt_count() if upload_type == "audio_message" else 1
-        last_uploaded: dict[str, Any] | None = None
+        last_error_code = "empty_response"
 
         for attempt in range(1, attempts + 1):
-            upload_meta = await self._vk_method("docs.getMessagesUploadServer", {"peer_id": str(external_user_id), "type": upload_type})
+            upload_meta = await self._vk_method(
+                "docs.getMessagesUploadServer",
+                {"peer_id": str(external_user_id), "type": upload_type},
+            )
             upload_url = str((upload_meta.get("response") or {}).get("upload_url") or "").strip()
             if not upload_url:
-                raise MessengerTransportError(f"Unexpected VK docs.getMessagesUploadServer response: {upload_meta}")
+                raise _vk_error("docs_upload", "url_missing")
 
             upload_path = _vk_audio_message_upload_path(file_path) if upload_type == "audio_message" else file_path
             try:
-                uploaded = await asyncio.to_thread(multipart_upload, upload_url, field_name="file", path=upload_path)
+                try:
+                    uploaded = await asyncio.to_thread(
+                        multipart_upload,
+                        upload_url,
+                        field_name="file",
+                        path=upload_path,
+                    )
+                except ProviderUploadURLRejected as exc:
+                    raise _vk_error("docs_upload", exc.code) from exc
             finally:
                 _cleanup_vk_upload_path(upload_path, file_path)
 
@@ -339,21 +411,29 @@ class VkBotSender:
             if uploaded_file:
                 break
 
-            last_uploaded = uploaded
+            last_error_code = _vk_error_code(uploaded)
             if attempt < attempts and _vk_upload_response_is_retryable(uploaded):
                 await asyncio.sleep(_vk_upload_retry_backoff_sec(attempt))
                 continue
-
-            raise MessengerTransportError(f"Unexpected VK upload response for type={upload_type}: {uploaded}")
+            raise _vk_error("docs_upload", last_error_code)
         else:
-            raise MessengerTransportError(f"Unexpected VK upload response for type={upload_type}: {last_uploaded}")
+            raise _vk_error("docs_upload", last_error_code)
 
-        saved = await self._vk_method("docs.save", {"file": uploaded_file, "title": file_path.stem[:128], "tags": "metrotherapy,audio"})
+        saved = await self._vk_method(
+            "docs.save",
+            {"file": uploaded_file, "title": file_path.stem[:128], "tags": "metrotherapy,audio"},
+        )
         attachment = self._doc_attachment_from_save_response(saved)
         store_media_token("vk", file_path, attachment, media_type=cache_media_type)
         return attachment
 
-    async def _upload_photo_attachment(self, external_user_id: str, file_path: Path, *, cache_media_type: str = "image:photo") -> str:
+    async def _upload_photo_attachment(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        cache_media_type: str = "image:photo",
+    ) -> str:
         cached = get_cached_media_token("vk", file_path, media_type=cache_media_type)
         if cached is not None:
             return cached.remote_token
@@ -364,20 +444,23 @@ class VkBotSender:
         )
         upload_url = str((upload_meta.get("response") or {}).get("upload_url") or "").strip()
         if not upload_url:
-            raise MessengerTransportError(f"Unexpected VK photos.getMessagesUploadServer response: {upload_meta}")
+            raise _vk_error("photos_upload", "url_missing")
 
-        uploaded = await asyncio.to_thread(
-            multipart_upload,
-            upload_url,
-            field_name="photo",
-            path=file_path,
-        )
+        try:
+            uploaded = await asyncio.to_thread(
+                multipart_upload,
+                upload_url,
+                field_name="photo",
+                path=file_path,
+            )
+        except ProviderUploadURLRejected as exc:
+            raise _vk_error("photos_upload", exc.code) from exc
 
         server = uploaded.get("server")
         photo = uploaded.get("photo")
         upload_hash = uploaded.get("hash")
         if server is None or photo is None or upload_hash is None:
-            raise MessengerTransportError(f"Unexpected VK photo upload response: {uploaded}")
+            raise _vk_error("photos_upload", _vk_error_code(uploaded))
 
         saved = await self._vk_method(
             "photos.saveMessagesPhoto",
@@ -391,39 +474,108 @@ class VkBotSender:
         store_media_token("vk", file_path, attachment, media_type=cache_media_type)
         return attachment
 
-    async def _ensure_doc_attachment(self, external_user_id: str, file_path: Path, *, media_type: str | None = None) -> str:
+    async def _ensure_doc_attachment(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        media_type: str | None = None,
+    ) -> str:
         preferred_upload_type = self._vk_upload_type_for_audio(file_path)
-        # VK accepts .opus/.ogg as audio_message. Falling back to type=doc for
-        # these native audio files is both a UX regression and error masking: the
-        # current group token may reject docs scope or VK may answer
-        # wrong_music_file, hiding the real audio_message result from diagnostics.
-        upload_types = [preferred_upload_type]
+        cache_media_type = media_type or f"audio:{preferred_upload_type}"
+        return await self._upload_doc_attachment(
+            str(external_user_id),
+            file_path,
+            upload_type=preferred_upload_type,
+            cache_media_type=cache_media_type,
+        )
 
-        last_error: MessengerTransportError | None = None
-        for upload_type in upload_types:
-            cache_media_type = media_type or f"audio:{upload_type}"
-            try:
-                return await self._upload_doc_attachment(
-                    str(external_user_id),
-                    file_path,
-                    upload_type=upload_type,
-                    cache_media_type=cache_media_type,
-                )
-            except MessengerTransportError as exc:
-                last_error = exc
-                raise
-        if last_error is not None:
-            raise last_error
-        raise MessengerTransportError("VK upload failed before any upload attempt")
+    async def _send_with_attachment_recovery(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        caption: str,
+        cache_media_type: str,
+        attachment_factory,
+        **kwargs: Any,
+    ):
+        attachment = await attachment_factory()
+        try:
+            return await self.send_text(external_user_id, caption, attachment=attachment, **kwargs)
+        except MessengerMediaTokenRejectedError:
+            await asyncio.to_thread(
+                invalidate_media_token,
+                "vk",
+                file_path,
+                media_type=cache_media_type,
+            )
+            fresh_attachment = await attachment_factory()
+            return await self.send_text(external_user_id, caption, attachment=fresh_attachment, **kwargs)
 
-    async def send_image_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
-        attachment = await self._upload_photo_attachment(str(external_user_id), file_path)
-        return await self.send_text(external_user_id, caption or file_path.stem, attachment=attachment, **kwargs)
+    async def send_image_file(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        caption: str | None = None,
+        **kwargs: Any,
+    ):
+        cache_media_type = "image:photo"
+        return await self._send_with_attachment_recovery(
+            external_user_id,
+            file_path,
+            caption=caption or file_path.stem,
+            cache_media_type=cache_media_type,
+            attachment_factory=lambda: self._upload_photo_attachment(
+                str(external_user_id),
+                file_path,
+                cache_media_type=cache_media_type,
+            ),
+            **kwargs,
+        )
 
-    async def send_document_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
-        attachment = await self._ensure_doc_attachment(str(external_user_id), file_path, media_type=f"doc:{file_path.suffix.lower() or 'file'}")
-        return await self.send_text(external_user_id, caption or file_path.stem, attachment=attachment, **kwargs)
+    async def send_document_file(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        caption: str | None = None,
+        **kwargs: Any,
+    ):
+        cache_media_type = f"doc:{file_path.suffix.lower() or 'file'}"
+        return await self._send_with_attachment_recovery(
+            external_user_id,
+            file_path,
+            caption=caption or file_path.stem,
+            cache_media_type=cache_media_type,
+            attachment_factory=lambda: self._ensure_doc_attachment(
+                str(external_user_id),
+                file_path,
+                media_type=cache_media_type,
+            ),
+            **kwargs,
+        )
 
-    async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
-        attachment = await self._ensure_doc_attachment(str(external_user_id), file_path)
-        return await self.send_text(external_user_id, caption or f"🎧 Аудио: {file_path.stem}", attachment=attachment, **kwargs)
+    async def send_audio_file(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        caption: str | None = None,
+        **kwargs: Any,
+    ):
+        upload_type = self._vk_upload_type_for_audio(file_path)
+        cache_media_type = f"audio:{upload_type}"
+        return await self._send_with_attachment_recovery(
+            external_user_id,
+            file_path,
+            caption=caption or f"🎧 Аудио: {file_path.stem}",
+            cache_media_type=cache_media_type,
+            attachment_factory=lambda: self._ensure_doc_attachment(
+                str(external_user_id),
+                file_path,
+                media_type=cache_media_type,
+            ),
+            **kwargs,
+        )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import ssl
 import urllib.parse
@@ -10,19 +11,35 @@ from typing import Any
 
 from config.settings import settings
 from runtime import messenger_max_ui as max_ui
-from runtime.messenger_transport_errors import MessengerMediaNotReadyError, MessengerTransportError
-from services.messenger.media_assets import get_cached_media_token, store_media_token
+from runtime.messenger_transport_errors import (
+    MessengerMediaNotReadyError,
+    MessengerMediaTokenRejectedError,
+    MessengerTransportError,
+)
+from services.messenger.media_assets import (
+    get_cached_media_token,
+    invalidate_media_token,
+    store_media_token,
+)
 from services.messenger.provider_transport import (
     ProviderPermanentHTTPError,
+    ProviderUploadURLRejected,
     json_request,
     multipart_upload,
 )
-
 
 MAX_API2_BASE_URL = "https://platform-api2.max.ru"
 LEGACY_MAX_API_BASE_URLS = {
     "https://platform-api.max.ru",
     "https://botapi.max.ru",
+}
+_MEDIA_TOKEN_REJECT_CODES = {
+    "attachment.invalid",
+    "attachment.not.found",
+    "attachment.not_found",
+    "invalid_attachment",
+    "invalid_token",
+    "media.not.found",
 }
 
 
@@ -34,7 +51,7 @@ def _attachment_retry_delays() -> tuple[float, ...]:
             value = float(part.strip())
         except ValueError:
             continue
-        if value >= 0:
+        if math.isfinite(value) and value >= 0:
             values.append(min(value, 60.0))
     return tuple(values) or (0.5, 1.0, 2.0, 4.0, 8.0, 16.0)
 
@@ -46,7 +63,7 @@ def _max_error_code(data: Any) -> str:
     error = data.get("error")
     if not code and isinstance(error, dict):
         code = error.get("code")
-    return str(code or "").strip()
+    return str(code or "").strip().casefold()[:120]
 
 
 def _deployed_env() -> bool:
@@ -62,6 +79,14 @@ def _truthy_env(name: str) -> bool:
     return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _max_error(operation: str, code: str) -> MessengerTransportError:
+    safe_code = str(code or "provider_error").strip().casefold().replace(" ", "_")[:120]
+    return MessengerTransportError(
+        f"MAX provider {operation} failed",
+        code=f"max.{operation}.{safe_code}",
+    )
+
+
 @dataclass
 class MaxBotSender:
     token: str | None = None
@@ -74,7 +99,7 @@ class MaxBotSender:
     def _token(self) -> str:
         token = (self.token or settings.MAX_BOT_TOKEN or "").strip()
         if not token:
-            raise MessengerTransportError("MAX_BOT_TOKEN is empty")
+            raise MessengerTransportError("MAX_BOT_TOKEN is empty", code="max.config.token_empty")
         return token
 
     def _api_base(self) -> str:
@@ -90,9 +115,15 @@ class MaxBotSender:
         if clean == MAX_API2_BASE_URL:
             return clean
         if not clean.startswith("https://"):
-            raise MessengerTransportError("MAX_API_BASE_URL must start with https://")
+            raise MessengerTransportError(
+                "MAX_API_BASE_URL must start with https://",
+                code="max.config.https_required",
+            )
         if _deployed_env() or not _truthy_env("ALLOW_CUSTOM_MAX_API_BASE_URL"):
-            raise MessengerTransportError("MAX_API_BASE_URL must use https://platform-api2.max.ru")
+            raise MessengerTransportError(
+                "MAX_API_BASE_URL must use https://platform-api2.max.ru",
+                code="max.config.official_api_required",
+            )
         return clean
 
     def _ssl_context(self) -> ssl.SSLContext | None:
@@ -101,15 +132,24 @@ class MaxBotSender:
             return None
         path = Path(bundle)
         if not path.is_file():
-            raise MessengerTransportError("MAX_CA_BUNDLE points to a missing file")
+            raise MessengerTransportError(
+                "MAX_CA_BUNDLE points to a missing file",
+                code="max.config.ca_bundle_missing",
+            )
         try:
             return ssl.create_default_context(cafile=str(path))
         except (OSError, ssl.SSLError) as exc:
-            raise MessengerTransportError(f"MAX_CA_BUNDLE is invalid: {type(exc).__name__}") from exc
+            raise MessengerTransportError(
+                f"MAX_CA_BUNDLE is invalid: {type(exc).__name__}",
+                code="max.config.ca_bundle_invalid",
+            ) from exc
 
     @staticmethod
     def _permanent_http_error(exc: ProviderPermanentHTTPError) -> MessengerTransportError:
-        return MessengerTransportError(f"MAX provider HTTP {exc.status_code}")
+        return MessengerTransportError(
+            f"MAX provider HTTP {exc.status_code}",
+            code=f"max.http.{exc.status_code}",
+        )
 
     @staticmethod
     def _upload_payload(upload_meta: dict[str, Any], uploaded: Any, *, media_type: str) -> dict[str, Any]:
@@ -128,9 +168,7 @@ class MaxBotSender:
                 return {"token": value}
         if isinstance(upload_meta, dict) and upload_meta.get("token"):
             return {"token": str(upload_meta["token"])}
-        raise MessengerTransportError(
-            f"Unexpected MAX {media_type} upload result: meta={upload_meta!r}, uploaded={uploaded!r}"
-        )
+        raise _max_error(f"{media_type}_upload", "token_missing")
 
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         token = self._token()
@@ -158,7 +196,7 @@ class MaxBotSender:
         except ProviderPermanentHTTPError as exc:
             raise self._permanent_http_error(exc) from exc
         if isinstance(data, dict) and data.get("error"):
-            raise MessengerTransportError(str(data["error"]))
+            raise _max_error("send_text", _max_error_code(data) or "provider_error")
         return data["message"] if isinstance(data, dict) and data.get("message") is not None else data
 
     async def _ensure_media_token(self, file_path: Path, *, media_type: str) -> str:
@@ -181,7 +219,7 @@ class MaxBotSender:
             raise self._permanent_http_error(exc) from exc
         upload_url = str(upload_meta.get("url") or "").strip()
         if not upload_url:
-            raise MessengerTransportError(f"Unexpected MAX {media_type} upload response: {upload_meta}")
+            raise _max_error(f"{media_type}_upload", "url_missing")
         try:
             uploaded = await asyncio.to_thread(
                 multipart_upload,
@@ -192,11 +230,11 @@ class MaxBotSender:
             )
         except ProviderPermanentHTTPError as exc:
             raise self._permanent_http_error(exc) from exc
+        except ProviderUploadURLRejected as exc:
+            raise _max_error(f"{media_type}_upload", exc.code) from exc
         media_token = str(self._upload_payload(upload_meta, uploaded, media_type=media_type).get("token") or "").strip()
         if not media_token:
-            raise MessengerTransportError(
-                f"Unexpected MAX {media_type} upload result: meta={upload_meta!r}, uploaded={uploaded!r}"
-            )
+            raise _max_error(f"{media_type}_upload", "token_missing")
         store_media_token("max", file_path, media_token, media_type=media_type)
         return media_token
 
@@ -240,14 +278,58 @@ class MaxBotSender:
                 continue
             code = _max_error_code(data)
             if code == "attachment.not.ready":
-                last_error = MessengerMediaNotReadyError(str(data))
+                last_error = MessengerMediaNotReadyError(
+                    "MAX attachment is not ready",
+                    code="max.attachment.not_ready",
+                )
                 continue
+            if code in _MEDIA_TOKEN_REJECT_CODES:
+                raise MessengerMediaTokenRejectedError(
+                    "MAX media token rejected",
+                    code=f"max.attachment.{code}",
+                )
             if isinstance(data, dict) and (data.get("error") or code):
-                raise MessengerTransportError(str(data.get("error") or data))
+                raise _max_error(f"send_{media_type}", code or "provider_error")
             return data.get("message", data) if isinstance(data, dict) else data
         if last_error is not None:
-            raise last_error if isinstance(last_error, MessengerTransportError) else MessengerTransportError(str(last_error))
-        raise MessengerTransportError(f"MAX {media_type} send failed without details")
+            if isinstance(last_error, MessengerTransportError):
+                raise last_error
+            raise _max_error(f"send_{media_type}", type(last_error).__name__.casefold())
+        raise _max_error(f"send_{media_type}", "no_result")
+
+    async def _send_media_file(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        media_type: str,
+        caption: str,
+        notify: bool | None,
+    ) -> Any:
+        media_token = await self._ensure_media_token(file_path, media_type=media_type)
+        try:
+            return await self._send_media_payload(
+                external_user_id,
+                text=caption,
+                media_type=media_type,
+                media_token=media_token,
+                notify=notify,
+            )
+        except MessengerMediaTokenRejectedError:
+            await asyncio.to_thread(
+                invalidate_media_token,
+                "max",
+                file_path,
+                media_type=media_type,
+            )
+            fresh_token = await self._ensure_media_token(file_path, media_type=media_type)
+            return await self._send_media_payload(
+                external_user_id,
+                text=caption,
+                media_type=media_type,
+                media_token=fresh_token,
+                notify=notify,
+            )
 
     async def send_image_file(
         self,
@@ -257,12 +339,11 @@ class MaxBotSender:
         caption: str | None = None,
         **kwargs: Any,
     ):
-        media_token = await self._ensure_media_token(file_path, media_type="image")
-        return await self._send_media_payload(
+        return await self._send_media_file(
             external_user_id,
-            text=caption or "",
+            file_path,
             media_type="image",
-            media_token=media_token,
+            caption=caption or "",
             notify=kwargs.get("notify"),
         )
 
@@ -274,11 +355,10 @@ class MaxBotSender:
         caption: str | None = None,
         **kwargs: Any,
     ):
-        media_token = await self._ensure_media_token(file_path, media_type="audio")
-        return await self._send_media_payload(
+        return await self._send_media_file(
             external_user_id,
-            text=caption or "",
+            file_path,
             media_type="audio",
-            media_token=media_token,
+            caption=caption or "",
             notify=kwargs.get("notify"),
         )

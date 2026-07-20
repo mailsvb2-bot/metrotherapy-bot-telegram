@@ -24,7 +24,7 @@ from services.events import log_event
 from services.gift_claims import claim_gift_token, is_gift_token, normalize_gift_token
 from services.messenger.delivery_outbox import persist_reply_bundle
 from services.messenger.entrypoints import register_user_entry
-from services.messenger.observability import log_payload_normalized
+from services.messenger.observability import classify_messenger_action, log_payload_normalized
 from services.messenger.text_ui_router import MessengerReply, handle_incoming_text
 from services.messenger.webhook_dedupe import claim_inbound_event, fail_inbound_event
 
@@ -44,21 +44,30 @@ def _app_env() -> str:
     return (os.getenv("APP_ENV") or getattr(settings, "APP_ENV", "") or "dev").strip().lower()
 
 
+def _deployed_env() -> bool:
+    return _app_env() in {"prod", "production", "stage", "staging"}
+
+
 def _allow_insecure_messenger_webhooks() -> bool:
-    if _app_env() in {"prod", "production", "stage", "staging"}:
+    if _deployed_env():
         return False
     return _env_bool("ALLOW_INSECURE_MESSENGER_WEBHOOKS", False)
 
 
+def _allow_legacy_max_secret_sources() -> bool:
+    return not _deployed_env() and _env_bool("ALLOW_LEGACY_MAX_WEBHOOK_SECRET_SOURCES", False)
+
+
 def _provided_max_secret(request: web.Request, payload: dict) -> str:
-    return (
+    header_value = (
         request.headers.get("X-Max-Webhook-Secret")
         or request.headers.get("X-Webhook-Secret")
         or request.headers.get("X-Metrotherapy-Webhook-Secret")
-        or request.query.get("secret")
-        or payload.get("secret")
         or ""
     ).strip()
+    if header_value or not _allow_legacy_max_secret_sources():
+        return header_value
+    return str(request.query.get("secret") or payload.get("secret") or "").strip()
 
 
 def _max_secret_ok(request: web.Request, payload: dict) -> bool:
@@ -224,7 +233,7 @@ async def _ack_vk_message_event(payload: dict[str, Any]) -> None:
     event_id, user_id, peer_id = context
     try:
         await VkBotSender().answer_message_event(event_id=event_id, user_id=user_id, peer_id=peer_id)
-        log.info("VK message_event acknowledged: user_id=%s event_id=%s", user_id, event_id)
+        log.info("VK message_event acknowledged")
     except MessengerTransportError:
         log.exception("VK message_event acknowledgement failed")
 
@@ -268,21 +277,20 @@ def _process_and_persist(
                 display_name=extracted["display_name"],
                 first_name=extracted["first_name"],
             )
-            action = normalized_text
+            action = classify_messenger_action(normalized_text)
 
         log.info(
-            "%s %s processed: external_user_id=%s canonical_user_id=%s text=%r replies=%s",
+            "%s %s processed: canonical_user_id=%s action=%s replies=%s",
             platform.upper(),
             event_type,
-            extracted["external_user_id"],
             canonical_user_id,
-            extracted["text"][:120],
+            action,
             len(replies),
         )
         log_event(
             canonical_user_id,
             f"{platform}_webhook_inbound",
-            {"text": extracted["text"][:120], "replies": len(replies), "event_key": event_key},
+            {"action": action, "text_len": len(str(extracted["text"] or "")), "replies": len(replies)},
         )
         persist_reply_bundle(
             platform=platform,
@@ -294,7 +302,7 @@ def _process_and_persist(
         )
         return True, int(canonical_user_id), len(replies)
     except Exception as exc:
-        fail_inbound_event(platform, event_key, payload, f"{type(exc).__name__}: {exc}")
+        fail_inbound_event(platform, event_key, payload, type(exc).__name__)
         raise
 
 
@@ -335,10 +343,10 @@ async def vk_webhook(request: web.Request) -> web.Response:
             event_type=event_type,
         )
     except (RuntimeError, OSError, ValueError, TypeError, KeyError):
-        log.exception("VK webhook processing failed event_key=%s", event_key)
+        log.exception("VK webhook processing failed")
         return web.Response(status=503, text="retry")
     if not processed:
-        log.info("VK webhook duplicate skipped: event_key=%s", event_key)
+        log.info("VK webhook duplicate skipped")
     return web.Response(text="ok")
 
 
@@ -402,8 +410,8 @@ async def max_webhook(request: web.Request) -> web.Response:
             event_type=update_type,
         )
     except (RuntimeError, OSError, ValueError, TypeError, KeyError):
-        log.exception("MAX webhook processing failed event_key=%s", event_key)
+        log.exception("MAX webhook processing failed")
         return web.json_response({"ok": False, "error": "retry"}, status=503)
     if not processed:
-        log.info("MAX webhook duplicate skipped: update_type=%r event_key=%s", update_type, event_key)
+        log.info("MAX webhook duplicate skipped: update_type=%r", update_type)
     return web.json_response({"ok": True})
