@@ -78,14 +78,14 @@ def test_single_scheduler_validator_all_failure_classes(
 
     unreadable = tmp_path / "services" / "gone.py"
     unreadable.write_text("x=1", encoding="utf-8")
-    original = runtime.Path.read_text
+    original = Path.read_text
 
     def sometimes_missing(self: Path, *args, **kwargs):
         if self.name == "gone.py":
             raise OSError("gone")
         return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(runtime.Path, "read_text", sometimes_missing)
+    monkeypatch.setattr(Path, "read_text", sometimes_missing)
     runtime.validate_single_scheduler(strict=True)
 
 
