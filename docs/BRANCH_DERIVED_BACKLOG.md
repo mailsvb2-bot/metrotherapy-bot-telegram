@@ -23,9 +23,17 @@ Implemented as part of the guarded live payment closure probe. The same syntheti
 
 ### DB stress diagnostic
 
-Goal: provide a manual SQLite concurrency diagnostic that does not touch production tables by default.
+Implemented through `scripts/stress_db.py` with a fail-closed target contract:
 
-Current main has `scripts/stress_db.py`, which uses a temp SQLite database unless `--db-path` is explicitly supplied.
+- the default run creates a unique temporary SQLite database and removes the database plus WAL/SHM sidecars afterwards;
+- a caller-supplied `--db-path` is rejected unless `--allow-custom-db-path` is explicit;
+- an existing file additionally requires `--allow-existing-db-path`;
+- a path matching `METRO_DB_PATH`, a SQLite `DATABASE_URL`, or the repository application default requires `--allow-configured-db-path` and the exact confirmation phrase exposed by the script;
+- worker and iteration counts are bounded;
+- only rows belonging to the synthetic run are removed from a pre-existing compatible stress table;
+- a table created by the diagnostic is dropped after the run, without creating a residual `sqlite_sequence` table;
+- the original SQLite journal mode is restored and zero residual run rows are verified before success;
+- error reports contain class/code information rather than raw database exception text.
 
 ## P2 — unified messenger contracts
 
