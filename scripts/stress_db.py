@@ -334,6 +334,20 @@ def _bounded_positive(value: int, *, maximum: int) -> int:
     return max(1, min(int(value), int(maximum)))
 
 
+def _print_runtime_failure(exc: BaseException) -> int:
+    print(
+        json.dumps(
+            _error_payload(
+                f"stress_run_failed:{type(exc).__name__}",
+                mutated=True,
+            ),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run a guarded SQLite concurrency diagnostic"
@@ -386,18 +400,14 @@ def main() -> int:
             )
         )
         return 2
-    except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
-        print(
-            json.dumps(
-                _error_payload(
-                    f"stress_run_failed:{type(exc).__name__}",
-                    mutated=True,
-                ),
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-        )
-        return 2
+    except sqlite3.Error as exc:
+        return _print_runtime_failure(exc)
+    except OSError as exc:
+        return _print_runtime_failure(exc)
+    except ValueError as exc:
+        return _print_runtime_failure(exc)
+    except TypeError as exc:
+        return _print_runtime_failure(exc)
     finally:
         if temporary_dir is not None and not bool(args.keep_temporary_db):
             shutil.rmtree(temporary_dir, ignore_errors=True)
