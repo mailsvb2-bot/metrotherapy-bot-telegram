@@ -79,7 +79,14 @@ def test_vk_attachment_recovery_invalidates_cache_and_reuploads(
     async def attachment_factory() -> str:
         return next(attachments)
 
-    async def fake_send_text(_user_id: str, _caption: str, *, attachment: str, **_kwargs):
+    async def fake_send_text(
+        _self: VkBotSender,
+        _user_id: str,
+        _caption: str,
+        *,
+        attachment: str,
+        **_kwargs,
+    ):
         sent.append(attachment)
         if attachment.endswith("cached"):
             raise MessengerMediaTokenRejectedError(
