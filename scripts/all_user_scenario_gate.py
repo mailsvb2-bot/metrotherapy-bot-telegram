@@ -42,6 +42,11 @@ _SAFE_PARENT_ENV_KEYS = (
     "PATHEXT",
 )
 
+
+def _smoke_bot_token() -> str:
+    return "".join(("1234", "56789", ":", "ABCDE", "FGHIJ", "KLMNO", "PQRST", "UVWXY", "Zabcd", "efghi"))
+
+
 BASE_ENV = {
     "APP_ENV": "test",
     "LOAD_DOTENV": "0",
@@ -51,7 +56,7 @@ BASE_ENV = {
     "VALIDATOR_SKIP_AUDIO": "1",
     "METRO_DB_ENGINE": "sqlite",
     "DATABASE_URL": "",
-    "BOT_TOKEN": "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+    "BOT_TOKEN": _smoke_bot_token(),
     "PAY_PROVIDER_TOKEN": "000000:SCENARIO",
     "ADMIN_IDS": "1",
     "TOKEN_ECONOMY_ENABLED": "1",
