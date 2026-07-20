@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+
+from scripts import all_user_scenario_gate as gate
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("DATABASE_URL", "postgresql://prod-user:prod-pass@db.internal/prod"),
+        ("METRO_DB_PATH", "/srv/metrotherapy/data/data.db"),
+        ("YOOKASSA_SECRET_KEY", "live-yookassa-secret"),
+        ("YOOKASSA_WEBHOOK_SECRET", "live-webhook-secret"),
+        ("MAX_BOT_TOKEN", "live-max-token"),
+        ("MAX_WEBHOOK_SECRET", "live-max-secret"),
+        ("VK_TOKEN", "live-vk-token"),
+        ("BOT_TOKEN", "live-telegram-token"),
+    ],
+)
+def test_isolated_parent_env_does_not_copy_application_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    value: str,
+) -> None:
+    monkeypatch.setenv(name, value)
+
+    isolated = gate._isolated_parent_env()
+
+    assert name not in isolated
+    assert value not in isolated.values()
+
+
+def test_step_env_uses_private_sqlite_and_disables_live_ingress(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://prod.example/metrotherapy")
+    monkeypatch.setenv("METRO_DB_PATH", "/srv/metrotherapy/data/data.db")
+    monkeypatch.setenv("YOOKASSA_SECRET_KEY", "live-secret")
+    target = tmp_path / "scenario.db"
+
+    env = gate._step_env(gate.STEPS[-1], target)
+
+    assert env["APP_ENV"] == "test"
+    assert env["LOAD_DOTENV"] == "0"
+    assert env["METRO_DB_ENGINE"] == "sqlite"
+    assert env["METRO_DB_PATH"] == str(target)
+    assert env["DATABASE_URL"] == ""
+    assert env["MESSENGER_WEBHOOK_ENABLED"] == "0"
+    assert env["MAX_WEBHOOK_ENABLED"] == "0"
+    assert env["VK_WEBHOOK_ENABLED"] == "0"
+    assert env["PAYMENT_HTTP_ENABLED"] == "0"
+    assert "live-secret" not in env.values()
+    assert "/srv/metrotherapy/data/data.db" not in env.values()
+
+
+def test_each_step_gets_distinct_database_path(
+    tmp_path: Path,
+) -> None:
+    first = gate._step_env(gate.STEPS[0], tmp_path / "first.db")
+    second = gate._step_env(gate.STEPS[1], tmp_path / "second.db")
+
+    assert first["METRO_DB_PATH"] != second["METRO_DB_PATH"]
+
+
+def test_safe_system_environment_is_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    monkeypatch.setenv("HOME", "/tmp/synthetic-home")
+
+    isolated = gate._isolated_parent_env()
+
+    assert "PATH" in isolated
+    assert isolated["HOME"] == "/tmp/synthetic-home"
