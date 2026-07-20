@@ -1,0 +1,4 @@
+# Hash-locked coverage-only quality dependency.
+# Keep this file isolated from production/runtime requirements.
+coverage==7.15.2 \
+    --hash=sha256:eb6bcae8d1a9d305351ecb108232441d11c5cfe9de840a04388ba5d2db8d735c
