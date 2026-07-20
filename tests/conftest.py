@@ -74,3 +74,31 @@ def _isolated_default_database():
         Path(f"{TEST_DB_PATH}{suffix}").unlink(missing_ok=True)
     shutil.copy2(SCHEMA_TEMPLATE_PATH, TEST_DB_PATH)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _phase2_stars_invoice_transport_bridge(request, monkeypatch):
+    """Keep the focused phase-2 test aligned with the installed transport owner.
+
+    ``telegram_stars.send_stars_invoice`` is intentionally replaced at startup by
+    ``stars_invoice_transport.send_stars_invoice``. The focused test changes the
+    public module's package/flag doubles between assertions; this bridge forwards
+    only those doubles to the actual owner and is inactive for every other module.
+    """
+
+    if Path(str(request.fspath)).name != "test_telegram_stars_critical_paths_phase2.py":
+        yield
+        return
+
+    from services.payments import stars_invoice_transport as transport
+    from services.payments import telegram_stars as stars
+
+    monkeypatch.setattr(transport, "package_by_id", lambda package_id: stars.package_by_id(package_id))
+    monkeypatch.setattr(transport, "telegram_stars_enabled", lambda: stars.telegram_stars_enabled())
+    monkeypatch.setattr(
+        transport,
+        "create_gift_checkout_token",
+        lambda **kwargs: stars.create_gift_checkout_token(**kwargs),
+    )
+    monkeypatch.setattr(transport, "log_event", lambda *args, **kwargs: stars.log_event(*args, **kwargs))
+    yield
