@@ -13,6 +13,7 @@ from services.bg import tm
 from services.db import db, tx
 from services.db.runtime import CONFIG
 from services.messenger import delivery_outbox
+from runtime.messenger_transport_errors import safe_transport_error_text
 
 log = logging.getLogger(__name__)
 _ALLOWED_PLATFORMS = ("vk", "max")
@@ -322,16 +323,18 @@ async def _process_item(item: delivery_outbox.ClaimedDelivery) -> None:
         _metric_add("leases_released", 1)
         raise
     except Exception as exc:  # validator: allow-wide-except
-        log.exception(
-            "%s durable delivery failed event_key=%s attempt=%s",
+        safe_error = safe_transport_error_text(exc)
+        log.error(
+            "%s durable delivery failed event_key=%s attempt=%s error=%s",
             item.platform.upper(),
             item.event_key,
             int(item.attempts) + 1,
+            safe_error,
         )
         await asyncio.to_thread(
             delivery_outbox.reschedule_delivery,
             item,
-            f"{type(exc).__name__}: {exc}",
+            safe_error,
         )
         max_attempts = _bounded_int("MESSENGER_OUTBOX_MAX_ATTEMPTS", 8, minimum=1, maximum=100)
         if int(item.attempts) + 1 >= max_attempts:
