@@ -4,12 +4,15 @@ from __future__ import annotations
 
 This gate complements the full regression suite with a named, auditable set of
 end-to-end and integration journeys across Telegram, VK, MAX, payments, gifts,
-account linking, privacy and durable delivery. It never calls live providers.
+account linking, privacy and durable delivery. It never calls live providers and
+never inherits configured application storage or provider credentials.
 """
 
 import os
+import shutil
 import subprocess  # nosec B404 - fixed local commands, no shell
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +26,22 @@ class ScenarioStep:
     env: dict[str, str] | None = None
 
 
+_SAFE_PARENT_ENV_KEYS = (
+    "PATH",
+    "PYTHONPATH",
+    "HOME",
+    "USERPROFILE",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LC_ALL",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+)
+
 BASE_ENV = {
     "APP_ENV": "test",
     "LOAD_DOTENV": "0",
@@ -30,9 +49,20 @@ BASE_ENV = {
     "VALIDATOR_RELEASE_MODE": "1",
     "VALIDATOR_GUARDRAILS_STRICT": "1",
     "VALIDATOR_SKIP_AUDIO": "1",
+    "METRO_DB_ENGINE": "sqlite",
+    "DATABASE_URL": "",
+    "BOT_TOKEN": "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+    "PAY_PROVIDER_TOKEN": "000000:SCENARIO",
+    "ADMIN_IDS": "1",
+    "TOKEN_ECONOMY_ENABLED": "1",
+    "TOKEN_ENFORCEMENT_MODE": "hard",
     "TELEGRAM_TRANSPORT": "polling",
     "TELEGRAM_WEBHOOK_ENABLED": "0",
     "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
+    "MESSENGER_WEBHOOK_ENABLED": "0",
+    "MAX_WEBHOOK_ENABLED": "0",
+    "VK_WEBHOOK_ENABLED": "0",
+    "PAYMENT_HTTP_ENABLED": "0",
 }
 
 DEEP_ENV = {
@@ -98,19 +128,38 @@ STEPS = (
 )
 
 
-def _run(step: ScenarioStep) -> int:
-    env = os.environ.copy()
+def _isolated_parent_env() -> dict[str, str]:
+    return {
+        key: value
+        for key in _SAFE_PARENT_ENV_KEYS
+        if (value := os.environ.get(key)) is not None
+    }
+
+
+def _step_env(step: ScenarioStep, db_path: Path) -> dict[str, str]:
+    env = _isolated_parent_env()
     env.update(BASE_ENV)
+    env["METRO_DB_PATH"] = str(db_path)
     if step.env:
         env.update(step.env)
+    return env
+
+
+def _run(step: ScenarioStep) -> int:
+    temp_dir = Path(tempfile.mkdtemp(prefix="metro_all_user_scenarios_"))
+    db_path = temp_dir / "scenario.db"
+    env = _step_env(step, db_path)
     print(f"==> {step.name}", flush=True)
     print("cmd:", " ".join(step.command), flush=True)
-    completed = subprocess.run(  # nosec B603 - commands are static and shell=False
-        step.command,
-        cwd=ROOT,
-        env=env,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(  # nosec B603 - commands are static and shell=False
+            step.command,
+            cwd=ROOT,
+            env=env,
+            check=False,
+        )
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
     if completed.returncode != 0:
         print(f"ALL_USER_SCENARIOS_FAILED step={step.name!r} code={completed.returncode}", flush=True)
     return int(completed.returncode)
