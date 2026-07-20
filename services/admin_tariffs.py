@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import io
 import logging
+import os
+import sqlite3
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-import os
+from typing import Any
 
 from services.db import db
 
@@ -64,9 +66,30 @@ def _to_day(ts: str | None) -> str | None:
     s = str(ts)
     return s[:10] if len(s) >= 10 else None
 
+
 def _day_to_dt(day: str) -> datetime:
     """Преобразует 'YYYY-MM-DD' в datetime для корректной оси X matplotlib."""
-    return datetime.strptime(day, '%Y-%m-%d')
+    return datetime.strptime(day, "%Y-%m-%d")
+
+
+def _row_value(row: Any, key: str, index: int, default: Any = None) -> Any:
+    try:
+        if hasattr(row, "keys"):
+            return row[key]
+        return row[index]
+    except (KeyError, IndexError, TypeError, OSError):
+        return default
+
+
+def _safe_int(value: Any, default: int | None = None) -> int | None:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def build_tariff_dynamics_images(plans: list[dict]) -> list[tuple[str, bytes]]:
@@ -75,10 +98,13 @@ def build_tariff_dynamics_images(plans: list[dict]) -> list[tuple[str, bytes]]:
     Возвращает список (caption, png_bytes).
     """
     plt = _plt()
-    try:
-        plan_map = {str(p.get("code")): p for p in plans if p.get("code")}
-    except OSError:
-        plan_map = {}
+    plan_map: dict[str, dict] = {}
+    for raw_plan in plans or []:
+        if not isinstance(raw_plan, dict):
+            continue
+        code = str(raw_plan.get("code") or "").strip()
+        if code:
+            plan_map[code] = raw_plan
 
     # 1) платежи
     payments_by_day: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -87,32 +113,25 @@ def build_tariff_dynamics_images(plans: list[dict]) -> list[tuple[str, bytes]]:
         # База у пользователей может быть старой версии без paid_at — делаем безопасно.
         try:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(payments)").fetchall()]
-        except OSError:
+        except (sqlite3.Error, OSError, TypeError, IndexError):
             cols = []
-        if "paid_at" in cols:
-            rows = conn.execute(
-                "SELECT payload, created_at, paid_at FROM payments ORDER BY id DESC LIMIT 50000"
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT payload, created_at FROM payments ORDER BY id DESC LIMIT 50000"
-            ).fetchall()
-        for r in rows or []:
-            try:
-                payload = r[0] if not hasattr(r, "keys") else r["payload"]
-                created_at = r[1] if not hasattr(r, "keys") else r["created_at"]
-                paid_at = None
-                # r может быть короче (без paid_at) — тогда используем только created_at
-                if not hasattr(r, "keys"):
-                    if len(r) >= 3:
-                        paid_at = r[2]
-                else:
-                    try:
-                        paid_at = r["paid_at"]
-                    except OSError:
-                        paid_at = None
-            except OSError:
-                continue
+        try:
+            if "paid_at" in cols:
+                rows = conn.execute(
+                    "SELECT payload, created_at, paid_at FROM payments ORDER BY id DESC LIMIT 50000"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT payload, created_at FROM payments ORDER BY id DESC LIMIT 50000"
+                ).fetchall()
+        except (sqlite3.Error, OSError):
+            log.exception("Не удалось прочитать платежи для динамики тарифов")
+            rows = []
+
+        for row in rows or []:
+            payload = _row_value(row, "payload", 0)
+            created_at = _row_value(row, "created_at", 1)
+            paid_at = _row_value(row, "paid_at", 2)
             code = _parse_plan_code_from_payload(payload)
             if not code:
                 continue
@@ -126,25 +145,19 @@ def build_tariff_dynamics_images(plans: list[dict]) -> list[tuple[str, bytes]]:
     with db() as conn:
         try:
             rows = conn.execute(
-                "SELECT plan_code, old_price, new_price, changed_at_utc FROM plan_price_history ORDER BY changed_at_utc ASC"
+                "SELECT plan_code, old_price, new_price, changed_at_utc "
+                "FROM plan_price_history ORDER BY changed_at_utc ASC"
             ).fetchall()
-        except OSError:
+        except (sqlite3.Error, OSError):
             rows = []
-        for r in rows or []:
-            try:
-                code = r[0] if not hasattr(r, "keys") else r["plan_code"]
-                old_p = r[1] if not hasattr(r, "keys") else r["old_price"]
-                new_p = r[2] if not hasattr(r, "keys") else r["new_price"]
-                ts = r[3] if not hasattr(r, "keys") else r["changed_at_utc"]
-            except OSError:
+        for row in rows or []:
+            code = str(_row_value(row, "plan_code", 0, "") or "").strip()
+            old_price = _safe_int(_row_value(row, "old_price", 1))
+            new_price = _safe_int(_row_value(row, "new_price", 2))
+            day = _to_day(_row_value(row, "changed_at_utc", 3))
+            if not code or not day or new_price is None:
                 continue
-            day = _to_day(ts)
-            if not day:
-                continue
-            try:
-                price_hist[str(code)].append((day, int(old_p) if old_p is not None else None, int(new_p)))
-            except OSError:
-                continue
+            price_hist[code].append((day, old_price, new_price))
 
     out: list[tuple[str, bytes]] = []
 
@@ -153,18 +166,14 @@ def build_tariff_dynamics_images(plans: list[dict]) -> list[tuple[str, bytes]]:
     codes: set[str] = set(plan_map.keys()) | set(payments_by_day.keys()) | set(price_hist.keys())
 
     for code in sorted(codes):
-        p = plan_map.get(code, {})
-        title = str(p.get("title") or code)
-        current_price = p.get("price")
-        try:
-            current_price = int(current_price) if current_price is not None else None
-        except OSError:
-            current_price = None
+        plan = plan_map.get(code, {})
+        title = str(plan.get("title") or code)
+        current_price = _safe_int(plan.get("price"))
 
         # собрать календарь дней
         days: set[str] = set(payments_by_day.get(code, {}).keys())
-        for d, _old, _new in price_hist.get(code, []):
-            days.add(d)
+        for day, _old, _new in price_hist.get(code, []):
+            days.add(day)
         if not days:
             # совсем нет данных — пропускаем
             continue
@@ -178,50 +187,50 @@ def build_tariff_dynamics_images(plans: list[dict]) -> list[tuple[str, bytes]]:
         # если есть история, пытаемся начать с old_price первой записи
         hist = price_hist.get(code, [])
         if hist:
-            first_day, first_old, _first_new = hist[0]
+            _first_day, first_old, _first_new = hist[0]
             if first_old is not None:
-                last_price = int(first_old)
+                last_price = first_old
 
         # применяем изменения по дням
-        changes_by_day: dict[str, int] = {}
-        for d, _old, new in hist:
-            changes_by_day[d] = int(new)
+        changes_by_day = {day: new for day, _old, new in hist}
 
-        for d in all_days:
-            if d in changes_by_day:
-                last_price = changes_by_day[d]
+        for day in all_days:
+            if day in changes_by_day:
+                last_price = changes_by_day[day]
             if last_price is None:
-                # fallback: если совсем неизвестно
+                # fallback: если цена повреждена или отсутствует, график остаётся доступным
                 last_price = 0
-            price_by_day[d] = int(last_price)
+            price_by_day[day] = last_price
 
         pay_by_day = payments_by_day.get(code, {})
-        pay_series = [int(pay_by_day.get(d, 0)) for d in all_days]
-        price_series = [int(price_by_day.get(d, 0)) for d in all_days]
+        pay_series = [int(pay_by_day.get(day, 0)) for day in all_days]
+        price_series = [int(price_by_day.get(day, 0)) for day in all_days]
 
         # рисуем (ось X как даты, чтобы не было категориальных предупреждений)
         import matplotlib.dates as mdates  # type: ignore
 
-        x = [_day_to_dt(d) for d in all_days]
+        x = [_day_to_dt(day) for day in all_days]
 
         fig, ax1 = plt.subplots(figsize=(10, 4))
-        ax1.set_title(f"{title} ({code})")
-        ax1.set_xlabel("Дата")
-        ax1.set_ylabel("Цена, ₽")
-        ax1.plot(x, price_series, marker="o")
+        try:
+            ax1.set_title(f"{title} ({code})")
+            ax1.set_xlabel("Дата")
+            ax1.set_ylabel("Цена, ₽")
+            ax1.plot(x, price_series, marker="o")
 
-        ax2 = ax1.twinx()
-        ax2.set_ylabel("Оплаты, шт")
-        ax2.bar(x, pay_series, alpha=0.3)
+            ax2 = ax1.twinx()
+            ax2.set_ylabel("Оплаты, шт")
+            ax2.bar(x, pay_series, alpha=0.3)
 
-        ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
-        ax1.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax1.xaxis.get_major_locator()))
-        fig.autofmt_xdate(rotation=45)
+            ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
+            ax1.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax1.xaxis.get_major_locator()))
+            fig.autofmt_xdate(rotation=45)
 
-        fig.tight_layout()
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=140)
-        plt.close(fig)
-        out.append((f"{title} — цена и оплаты", buf.getvalue()))
+            fig.tight_layout()
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=140)
+            out.append((f"{title} — цена и оплаты", buf.getvalue()))
+        finally:
+            plt.close(fig)
 
     return out
