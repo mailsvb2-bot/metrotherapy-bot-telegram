@@ -211,12 +211,15 @@ def _stream_multipart_once(
     ssl_context: ssl.SSLContext | None,
 ) -> dict[str, Any]:
     parsed = validate_provider_upload_url(url)
+    host = parsed.hostname
+    if host is None:
+        raise ProviderUploadURLRejected("upload_url_host_required")
     mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     head, tail, boundary = _multipart_parts(field_name, path.name, content_type=mime_type)
     file_size = path.stat().st_size
     target = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
     connection = http.client.HTTPSConnection(
-        parsed.hostname,
+        host,
         parsed.port or 443,
         timeout=timeout,
         context=ssl_context,
