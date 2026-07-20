@@ -36,6 +36,10 @@ async def test_telegram_action_runner_message_paths() -> None:
     assert await runner.run({"type": "unknown"}) is None
     assert await runner.run({}) is None
 
+    empty = action_runner.TelegramActionRunner(bot=SimpleNamespace())
+    assert await empty.run({"type": "safe_content"}) is None
+    assert await empty.run({"type": "send_text", "text": "nobody"}) is None
+
 
 @pytest.mark.asyncio
 async def test_telegram_action_runner_callback_paths(monkeypatch: pytest.MonkeyPatch) -> None:
