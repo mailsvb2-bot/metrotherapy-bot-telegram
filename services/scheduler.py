@@ -6,7 +6,7 @@ import logging
 import os
 import sqlite3
 import time
-from typing import TYPE_CHECKING, Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Coroutine, Optional
 
 from core.runtime_env import env_float, env_int
 
@@ -30,21 +30,25 @@ def _coro_name(coro: Awaitable[None]) -> str:
     return type(coro).__name__
 
 
-def _tm_create(coro: Awaitable[None]) -> asyncio.Task:
+def _tm_create(coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
     """Create background tasks through TaskManager with a safe fallback."""
 
-    def _attach(task: asyncio.Task) -> asyncio.Task:
-        def _done_cb(done: asyncio.Task) -> None:
+    def _attach(task: asyncio.Task[None]) -> asyncio.Task[None]:
+        def _done_cb(done: asyncio.Task[None]) -> None:
             try:
                 exc = done.exception()
             except asyncio.CancelledError:
                 return
             except (asyncio.InvalidStateError, RuntimeError):
-                log.exception("Background task callback failed task=%s", _coro_name(coro))
+                log.error("Background task callback failed task=%s", _coro_name(coro))
                 return
             if exc is not None:
                 _record_scheduler_error(_coro_name(coro), exc)
-                log.error("Background task crashed task=%s error_type=%s", _coro_name(coro), type(exc).__name__)
+                log.error(
+                    "Background task crashed task=%s error_type=%s",
+                    _coro_name(coro),
+                    type(exc).__name__,
+                )
 
         task.add_done_callback(_done_cb)
         return task
@@ -54,13 +58,22 @@ def _tm_create(coro: Awaitable[None]) -> asyncio.Task:
 
         return _attach(tm().create(coro))
     except (ImportError, AttributeError):
-        log.exception("TaskManager unavailable; falling back to asyncio.create_task task=%s", _coro_name(coro))
+        log.error(
+            "TaskManager unavailable; falling back to asyncio.create_task task=%s",
+            _coro_name(coro),
+        )
         return _attach(asyncio.create_task(coro))
     except RuntimeError:
-        log.exception("TaskManager runtime error; falling back to asyncio.create_task task=%s", _coro_name(coro))
+        log.error(
+            "TaskManager runtime error; falling back to asyncio.create_task task=%s",
+            _coro_name(coro),
+        )
         return _attach(asyncio.create_task(coro))
     except OSError:
-        log.exception("TaskManager OS error; falling back to asyncio.create_task task=%s", _coro_name(coro))
+        log.error(
+            "TaskManager OS error; falling back to asyncio.create_task task=%s",
+            _coro_name(coro),
+        )
         return _attach(asyncio.create_task(coro))
 
 
@@ -71,7 +84,7 @@ class PreciseScheduler:
         self._queue: list[tuple[float, int, Callable[[], Awaitable[None]]]] = []
         self._cv = asyncio.Condition()
         self._running = False
-        self._task: Optional[asyncio.Task] = None
+        self._task: Optional[asyncio.Task[None]] = None
         self._seq = 0
 
     async def start(self) -> None:
@@ -92,7 +105,11 @@ class PreciseScheduler:
                 pass
             self._task = None
 
-    async def schedule_at(self, when_loop_time: float, factory: Callable[[], Awaitable[None]]) -> None:
+    async def schedule_at(
+        self,
+        when_loop_time: float,
+        factory: Callable[[], Awaitable[None]],
+    ) -> None:
         async with self._cv:
             self._seq += 1
             heapq.heappush(self._queue, (when_loop_time, self._seq, factory))
@@ -121,21 +138,21 @@ class PreciseScheduler:
                 break
             except (RuntimeError, OSError) as exc:
                 _record_scheduler_error("precise_scheduler", exc)
-                log.exception("PreciseScheduler task failed")
+                log.error("PreciseScheduler task failed error_type=%s", type(exc).__name__)
             except Exception as exc:  # validator: allow-wide-except
                 _record_scheduler_error("precise_scheduler", exc)
-                log.exception("PreciseScheduler unexpected failure")
+                log.error("PreciseScheduler unexpected failure error_type=%s", type(exc).__name__)
 
 
 _precise: Optional[PreciseScheduler] = None
-_bg_task: Optional[asyncio.Task] = None
+_bg_task: Optional[asyncio.Task[None]] = None
 _bg_started_at_monotonic: float = 0.0
 _bg_iteration_count: int = 0
 _bg_error_count: int = 0
 _bg_last_error: str = ""
 _bg_last_error_at_monotonic: float = 0.0
 _bg_last_tick_at_monotonic: float = 0.0
-_owner_tasks: dict[str, asyncio.Task] = {}
+_owner_tasks: dict[str, asyncio.Task[None]] = {}
 _owner_started_at: dict[str, float] = {}
 
 
@@ -146,7 +163,10 @@ def _record_scheduler_error(source: str, exc: BaseException) -> None:
     _bg_last_error_at_monotonic = time.monotonic()
 
 
-async def _run_protected_tick(name: str, factory: Callable[[], Awaitable[object]]) -> bool:
+async def _run_protected_tick(
+    name: str,
+    factory: Callable[[], Awaitable[object]],
+) -> bool:
     try:
         await factory()
         return True
@@ -154,23 +174,40 @@ async def _run_protected_tick(name: str, factory: Callable[[], Awaitable[object]
         raise
     except Exception as exc:  # validator: allow-wide-except
         _record_scheduler_error(name, exc)
-        log.exception("Scheduler protected tick failed: %s", name)
+        log.error("Scheduler protected tick failed: %s error_type=%s", name, type(exc).__name__)
         return False
 
 
-def _start_owner_tick(name: str, factory: Callable[[], Awaitable[object]]) -> asyncio.Task | None:
+def _start_owner_tick(
+    name: str,
+    factory: Callable[[], Awaitable[object]],
+) -> asyncio.Task[None] | None:
     existing = _owner_tasks.get(name)
     if existing is not None and not existing.done():
         return None
 
+    timeout_sec = env_float(
+        "SCHEDULER_OWNER_MAX_RUNTIME_SEC",
+        300.0,
+        minimum=5.0,
+        maximum=3600.0,
+    )
+
     async def _runner() -> None:
-        await _run_protected_tick(name, factory)
+        try:
+            await asyncio.wait_for(
+                _run_protected_tick(name, factory),
+                timeout=timeout_sec,
+            )
+        except asyncio.TimeoutError as exc:
+            _record_scheduler_error(name, exc)
+            log.error("Scheduler owner timed out: %s", name)
 
     task = _tm_create(_runner())
     _owner_tasks[name] = task
     _owner_started_at[name] = time.monotonic()
 
-    def _cleanup(done: asyncio.Task) -> None:
+    def _cleanup(done: asyncio.Task[None]) -> None:
         if _owner_tasks.get(name) is done:
             _owner_tasks.pop(name, None)
             _owner_started_at.pop(name, None)
@@ -211,12 +248,18 @@ def scheduler_health_snapshot() -> dict[str, bool | int | float | str]:
         "precise_scheduler_task_running": precise_task_running,
         "precise_scheduler_queue_size": queue_size,
         "scheduler_loop_started": bool(_bg_started_at_monotonic > 0),
-        "scheduler_loop_uptime_sec": int(now_m - _bg_started_at_monotonic) if _bg_started_at_monotonic else 0,
+        "scheduler_loop_uptime_sec": (
+            int(now_m - _bg_started_at_monotonic) if _bg_started_at_monotonic else 0
+        ),
         "scheduler_loop_iterations": int(_bg_iteration_count),
         "scheduler_loop_error_count": int(_bg_error_count),
         "scheduler_loop_last_error": _bg_last_error,
-        "scheduler_loop_last_error_age_sec": int(now_m - _bg_last_error_at_monotonic) if _bg_last_error_at_monotonic else 0,
-        "scheduler_loop_last_tick_age_sec": int(now_m - _bg_last_tick_at_monotonic) if _bg_last_tick_at_monotonic else 0,
+        "scheduler_loop_last_error_age_sec": (
+            int(now_m - _bg_last_error_at_monotonic) if _bg_last_error_at_monotonic else 0
+        ),
+        "scheduler_loop_last_tick_age_sec": (
+            int(now_m - _bg_last_tick_at_monotonic) if _bg_last_tick_at_monotonic else 0
+        ),
         "scheduler_owner_tasks_running": len(active_owner_tasks),
         "scheduler_owner_oldest_age_sec": int(oldest_owner_age),
         **payment_retry,
@@ -250,11 +293,11 @@ async def _safe_ux_guard_tick() -> None:
         if "no such table" in str(exc).lower():
             log.debug("UX guard skipped until schema is ready", exc_info=True)
             return
-        log.exception("UX guard DB operational error")
+        log.error("UX guard DB operational error")
     except (sqlite3.Error, RuntimeError, OSError, ValueError, TypeError, AttributeError, KeyError):
-        log.exception("UX guard failed")
+        log.error("UX guard failed")
     except Exception:  # validator: allow-wide-except
-        log.exception("UX guard unexpected failure")
+        log.error("UX guard unexpected failure")
 
 
 async def _run_growth_conversion_bridge_tick() -> None:
@@ -302,8 +345,18 @@ async def _background_loop(bot: "Bot") -> None:
 
     self_heal = SelfHealingEngine()
     app_env = (os.getenv("APP_ENV") or "dev").lower()
-    heal_interval = env_float("SELF_HEAL_INTERVAL_SEC", 5.0, minimum=1.0, maximum=3600.0)
-    reward_interval = env_float("REWARD_TICK_INTERVAL_SEC", 60.0, minimum=10.0, maximum=86_400.0)
+    heal_interval = env_float(
+        "SELF_HEAL_INTERVAL_SEC",
+        5.0,
+        minimum=1.0,
+        maximum=3600.0,
+    )
+    reward_interval = env_float(
+        "REWARD_TICK_INTERVAL_SEC",
+        60.0,
+        minimum=10.0,
+        maximum=86_400.0,
+    )
     growth_bridge_interval = env_float(
         "GROWTH_CONVERSION_BRIDGE_INTERVAL_SEC",
         60.0,
@@ -323,8 +376,18 @@ async def _background_loop(bot: "Bot") -> None:
         maximum=86_400.0,
     )
     reward_timeout = 5.0 if app_env == "prod" else 15.0
-    reward_window_sec = env_int("REWARD_WINDOW_SEC", 3600, minimum=60, maximum=31 * 24 * 60 * 60)
-    reward_lookback_h = env_int("REWARD_LOOKBACK_H", 24, minimum=1, maximum=24 * 365)
+    reward_window_sec = env_int(
+        "REWARD_WINDOW_SEC",
+        3600,
+        minimum=60,
+        maximum=31 * 24 * 60 * 60,
+    )
+    reward_lookback_h = env_int(
+        "REWARD_LOOKBACK_H",
+        24,
+        minimum=1,
+        maximum=24 * 365,
+    )
 
     last_heal = 0.0
     last_ux_guard = 0.0
@@ -340,7 +403,10 @@ async def _background_loop(bot: "Bot") -> None:
 
         if now_m - last_heal >= heal_interval:
             last_heal = now_m
-            _start_owner_tick("SelfHealingEngine.tick", lambda: asyncio.to_thread(self_heal.tick))
+            _start_owner_tick(
+                "SelfHealingEngine.tick",
+                lambda: asyncio.to_thread(self_heal.tick),
+            )
 
         _start_owner_tick("auto_audio.tick", lambda: auto_audio_tick(bot))
         _start_owner_tick("engine.tick", lambda: engine.tick(bot))
@@ -360,11 +426,17 @@ async def _background_loop(bot: "Bot") -> None:
 
         if now_m - last_growth_conversion_bridge >= growth_bridge_interval:
             last_growth_conversion_bridge = now_m
-            _start_owner_tick("GrowthConversionBridge.tick", _run_growth_conversion_bridge_tick)
+            _start_owner_tick(
+                "GrowthConversionBridge.tick",
+                _run_growth_conversion_bridge_tick,
+            )
 
         if now_m - last_payment_reconciliation_retry >= payment_retry_interval:
             last_payment_reconciliation_retry = now_m
-            _start_owner_tick("PaymentReconciliationRetry.tick", _run_payment_reconciliation_retry_tick)
+            _start_owner_tick(
+                "PaymentReconciliationRetry.tick",
+                _run_payment_reconciliation_retry_tick,
+            )
 
         if now_m - last_ux_guard >= ux_guard_interval:
             last_ux_guard = now_m
