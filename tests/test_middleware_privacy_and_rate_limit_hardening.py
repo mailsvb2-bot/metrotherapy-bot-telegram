@@ -44,7 +44,11 @@ async def test_rate_limit_cannot_be_bypassed_by_changing_callback_payload(
 
     monkeypatch.setattr(middlewares, "CallbackQuery", FakeCallback)
     ticks = iter([100.0, 100.1])
-    monkeypatch.setattr(middlewares.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(
+        middlewares,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(ticks)),
+    )
     limiter = middlewares.SoftRateLimitMiddleware(
         callback_interval_sec=1.0,
         message_interval_sec=1.0,
@@ -123,7 +127,11 @@ async def test_slow_handler_logs_at_configured_threshold(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     ticks = iter([10.0, 10.8])
-    monkeypatch.setattr(middlewares.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(
+        middlewares,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(ticks)),
+    )
     middleware = middlewares.SlowHandlerLogMiddleware(threshold_ms=700)
 
     async def handler(_event, _data):
