@@ -25,6 +25,7 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = Path(__file__).resolve().parent
 SCHEMA_PATH = SCRIPT_DIR / "stress_db_schema.sql"
+CLEANUP_SCHEMA_PATH = SCRIPT_DIR / "stress_db_cleanup.sql"
 CONFIGURED_DB_CONFIRMATION = "I_UNDERSTAND_THIS_MODIFIES_THE_CONFIGURED_DATABASE"
 _SQLITE_URL_RE = re.compile(r"^sqlite(?:\+[^:]+)?:///([^?]+)", re.IGNORECASE)
 _JOURNAL_MODES = {"delete", "truncate", "persist", "memory", "wal", "off"}
@@ -131,7 +132,9 @@ def _restore_journal_mode(path: Path, previous_mode: str) -> bool:
     if normalized not in _JOURNAL_MODES:
         return False
     with sqlite3.connect(str(path), timeout=30, check_same_thread=False) as conn:
-        row = conn.execute(f"PRAGMA journal_mode={normalized.upper()}").fetchone()  # nosec B608 - whitelist above
+        row = conn.execute(
+            f"PRAGMA journal_mode={normalized.upper()}"  # nosec B608 - normalized from whitelist
+        ).fetchone()
         restored = str(row[0] if row else "").strip().lower()
         conn.commit()
     return restored == normalized
@@ -143,7 +146,9 @@ def _init(path: Path) -> tuple[bool, str]:
     try:
         with sqlite3.connect(str(path), timeout=30, check_same_thread=False) as conn:
             journal_row = conn.execute("PRAGMA journal_mode").fetchone()
-            previous_journal_mode = str(journal_row[0] if journal_row else "delete").strip().lower()
+            previous_journal_mode = str(
+                journal_row[0] if journal_row else "delete"
+            ).strip().lower()
             table_existed_before = _table_exists(conn)
             if table_existed_before and not _stress_table_compatible(conn):
                 raise DbStressSafetyError("existing_stress_table_schema_incompatible")
@@ -160,7 +165,14 @@ def _init(path: Path) -> tuple[bool, str]:
         raise
 
 
-def _worker(path: Path, *, run_id: str, worker_id: int, iterations: int, errors: list[str]) -> None:
+def _worker(
+    path: Path,
+    *,
+    run_id: str,
+    worker_id: int,
+    iterations: int,
+    errors: list[str],
+) -> None:
     try:
         conn = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
         try:
@@ -188,20 +200,23 @@ def _cleanup_run_rows(
     keep_rows: bool,
     errors: list[str],
 ) -> tuple[bool, int]:
-    if keep_rows:
-        with sqlite3.connect(str(path), timeout=30, check_same_thread=False) as conn:
-            row = conn.execute("SELECT COUNT(*) FROM stress_events WHERE run_id=?", (run_id,)).fetchone()
-        return False, int(row[0]) if row else 0
-
     table_removed = False
     try:
         with sqlite3.connect(str(path), timeout=30, check_same_thread=False) as conn:
+            if keep_rows:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM stress_events WHERE run_id=?",
+                    (run_id,),
+                ).fetchone()
+                return False, int(row[0]) if row else 0
+
             if _table_exists(conn):
                 conn.execute("DELETE FROM stress_events WHERE run_id=?", (run_id,))
                 if not table_existed_before:
-                    conn.execute("DROP TABLE stress_events")
+                    conn.executescript(CLEANUP_SCHEMA_PATH.read_text(encoding="utf-8"))
                     table_removed = True
                 conn.commit()
+
             if table_removed or not _table_exists(conn):
                 residual = 0
             else:
@@ -269,7 +284,10 @@ def run(
             errors=errors,
         )
         try:
-            journal_mode_restored = _restore_journal_mode(resolved, previous_journal_mode)
+            journal_mode_restored = _restore_journal_mode(
+                resolved,
+                previous_journal_mode,
+            )
         except (sqlite3.Error, OSError):
             journal_mode_restored = False
         if not journal_mode_restored:
@@ -303,11 +321,11 @@ def run(
     )
 
 
-def _error_payload(code: str) -> dict[str, object]:
+def _error_payload(code: str, *, mutated: bool = False) -> dict[str, object]:
     return {
         "ok": False,
-        "target_kind": "rejected",
-        "mutated": False,
+        "target_kind": "rejected" if not mutated else "failed",
+        "mutated": bool(mutated),
         "error_code": str(code or "stress_db_failed"),
     }
 
@@ -317,8 +335,14 @@ def _bounded_positive(value: int, *, maximum: int) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run a guarded SQLite concurrency diagnostic")
-    parser.add_argument("--db-path", default="", help="Custom SQLite target; blocked without explicit authorization")
+    parser = argparse.ArgumentParser(
+        description="Run a guarded SQLite concurrency diagnostic"
+    )
+    parser.add_argument(
+        "--db-path",
+        default="",
+        help="Custom SQLite target; blocked without explicit authorization",
+    )
     parser.add_argument("--allow-custom-db-path", action="store_true")
     parser.add_argument("--allow-existing-db-path", action="store_true")
     parser.add_argument("--allow-configured-db-path", action="store_true")
@@ -354,12 +378,21 @@ def main() -> int:
             target_kind=target_kind,
         )
     except DbStressSafetyError as exc:
-        print(json.dumps(_error_payload(exc.code), ensure_ascii=False, sort_keys=True))
+        print(
+            json.dumps(
+                _error_payload(exc.code, mutated=False),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
         return 2
     except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
         print(
             json.dumps(
-                _error_payload(f"stress_run_failed:{type(exc).__name__}"),
+                _error_payload(
+                    f"stress_run_failed:{type(exc).__name__}",
+                    mutated=True,
+                ),
                 ensure_ascii=False,
                 sort_keys=True,
             )
@@ -370,10 +403,8 @@ def main() -> int:
             shutil.rmtree(temporary_dir, ignore_errors=True)
 
     if temporary_dir is not None:
-        if args.keep_temporary_db:
-            report = replace(report, cleanup_status=report.cleanup_status + ":temporary_db_kept")
-        else:
-            report = replace(report, cleanup_status=report.cleanup_status + ":temporary_db_removed")
+        suffix = ":temporary_db_kept" if args.keep_temporary_db else ":temporary_db_removed"
+        report = replace(report, cleanup_status=report.cleanup_status + suffix)
     print(json.dumps(asdict(report), ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if report.ok else 2
 
