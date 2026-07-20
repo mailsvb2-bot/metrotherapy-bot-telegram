@@ -30,7 +30,8 @@ def buttons(markup: Any) -> list[Any]:
 
 
 def test_keyboard_helpers_and_labels(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert ui.kb([[1]]).inline_keyboard == [[1]]
+    button = ui.InlineKeyboardButton(text="Test", callback_data="test")
+    assert ui.kb([[button]]).inline_keyboard == [[button]]
     back = ui.kb_back("target")
     assert back.inline_keyboard[0][0].callback_data == "target"
     assert ui._price_label(2499) == "2 499 ₽"
@@ -91,8 +92,8 @@ def test_telegram_payment_method_text(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(ui, "telegram_stars_enabled", lambda: False)
     unavailable = ui.telegram_payment_method_text("a")
+    assert unavailable.startswith("Start\nFirst")
     assert "временно недоступна" in unavailable
-    assert "1500 Stars" in unavailable
 
     monkeypatch.setattr(ui, "telegram_stars_enabled", lambda: True)
     text = ui.telegram_payment_method_text("a")
@@ -197,10 +198,11 @@ def test_practice_package_route_selection(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_public_tariff_keyboards(monkeypatch: pytest.MonkeyPatch) -> None:
+    package_button = ui.InlineKeyboardButton(text="Package", callback_data="package")
     monkeypatch.setattr(
         ui,
         "_practice_package_rows",
-        lambda **_kwargs: [[SimpleNamespace(callback_data="package")]],
+        lambda **_kwargs: [[package_button]],
     )
     tariff = ui.kb_tariffs(user_id=7)
     assert [row[0].callback_data for row in tariff.inline_keyboard] == [
