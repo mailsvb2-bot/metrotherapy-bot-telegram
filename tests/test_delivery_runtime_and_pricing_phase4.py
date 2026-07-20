@@ -39,6 +39,14 @@ async def test_telegram_action_runner_message_paths() -> None:
 
 @pytest.mark.asyncio
 async def test_telegram_action_runner_callback_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeMessage:
+        pass
+
+    monkeypatch.setattr(action_runner, "Message", FakeMessage)
+    fake_message = FakeMessage()
+    assert action_runner._callback_message(SimpleNamespace(message=fake_message)) is fake_message
+    assert action_runner._callback_message(SimpleNamespace(message=object())) is None
+
     target = AnswerTarget()
     cb = SimpleNamespace(message=object())
     runner = action_runner.TelegramActionRunner(bot=SimpleNamespace(), cb=cb)
@@ -50,8 +58,6 @@ async def test_telegram_action_runner_callback_paths(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(action_runner, "_callback_message", lambda _cb: None)
     assert await runner.run({"type": "safe_content"}) is None
     assert await runner.run({"type": "send_text", "text": "hello"}) is None
-
-    assert action_runner._callback_message(SimpleNamespace(message=object())) is None
 
 
 def test_send_queue_reuses_one_semaphore_per_user() -> None:
