@@ -196,8 +196,10 @@ def _plot_data(metric: str, values: Sequence[float], threshold_ms: float) -> Non
     if not values:
         logger.info("No data for %s", metric)
         return
-    p95 = percentile(values, 95)
-    p99 = percentile(values, 99)
+    p95_value = percentile(values, 95)
+    p99_value = percentile(values, 99)
+    p95 = 0.0 if p95_value is None else p95_value
+    p99 = 0.0 if p99_value is None else p99_value
     plt.hist(values, bins=min(50, max(1, len(values))))
     plt.axvline(threshold_ms, color="red")
     plt.title(f"{metric} p95={p95:.0f}ms p99={p99:.0f}ms")
