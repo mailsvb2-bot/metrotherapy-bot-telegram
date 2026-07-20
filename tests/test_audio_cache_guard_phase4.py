@@ -99,6 +99,27 @@ def test_audio_guard_accepts_exotic_file_with_exact_stem(
     assert audio_guard.pick_demo_file("HOME") == exotic
 
 
+def test_audio_guard_logs_demo_directory_scan_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class BrokenDemoDir:
+        def __truediv__(self, name: str) -> Path:
+            return tmp_path / "missing" / name
+
+        def iterdir(self):
+            raise OSError("broken demo directory")
+
+        def exists(self) -> bool:
+            return False
+
+    monkeypatch.setattr(audio_guard, "DEMO_DIR", BrokenDemoDir())
+    monkeypatch.setattr(audio_guard, "EXTS", {".ogg", ".opus"})
+    assert audio_guard.pick_demo_file("work") is None
+    assert "DEMO_DIR scan failed" in caplog.text
+
+
 def test_audio_guard_full_catalog_access(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     full = tmp_path / "full"
     full.mkdir()
