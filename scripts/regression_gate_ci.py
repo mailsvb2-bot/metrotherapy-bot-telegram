@@ -7,7 +7,10 @@ full pytest step. The CI workflow runs the same suite exactly once under line
 and branch coverage, so this adapter removes only that duplicated step.
 """
 
-from scripts import regression_gate
+try:
+    from scripts import regression_gate
+except ModuleNotFoundError:  # Direct execution: python scripts/regression_gate_ci.py
+    import regression_gate  # type: ignore[no-redef]
 
 _FULL_PYTEST_STEP = "full pytest regression gate"
 
