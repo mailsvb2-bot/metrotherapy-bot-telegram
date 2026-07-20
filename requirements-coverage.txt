@@ -1,0 +1,4 @@
+# Hash-locked coverage-only quality dependency.
+# Regenerate with: pip-compile --generate-hashes --output-file=requirements-coverage.txt requirements-coverage.in
+coverage==7.15.2 \
+    --hash=sha256:eb6bcae8d1a9d305351ecb108232441d11c5cfe9de840a04388ba5d2db8d735c
