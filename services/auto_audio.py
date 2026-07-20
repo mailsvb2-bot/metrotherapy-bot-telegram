@@ -22,7 +22,7 @@ from config.settings import settings
 from core.runtime_env import env_int
 from runtime.messenger_senders import MaxBotSender, TelegramBotSender, VkBotSender
 from services.audio_anchor import pick_for_slot
-from services.auto_audio_entitlement import eligible_user_ids
+from services.auto_audio_entitlement import eligible_user_ids, has_entitlement
 from services.auto_audio_recovery import acquire_delivery_lock
 from services.db import db, mark_delivery_once, unmark_delivery, was_delivered
 from services.delivery_preferences import DeliveryPolicyDecision, build_delivery_policy_decision
@@ -101,9 +101,18 @@ def _slot_time_for_user(uid: int, slot: str) -> str:
 
 
 def _is_due_for_user(uid: int, slot: str, now_utc: datetime) -> tuple[bool, str, str]:
+    """Point preflight for diagnostics and focused delivery probes.
+
+    Bulk runtime delivery uses ``eligible_user_ids`` to avoid an N+1 entitlement
+    query storm. Individual probes retain the canonical ``has_entitlement`` guard
+    so no direct caller can bypass the practice-wallet/subscription source of truth.
+    """
+
     policy = build_delivery_policy_decision(int(uid), slot, now_utc=now_utc)
     hm = _slot_time_for_user(uid, slot)
     local_now = now_utc.astimezone(ZoneInfo(policy.timezone))
+    if not has_entitlement(int(uid), slot):
+        return False, policy.timezone, hm
     if policy.blocked_by_quiet_hours:
         return False, policy.timezone, hm
     return _is_due_local_day(local_now, hm), policy.timezone, hm
@@ -112,6 +121,9 @@ def _is_due_for_user(uid: int, slot: str, now_utc: datetime) -> tuple[bool, str,
 def _collect_due_candidates(now_utc: datetime) -> list[DueCandidate]:
     out: list[DueCandidate] = []
     for slot in ("morning", "evening"):
+        # eligible_user_ids() already applies the canonical practice-wallet or
+        # subscription entitlement in bulk. Do not repeat has_entitlement() here:
+        # that would recreate the old per-user DB query storm.
         for uid in eligible_user_ids(slot):
             policy = build_delivery_policy_decision(uid, slot, now_utc=now_utc)
             hm = _slot_time_for_user(uid, slot)
