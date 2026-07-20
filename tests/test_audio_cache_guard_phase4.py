@@ -75,9 +75,6 @@ def test_audio_guard_scan_and_demo_selection(monkeypatch: pytest.MonkeyPatch, tm
     (demo / "work.ogg").write_bytes(b"work")
     assert audio_guard.pick_demo_file("work").name == "work.ogg"
 
-    (demo / "home.weird").write_bytes(b"home")
-    assert audio_guard.pick_demo_file("HOME").name == "home.weird"
-
     pair = tmp_path / "pair"
     pair.mkdir()
     (pair / "01.ogg").write_bytes(b"1")
@@ -88,6 +85,18 @@ def test_audio_guard_scan_and_demo_selection(monkeypatch: pytest.MonkeyPatch, tm
 
     (pair / "03.ogg").write_bytes(b"3")
     assert audio_guard.pick_demo_file("work") is None
+
+
+def test_audio_guard_accepts_exotic_file_with_exact_stem(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    demo = tmp_path / "exotic"
+    demo.mkdir()
+    exotic = demo / "home.custom"
+    exotic.write_bytes(b"audio")
+    monkeypatch.setattr(audio_guard, "DEMO_DIR", demo)
+    monkeypatch.setattr(audio_guard, "EXTS", {".ogg", ".opus"})
+    assert audio_guard.pick_demo_file("HOME") == exotic
 
 
 def test_audio_guard_full_catalog_access(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
