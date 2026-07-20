@@ -17,6 +17,7 @@ import sqlite3
 import tempfile
 import time
 import uuid
+from contextlib import closing
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from threading import Thread
@@ -111,6 +112,10 @@ def _authorize_custom_target(
     return resolved
 
 
+def _connect(path: Path) -> sqlite3.Connection:
+    return sqlite3.connect(str(path), timeout=30, check_same_thread=False)
+
+
 def _table_exists(conn: sqlite3.Connection) -> bool:
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stress_events' LIMIT 1"
@@ -131,7 +136,7 @@ def _restore_journal_mode(path: Path, previous_mode: str) -> bool:
     normalized = str(previous_mode or "").strip().lower()
     if normalized not in _JOURNAL_MODES:
         return False
-    with sqlite3.connect(str(path), timeout=30, check_same_thread=False) as conn:
+    with closing(_connect(path)) as conn:
         row = conn.execute(
             f"PRAGMA journal_mode={normalized.upper()}"  # nosec B608 - normalized from whitelist
         ).fetchone()
@@ -144,7 +149,7 @@ def _init(path: Path) -> tuple[bool, str]:
     path.parent.mkdir(parents=True, exist_ok=True)
     previous_journal_mode = "delete"
     try:
-        with sqlite3.connect(str(path), timeout=30, check_same_thread=False) as conn:
+        with closing(_connect(path)) as conn:
             journal_row = conn.execute("PRAGMA journal_mode").fetchone()
             previous_journal_mode = str(
                 journal_row[0] if journal_row else "delete"
@@ -174,7 +179,7 @@ def _worker(
     errors: list[str],
 ) -> None:
     try:
-        conn = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
+        conn = _connect(path)
         try:
             for n in range(iterations):
                 conn.execute(
@@ -202,7 +207,7 @@ def _cleanup_run_rows(
 ) -> tuple[bool, int]:
     table_removed = False
     try:
-        with sqlite3.connect(str(path), timeout=30, check_same_thread=False) as conn:
+        with closing(_connect(path)) as conn:
             if keep_rows:
                 row = conn.execute(
                     "SELECT COUNT(*) FROM stress_events WHERE run_id=?",
@@ -269,7 +274,7 @@ def run(
         for thread in threads:
             thread.join()
 
-        with sqlite3.connect(str(resolved), timeout=30, check_same_thread=False) as conn:
+        with closing(_connect(resolved)) as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM stress_events WHERE run_id=?",
                 (run_id,),
