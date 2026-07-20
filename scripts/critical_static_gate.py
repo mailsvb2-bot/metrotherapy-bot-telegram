@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TYPE_CONTRACT_FILES = (
     "check_db.py",
     "dashboard/sla_dashboard.py",
+    "dashboard/sla_retention_money.py",
     "handlers/info.py",
     "runtime/messenger_ingress_reliability.py",
     "runtime/messenger_media_http.py",
@@ -57,6 +58,7 @@ TYPE_CONTRACT_FILES = (
 SECURITY_SCAN_PATHS = (
     "check_db.py",
     "dashboard/sla_dashboard.py",
+    "dashboard/sla_retention_money.py",
     "handlers/info.py",
     "runtime/messenger_ingress_reliability.py",
     "runtime/messenger_media_http.py",
