@@ -166,4 +166,6 @@ def test_build_tariff_dynamics_with_and_without_paid_at(monkeypatch: pytest.Monk
     monkeypatch.setattr(admin_tariffs, "_plt", lambda: plot3)
     connections = iter([PaymentsConn(fail_cols=True), HistoryConn(fail=True)])
     monkeypatch.setattr(admin_tariffs, "db", lambda: DbContext(next(connections)))
-    assert admin_tariffs.build_tariff_dynamics_images([]) == []
+    assert admin_tariffs.build_tariff_dynamics_images([]) == [
+        ("basic — цена и оплаты", b"PNG")
+    ]
