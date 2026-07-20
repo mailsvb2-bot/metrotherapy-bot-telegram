@@ -53,11 +53,12 @@ def test_rejected_cached_max_media_token_is_invalidated_and_rebuilt(
     sent_tokens: list[str] = []
     invalidated: list[tuple[str, Path, str]] = []
 
-    async def fake_ensure(_path: Path, *, media_type: str) -> str:
+    async def fake_ensure(_self: MaxBotSender, _path: Path, *, media_type: str) -> str:
         assert media_type == "audio"
         return next(issued)
 
     async def fake_send(
+        _self: MaxBotSender,
         _external_user_id: str,
         *,
         text: str,
