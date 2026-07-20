@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "total_percent": 0.0,
+  "comparison_tolerance": 0.01,
+  "require_update_on_improvement": false,
+  "measurement": "combined line and branch coverage",
+  "source": [
+    "services",
+    "handlers",
+    "core",
+    "runtime",
+    "config"
+  ]
+}
