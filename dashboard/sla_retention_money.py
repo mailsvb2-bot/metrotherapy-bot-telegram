@@ -75,7 +75,7 @@ def model_rows(
             "sla_latency_ms": latency,
             "retention_rate": retained,
             "arpu_rub": revenue_per_user,
-            "monthly_revenue_rub": retained * revenue_per_user * audience,
+            "monthly_revenue_rub": round(retained * revenue_per_user * audience, 2),
         }
         for latency, retained, revenue_per_user in zip(latencies, retention, arpu, strict=True)
     ]
