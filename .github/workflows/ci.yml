@@ -43,7 +43,7 @@ jobs:
         id: regression
         run: |
           set -o pipefail
-          python scripts/regression_gate.py 2>&1 | tee "$RUNNER_TEMP/regression-contour.log"
+          python scripts/regression_gate_ci.py 2>&1 | tee "$RUNNER_TEMP/regression-contour.log"
 
       - name: Publish regression contour status
         if: always()
