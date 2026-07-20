@@ -77,7 +77,9 @@ def _row_value(row: Any, key: str, index: int, default: Any = None) -> Any:
         if hasattr(row, "keys"):
             return row[key]
         return row[index]
-    except (KeyError, IndexError, TypeError, OSError):
+    except (KeyError, IndexError, TypeError):
+        return default
+    except OSError:
         return default
 
 
@@ -90,6 +92,15 @@ def _safe_int(value: Any, default: int | None = None) -> int | None:
         return int(value)
     except (TypeError, ValueError, OverflowError):
         return default
+
+
+def _payment_columns(conn: Any) -> list[str]:
+    try:
+        return [row[1] for row in conn.execute("PRAGMA table_info(payments)").fetchall()]
+    except (sqlite3.Error, TypeError, IndexError):
+        return []
+    except OSError:
+        return []
 
 
 def build_tariff_dynamics_images(plans: list[dict]) -> list[tuple[str, bytes]]:
@@ -111,12 +122,9 @@ def build_tariff_dynamics_images(plans: list[dict]) -> list[tuple[str, bytes]]:
     with db() as conn:
         # payload + paid_at или created_at
         # База у пользователей может быть старой версии без paid_at — делаем безопасно.
+        columns = _payment_columns(conn)
         try:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(payments)").fetchall()]
-        except (sqlite3.Error, OSError, TypeError, IndexError):
-            cols = []
-        try:
-            if "paid_at" in cols:
+            if "paid_at" in columns:
                 rows = conn.execute(
                     "SELECT payload, created_at, paid_at FROM payments ORDER BY id DESC LIMIT 50000"
                 ).fetchall()
