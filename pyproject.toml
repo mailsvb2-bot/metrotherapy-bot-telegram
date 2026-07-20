@@ -33,6 +33,7 @@ select = [
     "F822",  # undefined name in __all__
     "F823",  # local variable referenced before assignment
 ]
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true
@@ -50,3 +51,36 @@ skips = [
     "B110",  # try/except/pass is used by best-effort diagnostics and is separately reviewed
     "B310",  # controlled urllib calls are already constrained to known provider/local URLs
 ]
+
+[tool.coverage.run]
+branch = true
+relative_files = true
+source = ["services", "handlers", "core", "runtime", "config"]
+omit = [
+    "tests/*",
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "@(?:abc\\.)?abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+show_contexts = true
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+[tool.coverage.json]
+output = "coverage.json"
+pretty_print = true
+show_contexts = true
