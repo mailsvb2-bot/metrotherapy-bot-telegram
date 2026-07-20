@@ -28,6 +28,7 @@ SCHEMA_PATH = SCRIPT_DIR / "stress_db_schema.sql"
 CONFIGURED_DB_CONFIRMATION = "I_UNDERSTAND_THIS_MODIFIES_THE_CONFIGURED_DATABASE"
 _SQLITE_URL_RE = re.compile(r"^sqlite(?:\+[^:]+)?:///([^?]+)", re.IGNORECASE)
 _JOURNAL_MODES = {"delete", "truncate", "persist", "memory", "wal", "off"}
+_REQUIRED_STRESS_COLUMNS = {"run_id", "worker", "n"}
 
 
 class DbStressSafetyError(RuntimeError):
@@ -48,6 +49,7 @@ class DbStressReport:
     iterations: int
     expected_rows: int
     actual_rows: int
+    residual_rows: int
     elapsed_sec: float
     db_existed_before: bool
     table_existed_before: bool
@@ -115,17 +117,13 @@ def _table_exists(conn: sqlite3.Connection) -> bool:
     return bool(row)
 
 
-def _init(path: Path) -> tuple[bool, str]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(path), timeout=30, check_same_thread=False) as conn:
-        journal_row = conn.execute("PRAGMA journal_mode").fetchone()
-        previous_journal_mode = str(journal_row[0] if journal_row else "delete").strip().lower()
-        table_existed_before = _table_exists(conn)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-        conn.commit()
-    return table_existed_before, previous_journal_mode
+def _stress_table_compatible(conn: sqlite3.Connection) -> bool:
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(stress_events)").fetchall()
+        if len(row) > 1
+    }
+    return _REQUIRED_STRESS_COLUMNS.issubset(columns)
 
 
 def _restore_journal_mode(path: Path, previous_mode: str) -> bool:
@@ -137,6 +135,29 @@ def _restore_journal_mode(path: Path, previous_mode: str) -> bool:
         restored = str(row[0] if row else "").strip().lower()
         conn.commit()
     return restored == normalized
+
+
+def _init(path: Path) -> tuple[bool, str]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    previous_journal_mode = "delete"
+    try:
+        with sqlite3.connect(str(path), timeout=30, check_same_thread=False) as conn:
+            journal_row = conn.execute("PRAGMA journal_mode").fetchone()
+            previous_journal_mode = str(journal_row[0] if journal_row else "delete").strip().lower()
+            table_existed_before = _table_exists(conn)
+            if table_existed_before and not _stress_table_compatible(conn):
+                raise DbStressSafetyError("existing_stress_table_schema_incompatible")
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            conn.commit()
+        return table_existed_before, previous_journal_mode
+    except (DbStressSafetyError, sqlite3.Error, OSError):
+        try:
+            _restore_journal_mode(path, previous_journal_mode)
+        except (sqlite3.Error, OSError):
+            pass
+        raise
 
 
 def _worker(path: Path, *, run_id: str, worker_id: int, iterations: int, errors: list[str]) -> None:
@@ -159,6 +180,42 @@ def _worker(path: Path, *, run_id: str, worker_id: int, iterations: int, errors:
         errors.append(f"worker={worker_id}:{type(exc).__name__}")
 
 
+def _cleanup_run_rows(
+    path: Path,
+    *,
+    run_id: str,
+    table_existed_before: bool,
+    keep_rows: bool,
+    errors: list[str],
+) -> tuple[bool, int]:
+    if keep_rows:
+        with sqlite3.connect(str(path), timeout=30, check_same_thread=False) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM stress_events WHERE run_id=?", (run_id,)).fetchone()
+        return False, int(row[0]) if row else 0
+
+    table_removed = False
+    try:
+        with sqlite3.connect(str(path), timeout=30, check_same_thread=False) as conn:
+            if _table_exists(conn):
+                conn.execute("DELETE FROM stress_events WHERE run_id=?", (run_id,))
+                if not table_existed_before:
+                    conn.execute("DROP TABLE stress_events")
+                    table_removed = True
+                conn.commit()
+            if table_removed or not _table_exists(conn):
+                residual = 0
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM stress_events WHERE run_id=?",
+                    (run_id,),
+                ).fetchone()
+                residual = int(row[0]) if row else 0
+    except (sqlite3.Error, OSError) as exc:
+        errors.append(f"cleanup:{type(exc).__name__}")
+        residual = -1
+    return table_removed, residual
+
+
 def run(
     path: Path,
     *,
@@ -173,42 +230,52 @@ def run(
     table_existed_before, previous_journal_mode = _init(resolved)
     errors: list[str] = []
     started = time.monotonic()
-    threads = [
-        Thread(
-            target=_worker,
-            args=(resolved,),
-            kwargs={
-                "run_id": run_id,
-                "worker_id": worker_id,
-                "iterations": iterations,
-                "errors": errors,
-            },
-        )
-        for worker_id in range(workers)
-    ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-    elapsed = time.monotonic() - started
-
+    actual = 0
     table_removed = False
-    with sqlite3.connect(str(resolved), timeout=30, check_same_thread=False) as conn:
-        row = conn.execute("SELECT COUNT(*) FROM stress_events WHERE run_id=?", (run_id,)).fetchone()
-        actual = int(row[0]) if row else 0
-        if not keep_rows:
-            conn.execute("DELETE FROM stress_events WHERE run_id=?", (run_id,))
-            if not table_existed_before:
-                conn.execute("DROP TABLE stress_events")
-                table_removed = True
-            conn.commit()
+    residual_rows = -1
+    journal_mode_restored = False
 
     try:
-        journal_mode_restored = _restore_journal_mode(resolved, previous_journal_mode)
-    except (sqlite3.Error, OSError):
-        journal_mode_restored = False
-        errors.append("cleanup:journal_mode_restore_failed")
+        threads = [
+            Thread(
+                target=_worker,
+                args=(resolved,),
+                kwargs={
+                    "run_id": run_id,
+                    "worker_id": worker_id,
+                    "iterations": iterations,
+                    "errors": errors,
+                },
+            )
+            for worker_id in range(workers)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
 
+        with sqlite3.connect(str(resolved), timeout=30, check_same_thread=False) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM stress_events WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            actual = int(row[0]) if row else 0
+    finally:
+        table_removed, residual_rows = _cleanup_run_rows(
+            resolved,
+            run_id=run_id,
+            table_existed_before=table_existed_before,
+            keep_rows=keep_rows,
+            errors=errors,
+        )
+        try:
+            journal_mode_restored = _restore_journal_mode(resolved, previous_journal_mode)
+        except (sqlite3.Error, OSError):
+            journal_mode_restored = False
+        if not journal_mode_restored:
+            errors.append("cleanup:journal_mode_restore_failed")
+
+    elapsed = time.monotonic() - started
     expected = int(workers) * int(iterations)
     if keep_rows:
         cleanup_status = "rows_kept"
@@ -216,14 +283,16 @@ def run(
         cleanup_status = "run_rows_and_created_table_removed"
     else:
         cleanup_status = "run_rows_removed"
+    residual_ok = residual_rows == actual if keep_rows else residual_rows == 0
     return DbStressReport(
-        ok=not errors and actual == expected and journal_mode_restored,
+        ok=not errors and actual == expected and residual_ok and journal_mode_restored,
         db_path=str(resolved),
         target_kind=str(target_kind),
         workers=int(workers),
         iterations=int(iterations),
         expected_rows=expected,
         actual_rows=actual,
+        residual_rows=residual_rows,
         elapsed_sec=round(elapsed, 3),
         db_existed_before=db_existed_before,
         table_existed_before=table_existed_before,
