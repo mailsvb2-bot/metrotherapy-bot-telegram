@@ -295,7 +295,7 @@ async def _process_due_candidate(
                 **_safe_error_meta(exc),
             },
         )
-    except (sqlite3.Error, RuntimeError, ValueError, TypeError, OSError, asyncio.TimeoutError) as exc:
+    except (sqlite3.Error, RuntimeError, ValueError, TypeError, OSError, asyncio.TimeoutError) as exc:  # validator: allow-wide-except
         log_event(
             uid,
             "auto_audio_error",
@@ -364,5 +364,5 @@ async def tick(bot: Bot) -> None:
         )
     except asyncio.CancelledError:
         raise
-    except (sqlite3.Error, RuntimeError, ValueError, TypeError, OSError, asyncio.TimeoutError) as exc:
+    except (sqlite3.Error, RuntimeError, ValueError, TypeError, OSError, asyncio.TimeoutError) as exc:  # validator: allow-wide-except
         log.error("auto_audio.tick failed error_type=%s", type(exc).__name__)
