@@ -362,3 +362,20 @@ class MaxBotSender:
             caption=caption or "",
             notify=kwargs.get("notify"),
         )
+
+    async def send_document_file(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        caption: str | None = None,
+        **kwargs: Any,
+    ):
+        return await self._send_media_file(
+            external_user_id,
+            file_path,
+            media_type="file",
+            caption=caption or "",
+            notify=kwargs.get("notify"),
+        )
+
