@@ -19,6 +19,7 @@ _RUNTIME_HARDENING_FILES = (
     "services/audio_asset_integrity.py",
     "services/auto_audio.py",
     "services/db/read_only.py",
+    "services/db/sql_compat_guard.py",
     "services/messenger/media_assets.py",
     "services/messenger/observability.py",
     "services/messenger/provider_transport.py",
@@ -181,28 +182,21 @@ def main() -> int:
 
     missing = missing_critical_paths()
     if missing:
-        print("CRITICAL_STATIC_MANIFEST_FAILED")
-        for relative in missing:
-            print(f"missing: {relative}")
-        return 2
-    print(
-        "CRITICAL_STATIC_MANIFEST_OK "
-        f"type_files={len(TYPE_CONTRACT_FILES)} security_paths={len(SECURITY_SCAN_PATHS)}"
-    )
+        for path in missing:
+            print(f"missing critical static path: {path}", file=sys.stderr)
+        return 1
 
     if args.check == "manifest":
+        print("critical static manifest OK")
         return 0
-    if args.check in {"mypy", "all"}:
-        code = run_mypy()
-        if code:
-            return code
-        print("CRITICAL_MYPY_OK")
-    if args.check in {"bandit", "all"}:
-        code = run_bandit()
-        if code:
-            return code
-        print("CRITICAL_BANDIT_OK")
-    return 0
+    if args.check == "mypy":
+        return run_mypy()
+    if args.check == "bandit":
+        return run_bandit()
+
+    mypy_rc = run_mypy()
+    bandit_rc = run_bandit()
+    return 0 if mypy_rc == 0 and bandit_rc == 0 else 1
 
 
 if __name__ == "__main__":
