@@ -1,45 +1,70 @@
 from __future__ import annotations
 
-from datetime import datetime
+from config.settings import settings
 from core.time_utils import utc_now
 from services.db import db
-from config.settings import settings
+
+
+def _row_value(row, key: str, index: int, default=None):
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        return row.get(key, default)
+    if hasattr(row, "keys"):
+        try:
+            return row[key]
+        except (KeyError, TypeError, IndexError):
+            pass
+    try:
+        return row[index]
+    except (TypeError, KeyError, IndexError):
+        return default
 
 
 def set_referral(referrer_id: int, referred_id: int) -> bool:
-    if int(referrer_id) == int(referred_id):
+    referrer = int(referrer_id)
+    referred = int(referred_id)
+    if referrer <= 0 or referred <= 0 or referrer == referred:
         return False
     with db() as conn:
-        row = conn.execute("SELECT referred_id FROM referrals WHERE referred_id=?", (int(referred_id),)).fetchone()
-        if row:
-            return False
-        conn.execute(
-            "INSERT INTO referrals(referred_id, referrer_id, joined_at, reward_given) VALUES(?,?,?,0)",
-            (int(referred_id), int(referrer_id), utc_now().replace(microsecond=0).isoformat()),
+        cursor = conn.execute(
+            """
+            INSERT INTO referrals(referred_id, referrer_id, joined_at, reward_given)
+            VALUES(?,?,?,0)
+            ON CONFLICT(referred_id) DO NOTHING
+            """.strip(),
+            (referred, referrer, utc_now().replace(microsecond=0).isoformat()),
         )
-    return True
+        return int(getattr(cursor, "rowcount", 0) or 0) == 1
 
 
 def get_referrer(referred_id: int) -> int | None:
     with db() as conn:
-        row = conn.execute("SELECT referrer_id FROM referrals WHERE referred_id=?", (int(referred_id),)).fetchone()
-    return int(row["referrer_id"]) if row else None
+        row = conn.execute(
+            "SELECT referrer_id FROM referrals WHERE referred_id=? LIMIT 1",
+            (int(referred_id),),
+        ).fetchone()
+    raw = _row_value(row, "referrer_id", 0)
+    return int(raw) if raw is not None else None
 
 
 def reward_already_given(referred_id: int) -> bool:
     with db() as conn:
-        row = conn.execute("SELECT reward_given FROM referrals WHERE referred_id=?", (int(referred_id),)).fetchone()
-    return bool(row and int(row["reward_given"]) == 1)
+        row = conn.execute(
+            "SELECT reward_given FROM referrals WHERE referred_id=? LIMIT 1",
+            (int(referred_id),),
+        ).fetchone()
+    return bool(row and int(_row_value(row, "reward_given", 0, 0) or 0) == 1)
 
 
 def referrer_bonus_count(referrer_id: int) -> int:
-    """Сколько бонусов уже начислено рефереру."""
+    """How many paid-referral rewards have been recorded for this referrer."""
     with db() as conn:
         row = conn.execute(
-            "SELECT COUNT(1) AS n FROM referrals WHERE referrer_id=? AND reward_given=1",
+            "SELECT COUNT(1) AS n FROM referrals WHERE referrer_id=? AND COALESCE(reward_given,0)=1",
             (int(referrer_id),),
         ).fetchone()
-    return int(row["n"] if row and row["n"] is not None else 0)
+    return int(_row_value(row, "n", 0, 0) or 0)
 
 
 def can_reward_referrer(referrer_id: int) -> bool:
@@ -49,30 +74,20 @@ def can_reward_referrer(referrer_id: int) -> bool:
     return referrer_bonus_count(int(referrer_id)) < limit
 
 
-def mark_reward_given(referred_id: int, reward_days: int):
-    """Помечает, что бонус по рефералу начислен, и сохраняет событие в бонус-реестре.
+def mark_reward_given(referred_id: int, reward_days: int) -> bool:
+    """Compatibility entrypoint backed by the canonical practice-token ledger.
 
-    Важно по Установкам:
-    - бонус ТОЛЬКО за оплативших;
-    - доказуемость: отдельная запись в bonus_grants;
-    - никаких секретов / внешних зависимостей.
+    Legacy subscription payment code still calls this function. The reward itself
+    is now an idempotent practice-token grant, so hard token enforcement and the
+    user-visible balance agree with the referral message.
     """
-    with db() as conn:
-        now = utc_now().replace(microsecond=0).isoformat()
-        # fixed record in referrals
-        conn.execute(
-            "UPDATE referrals SET reward_given=1, reward_days=?, paid_at=COALESCE(paid_at, ?), bonus_applied=1, bonus_applied_at=? WHERE referred_id=?",
-            (int(reward_days), now, now, int(referred_id)),
-        )
+    from services.reward_tokens import grant_referral_reward
 
-        # create bonus grant for referrer (if known)
-        row = conn.execute(
-            "SELECT referrer_id FROM referrals WHERE referred_id=?",
-            (int(referred_id),),
-        ).fetchone()
-        if row and (row[0] if not hasattr(row, 'keys') else row['referrer_id']):
-            referrer_id = int(row[0] if not hasattr(row, 'keys') else row['referrer_id'])
-            conn.execute(
-                "INSERT INTO bonus_grants(user_id, days, source, related_user_id, granted_at_utc) VALUES(?,?,?,?,?)",
-                (referrer_id, int(reward_days), 'referral', int(referred_id), now),
-            )
+    result = grant_referral_reward(
+        referred_user_id=int(referred_id),
+        reward_tokens=int(reward_days),
+        provider="legacy_subscription",
+        provider_payment_id=f"legacy-referral:{int(referred_id)}",
+        source="legacy_paid_referral",
+    )
+    return bool(result and result.inserted)
