@@ -47,7 +47,16 @@ def validate_no_real_db(*, strict: bool = True) -> None:
         PROJECT_ROOT / "data.db",
         PROJECT_ROOT / "data" / "data.db",
     ]
-    found = [path for path in candidates if path.exists() and not path.name.endswith(".template")]
+    found: list[Path] = []
+    for path in candidates:
+        try:
+            exists = path.exists()
+        except OSError:
+            # An unreadable candidate is still suspicious and must be surfaced by
+            # the strict release gate instead of crashing before a useful report.
+            exists = True
+        if exists and not path.name.endswith(".template"):
+            found.append(path)
     if not found:
         return
 
