@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 
@@ -14,7 +13,7 @@ from tests.test_reminder_phase8 import ApiError, Connection, FakeBot, install_db
 
 def test_validator_legacy_self_path_exclusions(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path,
 ) -> None:
     exact = tmp_path / "services" / "validators"
     exact.mkdir(parents=True)
@@ -31,14 +30,15 @@ def test_validator_legacy_self_path_exclusions(
 
 def test_real_prewarm_marker_location() -> None:
     marker = prewarm._marker_path()
-    assert marker.name == ".prewarm_done"
-    assert marker.parent == Path(prewarm.__file__).resolve().parents[1]
+    assert marker.name == "audio.done"
+    assert marker.parent.name == "prewarm"
+    assert marker.parent.is_dir()
 
 
 @pytest.mark.asyncio
 async def test_voice_without_file_id_remains_retryable(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path,
 ) -> None:
     saved, marked = configure_prewarm(monkeypatch)
     voice = tmp_path / "voice.ogg"

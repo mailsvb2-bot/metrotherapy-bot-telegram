@@ -38,24 +38,40 @@ def test_marker_helpers_success_and_errors(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    marker = tmp_path / ".prewarm_done"
+    marker = tmp_path / "audio.done"
     monkeypatch.setattr(prewarm, "_marker_path", lambda: marker)
-    monkeypatch.setattr(prewarm.time, "time", lambda: 123.9)
-    assert prewarm._already_done() is False
-    prewarm._mark_done()
-    assert marker.read_text(encoding="utf-8") == "123"
-    assert prewarm._already_done() is True
+    fingerprint = "abc123"
+    assert prewarm._already_done(fingerprint) is False
+    prewarm._mark_done(fingerprint)
+    assert marker.read_text(encoding="utf-8") == fingerprint
+    assert prewarm._already_done(fingerprint) is True
+    assert prewarm._already_done("different") is False
 
-    class BrokenPath:
-        def exists(self) -> bool:
-            raise OSError("exists")
+    class BrokenReadPath:
+        def read_text(self, *_args: Any, **_kwargs: Any) -> str:
+            raise OSError("read")
+
+    monkeypatch.setattr(prewarm, "_marker_path", lambda: BrokenReadPath())
+    assert prewarm._already_done(fingerprint) is False
+
+    class BrokenWritePath:
+        name = "audio.done"
+
+        @property
+        def parent(self) -> "BrokenWritePath":
+            return self
+
+        def mkdir(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        def with_name(self, _name: str) -> "BrokenWritePath":
+            return self
 
         def write_text(self, *_args: Any, **_kwargs: Any) -> None:
             raise OSError("write")
 
-    monkeypatch.setattr(prewarm, "_marker_path", lambda: BrokenPath())
-    assert prewarm._already_done() is False
-    prewarm._mark_done()
+    monkeypatch.setattr(prewarm, "_marker_path", lambda: BrokenWritePath())
+    prewarm._mark_done(fingerprint)
 
 
 def test_admin_chat_id_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -127,9 +143,9 @@ def configure_prewarm(
     enabled: bool = True,
     already_done: bool = False,
     chat_id: int | None = 7,
-) -> tuple[list[tuple[Path, str, str]], list[bool]]:
+) -> tuple[list[tuple[Path, str, str]], list[str]]:
     monkeypatch.setattr(prewarm, "settings", SimpleNamespace(PREWARM_ENABLED=enabled))
-    monkeypatch.setattr(prewarm, "_already_done", lambda: already_done)
+    monkeypatch.setattr(prewarm, "_already_done", lambda _fingerprint: already_done)
     monkeypatch.setattr(prewarm, "_admin_chat_id", lambda: chat_id)
     monkeypatch.setattr(prewarm, "AudioCatalog", FakeCatalog)
     monkeypatch.setattr(prewarm, "FSInputFile", lambda path: Path(path))
@@ -140,8 +156,8 @@ def configure_prewarm(
         "save_cached_file_id",
         lambda path, kind, file_id: saved.append((Path(path), kind, file_id)),
     )
-    marked: list[bool] = []
-    monkeypatch.setattr(prewarm, "_mark_done", lambda: marked.append(True))
+    marked: list[str] = []
+    monkeypatch.setattr(prewarm, "_mark_done", lambda fingerprint: marked.append(fingerprint))
 
     async def no_sleep(_seconds: float) -> None:
         return None
@@ -189,7 +205,8 @@ async def test_prewarm_success_deduplicates_and_marks_done(
     assert len(bot.audio_calls) == 1
     assert (voice, "voice", "voice-id") in saved
     assert (audio, "audio", "audio-id") in saved
-    assert marked == [True]
+    assert len(marked) == 1
+    assert marked[0] == prewarm._content_fingerprint([voice, audio])
 
 
 @pytest.mark.asyncio
@@ -208,7 +225,7 @@ async def test_prewarm_cached_file_is_skipped_and_sweep_completes(
 
     assert bot.audio_calls == []
     assert saved == []
-    assert marked == [True]
+    assert len(marked) == 1
 
 
 @pytest.mark.asyncio

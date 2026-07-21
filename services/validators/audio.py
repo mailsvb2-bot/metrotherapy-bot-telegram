@@ -8,11 +8,8 @@ from pathlib import Path
 from services.validators.base import ValidationError
 
 log = logging.getLogger(__name__)
-
-# Public compatibility surface used by readiness probes and focused tests.
-# Runtime directories are resolved dynamically so monkeypatching PROJECT_ROOT or
-# setting AUDIO_DIR/DEMO_DIR affects the same checks that live readiness uses.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_AUDIO_EXTENSIONS = {".opus", ".ogg", ".mp3", ".wav", ".m4a"}
 
 
 def _audio_validation_skipped() -> bool:
@@ -40,16 +37,70 @@ def _full_dir() -> Path:
     return _configured_dir("AUDIO_DIR", "audio/full")
 
 
+def _minimum_audio_bytes() -> int:
+    raw = (os.getenv("AUDIO_VALIDATION_MIN_BYTES") or "1024").strip()
+    try:
+        return max(64, min(int(raw), 10 * 1024 * 1024))
+    except (TypeError, ValueError):
+        return 1024
+
+
 def _iter_audio_files(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
-    exts = {".opus", ".ogg", ".mp3", ".wav", ".m4a"}
     files = [
         path
         for path in folder.iterdir()
-        if path.is_file() and not path.name.startswith(".")
+        if path.is_file() and not path.name.startswith(".") and path.suffix.lower() in _AUDIO_EXTENSIONS
     ]
-    return [path for path in files if path.suffix.lower() in exts]
+    return sorted(files, key=lambda path: path.name.casefold())
+
+
+def _header_matches_container(path: Path, header: bytes) -> bool:
+    suffix = path.suffix.lower()
+    if suffix in {".ogg", ".opus"}:
+        return header.startswith(b"OggS")
+    if suffix == ".wav":
+        return len(header) >= 12 and header.startswith(b"RIFF") and header[8:12] == b"WAVE"
+    if suffix == ".m4a":
+        return b"ftyp" in header[:32]
+    if suffix == ".mp3":
+        if header.startswith(b"ID3"):
+            return True
+        return len(header) >= 2 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0
+    return False
+
+
+def _file_problem(path: Path) -> str | None:
+    try:
+        size = int(path.stat().st_size)
+    except OSError as exc:
+        return f"stat_failed:{type(exc).__name__}"
+    if size < _minimum_audio_bytes():
+        return f"too_small:{size}"
+    try:
+        with path.open("rb") as stream:
+            header = stream.read(64)
+    except OSError as exc:
+        return f"read_failed:{type(exc).__name__}"
+    if not _header_matches_container(path, header):
+        return "container_header_mismatch"
+    return None
+
+
+def _invalid_files(files: list[Path]) -> list[str]:
+    invalid: list[str] = []
+    for path in files:
+        problem = _file_problem(path)
+        if problem:
+            invalid.append(f"{path.name}:{problem}")
+    return invalid
+
+
+def _fail_or_warn(message: str, *, strict: bool) -> None:
+    if strict:
+        raise ValidationError(message)
+    log.warning(message)
 
 
 def validate_demo_audio(strict: bool = True, *, allow_skip: bool = True) -> None:
@@ -61,13 +112,19 @@ def validate_demo_audio(strict: bool = True, *, allow_skip: bool = True) -> None
 
     missing = [kind for kind in ("work", "home") if kind not in names]
     if missing:
-        msg = (
-            f"Demo audio missing: {missing}. "
-            f"Expected work/home audio files in {demo_dir}"
+        _fail_or_warn(
+            f"Demo audio missing: {missing}. Expected work/home audio files in {demo_dir}",
+            strict=strict,
         )
-        if strict:
-            raise ValidationError(msg)
-        log.warning(msg)
+        if not strict:
+            return
+
+    invalid = _invalid_files(files)
+    if invalid:
+        _fail_or_warn(
+            f"Demo audio files are empty, unreadable or malformed: {invalid}. Folder: {demo_dir}",
+            strict=strict,
+        )
 
 
 def validate_full_audio(strict: bool = True, *, allow_skip: bool = True) -> None:
@@ -75,44 +132,42 @@ def validate_full_audio(strict: bool = True, *, allow_skip: bool = True) -> None
         return
     full_dir = _full_dir()
     files = _iter_audio_files(full_dir)
+    if not files:
+        _fail_or_warn(f"No usable anchored full audio files found in {full_dir}.", strict=strict)
+        return
 
-    bad = [path.name for path in files if not re.match(r"^\d+_", path.name)]
-    if bad:
-        msg = (
+    bad_names = [path.name for path in files if not re.match(r"^\d+_", path.name)]
+    if bad_names:
+        _fail_or_warn(
             "Full audio files must start with a numeric prefix and underscore. "
-            f"Bad files: {bad}. Folder: {full_dir}"
+            f"Bad files: {bad_names}. Folder: {full_dir}",
+            strict=strict,
         )
-        if strict:
-            raise ValidationError(msg)
-        log.warning(msg)
 
-    nums: list[int] = []
-    for path in files:
-        match = re.match(r"^(\d+)_", path.name)
-        if match:
-            nums.append(int(match.group(1)))
+    invalid = _invalid_files(files)
+    if invalid:
+        _fail_or_warn(
+            f"Full audio files are empty, unreadable or malformed: {invalid}. Folder: {full_dir}",
+            strict=strict,
+        )
 
-    if nums:
-        has_odd = any(number % 2 == 1 for number in nums)
-        has_even = any(number % 2 == 0 for number in nums)
-        if not (has_odd and has_even):
-            msg = (
-                "Full audio numbering must include BOTH odd and even numbers. "
-                f"Found numbers: {sorted(set(nums))[:20]} (showing up to 20)."
-            )
-            if strict:
-                raise ValidationError(msg)
-            log.warning(msg)
-    else:
-        msg = f"No usable anchored full audio files found in {full_dir}."
-        if strict:
-            raise ValidationError(msg)
-        log.warning(msg)
+    numbers = [
+        int(match.group(1))
+        for path in files
+        if (match := re.match(r"^(\d+)_", path.name)) is not None
+    ]
+    has_odd = any(number % 2 == 1 for number in numbers)
+    has_even = any(number % 2 == 0 for number in numbers)
+    if not (has_odd and has_even):
+        _fail_or_warn(
+            "Full audio numbering must include BOTH odd and even numbers. "
+            f"Found numbers: {sorted(set(numbers))[:20]} (showing up to 20).",
+            strict=strict,
+        )
 
 
 def audio_readiness() -> tuple[bool, str | None]:
     """Fail closed against the same configured media directories runtime uses."""
-
     try:
         validate_demo_audio(strict=True, allow_skip=False)
         validate_full_audio(strict=True, allow_skip=False)

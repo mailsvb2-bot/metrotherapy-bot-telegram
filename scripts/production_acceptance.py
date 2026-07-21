@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-"""Production acceptance gate runner.
+"""Production automated acceptance runner.
 
 This script composes the existing canonical checks instead of creating a second
-validator brain. It is designed for a production host after git pull/restart and
-before traffic or ad spend is increased.
-
-By default it does not run full pytest on the live host. Use --include-pytest
-only in an approved maintenance window.
+validator brain. It intentionally distinguishes automated green checks from a
+fully proven live production journey. By default it does not run full pytest on
+the live host; use --include-pytest only in an approved maintenance window.
 """
 
 import argparse
 import json
 import os
-# Reviewed: operator acceptance runner invokes fixed local Python checks without shell.
-import subprocess  # nosec B404
+import subprocess  # nosec B404 - fixed local acceptance commands without shell
 import sys
 import urllib.error
 import urllib.request
@@ -40,8 +37,7 @@ def _merged_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 
 def _run(name: str, cmd: list[str], *, timeout: int = 120, extra_env: dict[str, str] | None = None) -> AcceptanceResult:
     try:
-        # Reviewed: all commands are static acceptance checks and execute without shell.
-        proc = subprocess.run(  # nosec B603
+        proc = subprocess.run(  # nosec B603 - static repository-owned command list
             cmd,
             check=False,
             capture_output=True,
@@ -118,13 +114,45 @@ def _method_probe(name: str, url: str, *, expected_status: int = 405, expected_a
 
 
 def collect_results(*, include_pytest: bool = False) -> list[AcceptanceResult]:
-    public_base = os.getenv("METRO_PUBLIC_BOT_BASE_URL", os.getenv("MESSENGER_PUBLIC_BASE_URL", "https://metrotherapy-bot.metrotherapy.ru")).rstrip("/")
+    public_base = os.getenv(
+        "METRO_PUBLIC_BOT_BASE_URL",
+        os.getenv("MESSENGER_PUBLIC_BASE_URL", "https://metrotherapy-bot.metrotherapy.ru"),
+    ).rstrip("/")
     results: list[AcceptanceResult] = []
-    results.append(_run("compileall:project", [sys.executable, "-m", "compileall", "-q", "app.py", "main.py", "config", "core", "handlers", "interfaces", "keyboards", "runtime", "scripts", "services", "tests", "tools"], timeout=180))
+    results.append(
+        _run(
+            "compileall:project",
+            [
+                sys.executable,
+                "-m",
+                "compileall",
+                "-q",
+                "app.py",
+                "main.py",
+                "config",
+                "core",
+                "handlers",
+                "interfaces",
+                "keyboards",
+                "runtime",
+                "scripts",
+                "services",
+                "tests",
+                "tools",
+            ],
+            timeout=180,
+        )
+    )
     if include_pytest:
         results.append(_run("pytest", [sys.executable, "-m", "pytest", "-q"], timeout=300))
     else:
-        results.append(AcceptanceResult("pytest", True, "skipped by default on production host; use --include-pytest only in an approved maintenance window"))
+        results.append(
+            AcceptanceResult(
+                "pytest:skipped",
+                True,
+                "not executed on the live host; rerun with --include-pytest in an approved maintenance window",
+            )
+        )
     results.append(_run("prod_readiness", [sys.executable, "scripts/prod_readiness_check.py"], timeout=120))
     results.append(_run("runtime_observability", [sys.executable, "scripts/runtime_observability_check.py"], timeout=60))
     results.append(_run("user_scenario_gate:prod", [sys.executable, "scripts/user_scenario_gate.py", "--mode", "prod"], timeout=120))
@@ -138,20 +166,25 @@ def collect_results(*, include_pytest: bool = False) -> list[AcceptanceResult]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run production acceptance checks without full pytest by default")
-    parser.add_argument("--include-pytest", action="store_true", help="Run full pytest; use only during an approved maintenance window")
+    parser = argparse.ArgumentParser(description="Run automated production acceptance checks")
+    parser.add_argument("--include-pytest", action="store_true", help="Run full pytest in an approved maintenance window")
     args = parser.parse_args()
 
-    results = collect_results(include_pytest=bool(args.include_pytest))
+    include_pytest = bool(args.include_pytest)
+    results = collect_results(include_pytest=include_pytest)
     print(json.dumps([asdict(item) for item in results], ensure_ascii=False, indent=2))
     failed = [item for item in results if not item.ok]
     if failed:
-        print("PRODUCTION ACCEPTANCE: FAILED")
+        print("AUTOMATED ACCEPTANCE: FAILED")
         for item in failed:
             print(f"ERROR: {item.name}: {item.detail}")
+        print("LIVE ACCEPTANCE: NOT PROVEN")
         return 2
-    print("PRODUCTION ACCEPTANCE: OK")
-    print("Manual live-flow stop-conditions still required: Telegram demo, VK message, MAX message, payment test.")
+
+    pytest_note = "pytest included" if include_pytest else "pytest skipped"
+    print(f"AUTOMATED ACCEPTANCE: GREEN ({pytest_note})")
+    print("LIVE ACCEPTANCE: NOT PROVEN")
+    print("Required live journeys: Telegram demo, VK message, MAX message, payment and refund test.")
     return 0
 
 
