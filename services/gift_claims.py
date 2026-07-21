@@ -99,7 +99,7 @@ def mark_gift_paid(
     token = normalize_gift_token(gift_token)
     if not is_gift_token(token):
         raise ValueError("Invalid gift token")
-    package_by_id(package_id)
+    package = package_by_id(package_id)
     with db() as conn:
         with tx(conn):
             conn.execute(
@@ -135,8 +135,21 @@ def mark_gift_paid(
                     END,
                     paid_at=COALESCE(gift_claims.paid_at, CURRENT_TIMESTAMP)
                 """.strip(),
-                (token, int(buyer_user_id or 0), package_id, provider, provider_payment_id, source_platform),
+                (token, int(buyer_user_id or 0), package.package_id, provider, provider_payment_id, source_platform),
             )
+
+    # This is intentionally outside the gift-row transaction. If the reward grant
+    # fails, the payment processor records an incomplete side effect and can replay
+    # it safely; the reward key prevents a second buyer bonus on that replay.
+    from services.reward_tokens import grant_gift_buyer_reward
+
+    grant_gift_buyer_reward(
+        buyer_user_id=int(buyer_user_id or 0),
+        package_tokens=int(package.tokens),
+        provider=str(provider or "gift"),
+        provider_payment_id=str(provider_payment_id or ""),
+        gift_token=token,
+    )
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
