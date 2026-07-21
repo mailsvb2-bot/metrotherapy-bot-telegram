@@ -37,12 +37,7 @@ def _row_value(row: Any, key: str, index: int, default: Any = None) -> Any:
 
 
 def add_grant(user_id: int, days: int, *, source: str, related_user_id: int | None = None) -> None:
-    """Record a legacy bonus projection.
-
-    Canonical production rewards are granted through services.reward_tokens,
-    which writes the wallet, immutable ledger, lot and governed bonus row in one
-    transaction.
-    """
+    """Record a legacy bonus projection."""
     days = int(days)
     if days <= 0:
         return
@@ -67,6 +62,7 @@ def _canonical_reward_stats(user_id: int) -> BonusStats | None:
                 SELECT COALESCE(SUM(COALESCE(tokens_granted, days)),0) AS earned
                 FROM bonus_grants
                 WHERE user_id=? AND reward_key IS NOT NULL AND reward_key<>''
+                  AND COALESCE(reward_status,'active')='active'
                 """.strip(),
                 (int(user_id),),
             ).fetchone()
@@ -76,13 +72,11 @@ def _canonical_reward_stats(user_id: int) -> BonusStats | None:
                        COALESCE(SUM(reserved_tokens),0) AS reserved,
                        COALESCE(SUM(used_tokens),0) AS used
                 FROM practice_token_lots
-                WHERE user_id=? AND lot_key LIKE 'reward:%'
+                WHERE user_id=? AND lot_key LIKE 'reward:%' AND refunded_tokens=0
                 """.strip(),
                 (int(user_id),),
             ).fetchone()
     except sqlite3.Error as exc:
-        # Older hermetic fixtures and pre-migration local DBs intentionally fall
-        # back to the legacy projection below.
         logging.getLogger(__name__).debug("Canonical reward stats unavailable: %s", exc)
         return None
 
@@ -167,7 +161,10 @@ def paid_referrals_days_granted(user_id: int) -> int:
     try:
         with db() as conn:
             row = conn.execute(
-                "SELECT COALESCE(SUM(days),0) AS d FROM bonus_grants WHERE user_id=? AND source='referral'",
+                """
+                SELECT COALESCE(SUM(days),0) AS d FROM bonus_grants
+                WHERE user_id=? AND source='referral' AND COALESCE(reward_status,'active')='active'
+                """.strip(),
                 (int(user_id),),
             ).fetchone()
         return int(_row_value(row, "d", 0, 0) or 0)
@@ -177,11 +174,13 @@ def paid_referrals_days_granted(user_id: int) -> int:
 
 
 def gift_grants_count(user_id: int) -> int:
-    """How many paid-gift buyer rewards were granted."""
     try:
         with db() as conn:
             row = conn.execute(
-                "SELECT COUNT(1) AS n FROM bonus_grants WHERE user_id=? AND source='gift'",
+                """
+                SELECT COUNT(1) AS n FROM bonus_grants
+                WHERE user_id=? AND source='gift' AND COALESCE(reward_status,'active')='active'
+                """.strip(),
                 (int(user_id),),
             ).fetchone()
         return int(_row_value(row, "n", 0, 0) or 0)
@@ -191,11 +190,13 @@ def gift_grants_count(user_id: int) -> int:
 
 
 def gift_days_granted(user_id: int) -> int:
-    """How many bonus practices were granted for paid gifts."""
     try:
         with db() as conn:
             row = conn.execute(
-                "SELECT COALESCE(SUM(days),0) AS d FROM bonus_grants WHERE user_id=? AND source='gift'",
+                """
+                SELECT COALESCE(SUM(days),0) AS d FROM bonus_grants
+                WHERE user_id=? AND source='gift' AND COALESCE(reward_status,'active')='active'
+                """.strip(),
                 (int(user_id),),
             ).fetchone()
         return int(_row_value(row, "d", 0, 0) or 0)
