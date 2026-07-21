@@ -5,7 +5,8 @@ from __future__ import annotations
 A release directory is complete only when its `.release.json` marker matches the
 40-character Git commit used as the directory name and the release contains its
 own Python interpreter and entrypoint. Runtime switching mutates only symlinks;
-release contents are never changed during rollback.
+release contents and their pinned audio asset sets are never changed during
+rollback.
 """
 
 import argparse
@@ -14,11 +15,18 @@ import json
 import os
 import re
 import stat
+import sys
 import tempfile
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from services.audio_asset_integrity import validate_release_assets
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _MARKER = ".release.json"
@@ -34,6 +42,9 @@ class ReleaseInfo:
     lock_sha256: str
     tree_sha256: str
     built_at_utc: str
+    audio_asset_dir: str = ""
+    audio_asset_sha256: str = ""
+    audio_asset_file_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -87,8 +98,10 @@ def release_tree_sha256(path: str | Path) -> str:
     """Hash the root and all release entries except the self-referential marker.
 
     The digest includes relative paths, file type, permission bits, symlink
-    targets and regular-file bytes. It therefore detects dependency, source, or
-    service-readability mutation while remaining stable after publication.
+    targets and regular-file bytes. It therefore detects dependency, source,
+    sealed audio-pointer or service-readability mutation while remaining stable
+    after publication. External audio bytes are verified separately against that
+    immutable pointer.
     """
 
     root = Path(path).resolve(strict=True)
@@ -174,6 +187,21 @@ def validate_release(path: str | Path) -> ReleaseInfo:
     if not built_at:
         raise ValueError("release build timestamp is missing")
 
+    audio = validate_release_assets(release, require_versioned=False)
+    if audio is not None:
+        marker_dir = str(marker.get("shared_audio_dir") or "").strip()
+        marker_sha = str(marker.get("audio_asset_sha256") or "").strip()
+        try:
+            marker_count = int(str(marker.get("audio_asset_file_count")))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("release audio asset file count is invalid") from exc
+        if marker_dir and Path(marker_dir).resolve(strict=False) != Path(audio.asset_dir):
+            raise ValueError("release marker audio directory does not match sealed asset pointer")
+        if marker_sha and marker_sha != audio.asset_sha256:
+            raise ValueError("release marker audio digest does not match sealed asset pointer")
+        if marker_count != audio.file_count:
+            raise ValueError("release marker audio file count does not match sealed asset pointer")
+
     return ReleaseInfo(
         sha=sha,
         path=str(release),
@@ -182,6 +210,9 @@ def validate_release(path: str | Path) -> ReleaseInfo:
         lock_sha256=lock_sha256,
         tree_sha256=tree_sha256,
         built_at_utc=built_at,
+        audio_asset_dir=audio.asset_dir if audio is not None else "",
+        audio_asset_sha256=audio.asset_sha256 if audio is not None else "",
+        audio_asset_file_count=audio.file_count if audio is not None else 0,
     )
 
 
@@ -238,6 +269,8 @@ def rollback_release(*, current_link: str | Path, previous_link: str | Path) -> 
     assert old_current is not None
     assert rollback_target is not None
 
+    # resolve_link validates both the release tree and pinned external audio bytes
+    # before either symlink is changed.
     _atomic_symlink(Path(rollback_target.path), current_path)
     _atomic_symlink(Path(old_current.path), previous_path)
     return SwitchResult(current=rollback_target, previous=old_current)
@@ -256,7 +289,7 @@ def write_deployment_proof(
     previous = resolve_link(previous_link)
     assert current is not None
     payload: dict[str, Any] = {
-        "proof_version": 1,
+        "proof_version": 2,
         "proved_at_utc": _utc_now_iso(),
         "deployed_sha": current.sha,
         "release_dir": current.path,
@@ -264,9 +297,15 @@ def write_deployment_proof(
         "dependency_lock": current.lock_file,
         "dependency_lock_sha256": current.lock_sha256,
         "release_tree_sha256": current.tree_sha256,
+        "audio_asset_dir": current.audio_asset_dir,
+        "audio_asset_sha256": current.audio_asset_sha256,
+        "audio_asset_file_count": current.audio_asset_file_count,
         "previous_sha": previous.sha if previous is not None else "",
         "previous_release_dir": previous.path if previous is not None else "",
         "previous_release_tree_sha256": previous.tree_sha256 if previous is not None else "",
+        "previous_audio_asset_dir": previous.audio_asset_dir if previous is not None else "",
+        "previous_audio_asset_sha256": previous.audio_asset_sha256 if previous is not None else "",
+        "previous_audio_asset_file_count": previous.audio_asset_file_count if previous is not None else 0,
         "production_gate": str(production_gate),
         "health_url": str(health_url),
         "readiness_url": str(readiness_url),

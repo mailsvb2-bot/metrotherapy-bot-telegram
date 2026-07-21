@@ -43,6 +43,7 @@ FORBIDDEN_LOG_DIR = Path("logs")
 FORBIDDEN_LOG_GLOBS = ["*.log"]
 
 ALLOWED_ROOT_FILES = {
+    ".audio-assets.json",
     ".env.example",
     ".gitignore",
     ".pre-commit-config.yaml",

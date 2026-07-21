@@ -5,6 +5,7 @@ import os
 import re
 from pathlib import Path
 
+from services.audio_asset_integrity import validate_release_assets
 from services.validators.base import ValidationError
 
 log = logging.getLogger(__name__)
@@ -103,6 +104,26 @@ def _fail_or_warn(message: str, *, strict: bool) -> None:
     log.warning(message)
 
 
+def _production_runtime() -> bool:
+    return (os.getenv("APP_ENV") or "dev").strip().lower() in {
+        "prod",
+        "production",
+        "stage",
+        "staging",
+    }
+
+
+def validate_audio_asset_integrity(strict: bool = True) -> None:
+    """Tie runtime media bytes to the content-addressed release pointer."""
+
+    pointer = PROJECT_ROOT / ".audio-assets.json"
+    require_versioned = _production_runtime() or pointer.exists()
+    try:
+        validate_release_assets(PROJECT_ROOT, require_versioned=require_versioned)
+    except (OSError, ValueError) as exc:
+        _fail_or_warn(f"Versioned audio asset integrity failed: {exc}", strict=strict)
+
+
 def validate_demo_audio(strict: bool = True, *, allow_skip: bool = True) -> None:
     if allow_skip and _audio_validation_skipped():
         return
@@ -169,6 +190,7 @@ def validate_full_audio(strict: bool = True, *, allow_skip: bool = True) -> None
 def audio_readiness() -> tuple[bool, str | None]:
     """Fail closed against the same configured media directories runtime uses."""
     try:
+        validate_audio_asset_integrity(strict=True)
         validate_demo_audio(strict=True, allow_skip=False)
         validate_full_audio(strict=True, allow_skip=False)
     except ValidationError as exc:
