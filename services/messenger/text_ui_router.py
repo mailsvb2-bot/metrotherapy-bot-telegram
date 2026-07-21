@@ -17,6 +17,72 @@ from services.messenger.text_ui import MessengerReply
 from services.mood import create_session, get_session
 from services.mood_text_flow import find_pending_post_session_id
 from services.practice_journey import start_or_resume_paid_practice
+from services.privacy_controls import erase_user_behavioral_data
+
+
+PRIVACY_POLICY_URL = "https://t.me/metrotherapyprivacy"
+
+
+def _privacy_action(text: str) -> tuple[str, bool] | None:
+    raw = " ".join(str(text or "").strip().split())
+    normalized = raw.casefold().replace("ё", "е")
+    if normalized in {"privacy", "/privacy", "конфиденциальность", "политика", "политика конфиденциальности"}:
+        return "privacy", False
+    if normalized in {"mydata", "/mydata", "мои данные", "экспорт данных", "выгрузить данные"}:
+        return "export", False
+
+    delete_aliases = (
+        "deletemydata",
+        "/deletemydata",
+        "удалить мои данные",
+        "удалить данные",
+    )
+    for alias in delete_aliases:
+        if normalized == alias:
+            return "delete", False
+        if normalized == f"{alias} confirm":
+            return "delete", True
+    return None
+
+
+def _privacy_info_reply() -> MessengerReply:
+    return MessengerReply(
+        text=(
+            "🔐 Конфиденциальность и Ваши данные\n\n"
+            f"Политика: {PRIVACY_POLICY_URL}\n\n"
+            "Получить сжатую копию данных: mydata или /mydata\n"
+            "Удалить поведенческую историю: deletemydata\n\n"
+            "Удаление требует отдельного подтверждения словом CONFIRM. "
+            "Платежные, возвратные и обязательные технические записи сохраняются "
+            "для исполнения оплаченного доступа, предотвращения повторных операций и требований учета."
+        )
+    )
+
+
+def _privacy_delete_reply(user_id: int, *, platform: str, confirmed: bool) -> MessengerReply:
+    if not confirmed:
+        return MessengerReply(
+            text=(
+                "⚠️ Команда удалит поведенческую историю и очистит отображаемые данные профиля. "
+                "Платежные, возвратные и обязательные технические записи сохранятся.\n\n"
+                "Для подтверждения отправьте точно:\n"
+                "deletemydata CONFIRM"
+            )
+        )
+
+    result = erase_user_behavioral_data(
+        int(user_id),
+        reason=f"{str(platform or 'messenger').strip().lower()}_user_request",
+    )
+    deleted_rows = sum(int(value) for value in result.deleted_tables.values())
+    return MessengerReply(
+        text=(
+            "✅ Поведенческие данные удалены, отображаемые данные профиля очищены.\n"
+            f"Удалено записей: {deleted_rows}.\n"
+            "Платежные и иные обязательные учетные записи сохранены для работы "
+            "оплаченного доступа и требований учета."
+        )
+    )
 
 
 def _demo_kind(action: str) -> str | None:
@@ -257,6 +323,29 @@ def handle_incoming_text(
     first_name: str | None = None,
 ) -> tuple[int, list[MessengerReply]]:
     """Canonical cross-messenger user route for demo/paid practice boundaries."""
+
+    privacy_action = _privacy_action(text)
+    if privacy_action is not None:
+        action_name, confirmed = privacy_action
+        canonical_user_id = _register(
+            user_id,
+            platform=platform,
+            external_user_id=external_user_id,
+            username=username,
+            display_name=display_name,
+            first_name=first_name,
+        )
+        if action_name == "privacy":
+            return canonical_user_id, [_privacy_info_reply()]
+        if action_name == "export":
+            return canonical_user_id, [MessengerReply(kind="privacy_export")]
+        return canonical_user_id, [
+            _privacy_delete_reply(
+                canonical_user_id,
+                platform=platform,
+                confirmed=confirmed,
+            )
+        ]
 
     action, value = legacy_text_ui._parse_command(text)  # noqa: SLF001
     payload = value if action == "start" else None
