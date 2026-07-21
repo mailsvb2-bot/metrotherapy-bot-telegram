@@ -155,7 +155,7 @@ def validate_asset_dir(
     marker = _load_json(root / _ASSET_MANIFEST, label="audio asset manifest")
     marker_sha = str(marker.get("asset_sha256") or "").strip()
     try:
-        marker_count = int(marker.get("file_count"))
+        marker_count = int(str(marker.get("file_count")))
     except (TypeError, ValueError) as exc:
         raise ValueError("audio asset manifest file_count is invalid") from exc
     if not _SHA256_RE.fullmatch(marker_sha):
@@ -205,7 +205,7 @@ def validate_release_assets(
     asset_dir_raw = str(pointer.get("asset_dir") or "").strip()
     expected_sha = str(pointer.get("asset_sha256") or "").strip()
     try:
-        expected_count = int(pointer.get("file_count"))
+        expected_count = int(str(pointer.get("file_count")))
     except (TypeError, ValueError) as exc:
         raise ValueError("release audio asset file_count is invalid") from exc
     if not asset_dir_raw or not Path(asset_dir_raw).is_absolute():
