@@ -145,9 +145,15 @@ def test_mark_gift_paid_transaction_and_wrapper(monkeypatch: pytest.MonkeyPatch)
 
 
 class BadExpiryRow(dict[str, Any]):
+    def __init__(self, values: dict[str, Any]) -> None:
+        super().__init__(values)
+        self.expiry_reads = 0
+
     def __getitem__(self, key: str) -> Any:
         if key == "expires_at":
-            raise TypeError("bad expiry")
+            self.expiry_reads += 1
+            if self.expiry_reads >= 2:
+                raise TypeError("bad expiry")
         return super().__getitem__(key)
 
 
