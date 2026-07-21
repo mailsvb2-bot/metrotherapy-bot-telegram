@@ -1,0 +1,41 @@
+name: Temporary apply legacy release recovery
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: contains(github.event.head_commit.message, '[apply-legacy-recovery-branch]')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: agent/recover-contaminated-immutable-release
+          fetch-depth: 0
+
+      - name: Apply exact recovery patch
+        run: |
+          set -Eeuo pipefail
+          python tools/apply_legacy_release_recovery_fix.py
+          bash -n scripts/immutable_deploy.sh
+          python -m py_compile scripts/immutable_release.py tests/test_immutable_release_recovery.py
+          python scripts/check_deploy_governance.py
+
+      - name: Commit repaired deploy code
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/apply_legacy_release_recovery_fix.py
+          rm -f .github/workflows/apply-legacy-release-recovery.yml
+          git config user.name "Metrotherapy Release Repair"
+          git config user.email "release-repair@metrotherapy.local"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: recover contaminated immutable rollback release"
+          git push origin HEAD:agent/recover-contaminated-immutable-release
