@@ -29,7 +29,7 @@ PREVIOUS_LINK="${METRO_PREVIOUS_RELEASE_LINK:-$RUNTIME_ROOT/previous}"
 DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-/var/lib/metrotherapy/deploy-state}"
 DEPLOYED_SHA_FILE="${DEPLOYED_SHA_FILE:-$DEPLOY_STATE_DIR/deployed_sha}"
 DEPLOYMENT_PROOF_FILE="${DEPLOYMENT_PROOF_FILE:-$DEPLOY_STATE_DIR/deployment-proof.json}"
-SYSTEMD_OVERRIDE="${METRO_IMMUTABLE_SYSTEMD_OVERRIDE:-/etc/systemd/system/$SERVICE_NAME.d/immutable-release.conf}"
+SYSTEMD_OVERRIDE="${METRO_IMMUTABLE_SYSTEMD_OVERRIDE:-/etc/systemd/system/$SERVICE_NAME.d/zz-immutable-release.conf}"
 RELEASE_MANAGER="$SOURCE_DIR/scripts/immutable_release.py"
 RELEASE_BUILDER="$SOURCE_DIR/scripts/build_immutable_release.sh"
 LOCAL_HEALTH_URL="${LOCAL_HEALTH_URL:-http://127.0.0.1:8082/healthz}"
@@ -220,6 +220,24 @@ EOF
   printf '%s\n' "$changed"
 }
 
+verify_immutable_systemd_effective_config() {
+  local working_directory exec_start
+  working_directory="$(systemctl show "$SERVICE_NAME" --property=WorkingDirectory --value)"
+  exec_start="$(systemctl show "$SERVICE_NAME" --property=ExecStart --value)"
+
+  if [ "$working_directory" != "$CURRENT_LINK" ]; then
+    echo "IMMUTABLE_DEPLOY_FAILED effective WorkingDirectory is not immutable current: $working_directory" >&2
+    return 1
+  fi
+  case "$exec_start" in
+    *"$CURRENT_LINK/.venv/bin/python"*"$CURRENT_LINK/main.py"*) ;;
+    *)
+      echo "IMMUTABLE_DEPLOY_FAILED effective ExecStart is not immutable current: $exec_start" >&2
+      return 1
+      ;;
+  esac
+}
+
 build_release() {
   local sha="$1"
   run_bounded "$RELEASE_BUILD_TIMEOUT_SECONDS" \
@@ -353,6 +371,7 @@ fi
 CURRENT_RELEASE_DIR="$(release_path_from_link "$CURRENT_LINK")"
 validate_release "$CURRENT_RELEASE_DIR"
 SYSTEMD_CHANGED="$(install_immutable_systemd_override)"
+verify_immutable_systemd_effective_config
 if [ "$BOOTSTRAP_CURRENT" -eq 1 ] || [ "$SYSTEMD_CHANGED" -eq 1 ]; then
   echo "=== bootstrap systemd on immutable current=$OLD_RUNTIME_SHA ==="
   restart_runtime_and_wait

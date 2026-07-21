@@ -29,6 +29,13 @@ def test_deploy_wrapper_has_no_mutable_runtime_logic() -> None:
     assert ".venv/bin/python" not in wrapper
     assert "git reset" not in wrapper
     assert "pip install" not in wrapper
+    assert 'git -C "$SOURCE_DIR" fetch --prune origin main' in wrapper
+    assert 'git -C "$SOURCE_DIR" merge --ff-only origin/main' in wrapper
+    assert "DEPLOY_BOOTSTRAPPED_SHA" in wrapper
+    assert "re-exec updated wrapper" in wrapper
+    assert wrapper.index("merge --ff-only origin/main") < wrapper.index(
+        "scripts/immutable_deploy.sh"
+    )
 
 
 def test_immutable_deploy_governance_is_closed() -> None:
@@ -157,3 +164,26 @@ def test_candidate_validator_runs_with_release_guardrails() -> None:
     assert "VALIDATOR_RELEASE_MODE=0" not in candidate
     assert "VALIDATOR_STRICT=1" in candidate
     assert "VALIDATOR_GUARDRAILS_STRICT=1" in candidate
+
+def test_immutable_systemd_dropin_wins_over_legacy_override() -> None:
+    deploy = _text("scripts/immutable_deploy.sh")
+
+    assert "$SERVICE_NAME.d/zz-immutable-release.conf" in deploy
+    assert "$SERVICE_NAME.d/immutable-release.conf" not in deploy
+    assert "verify_immutable_systemd_effective_config" in deploy
+    install = deploy.index('SYSTEMD_CHANGED="$(install_immutable_systemd_override)"')
+    verify = deploy.index("verify_immutable_systemd_effective_config", install)
+    restart = deploy.index("restart_runtime_and_wait", verify)
+    assert install < verify < restart
+
+
+def test_deploy_wrapper_reexecutes_after_fast_forward() -> None:
+    wrapper = _text("deploy.sh")
+
+    topology = wrapper.index("scripts/check_remote_main_topology.sh")
+    fetch = wrapper.index("fetch --prune origin main", topology)
+    merge = wrapper.index("merge --ff-only origin/main", fetch)
+    reexec = wrapper.index("re-exec updated wrapper", merge)
+    immutable = wrapper.index("scripts/immutable_deploy.sh", reexec)
+    assert topology < fetch < merge < reexec < immutable
+
