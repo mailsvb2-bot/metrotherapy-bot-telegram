@@ -192,7 +192,7 @@ def validate_release(path: str | Path) -> ReleaseInfo:
         marker_dir = str(marker.get("shared_audio_dir") or "").strip()
         marker_sha = str(marker.get("audio_asset_sha256") or "").strip()
         try:
-            marker_count = int(marker.get("audio_asset_file_count"))
+            marker_count = int(str(marker.get("audio_asset_file_count")))
         except (TypeError, ValueError) as exc:
             raise ValueError("release audio asset file count is invalid") from exc
         if marker_dir and Path(marker_dir).resolve(strict=False) != Path(audio.asset_dir):
