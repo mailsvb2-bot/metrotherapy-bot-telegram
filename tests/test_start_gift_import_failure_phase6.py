@@ -1,12 +1,27 @@
 from __future__ import annotations
 
 import builtins
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import pytest
 
 from handlers import start
-from tests.test_start_onboarding_phase6 import FakeMessage
+
+
+class FakeMessage:
+    def __init__(self, user_id: int = 7, *, text: str = "/start") -> None:
+        self.from_user = SimpleNamespace(
+            id=user_id,
+            username="user",
+            full_name="User Name",
+            first_name="User",
+        )
+        self.text = text
+        self.answers: list[tuple[str, dict[str, Any]]] = []
+
+    async def answer(self, text: str, **kwargs: Any) -> None:
+        self.answers.append((text, kwargs))
 
 
 async def direct_to_thread(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
