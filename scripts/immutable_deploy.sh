@@ -237,7 +237,7 @@ validate_candidate_and_expand_schema() {
   local release="$1"
   run_bounded "$VALIDATOR_TIMEOUT_SECONDS" \
     "candidate strict validator and expand migrations" \
-    env PYTHONDONTWRITEBYTECODE=1 VALIDATOR_RELEASE_MODE=0 VALIDATOR_STRICT=1 \
+    env PYTHONDONTWRITEBYTECODE=1 VALIDATOR_RELEASE_MODE=1 VALIDATOR_STRICT=1 \
       VALIDATOR_GUARDRAILS_STRICT=1 \
       "$release/.venv/bin/python" "$release/scripts/validate_project.py"
   validate_release "$release"
