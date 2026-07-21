@@ -39,6 +39,7 @@ def _install_telegram_only_prod(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cfg.settings, "HEALTHCHECK_ENABLED", True)
     monkeypatch.setattr(cfg.settings, "TELEGRAM_TRANSPORT", "polling")
     monkeypatch.setattr(cfg.settings, "TELEGRAM_WEBHOOK_ENABLED", False)
+    monkeypatch.setattr(cfg.settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "")
     monkeypatch.setattr(cfg.settings, "MESSENGER_WEBHOOK_ENABLED", False)
     monkeypatch.setattr(cfg.settings, "MESSENGER_PUBLIC_BASE_URL", "")
     monkeypatch.setattr(cfg.settings, "MAX_BOT_TOKEN", "")
