@@ -59,23 +59,25 @@ def grant_tokens_for_payment(
     The wallet grant remains the primary operation. Referral rewards use their own
     unique reward key, so replaying a YooKassa webhook or Telegram successful
     payment can safely repair an incomplete referral side effect without granting
-    the purchased package or the reward twice.
+    the purchased package or the reward twice. Reserved negative probe identities
+    never participate in referral relationships.
     """
 
+    uid = int(user_id)
     result = _grant_tokens_for_payment(
         provider=provider,
         provider_payment_id=provider_payment_id,
-        user_id=int(user_id),
+        user_id=uid,
         package_id=package_id,
         source=source,
     )
     normalized_provider = str(provider or "").strip().lower()
-    if normalized_provider in {"yookassa", "telegram_stars"}:
+    if uid > 0 and normalized_provider in {"yookassa", "telegram_stars"}:
         from services.reward_tokens import grant_referral_reward_for_payment
 
         package = get_package(package_id)
         grant_referral_reward_for_payment(
-            referred_user_id=int(user_id),
+            referred_user_id=uid,
             package_tokens=int(package.tokens),
             provider=normalized_provider,
             provider_payment_id=str(provider_payment_id or ""),
