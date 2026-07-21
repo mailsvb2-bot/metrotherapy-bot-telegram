@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from contextlib import contextmanager
-from typing import Any, Iterator, Sequence
+from typing import Any, Iterator, Literal, Sequence
 
 from services.db.core import get_connection
 from services.db.runtime import is_postgres_enabled
@@ -97,7 +97,7 @@ class ReadOnlyCursor:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> Literal[False]:
         self.close()
         return False
 
@@ -140,7 +140,7 @@ class ReadOnlyConnection:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> Literal[False]:
         return False
 
     def __getattr__(self, name: str) -> Any:
