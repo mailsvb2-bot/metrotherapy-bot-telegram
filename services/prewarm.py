@@ -18,9 +18,11 @@ from services.catalog import AudioCatalog
 
 log = logging.getLogger(__name__)
 
+
 def _marker_path() -> Path:
     # local marker to avoid repeating prewarm on every restart
     return Path(__file__).resolve().parents[1] / ".prewarm_done"
+
 
 def _already_done() -> bool:
     try:
@@ -28,6 +30,7 @@ def _already_done() -> bool:
     except OSError:
         logging.getLogger(__name__).exception("Unhandled exception")
         return False
+
 
 def _mark_done() -> None:
     try:
@@ -37,14 +40,14 @@ def _mark_done() -> None:
 
 
 def _admin_chat_id() -> int | None:
-    raw_chat = (getattr(settings, "PREWARM_CHAT_ID", "") or "").strip()
+    raw_chat = str(getattr(settings, "PREWARM_CHAT_ID", "") or "").strip()
     if raw_chat:
         try:
             return int(raw_chat)
-        except OSError:
-            logging.getLogger(__name__).exception("Unhandled exception")
+        except (TypeError, ValueError):
+            logging.getLogger(__name__).warning("Invalid PREWARM_CHAT_ID; falling back to ADMIN_IDS")
 
-    raw = (getattr(settings, "ADMIN_IDS", "") or "").strip()
+    raw = str(getattr(settings, "ADMIN_IDS", "") or "").strip()
     if not raw:
         return None
     # ADMIN_IDS can be "1,2,3"
@@ -54,8 +57,8 @@ def _admin_chat_id() -> int | None:
             continue
         try:
             return int(part)
-        except OSError:
-            logging.getLogger(__name__).exception("Unhandled exception")
+        except (TypeError, ValueError):
+            logging.getLogger(__name__).warning("Invalid ADMIN_IDS entry ignored: %r", part)
             continue
     return None
 
@@ -65,6 +68,8 @@ async def prewarm_audio_cache(bot: Bot) -> None:
 
     IMPORTANT: OFF by default. Enable explicitly with PREWARM_ENABLED=1.
     Also runs only once per machine (creates .prewarm_done marker).
+    The marker is written only after a complete sweep without retryable failures,
+    so a temporary Telegram or content-mount outage is retried after restart.
     """
     if not getattr(settings, "PREWARM_ENABLED", False):
         return
@@ -77,14 +82,17 @@ async def prewarm_audio_cache(bot: Bot) -> None:
 
     catalog = AudioCatalog()
     files: list[Path] = []
+    retryable_failure = False
     try:
         files.extend(catalog.get_demo() or [])
     except OSError:
-        logging.getLogger(__name__).exception("Unhandled exception")
+        retryable_failure = True
+        logging.getLogger(__name__).exception("prewarm demo catalog read failed")
     try:
         files.extend(catalog.get_full() or [])
     except OSError:
-        logging.getLogger(__name__).exception("Unhandled exception")
+        retryable_failure = True
+        logging.getLogger(__name__).exception("prewarm full catalog read failed")
 
     # de-dup while preserving order
     seen = set()
@@ -103,6 +111,8 @@ async def prewarm_audio_cache(bot: Bot) -> None:
                 continue
 
             if not p.exists():
+                retryable_failure = True
+                log.warning("prewarm source missing: %s", p)
                 continue
 
             # Send quietly
@@ -117,6 +127,8 @@ async def prewarm_audio_cache(bot: Bot) -> None:
                 fid = getattr(getattr(msg, "voice", None), "file_id", None)
                 if fid:
                     save_cached_file_id(p, "voice", str(fid))
+                else:
+                    retryable_failure = True
             else:
                 msg = await bot.send_audio(
                     chat_id,
@@ -128,17 +140,24 @@ async def prewarm_audio_cache(bot: Bot) -> None:
                 fid = getattr(getattr(msg, "audio", None), "file_id", None)
                 if fid:
                     save_cached_file_id(p, "audio", str(fid))
+                else:
+                    retryable_failure = True
 
             await asyncio.sleep(0.2)
-        except (TelegramAPIError, OSError, asyncio.TimeoutError) as e:
-            log.info("prewarm failed for %s: %s", str(p), e)
+        except (TelegramAPIError, OSError, asyncio.TimeoutError) as exc:
+            retryable_failure = True
+            log.info("prewarm failed for %s: %s", str(p), exc)
             continue
+
+    if not retryable_failure:
+        _mark_done()
+
 
 async def prewarm_matplotlib_cache() -> None:
     """Прогревает matplotlib font cache в фоне, чтобы не тормозить первый график."""
     try:
         from services.charts import _ensure_mpl
-    except OSError:
+    except (ImportError, OSError):
         logging.getLogger(__name__).exception("prewarm_matplotlib_cache: import failed")
         return
     try:
