@@ -145,3 +145,15 @@ def test_remote_topology_gate_is_read_only_and_exact() -> None:
     assert "REMOTE_TOPOLOGY_OK" in topology
     assert "git push" not in topology
     assert "deleteRef" not in topology
+
+
+def test_candidate_validator_runs_with_release_guardrails() -> None:
+    deploy = _text("scripts/immutable_deploy.sh")
+    start = deploy.index("validate_candidate_and_expand_schema() {")
+    end = deploy.index("verify_previous_release_on_expanded_schema() {", start)
+    candidate = deploy[start:end]
+
+    assert "VALIDATOR_RELEASE_MODE=1" in candidate
+    assert "VALIDATOR_RELEASE_MODE=0" not in candidate
+    assert "VALIDATOR_STRICT=1" in candidate
+    assert "VALIDATOR_GUARDRAILS_STRICT=1" in candidate
