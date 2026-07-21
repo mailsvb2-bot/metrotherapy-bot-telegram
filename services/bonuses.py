@@ -62,7 +62,7 @@ def _canonical_reward_stats(user_id: int) -> BonusStats | None:
                 SELECT COALESCE(SUM(COALESCE(tokens_granted, days)),0) AS earned
                 FROM bonus_grants
                 WHERE user_id=? AND reward_key IS NOT NULL AND reward_key<>''
-                  AND COALESCE(reward_status,'active')='active'
+                  AND COALESCE(reward_status,'active')<>'revoked'
                 """.strip(),
                 (int(user_id),),
             ).fetchone()
@@ -163,7 +163,8 @@ def paid_referrals_days_granted(user_id: int) -> int:
             row = conn.execute(
                 """
                 SELECT COALESCE(SUM(days),0) AS d FROM bonus_grants
-                WHERE user_id=? AND source='referral' AND COALESCE(reward_status,'active')='active'
+                WHERE user_id=? AND source='referral'
+                  AND COALESCE(reward_status,'active')<>'revoked'
                 """.strip(),
                 (int(user_id),),
             ).fetchone()
@@ -179,7 +180,8 @@ def gift_grants_count(user_id: int) -> int:
             row = conn.execute(
                 """
                 SELECT COUNT(1) AS n FROM bonus_grants
-                WHERE user_id=? AND source='gift' AND COALESCE(reward_status,'active')='active'
+                WHERE user_id=? AND source='gift'
+                  AND COALESCE(reward_status,'active')<>'revoked'
                 """.strip(),
                 (int(user_id),),
             ).fetchone()
@@ -195,7 +197,8 @@ def gift_days_granted(user_id: int) -> int:
             row = conn.execute(
                 """
                 SELECT COALESCE(SUM(days),0) AS d FROM bonus_grants
-                WHERE user_id=? AND source='gift' AND COALESCE(reward_status,'active')='active'
+                WHERE user_id=? AND source='gift'
+                  AND COALESCE(reward_status,'active')<>'revoked'
                 """.strip(),
                 (int(user_id),),
             ).fetchone()
