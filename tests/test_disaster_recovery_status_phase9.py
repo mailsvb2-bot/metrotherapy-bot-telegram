@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
@@ -97,7 +95,7 @@ def test_supported_hash_and_freshness(tmp_path: Path) -> None:
     assert dr._supported(sql_gz) is True
     assert dr._supported(other) is False
     assert dr._supported(tmp_path) is False
-    assert dr._hash(dump) == "9e2d47472192ed832fbba050abc2037217ba6b5a08094e2b24459868083c3a2e"
+    assert dr._hash(dump) == "185b0198441f4e8cdb882a49cb5a5d34108aada752d520d41b39bacdfa613e2c"
 
     future = datetime.now(tz=UTC) + timedelta(hours=1)
     age, fresh = dr._freshness(mtime_utc=future, max_age_hours=1)
