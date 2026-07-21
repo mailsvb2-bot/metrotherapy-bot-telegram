@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 from services.db.runtime import CONFIG, is_postgres_enabled, postgres_driver_error_hint
+from services.db.sql_compat_guard import (
+    count_qmark_placeholders,
+    replace_qmark_placeholders,
+    validate_sqlite_compat_statement,
+)
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +75,8 @@ class PostgresCompatCursor:
         self._synthetic_rows: list[PgRow] | None = None
         self.rowcount = -1
 
-    def execute(self, sql: str, params: Sequence[Any] = ()): 
+    def execute(self, sql: str, params: Sequence[Any] = ()):
+        validate_sqlite_compat_statement(sql)
         if _is_select_changes_sql(sql):
             self._synthetic_rows = [PgRow({"c": int(getattr(self._conn, "last_rowcount", 0) or 0)})]
             self.rowcount = 1
@@ -88,6 +94,7 @@ class PostgresCompatCursor:
         return self
 
     def executemany(self, sql: str, seq_of_params):
+        validate_sqlite_compat_statement(sql)
         self._synthetic_rows = None
         translated = translate_sql_for_postgres(sql)
         try:
@@ -157,7 +164,7 @@ class PostgresCompatConnection:
     def cursor(self):
         return PostgresCompatCursor(self._conn.cursor(), self)
 
-    def execute(self, sql: str, params: Sequence[Any] = ()): 
+    def execute(self, sql: str, params: Sequence[Any] = ()):
         cur = self.cursor()
         return cur.execute(sql, params)
 
@@ -198,24 +205,7 @@ def _normalize_params(params: Sequence[Any] | None):
 
 
 def _replace_qmark_placeholders(sql: str) -> str:
-    out = []
-    in_single = False
-    in_double = False
-    i = 0
-    while i < len(sql):
-        ch = sql[i]
-        if ch == "'" and not in_double:
-            in_single = not in_single
-            out.append(ch)
-        elif ch == '"' and not in_single:
-            in_double = not in_double
-            out.append(ch)
-        elif ch == '?' and not in_single and not in_double:
-            out.append('%s')
-        else:
-            out.append(ch)
-        i += 1
-    return ''.join(out)
+    return replace_qmark_placeholders(sql)
 
 
 def _translate_insert_or_ignore(sql: str) -> str:
@@ -253,7 +243,7 @@ def _translate_sqlite_master_tables_query(s: str) -> str | None:
     )
 
     if re.search(r"(?is)\bname\s+IN\s*\(", s):
-        placeholder_count = s.count("?")
+        placeholder_count = count_qmark_placeholders(s)
         if placeholder_count > 0:
             placeholders = ",".join("%s" for _ in range(placeholder_count))
             return f"{base} AND table_name IN ({placeholders})"

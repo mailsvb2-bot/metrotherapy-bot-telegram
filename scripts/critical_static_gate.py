@@ -19,6 +19,7 @@ _RUNTIME_HARDENING_FILES = (
     "services/audio_asset_integrity.py",
     "services/auto_audio.py",
     "services/db/read_only.py",
+    "services/db/sql_compat_guard.py",
     "services/messenger/media_assets.py",
     "services/messenger/observability.py",
     "services/messenger/provider_transport.py",
