@@ -5,6 +5,7 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${METROTHERAPY_ENV_FILE:-/etc/metrotherapy/metrotherapy.env}"
 BOOTSTRAPPED_SHA="${DEPLOY_BOOTSTRAPPED_SHA:-}"
 RECOVERY_SCRIPT="$SOURCE_DIR/scripts/repair_contaminated_current_release.sh"
+CANDIDATE_PREPARER="$SOURCE_DIR/scripts/prepare_immutable_candidate.sh"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "IMMUTABLE_DEPLOY_FAILED production env file is missing: $ENV_FILE" >&2
@@ -13,6 +14,10 @@ fi
 if [ ! -f "$RECOVERY_SCRIPT" ]; then
   echo "IMMUTABLE_DEPLOY_FAILED current-release recovery script is missing: $RECOVERY_SCRIPT" >&2
   exit 5
+fi
+if [ ! -f "$CANDIDATE_PREPARER" ]; then
+  echo "IMMUTABLE_DEPLOY_FAILED candidate preparation script is missing: $CANDIDATE_PREPARER" >&2
+  exit 6
 fi
 
 export PYTHONDONTWRITEBYTECODE=1
@@ -44,6 +49,7 @@ if [ -n "$BOOTSTRAPPED_SHA" ] && [ "$BOOTSTRAPPED_SHA" != "$AFTER_SHA" ]; then
 fi
 
 bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"
+bash "$CANDIDATE_PREPARER" "$SOURCE_DIR"
 if bash "$SOURCE_DIR/scripts/immutable_deploy.sh" "$@"; then
   bash "$RECOVERY_SCRIPT" cleanup "$SOURCE_DIR"
 else
