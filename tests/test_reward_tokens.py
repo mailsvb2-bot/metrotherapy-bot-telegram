@@ -24,17 +24,6 @@ def _reward_db() -> sqlite3.Connection:
             used_tokens INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE TABLE practice_reward_grants(
-            reward_key TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            reward_type TEXT NOT NULL,
-            tokens_granted INTEGER NOT NULL,
-            related_user_id INTEGER,
-            provider TEXT NOT NULL DEFAULT '',
-            provider_payment_id TEXT NOT NULL DEFAULT '',
-            ledger_id INTEGER,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
         CREATE TABLE practice_ledger(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -76,7 +65,12 @@ def _reward_db() -> sqlite3.Connection:
             days INTEGER NOT NULL,
             source TEXT NOT NULL,
             related_user_id INTEGER,
-            granted_at_utc TEXT NOT NULL
+            granted_at_utc TEXT NOT NULL,
+            reward_key TEXT UNIQUE,
+            tokens_granted INTEGER,
+            provider TEXT NOT NULL DEFAULT '',
+            provider_payment_id TEXT NOT NULL DEFAULT '',
+            ledger_id INTEGER
         );
         """
     )
@@ -123,18 +117,10 @@ def _install_reward_db(monkeypatch: pytest.MonkeyPatch, conn: sqlite3.Connection
                 package_id, provider, provider_payment_id, idempotency_key
             ) VALUES(?,?,?,?,?,?,?,?,?,?)
             """.strip(),
-            (
-                kwargs["user_id"],
-                kwargs["event_type"],
-                kwargs["amount"],
-                kwargs["balance_after"],
-                kwargs["reason"],
-                kwargs["source"],
-                kwargs["package_id"],
-                kwargs["provider"],
-                kwargs["provider_payment_id"],
-                kwargs["idempotency_key"],
-            ),
+            tuple(kwargs[key] for key in (
+                "user_id", "event_type", "amount", "balance_after", "reason",
+                "source", "package_id", "provider", "provider_payment_id", "idempotency_key",
+            )),
         )
         return int(value.execute("SELECT last_insert_rowid()").fetchone()[0])
 
@@ -147,22 +133,14 @@ def _install_reward_db(monkeypatch: pytest.MonkeyPatch, conn: sqlite3.Connection
             ) VALUES(?,?,?,?,?,?,?,?)
             """.strip(),
             (
-                kwargs["lot_key"],
-                kwargs["user_id"],
-                kwargs["provider"],
-                kwargs["provider_payment_id"],
-                kwargs["package_id"],
-                kwargs["amount"],
-                kwargs["amount"],
-                1 if kwargs["refundable"] else 0,
+                kwargs["lot_key"], kwargs["user_id"], kwargs["provider"],
+                kwargs["provider_payment_id"], kwargs["package_id"],
+                kwargs["amount"], kwargs["amount"], 1 if kwargs["refundable"] else 0,
             ),
         )
-        return int(
-            value.execute(
-                "SELECT id FROM practice_token_lots WHERE lot_key=?",
-                (kwargs["lot_key"],),
-            ).fetchone()[0]
-        )
+        return int(value.execute(
+            "SELECT id FROM practice_token_lots WHERE lot_key=?", (kwargs["lot_key"],)
+        ).fetchone()[0])
 
     monkeypatch.setattr(reward_tokens, "db", db_context)
     monkeypatch.setattr(reward_tokens, "tx", tx_context)
@@ -184,33 +162,25 @@ def test_paid_referral_reward_is_token_backed_and_idempotent(monkeypatch: pytest
     conn.commit()
     try:
         first = reward_tokens.grant_referral_reward_for_payment(
-            referred_user_id=2,
-            package_tokens=60,
-            provider="telegram_stars",
-            provider_payment_id="charge-1",
+            referred_user_id=2, package_tokens=60,
+            provider="telegram_stars", provider_payment_id="charge-1",
         )
-        assert first is not None and first.inserted is True
-        assert first.tokens == 30
-        assert first.wallet_balance == 30
-
         duplicate = reward_tokens.grant_referral_reward_for_payment(
-            referred_user_id=2,
-            package_tokens=60,
-            provider="telegram_stars",
-            provider_payment_id="charge-1-replay",
+            referred_user_id=2, package_tokens=60,
+            provider="telegram_stars", provider_payment_id="charge-1-replay",
         )
-        assert duplicate is not None and duplicate.inserted is False
+        assert first is not None and first.inserted and first.tokens == 30
+        assert duplicate is not None and not duplicate.inserted
         assert duplicate.reason == "already_granted"
-
-        wallet = conn.execute("SELECT available_tokens FROM practice_wallets WHERE user_id=1").fetchone()
-        referral = conn.execute(
+        assert conn.execute("SELECT available_tokens FROM practice_wallets WHERE user_id=1").fetchone()[0] == 30
+        assert tuple(conn.execute(
             "SELECT reward_given, reward_days, bonus_applied FROM referrals WHERE referred_id=2"
+        ).fetchone()) == (1, 30, 1)
+        reward = conn.execute(
+            "SELECT reward_key,tokens_granted,ledger_id FROM bonus_grants"
         ).fetchone()
-        assert wallet[0] == 30
-        assert tuple(referral) == (1, 30, 1)
-        assert conn.execute("SELECT COUNT(*) FROM practice_reward_grants").fetchone()[0] == 1
+        assert reward[0] == "referral:2" and reward[1] == 30 and int(reward[2]) > 0
         assert conn.execute("SELECT COUNT(*) FROM practice_ledger").fetchone()[0] == 1
-        assert conn.execute("SELECT COUNT(*) FROM bonus_grants").fetchone()[0] == 1
     finally:
         conn.close()
 
@@ -219,29 +189,19 @@ def test_referral_limit_is_serialized_on_referrer_wallet(monkeypatch: pytest.Mon
     conn = _reward_db()
     _install_reward_db(monkeypatch, conn)
     monkeypatch.setattr(reward_tokens.settings, "REF_MAX_BONUSES", 1, raising=False)
-    conn.executemany(
-        "INSERT INTO referrals(referred_id, referrer_id) VALUES(?,1)",
-        [(2,), (3,)],
-    )
+    conn.executemany("INSERT INTO referrals(referred_id, referrer_id) VALUES(?,1)", [(2,), (3,)])
     conn.commit()
     try:
         first = reward_tokens.grant_referral_reward_for_payment(
-            referred_user_id=2,
-            package_tokens=7,
-            provider="yookassa",
-            provider_payment_id="pay-1",
+            referred_user_id=2, package_tokens=7, provider="yookassa", provider_payment_id="pay-1"
         )
         second = reward_tokens.grant_referral_reward_for_payment(
-            referred_user_id=3,
-            package_tokens=7,
-            provider="yookassa",
-            provider_payment_id="pay-2",
+            referred_user_id=3, package_tokens=7, provider="yookassa", provider_payment_id="pay-2"
         )
         assert first is not None and first.inserted
-        assert second is not None and second.inserted is False
-        assert second.reason == "limit_reached"
+        assert second is not None and not second.inserted and second.reason == "limit_reached"
         assert conn.execute("SELECT available_tokens FROM practice_wallets WHERE user_id=1").fetchone()[0] == 7
-        assert conn.execute("SELECT COUNT(*) FROM practice_reward_grants").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM bonus_grants WHERE reward_key<>''").fetchone()[0] == 1
     finally:
         conn.close()
 
@@ -251,21 +211,15 @@ def test_gift_buyer_reward_is_granted_once(monkeypatch: pytest.MonkeyPatch) -> N
     _install_reward_db(monkeypatch, conn)
     try:
         first = reward_tokens.grant_gift_buyer_reward(
-            buyer_user_id=5,
-            package_tokens=60,
-            provider="yookassa",
-            provider_payment_id="gift-payment-1",
-            gift_token="gift_" + "a" * 32,
+            buyer_user_id=5, package_tokens=60, provider="yookassa",
+            provider_payment_id="gift-payment-1", gift_token="gift_" + "a" * 32,
         )
         second = reward_tokens.grant_gift_buyer_reward(
-            buyer_user_id=5,
-            package_tokens=60,
-            provider="yookassa",
-            provider_payment_id="gift-payment-1",
-            gift_token="gift_" + "a" * 32,
+            buyer_user_id=5, package_tokens=60, provider="yookassa",
+            provider_payment_id="gift-payment-1", gift_token="gift_" + "a" * 32,
         )
-        assert first.inserted is True and first.tokens == 5
-        assert second.inserted is False
+        assert first.inserted and first.tokens == 5
+        assert not second.inserted
         assert conn.execute("SELECT available_tokens FROM practice_wallets WHERE user_id=5").fetchone()[0] == 5
         assert conn.execute("SELECT COUNT(*) FROM bonus_grants WHERE source='gift'").fetchone()[0] == 1
     finally:
@@ -275,38 +229,17 @@ def test_gift_buyer_reward_is_granted_once(monkeypatch: pytest.MonkeyPatch) -> N
 def test_payment_wrapper_repairs_referral_only_for_real_payment_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     wallet = SimpleNamespace(available_tokens=60)
     calls: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        practice_tokens,
-        "_grant_tokens_for_payment",
-        lambda **_kwargs: (False, wallet, 10),
-    )
-    monkeypatch.setattr(
-        reward_tokens,
-        "grant_referral_reward_for_payment",
-        lambda **kwargs: calls.append(kwargs),
-    )
+    monkeypatch.setattr(practice_tokens, "_grant_tokens_for_payment", lambda **_kwargs: (False, wallet, 10))
+    monkeypatch.setattr(reward_tokens, "grant_referral_reward_for_payment", lambda **kwargs: calls.append(kwargs))
 
-    result = practice_tokens.grant_tokens_for_payment(
-        provider="telegram_stars",
-        provider_payment_id="charge",
-        user_id=7,
-        package_id="practice_60",
-    )
-    assert result == (False, wallet, 10)
-    assert calls == [
-        {
-            "referred_user_id": 7,
-            "package_tokens": 60,
-            "provider": "telegram_stars",
-            "provider_payment_id": "charge",
-        }
-    ]
-
+    assert practice_tokens.grant_tokens_for_payment(
+        provider="telegram_stars", provider_payment_id="charge",
+        user_id=7, package_id="practice_60",
+    ) == (False, wallet, 10)
+    assert calls[0]["referred_user_id"] == 7 and calls[0]["package_tokens"] == 60
     practice_tokens.grant_tokens_for_payment(
-        provider="gift_claim",
-        provider_payment_id="gift-token",
-        user_id=8,
-        package_id="practice_60",
+        provider="gift_claim", provider_payment_id="gift-token",
+        user_id=8, package_id="practice_60",
     )
     assert len(calls) == 1
 
@@ -318,47 +251,29 @@ def _migration_db() -> sqlite3.Connection:
         """
         CREATE TABLE schema_migrations(name TEXT PRIMARY KEY, applied_at_utc TEXT);
         CREATE TABLE practice_wallets(
-            user_id INTEGER PRIMARY KEY,
-            available_tokens INTEGER NOT NULL DEFAULT 0,
-            reserved_tokens INTEGER NOT NULL DEFAULT 0,
-            used_tokens INTEGER NOT NULL DEFAULT 0,
+            user_id INTEGER PRIMARY KEY, available_tokens INTEGER NOT NULL DEFAULT 0,
+            reserved_tokens INTEGER NOT NULL DEFAULT 0, used_tokens INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE practice_ledger(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            event_type TEXT NOT NULL,
-            amount INTEGER NOT NULL,
-            balance_after INTEGER NOT NULL,
-            reason TEXT NOT NULL,
-            source TEXT NOT NULL DEFAULT '',
-            package_id TEXT,
-            provider TEXT,
-            provider_payment_id TEXT,
-            idempotency_key TEXT NOT NULL UNIQUE,
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL, amount INTEGER NOT NULL, balance_after INTEGER NOT NULL,
+            reason TEXT NOT NULL, source TEXT NOT NULL DEFAULT '', package_id TEXT,
+            provider TEXT, provider_payment_id TEXT, idempotency_key TEXT NOT NULL UNIQUE,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE practice_token_lots(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            lot_key TEXT NOT NULL UNIQUE,
-            user_id INTEGER NOT NULL,
-            provider TEXT NOT NULL DEFAULT '',
-            provider_payment_id TEXT NOT NULL DEFAULT '',
-            package_id TEXT NOT NULL DEFAULT '',
-            granted_tokens INTEGER NOT NULL,
-            available_tokens INTEGER NOT NULL,
-            reserved_tokens INTEGER NOT NULL DEFAULT 0,
-            used_tokens INTEGER NOT NULL DEFAULT 0,
-            refundable INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            id INTEGER PRIMARY KEY AUTOINCREMENT, lot_key TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL, provider TEXT NOT NULL DEFAULT '',
+            provider_payment_id TEXT NOT NULL DEFAULT '', package_id TEXT NOT NULL DEFAULT '',
+            granted_tokens INTEGER NOT NULL, available_tokens INTEGER NOT NULL,
+            reserved_tokens INTEGER NOT NULL DEFAULT 0, used_tokens INTEGER NOT NULL DEFAULT 0,
+            refundable INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE bonus_grants(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            days INTEGER NOT NULL,
-            source TEXT NOT NULL,
-            related_user_id INTEGER,
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
+            days INTEGER NOT NULL, source TEXT NOT NULL, related_user_id INTEGER,
             granted_at_utc TEXT NOT NULL
         );
         INSERT INTO bonus_grants(user_id, days, source, related_user_id, granted_at_utc)
@@ -375,10 +290,13 @@ def test_reward_migration_backfills_legacy_bonus_rows_once() -> None:
         practice_reward_grants_v1.apply(conn)
         conn.commit()
         assert conn.execute("SELECT available_tokens FROM practice_wallets WHERE user_id=11").fetchone()[0] == 12
-        assert conn.execute("SELECT COUNT(*) FROM practice_reward_grants").fetchone()[0] == 2
+        rows = conn.execute(
+            "SELECT reward_key,tokens_granted,ledger_id FROM bonus_grants ORDER BY id"
+        ).fetchall()
+        assert rows[0][0] == "referral:22" and rows[0][1] == 7 and int(rows[0][2]) > 0
+        assert rows[1][0].startswith("legacy_bonus:") and rows[1][1] == 5
         assert conn.execute("SELECT COUNT(*) FROM practice_ledger").fetchone()[0] == 2
         assert conn.execute("SELECT COUNT(*) FROM practice_token_lots").fetchone()[0] == 2
-
         practice_reward_grants_v1.apply(conn)
         conn.commit()
         assert conn.execute("SELECT available_tokens FROM practice_wallets WHERE user_id=11").fetchone()[0] == 12
