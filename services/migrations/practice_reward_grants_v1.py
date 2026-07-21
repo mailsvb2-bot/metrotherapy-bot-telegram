@@ -34,6 +34,8 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         "provider": "provider TEXT NOT NULL DEFAULT ''",
         "provider_payment_id": "provider_payment_id TEXT NOT NULL DEFAULT ''",
         "ledger_id": "ledger_id INTEGER",
+        "reward_status": "reward_status TEXT NOT NULL DEFAULT 'active'",
+        "revoked_at": "revoked_at TEXT",
     }
     for name, ddl in additions.items():
         if name not in existing:
@@ -77,7 +79,8 @@ def _backfill_legacy_bonus_grants(conn: sqlite3.Connection) -> int:
             """
             UPDATE bonus_grants
             SET source=?, reward_key=?, tokens_granted=COALESCE(tokens_granted, days),
-                provider=CASE WHEN provider='' THEN 'legacy_bonus' ELSE provider END
+                provider=CASE WHEN provider='' THEN 'legacy_bonus' ELSE provider END,
+                reward_status=COALESCE(NULLIF(reward_status,''),'active')
             WHERE id=?
             """.strip(),
             (reward_type, reward_key, bonus_id),
@@ -140,10 +143,7 @@ def _backfill_legacy_bonus_grants(conn: sqlite3.Connection) -> int:
             """.strip(),
             (ledger_key, user_id, f"reward:{reward_type}", tokens, tokens),
         )
-        conn.execute(
-            "UPDATE bonus_grants SET ledger_id=? WHERE id=?",
-            (ledger_id, bonus_id),
-        )
+        conn.execute("UPDATE bonus_grants SET ledger_id=? WHERE id=?", (ledger_id, bonus_id))
         inserted_count += 1
     return inserted_count
 
@@ -157,9 +157,6 @@ def apply(conn: sqlite3.Connection) -> None:
     log.info("Migration start: %s", NAME)
     _ensure_columns(conn)
     backfilled = _backfill_legacy_bonus_grants(conn)
-    # NULL reward keys remain allowed for legacy projections, while every
-    # canonical reward gets a globally unique non-null key. A non-partial index
-    # keeps ON CONFLICT(reward_key) portable across SQLite and PostgreSQL.
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_bonus_grants_reward_key ON bonus_grants(reward_key)"
     )
