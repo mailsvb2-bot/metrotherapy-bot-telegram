@@ -16,15 +16,62 @@ import io
 import hashlib
 import time
 import os
-from pathlib import Path
+from collections import OrderedDict
+from threading import RLock
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from config.settings import settings
+from core.runtime_paths import matplotlib_cache_dir
 from typing import Any
 
-# Кеш PNG, чтобы кнопки ощущались мгновенными
-_CHART_CACHE: dict[str, tuple[float, bytes]] = {}
-_CHART_CACHE_TTL = 10 * 60  # 10 минут
+# Bounded PNG cache: fast repeated clicks without unbounded process memory growth.
+_CHART_CACHE: OrderedDict[str, tuple[float, bytes]] = OrderedDict()
+_CHART_CACHE_TTL = 10 * 60
+_CHART_CACHE_LOCK = RLock()
+
+
+def _cache_limit(name: str, default: int, *, minimum: int = 0) -> int:
+    raw = (os.getenv(name) or str(default)).strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logging.getLogger(__name__).warning("Invalid %s=%r; using %s", name, raw, default)
+        return default
+    return max(minimum, value)
+
+
+def _prune_chart_cache(now: float) -> None:
+    for stale_key, (created_at, _data) in list(_CHART_CACHE.items()):
+        if now - created_at >= _CHART_CACHE_TTL:
+            _CHART_CACHE.pop(stale_key, None)
+
+
+def _chart_cache_get(key: str) -> bytes | None:
+    now = time.time()
+    with _CHART_CACHE_LOCK:
+        _prune_chart_cache(now)
+        item = _CHART_CACHE.get(key)
+        if item is None:
+            return None
+        _CHART_CACHE.move_to_end(key)
+        return item[1]
+
+
+def _chart_cache_put(key: str, data: bytes) -> None:
+    max_entries = _cache_limit("CHART_CACHE_MAX_ENTRIES", 64)
+    max_bytes = _cache_limit("CHART_CACHE_MAX_BYTES", 32 * 1024 * 1024)
+    payload = bytes(data)
+    if max_entries <= 0 or max_bytes <= 0 or len(payload) > max_bytes:
+        return
+    now = time.time()
+    with _CHART_CACHE_LOCK:
+        _prune_chart_cache(now)
+        _CHART_CACHE.pop(key, None)
+        _CHART_CACHE[key] = (now, payload)
+        total_bytes = sum(len(item[1]) for item in _CHART_CACHE.values())
+        while _CHART_CACHE and (len(_CHART_CACHE) > max_entries or total_bytes > max_bytes):
+            _old_key, (_created_at, old_payload) = _CHART_CACHE.popitem(last=False)
+            total_bytes -= len(old_payload)
 
 
 def _chart_cache_key(prefix: str, kind_title: str, rows: list[dict[str, Any]]) -> str:
@@ -49,7 +96,7 @@ def _ensure_mpl() -> None:
     global _MPL_READY
     if _MPL_READY:
         return
-    _mpl_dir = (Path(__file__).resolve().parents[1] / "data" / "mplcache").resolve()
+    _mpl_dir = matplotlib_cache_dir()
     try:
         _mpl_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -74,17 +121,17 @@ def _ensure_mpl() -> None:
 
 def _plt():
     _ensure_mpl()
-    import matplotlib.pyplot as plt  # type: ignore
+    import matplotlib.pyplot as plt # type: ignore
 
     return plt
 
 def _rget(r: Any, key: str, default: Any = None) -> Any:
     """Безопасно достаёт значение из dict / sqlite3.Row / любых mapping-подобных."""
     try:
-        return r.get(key, default)  # type: ignore[attr-defined]
+        return r.get(key, default) # type: ignore[attr-defined]
     except AttributeError:
         try:
-            return r[key]  # type: ignore[index]
+            return r[key] # type: ignore[index]
         except (TypeError, KeyError, IndexError):
             return default
 
@@ -131,9 +178,9 @@ def _x_labels(rows: list[dict[str, Any]], max_labels: int = 8) -> tuple[list[int
 def plot_mood(kind_title: str, rows: list[dict[str, Any]]) -> bytes:
     plt = _plt()
     key = _chart_cache_key('mood', kind_title, rows)
-    cached = _CHART_CACHE.get(key)
-    if cached and (time.time() - cached[0] < _CHART_CACHE_TTL):
-        return cached[1]
+    cached = _chart_cache_get(key)
+    if cached is not None:
+        return cached
 
     """График по конкретному виду (работа/дом)."""
     fig = plt.figure(figsize=(8, 4.2), dpi=160)
@@ -163,16 +210,16 @@ def plot_mood(kind_title: str, rows: list[dict[str, Any]]) -> bytes:
     fig.savefig(buf, format="png")
     plt.close(fig)
     out = buf.getvalue()
-    _CHART_CACHE[key] = (time.time(), out)
+    _chart_cache_put(key, out)
     return out
 
 
 def plot_overall(rows_work: list[dict[str, Any]], rows_home: list[dict[str, Any]]) -> bytes:
     plt = _plt()
     key = _chart_cache_key('overall', 'overall', (rows_work or []) + (rows_home or []))
-    cached = _CHART_CACHE.get(key)
-    if cached and (time.time() - cached[0] < _CHART_CACHE_TTL):
-        return cached[1]
+    cached = _chart_cache_get(key)
+    if cached is not None:
+        return cached
 
     """Общая динамика: среднее состояние (pre/post) по всем сессиям."""
 
@@ -211,7 +258,7 @@ def plot_overall(rows_work: list[dict[str, Any]], rows_home: list[dict[str, Any]
     fig.savefig(buf, format="png")
     plt.close(fig)
     out = buf.getvalue()
-    _CHART_CACHE[key] = (time.time(), out)
+    _chart_cache_put(key, out)
     return out
 
 
@@ -222,9 +269,9 @@ def plot_state_ratings(title: str, rows: list[dict[str, Any]]) -> bytes:
     """
     plt = _plt()
     key = _chart_cache_key('state', title, rows)
-    cached = _CHART_CACHE.get(key)
-    if cached and (time.time() - cached[0] < _CHART_CACHE_TTL):
-        return cached[1]
+    cached = _chart_cache_get(key)
+    if cached is not None:
+        return cached
 
     fig = plt.figure(figsize=(8, 4.2), dpi=160)
     ax = fig.add_subplot(111)
@@ -253,7 +300,7 @@ def plot_state_ratings(title: str, rows: list[dict[str, Any]]) -> bytes:
     fig.savefig(buf, format="png")
     plt.close(fig)
     out = buf.getvalue()
-    _CHART_CACHE[key] = (time.time(), out)
+    _chart_cache_put(key, out)
     return out
 
 
@@ -267,9 +314,9 @@ def plot_tariffs_dynamics(title: str, price_events: list[dict[str, Any]], paymen
 
     payload = repr((len(price_events), price_events[-20:], len(payments_daily), payments_daily[-20:]))
     key = f"tariffs_dyn:{hashlib.sha256(payload.encode('utf-8', errors='ignore')).hexdigest()}"
-    cached = _CHART_CACHE.get(key)
-    if cached and (time.time() - cached[0] < _CHART_CACHE_TTL):
-        return cached[1]
+    cached = _chart_cache_get(key)
+    if cached is not None:
+        return cached
 
     fig = plt.figure(figsize=(8.2, 4.4), dpi=160)
     ax1 = fig.add_subplot(111)
@@ -321,5 +368,5 @@ def plot_tariffs_dynamics(title: str, price_events: list[dict[str, Any]], paymen
     fig.savefig(buf, format="png")
     plt.close(fig)
     out = buf.getvalue()
-    _CHART_CACHE[key] = (time.time(), out)
+    _chart_cache_put(key, out)
     return out

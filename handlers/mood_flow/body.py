@@ -17,7 +17,7 @@ from aiogram.types import CallbackQuery, BufferedInputFile, Message
 from aiogram.types import FSInputFile
 
 from keyboards.inline import kb_mood_scale, kb_mood_done, kb_body_question, kb_after_post_actions, kb_post_show_chart
-from services.db import mark_delivery_once
+from services.db import mark_delivery_once, unmark_delivery
 from services.idempotency import wall_key
 from services.idempotency_keys import for_demo_click, for_session
 from services.mood import set_pre, set_post, get_session, mark_audio_sent, last_delta
@@ -35,6 +35,39 @@ from services.subscription import register_touch
 
 from core.callback_utils import safe_answer_callback
 router = Router()
+
+
+def _record_body_answer_sync(*, user_id: int, session_id: int, kind: str, area: str, source: str) -> None:
+    save_body_feedback(int(user_id), int(session_id), kind=str(kind or ""), area=str(area))
+    log_event(
+        int(user_id),
+        "body_area",
+        {"area": str(area), "kind": str(kind or ""), "source": str(source or "")},
+    )
+
+
+def _persist_post_schedule_sync(
+    *,
+    session_id: str,
+    user_id: int,
+    kind: str,
+    run_at_iso: str,
+    run_at_epoch: int,
+) -> bool:
+    marker_parts = (str(kind or ""), "post_prompt_schedule", for_session(session_id))
+    if not mark_delivery_once(int(user_id), *marker_parts):
+        return False
+    try:
+        add_job(
+            int(user_id),
+            "post_prompt",
+            str(run_at_iso),
+            {"session_id": str(session_id), "run_at": int(run_at_epoch)},
+        )
+    except Exception:
+        unmark_delivery(int(user_id), *marker_parts)
+        raise
+    return True
 
 
 def _callback_message(cb: CallbackQuery) -> Message | None:
@@ -65,7 +98,7 @@ async def body_answer(cb: CallbackQuery):
         logging.getLogger(__name__).exception("Unhandled exception")
         return
 
-    s = get_session(sid)
+    s = await asyncio.to_thread(get_session, sid)
     if not s:
         return
 
@@ -74,9 +107,15 @@ async def body_answer(cb: CallbackQuery):
         return
 
     area = str(q.options[idx])
-    # Контракт: save_body_feedback(user_id, session_id, kind, area)
-    save_body_feedback(int(cb.from_user.id), sid, kind=s.kind or "", area=area)
-    log_event(int(cb.from_user.id), "body_area", {"area": area, "kind": s.kind, "source": s.source})
+    # Sync persistence is isolated from the aiogram event loop.
+    await asyncio.to_thread(
+        _record_body_answer_sync,
+        user_id=int(cb.from_user.id),
+        session_id=sid,
+        kind=s.kind or "",
+        area=area,
+        source=s.source or "",
+    )
 
     # AI-техника (быстро, сейчас)
     try:
@@ -98,6 +137,11 @@ async def _schedule_post(session_id: str, user_id: int, delay_sec: int, *, kind:
     run_at_dt = utc_now().replace(microsecond=0) + timedelta(seconds=int(delay_sec))
     run_at_epoch = int(run_at_dt.timestamp())
     run_at_iso = run_at_dt.isoformat()
-    if not mark_delivery_once(int(user_id), str(kind or ""), "post_prompt_schedule", for_session(session_id)):
-        return
-    add_job(int(user_id), "post_prompt", run_at_iso, {"session_id": str(session_id), "run_at": int(run_at_epoch)})
+    await asyncio.to_thread(
+        _persist_post_schedule_sync,
+        session_id=str(session_id),
+        user_id=int(user_id),
+        kind=str(kind or ""),
+        run_at_iso=run_at_iso,
+        run_at_epoch=run_at_epoch,
+    )

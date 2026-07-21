@@ -44,10 +44,22 @@ class MessengerWebhookRuntime:
     delivery_worker_started: bool = False
 
     async def stop(self) -> None:
+        errors: list[BaseException] = []
         if self.delivery_worker_started:
-            await stop_delivery_worker()
-            self.delivery_worker_started = False
-        await self.runner.cleanup()
+            try:
+                await stop_delivery_worker()
+            except BaseException as exc:  # validator: allow-wide-except
+                log.exception("Messenger delivery worker shutdown failed")
+                errors.append(exc)
+            finally:
+                self.delivery_worker_started = False
+        try:
+            await self.runner.cleanup()
+        except BaseException as exc:  # validator: allow-wide-except
+            log.exception("Messenger ingress runner cleanup failed")
+            errors.append(exc)
+        if errors:
+            raise errors[0]
 
 
 async def _health(request: web.Request) -> web.Response:
@@ -255,6 +267,12 @@ async def start_messenger_webhook_runtime(
         )
     except (OSError, RuntimeError, ValueError, TypeError, AttributeError, TelegramAPIError):
         if delivery_worker_started:
-            await stop_delivery_worker()
-        await runner.cleanup()
+            try:
+                await stop_delivery_worker()
+            except BaseException:  # validator: allow-wide-except
+                log.exception("Messenger delivery worker startup rollback failed")
+        try:
+            await runner.cleanup()
+        except BaseException:  # validator: allow-wide-except
+            log.exception("Messenger ingress startup rollback cleanup failed")
         raise
