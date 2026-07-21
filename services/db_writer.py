@@ -11,6 +11,7 @@ from typing import Any, Iterable, Sequence
 from core.paths import DB_PATH
 from services.db.runtime import CONFIG, is_postgres_enabled
 
+
 def _is_write_sql(sql: str) -> bool:
     """Best-effort check whether SQL mutates DB (needs commit)."""
     s = (sql or "").strip()
@@ -21,13 +22,27 @@ def _is_write_sql(sql: str) -> bool:
         nl = s.find("\n")
         if nl == -1:
             return False
-        s = s[nl+1:].lstrip()
+        s = s[nl + 1 :].lstrip()
     first = re.match(r"^([A-Za-z_]+)", s)
-    kw = (first.group(1).upper() if first else "")
+    kw = first.group(1).upper() if first else ""
     if kw == "WITH":
         m = re.search(r"\b(INSERT|UPDATE|DELETE|REPLACE|SELECT)\b", s, flags=re.IGNORECASE)
-        kw = (m.group(1).upper() if m else "WITH")
-    return kw in {"INSERT","UPDATE","DELETE","REPLACE","CREATE","DROP","ALTER","VACUUM","PRAGMA","BEGIN","COMMIT"}
+        kw = m.group(1).upper() if m else "WITH"
+    return kw in {
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "REPLACE",
+        "CREATE",
+        "DROP",
+        "ALTER",
+        "VACUUM",
+        "PRAGMA",
+        "BEGIN",
+        "COMMIT",
+    }
+
+
 log = logging.getLogger(__name__)
 
 
@@ -44,6 +59,20 @@ class DbJob:
 _queue: asyncio.Queue[DbJob] | None = None
 _task: asyncio.Task | None = None
 
+
+def _finish_future(
+    fut: asyncio.Future,
+    *,
+    result: Any = None,
+    exception: BaseException | None = None,
+) -> None:
+    """Complete a caller future without letting cancellation kill the writer loop."""
+    if fut.done():
+        return
+    if exception is not None:
+        fut.set_exception(exception)
+    else:
+        fut.set_result(result)
 
 
 def start_db_writer() -> None:
@@ -65,9 +94,10 @@ def start_db_writer() -> None:
 
         _task = tm().create(_writer_loop())
     except (ImportError, AttributeError, RuntimeError):
-        logging.getLogger(__name__).exception("db_writer: TaskManager unavailable, using create_task fallback")
+        logging.getLogger(__name__).exception(
+            "db_writer: TaskManager unavailable, using create_task fallback"
+        )
         _task = asyncio.create_task(_writer_loop(), name="db-writer")
-# asyncio.create_task(_writer_loop(), name="db-writer")
 
 
 async def stop_db_writer(*, drain: bool = True) -> None:
@@ -78,7 +108,7 @@ async def stop_db_writer(*, drain: bool = True) -> None:
     global _queue, _task
     if not _task:
         return
-    if drain and _queue:
+    if drain and _queue and not _task.done():
         await _queue.join()
     _task.cancel()
     try:
@@ -102,21 +132,32 @@ async def enqueue(
     Returns fetched row(s) for fetchone/fetchall, otherwise None.
     """
     if is_postgres_enabled():
-        return await _execute_postgres_job(sql, params, many=many, fetchone=fetchone, fetchall=fetchall)
+        return await _execute_postgres_job(
+            sql,
+            params,
+            many=many,
+            fetchone=fetchone,
+            fetchall=fetchall,
+        )
     if not _queue or not _task or _task.done():
         raise RuntimeError("DB writer is not running. Call start_db_writer() on startup.")
 
     loop = asyncio.get_running_loop()
     fut = loop.create_future()
-    job = DbJob(sql=sql, params=tuple(params), many=bool(many), fetchone=bool(fetchone), fetchall=bool(fetchall), fut=fut)
+    job = DbJob(
+        sql=sql,
+        params=tuple(params),
+        many=bool(many),
+        fetchone=bool(fetchone),
+        fetchall=bool(fetchall),
+        fut=fut,
+    )
     await _queue.put(job)
     return await fut
 
 
 async def enqueue_many(sql: str, seq_of_params: Iterable[Sequence[Any]]):
     return await enqueue(sql, tuple(seq_of_params), many=True)
-
-
 
 
 async def _execute_postgres_job(
@@ -177,8 +218,8 @@ async def _writer_loop() -> None:
             conn.execute("PRAGMA temp_store=MEMORY;")
             conn.execute("PRAGMA busy_timeout=10000;")
             conn.execute("PRAGMA foreign_keys=ON;")
-        except sqlite3.Error as e:
-            log.warning("[DB] PRAGMA init failed: %s", e)
+        except sqlite3.Error as exc:
+            log.warning("[DB] PRAGMA init failed: %s", exc)
 
         while True:
             job: DbJob = await _queue.get()
@@ -191,7 +232,7 @@ async def _writer_loop() -> None:
                         cur.executemany(job.sql, job.params)  # type: ignore[arg-type]
                         if is_write:
                             conn.commit()
-                        job.fut.set_result(None)
+                        _finish_future(job.fut, result=None)
                     else:
                         cur.execute(job.sql, job.params)
 
@@ -207,28 +248,27 @@ async def _writer_loop() -> None:
                                 logging.getLogger(__name__).exception("Unhandled exception")
                             if is_write:
                                 conn.commit()
-                            job.fut.set_result(res)
+                            _finish_future(job.fut, result=res)
                         elif job.fetchall:
                             res = cur.fetchall()
                             if is_write:
                                 conn.commit()
-                            job.fut.set_result(res)
+                            _finish_future(job.fut, result=res)
                         else:
                             if is_write:
                                 conn.commit()
-                            job.fut.set_result(None)
+                            _finish_future(job.fut, result=None)
                 finally:
                     try:
                         cur.close()
                     except sqlite3.Error:
                         logging.getLogger(__name__).exception("Unhandled exception")
-            except sqlite3.Error as e:
+            except sqlite3.Error as exc:
                 try:
                     conn.rollback()
                 except sqlite3.Error:
                     logging.getLogger(__name__).exception("Unhandled exception")
-                if not job.fut.done():
-                    job.fut.set_exception(e)
+                _finish_future(job.fut, exception=exc)
             finally:
                 _queue.task_done()
     finally:
