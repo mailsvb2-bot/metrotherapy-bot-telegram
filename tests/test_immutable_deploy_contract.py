@@ -50,13 +50,19 @@ def test_builder_creates_per_sha_hash_locked_release() -> None:
     assert 'rm -rf "$BUILD_DIR"' in builder
 
 
-def test_builder_separates_shared_audio_from_release_code() -> None:
+def test_builder_publishes_content_addressed_audio_assets() -> None:
     builder = _text("scripts/build_immutable_release.sh")
 
-    assert 'SHARED_AUDIO_DIR="${SHARED_AUDIO_DIR:-$(dirname "$RUNTIME_ROOT")/audio}"' in builder
-    assert 'cp -a "$SOURCE_DIR/audio/." "$SHARED_AUDIO_DIR/"' in builder
-    assert 'ln -s "$SHARED_AUDIO_DIR" "$BUILD_DIR/audio"' in builder
-    assert 'chmod -R a+rX "$SHARED_AUDIO_DIR"' in builder
+    assert 'AUDIO_RELEASES_DIR="${AUDIO_RELEASES_DIR:-$(dirname "$RUNTIME_ROOT")/audio-releases}"' in builder
+    assert 'AUDIO_BUILD_DIR="$(mktemp -d "$AUDIO_RELEASES_DIR/.build-audio.XXXXXX")"' in builder
+    assert 'cp -a "$AUDIO_SOURCE_DIR/." "$AUDIO_BUILD_DIR/"' in builder
+    assert '"$SYSTEM_PYTHON" "$AUDIO_MANAGER" seal "$AUDIO_BUILD_DIR"' in builder
+    assert 'AUDIO_ASSET_DIR="$AUDIO_RELEASES_DIR/$AUDIO_ASSET_SHA256"' in builder
+    assert 'ln -s "$AUDIO_ASSET_DIR" "$BUILD_DIR/audio"' in builder
+    assert "write-release-pointer" in builder
+    assert 'chmod 0750 "$AUDIO_RELEASES_DIR"' in builder
+    assert 'chmod -R a+rX' not in builder
+    assert 'cp -a "$SOURCE_DIR/audio/." "$SHARED_AUDIO_DIR/"' not in builder
 
 
 def test_immutable_deploy_orders_switch_gate_proof_and_marker() -> None:
@@ -74,7 +80,7 @@ def test_immutable_deploy_orders_switch_gate_proof_and_marker() -> None:
     marker = deploy.index('record_successful_deployed_sha "$NEW_SHA"', proof)
 
     assert expand < compatibility < switch < restart < gate < proof < marker
-    assert "--require-hashes" not in deploy  # dependency install belongs only to builder
+    assert "--require-hashes" not in deploy
     assert "post_deploy_verify.py --skip-pytest" not in deploy
 
 
