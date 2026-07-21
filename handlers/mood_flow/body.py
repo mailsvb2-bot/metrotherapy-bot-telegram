@@ -64,7 +64,10 @@ def _persist_post_schedule_sync(
             str(run_at_iso),
             {"session_id": str(session_id), "run_at": int(run_at_epoch)},
         )
-    except Exception:  # validator: allow-wide-except
+    except (sqlite3.Error, RuntimeError):
+        unmark_delivery(int(user_id), *marker_parts)
+        raise
+    except (ValueError, TypeError):
         unmark_delivery(int(user_id), *marker_parts)
         raise
     return True
