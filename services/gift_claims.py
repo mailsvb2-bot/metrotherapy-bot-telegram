@@ -96,6 +96,13 @@ def mark_gift_paid(
     provider_payment_id: str,
     source_platform: str,
 ) -> None:
+    """Persist the paid gift without crediting the buyer's practice wallet.
+
+    A gift package belongs exclusively to its eventual recipient. The recipient
+    receives practices only after claiming the opaque gift token; this keeps gift
+    refunds and ownership deterministic and prevents buyer-plus-recipient double
+    entitlement.
+    """
     token = normalize_gift_token(gift_token)
     if not is_gift_token(token):
         raise ValueError("Invalid gift token")
@@ -138,26 +145,22 @@ def mark_gift_paid(
                 (token, int(buyer_user_id or 0), package.package_id, provider, provider_payment_id, source_platform),
             )
 
-    # This is intentionally outside the gift-row transaction. If the reward grant
-    # fails, the payment processor records an incomplete side effect and can replay
-    # it safely; the reward key prevents a second buyer bonus on that replay.
-    from services.reward_tokens import grant_gift_buyer_reward
-
-    grant_gift_buyer_reward(
-        buyer_user_id=int(buyer_user_id or 0),
-        package_tokens=int(package.tokens),
-        provider=str(provider or "gift"),
-        provider_payment_id=str(provider_payment_id or ""),
-        gift_token=token,
-    )
-
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
     if row is None:
         return {}
     if isinstance(row, dict):
         return dict(row)
-    keys = ["gift_token", "buyer_user_id", "recipient_user_id", "package_id", "provider", "provider_payment_id", "source_platform", "status"]
+    keys = [
+        "gift_token",
+        "buyer_user_id",
+        "recipient_user_id",
+        "package_id",
+        "provider",
+        "provider_payment_id",
+        "source_platform",
+        "status",
+    ]
     return {key: row[idx] for idx, key in enumerate(keys)}
 
 
@@ -180,21 +183,45 @@ def _acquire_gift_claim(*, token: str, recipient_user_id: int) -> GiftClaimResul
         with tx(conn):
             data = _gift_row_in_conn(conn, token)
             if not data:
-                return GiftClaimResult(False, "not_paid", "Подарок пока не найден как оплаченный. Проверьте ссылку после успешной оплаты.")
+                return GiftClaimResult(
+                    False,
+                    "not_paid",
+                    "Подарок пока не найден как оплаченный. Проверьте ссылку после успешной оплаты.",
+                )
 
             status = str(data.get("status") or "").strip()
             package_id = str(data.get("package_id") or "").strip()
             owner_id = int(data.get("recipient_user_id") or 0)
             if status == "claimed":
                 if owner_id == recipient_id:
-                    return GiftClaimResult(True, "already_claimed", "Этот подарок уже закреплён за вашим профилем.", package_id)
-                return GiftClaimResult(False, "claimed_by_other", "Этот подарок уже был активирован другим профилем.", package_id)
+                    return GiftClaimResult(
+                        True,
+                        "already_claimed",
+                        "Этот подарок уже закреплён за вашим профилем.",
+                        package_id,
+                    )
+                return GiftClaimResult(
+                    False,
+                    "claimed_by_other",
+                    "Этот подарок уже был активирован другим профилем.",
+                    package_id,
+                )
             if status == "claiming":
                 if owner_id == recipient_id:
                     return data
-                return GiftClaimResult(False, "claim_in_progress", "Этот подарок уже активируется другим профилем.", package_id)
+                return GiftClaimResult(
+                    False,
+                    "claim_in_progress",
+                    "Этот подарок уже активируется другим профилем.",
+                    package_id,
+                )
             if status != "paid":
-                return GiftClaimResult(False, status or "not_ready", "Подарок ещё не готов к активации.", package_id)
+                return GiftClaimResult(
+                    False,
+                    status or "not_ready",
+                    "Подарок ещё не готов к активации.",
+                    package_id,
+                )
 
             updated = conn.execute(
                 """
@@ -205,7 +232,12 @@ def _acquire_gift_claim(*, token: str, recipient_user_id: int) -> GiftClaimResul
                 (recipient_id, token),
             )
             if int(getattr(updated, "rowcount", 0) or 0) != 1:
-                return GiftClaimResult(False, "claim_race", "Подарок уже активируется. Обновите статус профиля.", package_id)
+                return GiftClaimResult(
+                    False,
+                    "claim_race",
+                    "Подарок уже активируется. Обновите статус профиля.",
+                    package_id,
+                )
             data["recipient_user_id"] = recipient_id
             data["status"] = "claiming"
             return data
@@ -242,7 +274,12 @@ def claim_gift_token(*, gift_token: str, recipient_user_id: int, platform: str) 
         # Keep the claim pinned to this recipient. A retry by the same profile is
         # safe because both token and premium grants are provider-idempotent. Reopening
         # the gift here could grant it to a second user after a partial first grant.
-        return GiftClaimResult(False, "grant_failed", f"Не удалось активировать подарок: {type(exc).__name__}", package_id)
+        return GiftClaimResult(
+            False,
+            "grant_failed",
+            f"Не удалось активировать подарок: {type(exc).__name__}",
+            package_id,
+        )
 
     with db() as conn:
         with tx(conn):
@@ -256,9 +293,22 @@ def claim_gift_token(*, gift_token: str, recipient_user_id: int, platform: str) 
             )
             if int(getattr(updated, "rowcount", 0) or 0) != 1:
                 current = _gift_row_in_conn(conn, token)
-                if str(current.get("status") or "") == "claimed" and int(current.get("recipient_user_id") or 0) == int(recipient_user_id):
-                    return GiftClaimResult(True, "already_claimed", "Этот подарок уже закреплён за вашим профилем.", package_id)
-                return GiftClaimResult(False, "claim_race", "Подарок уже активирован. Обновите статус профиля.", package_id)
+                if (
+                    str(current.get("status") or "") == "claimed"
+                    and int(current.get("recipient_user_id") or 0) == int(recipient_user_id)
+                ):
+                    return GiftClaimResult(
+                        True,
+                        "already_claimed",
+                        "Этот подарок уже закреплён за вашим профилем.",
+                        package_id,
+                    )
+                return GiftClaimResult(
+                    False,
+                    "claim_race",
+                    "Подарок уже активирован. Обновите статус профиля.",
+                    package_id,
+                )
 
     premium_tail = ""
     if premium.outbox_created or premium.consultation_request_created:
@@ -270,4 +320,9 @@ def claim_gift_token(*, gift_token: str, recipient_user_id: int, platform: str) 
             f"Подарок активирован: {package.title}. На балансе теперь {wallet.available_tokens} практик.{premium_tail}",
             package.package_id,
         )
-    return GiftClaimResult(True, "already_granted", f"Подарок уже был начислен: {package.title}.", package.package_id)
+    return GiftClaimResult(
+        True,
+        "already_granted",
+        f"Подарок уже был начислен: {package.title}.",
+        package.package_id,
+    )
