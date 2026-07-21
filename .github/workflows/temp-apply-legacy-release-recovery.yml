@@ -1,5 +1,6 @@
 name: Temporary apply legacy release recovery
 
+# Bootstrap definition already exists on main; this follow-up push executes it.
 on:
   push:
     branches:
