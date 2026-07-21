@@ -201,12 +201,15 @@ def _grant_reward_in_conn(
         provider_payment_id=str(provider_payment_id or ""),
         idempotency_key=ledger_key,
     )
+    # The paid package already owns the canonical (provider, payment_id) lot.
+    # Reward lots use a separate provider namespace while the original payment
+    # provenance remains in bonus_grants and practice_ledger.
     create_lot_in_conn(
         conn,
         lot_key=ledger_key,
         user_id=uid,
-        provider=str(provider or "reward"),
-        provider_payment_id=str(provider_payment_id or ""),
+        provider=f"reward_{kind}",
+        provider_payment_id=key,
         package_id=f"reward:{kind}",
         amount=amount,
         refundable=False,
