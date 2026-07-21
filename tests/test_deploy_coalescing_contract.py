@@ -12,6 +12,7 @@ IMMUTABLE_DEPLOY = ROOT / "scripts" / "immutable_deploy.sh"
 RELEASE_MANAGER = ROOT / "scripts" / "immutable_release.py"
 RELEASE_BUILDER = ROOT / "scripts" / "build_immutable_release.sh"
 CURRENT_RELEASE_RECOVERY = ROOT / "scripts" / "repair_contaminated_current_release.sh"
+CANDIDATE_PREPARER = ROOT / "scripts" / "prepare_immutable_candidate.sh"
 REMOTE_TOPOLOGY = ROOT / "scripts" / "check_remote_main_topology.sh"
 WORKER = ROOT / "scripts" / "run_deploy_worker.sh"
 STALE_RECOVERY = ROOT / "scripts" / "recover_stale_deploy_worker.sh"
@@ -74,16 +75,18 @@ def test_deploy_launcher_and_immutable_pipeline_have_valid_bash_syntax() -> None
     _assert_bash_syntax(IMMUTABLE_DEPLOY)
     _assert_bash_syntax(RELEASE_BUILDER)
     _assert_bash_syntax(CURRENT_RELEASE_RECOVERY)
+    _assert_bash_syntax(CANDIDATE_PREPARER)
     _assert_bash_syntax(REMOTE_TOPOLOGY)
 
 
-def test_deploy_launcher_delegates_topology_recovery_immutable_and_cleanup() -> None:
+def test_deploy_launcher_delegates_topology_recovery_prepare_immutable_and_cleanup() -> None:
     source = DEPLOY_LAUNCHER.read_text(encoding="utf-8")
     topology = source.index('bash "$SOURCE_DIR/scripts/check_remote_main_topology.sh" "$SOURCE_DIR"')
     repair = source.index('bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"', topology)
-    immutable = source.index('bash "$SOURCE_DIR/scripts/immutable_deploy.sh" "$@"', repair)
+    prepare = source.index('bash "$CANDIDATE_PREPARER" "$SOURCE_DIR"', repair)
+    immutable = source.index('bash "$SOURCE_DIR/scripts/immutable_deploy.sh" "$@"', prepare)
     cleanup = source.index('bash "$RECOVERY_SCRIPT" cleanup "$SOURCE_DIR"', immutable)
-    assert topology < repair < immutable < cleanup
+    assert topology < repair < prepare < immutable < cleanup
     assert 'exec bash "$SOURCE_DIR/scripts/immutable_deploy.sh"' not in source
     assert "git reset --hard" not in source
     assert "pip install" not in source
