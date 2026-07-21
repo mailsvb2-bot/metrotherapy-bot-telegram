@@ -157,12 +157,11 @@ def apply(conn: sqlite3.Connection) -> None:
     log.info("Migration start: %s", NAME)
     _ensure_columns(conn)
     backfilled = _backfill_legacy_bonus_grants(conn)
+    # NULL reward keys remain allowed for legacy projections, while every
+    # canonical reward gets a globally unique non-null key. A non-partial index
+    # keeps ON CONFLICT(reward_key) portable across SQLite and PostgreSQL.
     conn.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_bonus_grants_reward_key
-        ON bonus_grants(reward_key)
-        WHERE reward_key IS NOT NULL AND reward_key <> ''
-        """.strip()
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_bonus_grants_reward_key ON bonus_grants(reward_key)"
     )
     conn.execute(
         """
