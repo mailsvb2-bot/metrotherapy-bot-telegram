@@ -20,10 +20,15 @@ def _normalize_telegram_token_env() -> None:
 
 _normalize_telegram_token_env()
 
-# В PROD не пишем байткод, чтобы релиз оставался чистым и не плодил __pycache__.
+# In production, neither Python bytecode nor third-party caches may mutate the
+# content-addressed release directory after its digest has been sealed.
 if os.getenv("APP_ENV", "dev").strip().lower() in {"prod", "production"}:
     os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     sys.dont_write_bytecode = True
+
+from core.runtime_paths import matplotlib_cache_dir
+
+os.environ.setdefault("MPLCONFIGDIR", str(matplotlib_cache_dir()))
 
 from app import create_application
 
