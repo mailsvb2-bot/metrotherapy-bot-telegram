@@ -129,7 +129,7 @@ def _grant_reward_in_conn(
     if amount <= 0:
         raise ValueError("practice_reward_amount_must_be_positive")
     kind = str(reward_type or "").strip().lower()
-    if kind not in {"referral", "gift"}:
+    if kind != "referral":
         raise ValueError("practice_reward_type_invalid")
     key = _reward_key(reward_key)
 
@@ -201,9 +201,6 @@ def _grant_reward_in_conn(
         provider_payment_id=str(provider_payment_id or ""),
         idempotency_key=ledger_key,
     )
-    # The paid package already owns the canonical (provider, payment_id) lot.
-    # Reward lots use a separate provider namespace while the original payment
-    # provenance remains in bonus_grants and practice_ledger.
     create_lot_in_conn(
         conn,
         lot_key=ledger_key,
@@ -269,7 +266,10 @@ def grant_referral_reward(
                 "SELECT referrer_id FROM referrals WHERE referred_id=? LIMIT 1",
                 (referred_id,),
             ).fetchone()
-            if referral is None or int(_row_value(referral, "referrer_id", 0, 0) or 0) != raw_referrer:
+            if (
+                referral is None
+                or int(_row_value(referral, "referrer_id", 0, 0) or 0) != raw_referrer
+            ):
                 return None
 
             existing = _existing_reward(conn, reward_key)
@@ -345,32 +345,3 @@ def grant_referral_reward_for_payment(
         provider_payment_id=str(provider_payment_id or ""),
         source="paid_referral",
     )
-
-
-def grant_gift_buyer_reward(
-    *,
-    buyer_user_id: int,
-    package_tokens: int,
-    provider: str,
-    provider_payment_id: str,
-    gift_token: str,
-) -> RewardGrantResult:
-    buyer_id = canonical_practice_user_id(int(buyer_user_id))
-    amount = 5 if int(package_tokens) >= 20 else 3
-    payment_key = str(provider_payment_id or "").strip() or str(gift_token or "").strip()
-    if not payment_key:
-        raise ValueError("gift_reward_payment_identity_required")
-    key = f"gift_buyer:{str(provider or 'gift')}:{payment_key}"
-    with db() as conn:
-        with tx(conn):
-            return _grant_reward_in_conn(
-                conn,
-                user_id=buyer_id,
-                tokens=amount,
-                reward_type="gift",
-                reward_key=key,
-                related_user_id=None,
-                provider=str(provider or "gift"),
-                provider_payment_id=str(provider_payment_id or gift_token or ""),
-                source="paid_gift",
-            )
