@@ -1,18 +1,18 @@
 from __future__ import annotations
-from aiogram.exceptions import TelegramAPIError
-
-from services.fast_send_audio import send_audio_cached
 
 import asyncio
-import time
+import hashlib
 import logging
+import time
 from pathlib import Path
 from typing import Iterable
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import FSInputFile
 
 from config.settings import settings
+from core.runtime_paths import prewarm_marker_path
 from services.audio_cache import get_cached_file_id, save_cached_file_id
 from services.catalog import AudioCatalog
 
@@ -20,23 +20,46 @@ log = logging.getLogger(__name__)
 
 
 def _marker_path() -> Path:
-    # local marker to avoid repeating prewarm on every restart
-    return Path(__file__).resolve().parents[1] / ".prewarm_done"
+    return prewarm_marker_path()
 
 
-def _already_done() -> bool:
+def _content_fingerprint(paths: Iterable[Path]) -> str:
+    digest = hashlib.sha256()
+    for path in sorted((Path(item) for item in paths), key=lambda item: str(item)):
+        resolved = path.resolve()
+        digest.update(str(resolved).encode("utf-8", errors="surrogateescape"))
+        digest.update(b"\0")
+        try:
+            stat = resolved.stat()
+        except OSError:
+            digest.update(b"missing")
+        else:
+            digest.update(str(int(stat.st_size)).encode("ascii"))
+            digest.update(b":")
+            digest.update(str(int(stat.st_mtime_ns)).encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _already_done(fingerprint: str) -> bool:
     try:
-        return _marker_path().exists()
+        return _marker_path().read_text(encoding="utf-8").strip() == str(fingerprint)
+    except FileNotFoundError:
+        return False
     except OSError:
-        logging.getLogger(__name__).exception("Unhandled exception")
+        logging.getLogger(__name__).exception("Failed to read prewarm marker")
         return False
 
 
-def _mark_done() -> None:
+def _mark_done(fingerprint: str) -> None:
     try:
-        _marker_path().write_text(str(int(time.time())), encoding="utf-8")
+        marker = _marker_path()
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        temp = marker.with_name(f".{marker.name}.{int(time.time())}.tmp")
+        temp.write_text(str(fingerprint), encoding="utf-8")
+        temp.replace(marker)
     except OSError:
-        logging.getLogger(__name__).exception("Unhandled exception")
+        logging.getLogger(__name__).exception("Failed to write prewarm marker")
 
 
 def _admin_chat_id() -> int | None:
@@ -50,7 +73,6 @@ def _admin_chat_id() -> int | None:
     raw = str(getattr(settings, "ADMIN_IDS", "") or "").strip()
     if not raw:
         return None
-    # ADMIN_IDS can be "1,2,3"
     for part in raw.replace(";", ",").split(","):
         part = part.strip()
         if not part:
@@ -64,16 +86,13 @@ def _admin_chat_id() -> int | None:
 
 
 async def prewarm_audio_cache(bot: Bot) -> None:
-    """Pre-upload audio to Telegram to obtain file_id and make user sends instant.
+    """Pre-upload audio to Telegram and cache stable file IDs.
 
-    IMPORTANT: OFF by default. Enable explicitly with PREWARM_ENABLED=1.
-    Also runs only once per machine (creates .prewarm_done marker).
-    The marker is written only after a complete sweep without retryable failures,
-    so a temporary Telegram or content-mount outage is retried after restart.
+    The completion marker is outside the immutable release and stores a fingerprint
+    of the current media set. New or replaced audio therefore triggers another
+    sweep, while restarts with unchanged content remain instant.
     """
     if not getattr(settings, "PREWARM_ENABLED", False):
-        return
-    if _already_done():
         return
     chat_id = _admin_chat_id()
     if not chat_id:
@@ -94,67 +113,67 @@ async def prewarm_audio_cache(bot: Bot) -> None:
         retryable_failure = True
         logging.getLogger(__name__).exception("prewarm full catalog read failed")
 
-    # de-dup while preserving order
-    seen = set()
-    uniq: list[Path] = []
-    for p in files:
-        rp = str(Path(p).resolve())
-        if rp in seen:
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in files:
+        resolved = str(Path(path).resolve())
+        if resolved in seen:
             continue
-        seen.add(rp)
-        uniq.append(Path(p))
+        seen.add(resolved)
+        unique.append(Path(path))
 
-    for p in uniq:
+    fingerprint = _content_fingerprint(unique)
+    if not retryable_failure and _already_done(fingerprint):
+        return
+
+    for path in unique:
         try:
-            kind = "voice" if p.suffix.lower() in (".ogg", ".opus") else "audio"
-            if get_cached_file_id(p, kind):
+            kind = "voice" if path.suffix.lower() in (".ogg", ".opus") else "audio"
+            if get_cached_file_id(path, kind):
                 continue
-
-            if not p.exists():
+            if not path.exists():
                 retryable_failure = True
-                log.warning("prewarm source missing: %s", p)
+                log.warning("prewarm source missing: %s", path)
                 continue
 
-            # Send quietly
             if kind == "voice":
-                msg = await bot.send_voice(
+                message = await bot.send_voice(
                     chat_id,
-                    voice=FSInputFile(p),
+                    voice=FSInputFile(path),
                     caption="(prewarm)",
                     disable_notification=True,
                     protect_content=True,
                 )
-                fid = getattr(getattr(msg, "voice", None), "file_id", None)
-                if fid:
-                    save_cached_file_id(p, "voice", str(fid))
+                file_id = getattr(getattr(message, "voice", None), "file_id", None)
+                if file_id:
+                    save_cached_file_id(path, "voice", str(file_id))
                 else:
                     retryable_failure = True
             else:
-                msg = await bot.send_audio(
+                message = await bot.send_audio(
                     chat_id,
-                    audio=FSInputFile(p),
+                    audio=FSInputFile(path),
                     caption="(prewarm)",
                     disable_notification=True,
                     protect_content=True,
                 )
-                fid = getattr(getattr(msg, "audio", None), "file_id", None)
-                if fid:
-                    save_cached_file_id(p, "audio", str(fid))
+                file_id = getattr(getattr(message, "audio", None), "file_id", None)
+                if file_id:
+                    save_cached_file_id(path, "audio", str(file_id))
                 else:
                     retryable_failure = True
 
             await asyncio.sleep(0.2)
         except (TelegramAPIError, OSError, asyncio.TimeoutError) as exc:
             retryable_failure = True
-            log.info("prewarm failed for %s: %s", str(p), exc)
-            continue
+            log.info("prewarm failed for %s: %s", str(path), exc)
 
     if not retryable_failure:
-        _mark_done()
+        _mark_done(fingerprint)
 
 
 async def prewarm_matplotlib_cache() -> None:
-    """Прогревает matplotlib font cache в фоне, чтобы не тормозить первый график."""
+    """Warm Matplotlib font cache outside the immutable release tree."""
     try:
         from services.charts import _ensure_mpl
     except (ImportError, OSError):
