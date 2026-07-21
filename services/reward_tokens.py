@@ -67,9 +67,10 @@ def _lock_wallet(conn: Any, user_id: int) -> None:
 def _existing_reward(conn: Any, reward_key: str) -> Any:
     return conn.execute(
         """
-        SELECT reward_key, user_id, reward_type, tokens_granted, related_user_id,
-               provider, provider_payment_id, ledger_id
-        FROM practice_reward_grants
+        SELECT reward_key, user_id, source AS reward_type,
+               COALESCE(tokens_granted, days) AS tokens_granted,
+               related_user_id, provider, provider_payment_id, ledger_id
+        FROM bonus_grants
         WHERE reward_key=?
         LIMIT 1
         """.strip(),
@@ -146,18 +147,20 @@ def _grant_reward_in_conn(
 
     claimed = conn.execute(
         """
-        INSERT INTO practice_reward_grants(
-            reward_key, user_id, reward_type, tokens_granted, related_user_id,
-            provider, provider_payment_id, ledger_id
-        ) VALUES(?,?,?,?,?,?,?,NULL)
+        INSERT INTO bonus_grants(
+            user_id, days, source, related_user_id, granted_at_utc,
+            reward_key, tokens_granted, provider, provider_payment_id, ledger_id
+        ) VALUES(?,?,?,?,?,?,?,?,?,NULL)
         ON CONFLICT(reward_key) DO NOTHING
         """.strip(),
         (
-            key,
             uid,
-            kind,
             amount,
+            kind,
             int(related_user_id) if related_user_id is not None else None,
+            utc_now().replace(microsecond=0).isoformat(),
+            key,
+            amount,
             str(provider or ""),
             str(provider_payment_id or ""),
         ),
@@ -209,24 +212,11 @@ def _grant_reward_in_conn(
         refundable=False,
     )
     updated = conn.execute(
-        "UPDATE practice_reward_grants SET ledger_id=? WHERE reward_key=? AND ledger_id IS NULL",
+        "UPDATE bonus_grants SET ledger_id=? WHERE reward_key=? AND ledger_id IS NULL",
         (ledger_id, key),
     )
     if int(getattr(updated, "rowcount", 0) or 0) != 1:
         raise RuntimeError("practice_reward_finalize_failed")
-    conn.execute(
-        """
-        INSERT INTO bonus_grants(user_id, days, source, related_user_id, granted_at_utc)
-        VALUES(?,?,?,?,?)
-        """.strip(),
-        (
-            uid,
-            amount,
-            kind,
-            int(related_user_id) if related_user_id is not None else None,
-            utc_now().replace(microsecond=0).isoformat(),
-        ),
-    )
     return RewardGrantResult(
         inserted=True,
         user_id=uid,
