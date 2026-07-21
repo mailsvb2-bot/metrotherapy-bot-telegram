@@ -3,10 +3,9 @@ from __future__ import annotations
 """Fail-closed guards for the legacy SQLite-to-PostgreSQL compatibility surface.
 
 The project still accepts SQLite-flavoured statements from older services. This
-module owns the safety boundary around that compatibility layer: placeholders
-are rewritten lexically, schema probes count only real parameters, and SQLite
-PRAGMA statements are rejected before they can be silently treated as a
-successful PostgreSQL query.
+module owns the narrow safety boundary around that compatibility layer: real
+qmark parameters are identified lexically, and unsupported SQLite PRAGMA
+statements are rejected before reaching the PostgreSQL driver.
 """
 
 import re
@@ -20,7 +19,7 @@ _TABLE_INFO_RE = re.compile(r"(?is)^PRAGMA\s+table_info\(([^)]+)\)\s*;?\s*$")
 def rewrite_qmark_placeholders(sql: str) -> tuple[str, int]:
     """Replace real SQLite ``?`` parameters while preserving SQL text.
 
-    This is a deliberately small lexical scanner, not a general SQL parser. It
+    This is deliberately a small lexical scanner, not a general SQL parser. It
     distinguishes quoted strings, quoted identifiers and both SQL comment forms
     so a question mark in text or a comment cannot become a psycopg parameter.
     """
@@ -107,35 +106,6 @@ def count_qmark_placeholders(sql: str) -> int:
     return rewrite_qmark_placeholders(sql)[1]
 
 
-def translate_sqlite_master_tables_query(sql: str) -> str | None:
-    """Translate the supported ``sqlite_master`` table-discovery forms."""
-
-    if not re.match(
-        r"(?is)^SELECT\s+(?:name|1)\s+FROM\s+sqlite_master\s+WHERE\s+type='table'",
-        sql,
-    ):
-        return None
-
-    base = (
-        "SELECT table_name AS name FROM information_schema.tables "
-        "WHERE table_schema=current_schema() AND table_type='BASE TABLE'"
-    )
-
-    if re.search(r"(?is)\bname\s+IN\s*\(", sql):
-        placeholder_count = count_qmark_placeholders(sql)
-        if placeholder_count > 0:
-            placeholders = ",".join("%s" for _ in range(placeholder_count))
-            return f"{base} AND table_name IN ({placeholders})"
-
-    if re.search(r"(?is)\bname\s*=\s*\?", sql):
-        return f"{base} AND table_name=%s LIMIT 1"
-
-    if re.search(r"(?is)\bname\s+NOT\s+LIKE\s+'sqlite_%'", sql):
-        return f"{base} AND table_name NOT LIKE 'sqlite_%'"
-
-    return base
-
-
 def validate_sqlite_compat_statement(sql: str) -> None:
     """Reject unsupported or malformed PRAGMA statements before translation."""
 
@@ -163,6 +133,5 @@ __all__ = [
     "count_qmark_placeholders",
     "replace_qmark_placeholders",
     "rewrite_qmark_placeholders",
-    "translate_sqlite_master_tables_query",
     "validate_sqlite_compat_statement",
 ]
