@@ -1,0 +1,180 @@
+name: Apply deploy bootstrap fix
+
+on:
+  push:
+    branches:
+      - agent/fix-deploy-bootstrap-systemd
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: contains(github.event.head_commit.message, '[apply-deploy-bootstrap-fix]')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: agent/fix-deploy-bootstrap-systemd
+          fetch-depth: 0
+
+      - name: Apply deploy bootstrap and systemd precedence repair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          deploy_wrapper = Path('deploy.sh')
+          deploy_wrapper.write_text(r'''#!/usr/bin/env bash
+          set -Eeuo pipefail
+
+          SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          ENV_FILE="${METROTHERAPY_ENV_FILE:-/etc/metrotherapy/metrotherapy.env}"
+          BOOTSTRAPPED_SHA="${DEPLOY_BOOTSTRAPPED_SHA:-}"
+
+          if [ ! -f "$ENV_FILE" ]; then
+            echo "IMMUTABLE_DEPLOY_FAILED production env file is missing: $ENV_FILE" >&2
+            exit 2
+          fi
+
+          export PYTHONDONTWRITEBYTECODE=1
+          export GIT_TERMINAL_PROMPT=0
+
+          bash "$SOURCE_DIR/scripts/check_remote_main_topology.sh" "$SOURCE_DIR"
+
+          git -C "$SOURCE_DIR" checkout main
+          BEFORE_SHA="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+          git -C "$SOURCE_DIR" fetch --prune origin main
+          git -C "$SOURCE_DIR" merge --ff-only origin/main
+          AFTER_SHA="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+
+          if [ "$BEFORE_SHA" != "$AFTER_SHA" ]; then
+            if [ "$BOOTSTRAPPED_SHA" = "$AFTER_SHA" ]; then
+              echo "IMMUTABLE_DEPLOY_FAILED deploy wrapper self-reexec loop at $AFTER_SHA" >&2
+              exit 3
+            fi
+            echo "=== deploy wrapper updated old=$BEFORE_SHA new=$AFTER_SHA; re-exec updated wrapper ==="
+            exec env \
+              DEPLOY_BOOTSTRAPPED_SHA="$AFTER_SHA" \
+              METROTHERAPY_ENV_FILE="$ENV_FILE" \
+              bash "$SOURCE_DIR/deploy.sh" "$@"
+          fi
+
+          if [ -n "$BOOTSTRAPPED_SHA" ] && [ "$BOOTSTRAPPED_SHA" != "$AFTER_SHA" ]; then
+            echo "IMMUTABLE_DEPLOY_FAILED bootstrap SHA mismatch expected=$BOOTSTRAPPED_SHA actual=$AFTER_SHA" >&2
+            exit 4
+          fi
+
+          exec bash "$SOURCE_DIR/scripts/immutable_deploy.sh" "$@"
+          ''', encoding='utf-8')
+
+          immutable = Path('scripts/immutable_deploy.sh')
+          text = immutable.read_text(encoding='utf-8')
+          old_override = 'SYSTEMD_OVERRIDE="${METRO_IMMUTABLE_SYSTEMD_OVERRIDE:-/etc/systemd/system/$SERVICE_NAME.d/immutable-release.conf}"'
+          new_override = 'SYSTEMD_OVERRIDE="${METRO_IMMUTABLE_SYSTEMD_OVERRIDE:-/etc/systemd/system/$SERVICE_NAME.d/zz-immutable-release.conf}"'
+          if text.count(old_override) != 1:
+              raise SystemExit('expected one legacy immutable override path')
+          text = text.replace(old_override, new_override)
+
+          install_block = r'''install_immutable_systemd_override() {
+            local temp changed=0
+            mkdir -p "$(dirname "$SYSTEMD_OVERRIDE")"
+            temp="$(mktemp "$(dirname "$SYSTEMD_OVERRIDE")/.immutable-release.XXXXXX")"
+            cat > "$temp" <<EOF
+          [Service]
+          WorkingDirectory=$CURRENT_LINK
+          ExecStart=
+          ExecStart=$CURRENT_LINK/.venv/bin/python $CURRENT_LINK/main.py
+          Environment=PYTHONDONTWRITEBYTECODE=1
+          EOF
+            chmod 0644 "$temp"
+            if [ ! -f "$SYSTEMD_OVERRIDE" ] || ! cmp -s "$temp" "$SYSTEMD_OVERRIDE"; then
+              mv -f "$temp" "$SYSTEMD_OVERRIDE"
+              changed=1
+            else
+              rm -f "$temp"
+            fi
+            systemctl daemon-reload
+            printf '%s\n' "$changed"
+          }
+          '''
+          replacement_block = install_block + r'''
+          verify_immutable_systemd_effective_config() {
+            local working_directory exec_start
+            working_directory="$(systemctl show "$SERVICE_NAME" --property=WorkingDirectory --value)"
+            exec_start="$(systemctl show "$SERVICE_NAME" --property=ExecStart --value)"
+
+            if [ "$working_directory" != "$CURRENT_LINK" ]; then
+              echo "IMMUTABLE_DEPLOY_FAILED effective WorkingDirectory is not immutable current: $working_directory" >&2
+              return 1
+            fi
+            case "$exec_start" in
+              *"$CURRENT_LINK/.venv/bin/python"*"$CURRENT_LINK/main.py"*) ;;
+              *)
+                echo "IMMUTABLE_DEPLOY_FAILED effective ExecStart is not immutable current: $exec_start" >&2
+                return 1
+                ;;
+            esac
+          }
+          '''
+          if text.count(install_block) != 1:
+              raise SystemExit('expected one immutable systemd install block')
+          text = text.replace(install_block, replacement_block)
+
+          old_call = '''SYSTEMD_CHANGED="$(install_immutable_systemd_override)"\nif [ "$BOOTSTRAP_CURRENT" -eq 1 ] || [ "$SYSTEMD_CHANGED" -eq 1 ]; then'''
+          new_call = '''SYSTEMD_CHANGED="$(install_immutable_systemd_override)"\nverify_immutable_systemd_effective_config\nif [ "$BOOTSTRAP_CURRENT" -eq 1 ] || [ "$SYSTEMD_CHANGED" -eq 1 ]; then'''
+          if text.count(old_call) != 1:
+              raise SystemExit('expected one systemd install call')
+          text = text.replace(old_call, new_call)
+          immutable.write_text(text, encoding='utf-8')
+
+          tests = Path('tests/test_immutable_deploy_contract.py')
+          test_text = tests.read_text(encoding='utf-8')
+          anchor = '''    assert "pip install" not in wrapper\n'''
+          extra = '''    assert "git -C \\"$SOURCE_DIR\\" fetch --prune origin main" in wrapper\n    assert "git -C \\"$SOURCE_DIR\\" merge --ff-only origin/main" in wrapper\n    assert "DEPLOY_BOOTSTRAPPED_SHA" in wrapper\n    assert "re-exec updated wrapper" in wrapper\n    assert wrapper.index("merge --ff-only origin/main") < wrapper.index(\n        "scripts/immutable_deploy.sh"\n    )\n'''
+          if test_text.count(anchor) != 1:
+              raise SystemExit('expected wrapper test anchor')
+          test_text = test_text.replace(anchor, anchor + extra)
+
+          appended = r'''
+
+          def test_immutable_systemd_dropin_wins_over_legacy_override() -> None:
+              deploy = _text("scripts/immutable_deploy.sh")
+
+              assert "$SERVICE_NAME.d/zz-immutable-release.conf" in deploy
+              assert "$SERVICE_NAME.d/immutable-release.conf" not in deploy
+              assert "verify_immutable_systemd_effective_config" in deploy
+              install = deploy.index('SYSTEMD_CHANGED="$(install_immutable_systemd_override)"')
+              verify = deploy.index("verify_immutable_systemd_effective_config", install)
+              restart = deploy.index("restart_runtime_and_wait", verify)
+              assert install < verify < restart
+
+
+          def test_deploy_wrapper_reexecutes_after_fast_forward() -> None:
+              wrapper = _text("deploy.sh")
+
+              topology = wrapper.index("scripts/check_remote_main_topology.sh")
+              fetch = wrapper.index("fetch --prune origin main", topology)
+              merge = wrapper.index("merge --ff-only origin/main", fetch)
+              reexec = wrapper.index("re-exec updated wrapper", merge)
+              immutable = wrapper.index("scripts/immutable_deploy.sh", reexec)
+              assert topology < fetch < merge < reexec < immutable
+          '''
+          if 'def test_immutable_systemd_dropin_wins_over_legacy_override()' in test_text:
+              raise SystemExit('systemd regression test already exists')
+          tests.write_text(test_text.rstrip() + appended + '\n', encoding='utf-8')
+          PY
+
+          bash -n deploy.sh
+          bash -n scripts/immutable_deploy.sh
+          python -m pytest -q tests/test_immutable_deploy_contract.py tests/test_deploy_governance.py
+
+      - name: Commit only reviewed repair
+        run: |
+          rm -f .github/workflows/apply-deploy-bootstrap-fix.yml
+          git config user.name "Metrotherapy Repair Bot"
+          git config user.email "repair@metrotherapy.local"
+          git add deploy.sh scripts/immutable_deploy.sh tests/test_immutable_deploy_contract.py .github/workflows/apply-deploy-bootstrap-fix.yml
+          git commit -m "Fix deploy self-update and immutable systemd precedence"
+          git push origin HEAD:agent/fix-deploy-bootstrap-systemd
