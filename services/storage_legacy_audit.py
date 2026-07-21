@@ -11,8 +11,7 @@ from services.db.runtime import CONFIG, redacted_db_target
 # Direct sqlite3.connect is allowed only in explicit SQLite fallback/operator/test
 # surfaces. Production business code must go through services.db.core.get_connection().
 ALLOWED_DIRECT_SQLITE_CONNECT_PATHS = {
-    "services/db/core.py",          # canonical DB facade
-    "services/db/core_legacy.py",   # unchanged canonical adapter implementation
+    "services/db/core.py",          # canonical DB adapter; Postgres branch wins in prod
     "services/db_writer.py",        # SQLite fallback writer; disabled in Postgres mode
     "scripts/archive_legacy_sqlite.py",  # operator-only archival/integrity tooling
     "scripts/backup_db.py",         # offline SQLite backup tooling

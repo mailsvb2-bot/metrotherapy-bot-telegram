@@ -1,10 +1,10 @@
 from __future__ import annotations
 """Backward-compatible public database package.
 
-Write-capable runtime helpers are implemented by the reload-safe
-:mod:`services.db.core` facade. The public read-only context is deliberately
-provided by :mod:`services.db.read_only`, which enables and verifies
-database-level read-only mode before yielding a connection wrapper.
+Write-capable runtime helpers are implemented in :mod:`services.db.core`.
+The public read-only context is deliberately provided by
+:mod:`services.db.read_only`, which enables and verifies database-level
+read-only mode before yielding a connection wrapper.
 """
 
 from services.db.core import (
