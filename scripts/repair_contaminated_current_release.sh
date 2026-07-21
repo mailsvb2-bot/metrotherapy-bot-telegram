@@ -74,7 +74,7 @@ record_contaminated_path() {
 }
 
 repair_current() {
-  local current_path sha recorded_sha=""
+  local current_path sha recorded_sha="" previous_path=""
   local generation_dir recovery_dir state_file
 
   if [ ! -L "$CURRENT_LINK" ]; then
@@ -87,11 +87,6 @@ repair_current() {
     echo "CURRENT_RELEASE_RECOVERY_FAILED current link is unresolved: $CURRENT_LINK" >&2
     return 20
   }
-
-  if validate_release "$current_path"; then
-    echo "CURRENT_RELEASE_INTEGRITY_OK path=$current_path"
-    return 0
-  fi
 
   is_safe_release_path "$current_path" || {
     echo "CURRENT_RELEASE_RECOVERY_FAILED unsafe current release path: $current_path" >&2
@@ -106,10 +101,31 @@ repair_current() {
 
   if [ -f "$DEPLOYED_SHA_FILE" ]; then
     IFS= read -r recorded_sha < "$DEPLOYED_SHA_FILE" || true
-    if is_valid_sha "$recorded_sha" && [ "$recorded_sha" != "$sha" ]; then
-      echo "CURRENT_RELEASE_RECOVERY_FAILED deployed marker mismatch current=$sha recorded=$recorded_sha" >&2
-      return 23
+  fi
+
+  if is_valid_sha "$recorded_sha" && [ "$recorded_sha" != "$sha" ]; then
+    previous_path="$(readlink -f "$PREVIOUS_LINK" 2>/dev/null || true)"
+    if [ -n "$previous_path" ] \
+      && [ -d "$previous_path" ] \
+      && is_safe_release_path "$previous_path" \
+      && [ "$(basename "$previous_path")" = "$recorded_sha" ] \
+      && validate_release "$previous_path"; then
+      atomic_point_current_to "$previous_path"
+      if ! "$SYSTEM_PYTHON" "$RELEASE_MANAGER" inspect "$CURRENT_LINK" --required >/dev/null 2>&1; then
+        atomic_point_current_to "$current_path" || true
+        echo "CURRENT_RELEASE_RECOVERY_FAILED deployed rollback target did not validate" >&2
+        return 26
+      fi
+      echo "CURRENT_RELEASE_ROLLBACK_RESCUED failed_current=$sha deployed=$recorded_sha target=$previous_path"
+      return 0
     fi
+    echo "CURRENT_RELEASE_RECOVERY_FAILED deployed marker mismatch current=$sha recorded=$recorded_sha" >&2
+    return 23
+  fi
+
+  if validate_release "$current_path"; then
+    echo "CURRENT_RELEASE_INTEGRITY_OK path=$current_path"
+    return 0
   fi
 
   mkdir -p "$RECOVERY_RELEASES_ROOT" "$DEPLOY_STATE_DIR"
