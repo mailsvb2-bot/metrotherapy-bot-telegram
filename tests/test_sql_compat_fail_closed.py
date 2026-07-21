@@ -137,11 +137,11 @@ def test_guard_validation_and_core_reload_are_stable() -> None:
     assert raw.execute_calls == []
 
 
-def test_facade_attribute_mutations_reach_legacy_function_globals(
+def test_core_attribute_mutations_reach_function_globals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(core, "DATABASE_URL", "postgresql://facade-test")
+    monkeypatch.setattr(core, "DATABASE_URL", "postgresql://core-test")
     monkeypatch.setattr(core, "POSTGRES_REUSE_CONNECTIONS_TEST_SENTINEL", "ok", raising=False)
 
-    assert core.get_connection.__globals__["DATABASE_URL"] == "postgresql://facade-test"
+    assert core.get_connection.__globals__["DATABASE_URL"] == "postgresql://core-test"
     assert core.POSTGRES_REUSE_CONNECTIONS_TEST_SENTINEL == "ok"
