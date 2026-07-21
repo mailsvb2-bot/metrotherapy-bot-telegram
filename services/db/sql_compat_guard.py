@@ -172,8 +172,12 @@ def install_sql_compat_guards(core_module: ModuleType) -> None:
     if bool(getattr(core_module, "_SQL_COMPAT_GUARDS_INSTALLED", False)):
         return
 
-    core_module._replace_qmark_placeholders = replace_qmark_placeholders
-    core_module._translate_sqlite_master_tables_query = translate_sqlite_master_tables_query
+    setattr(core_module, "_replace_qmark_placeholders", replace_qmark_placeholders)
+    setattr(
+        core_module,
+        "_translate_sqlite_master_tables_query",
+        translate_sqlite_master_tables_query,
+    )
 
     cursor_type = core_module.PostgresCompatCursor
     original_execute: Callable[..., Any] = cursor_type.execute
@@ -197,7 +201,7 @@ def install_sql_compat_guards(core_module: ModuleType) -> None:
 
     cursor_type.execute = guarded_execute
     cursor_type.executemany = guarded_executemany
-    core_module._SQL_COMPAT_GUARDS_INSTALLED = True
+    setattr(core_module, "_SQL_COMPAT_GUARDS_INSTALLED", True)
 
 
 __all__ = [
