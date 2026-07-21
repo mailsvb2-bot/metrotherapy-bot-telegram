@@ -232,7 +232,15 @@ def test_get_connection_sqlite_configures_database(monkeypatch: pytest.MonkeyPat
 
 
 def test_write_sql_classification() -> None:
-    for sql in ("INSERT x", " UPDATE x", "DELETE x", "REPLACE x", "CREATE TABLE x(a)", "DROP TABLE x", "ALTER TABLE x ADD a"):
+    for sql in (
+        "INSERT x",
+        " UPDATE x",
+        "DELETE x",
+        "REPLACE x",
+        "CREATE TABLE x(a)",
+        "DROP TABLE x",
+        "ALTER TABLE x ADD a",
+    ):
         assert core._is_write_sql(sql) is True
     assert core._is_write_sql("SELECT 1") is False
 
@@ -296,7 +304,7 @@ def test_db_alias_tx_write_and_execute(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = ExecuteConnection(
         [
             ResultCursor(rowcount=2),
-            ResultCursor(rowcount="bad"),
+            ResultCursor(rowcount=None),
             ResultCursor(one={"x": 1}),
             ResultCursor(all_rows=[{"x": 1}], description=("x",)),
             ResultCursor(all_rows=[{"x": 2}], description=("x",)),
@@ -349,7 +357,12 @@ def test_delivery_key_and_deferred_marker() -> None:
 
 
 def test_delivery_idempotency_functions(monkeypatch: pytest.MonkeyPatch) -> None:
-    rows = [ResultCursor(one={"exists": 1}), ResultCursor(), ResultCursor(one={"c": 1}), ResultCursor()]
+    rows = [
+        ResultCursor(one={"exists": 1}),
+        ResultCursor(),
+        ResultCursor(one={"c": 1}),
+        ResultCursor(),
+    ]
     conn = ExecuteConnection(rows)
 
     @contextmanager
