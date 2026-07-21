@@ -203,6 +203,8 @@ def validate_wide_except_policy(*, strict: bool = True) -> None:
         "services/db_writer.py",
         "services/validator.py",
         "services/db/core.py",
+        # Exact unchanged implementation behind the reload-safe core facade.
+        "services/db/core_legacy.py",
         "handlers/menu.py",
         "handlers/start.py",
         "services/messenger/audio_delivery.py",
