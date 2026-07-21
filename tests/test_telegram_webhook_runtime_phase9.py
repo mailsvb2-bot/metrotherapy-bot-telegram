@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from typing import Any
 
 import aiogram.types as aiogram_types
@@ -159,25 +158,32 @@ def test_secret_validation(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.asyncio
 async def test_webhook_requires_configured_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     install_runtime_settings(monkeypatch)
-    with pytest.raises(web.HTTPServiceUnavailable, match="not configured"):
+    with pytest.raises(web.HTTPServiceUnavailable) as exc_info:
         await runtime.telegram_webhook(RequestDouble())
+    assert exc_info.value.status == 503
+    assert exc_info.value.text == "telegram webhook runtime is not configured"
 
 
 @pytest.mark.asyncio
 async def test_webhook_rejects_bad_route_token_and_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     install_runtime_settings(monkeypatch)
     request, _bot, _dispatcher = configured_request(route_token="wrong")
-    with pytest.raises(web.HTTPForbidden, match="bad token"):
+    with pytest.raises(web.HTTPForbidden) as exc_info:
         await runtime.telegram_webhook(request)
+    assert exc_info.value.status == 403
+    assert exc_info.value.text == "bad token"
 
     request, _bot, _dispatcher = configured_request(route_token="bot-token", secret="wrong")
-    with pytest.raises(web.HTTPForbidden, match="bad telegram secret"):
+    with pytest.raises(web.HTTPForbidden) as exc_info:
         await runtime.telegram_webhook(request)
+    assert exc_info.value.status == 403
+    assert exc_info.value.text == "bad telegram secret"
 
     monkeypatch.setattr(runtime.settings, "BOT_TOKEN", "")
     request, _bot, _dispatcher = configured_request(route_token="legacy")
-    with pytest.raises(web.HTTPForbidden, match="bad token"):
+    with pytest.raises(web.HTTPForbidden) as exc_info:
         await runtime.telegram_webhook(request)
+    assert exc_info.value.text == "bad token"
 
 
 @pytest.mark.asyncio
@@ -189,8 +195,10 @@ async def test_webhook_rejects_invalid_json(monkeypatch: pytest.MonkeyPatch, err
     install_runtime_settings(monkeypatch)
     request, _bot, _dispatcher = configured_request()
     request.json_error = error
-    with pytest.raises(web.HTTPBadRequest, match="invalid telegram json"):
+    with pytest.raises(web.HTTPBadRequest) as exc_info:
         await runtime.telegram_webhook(request)
+    assert exc_info.value.status == 400
+    assert exc_info.value.text == "invalid telegram json"
 
 
 @pytest.mark.asyncio
