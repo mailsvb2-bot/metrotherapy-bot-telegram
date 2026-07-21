@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+
+def _float_env(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        value = float(raw)
+    except ValueError:
+        return float(default)
+    return value if math.isfinite(value) else float(default)
+
+
 DEFAULT_BACKUP_DIR = Path(os.getenv("METRO_POSTGRES_BACKUP_DIR", "/var/backups/metrotherapy/postgres"))
 SUPPORTED_SUFFIXES = (".dump", ".sql", ".sql.gz")
-DEFAULT_MAX_BACKUP_AGE_HOURS = float(os.getenv("METRO_POSTGRES_BACKUP_MAX_AGE_HOURS", "72") or "72")
+DEFAULT_MAX_BACKUP_AGE_HOURS = _float_env("METRO_POSTGRES_BACKUP_MAX_AGE_HOURS", 72.0)
 
 
 @dataclass(frozen=True)
@@ -65,11 +78,41 @@ def _hash(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _coerce_max_age(value: object) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_BACKUP_AGE_HOURS
+    return parsed if math.isfinite(parsed) else DEFAULT_MAX_BACKUP_AGE_HOURS
+
+
 def _freshness(*, mtime_utc: datetime, max_age_hours: float) -> tuple[int, bool]:
     age_seconds = max(int((datetime.now(tz=UTC) - mtime_utc).total_seconds()), 0)
-    if float(max_age_hours) <= 0:
+    safe_max_age = _coerce_max_age(max_age_hours)
+    if safe_max_age <= 0:
         return age_seconds, True
-    return age_seconds, age_seconds <= int(float(max_age_hours) * 3600)
+    return age_seconds, age_seconds <= int(safe_max_age * 3600)
+
+
+def _empty_status(
+    *,
+    backup_dir: Path,
+    target_configured: bool,
+    reason: str,
+    max_backup_age_hours: float,
+) -> DisasterRecoveryStatus:
+    return DisasterRecoveryStatus(
+        str(backup_dir),
+        None,
+        0,
+        None,
+        None,
+        0,
+        target_configured,
+        "RED",
+        reason,
+        max_backup_age_hours=max_backup_age_hours,
+    )
 
 
 def disaster_recovery_status(
@@ -78,21 +121,68 @@ def disaster_recovery_status(
     include_hash: bool = False,
     max_backup_age_hours: float = DEFAULT_MAX_BACKUP_AGE_HOURS,
 ) -> DisasterRecoveryStatus:
-    target_configured = bool((os.getenv("METRO_RESTORE_DRILL_DATABASE_URL") or os.getenv("RESTORE_DATABASE_URL") or "").strip())
-    if not backup_dir.exists():
-        return DisasterRecoveryStatus(str(backup_dir), None, 0, None, None, 0, target_configured, "RED", "backup_dir_missing")
-    backups = sorted((p for p in backup_dir.iterdir() if _supported(p)), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not backups:
-        return DisasterRecoveryStatus(str(backup_dir), None, 0, None, None, 0, target_configured, "RED", "backup_missing")
+    safe_max_age = _coerce_max_age(max_backup_age_hours)
+    target_configured = bool(
+        (os.getenv("METRO_RESTORE_DRILL_DATABASE_URL") or os.getenv("RESTORE_DATABASE_URL") or "").strip()
+    )
+    try:
+        backup_dir_exists = backup_dir.exists()
+    except OSError:
+        return _empty_status(
+            backup_dir=backup_dir,
+            target_configured=target_configured,
+            reason="backup_dir_unreadable",
+            max_backup_age_hours=safe_max_age,
+        )
+    if not backup_dir_exists:
+        return _empty_status(
+            backup_dir=backup_dir,
+            target_configured=target_configured,
+            reason="backup_dir_missing",
+            max_backup_age_hours=safe_max_age,
+        )
 
-    latest = backups[0]
-    stat = latest.stat()
+    try:
+        entries = list(backup_dir.iterdir())
+    except OSError:
+        return _empty_status(
+            backup_dir=backup_dir,
+            target_configured=target_configured,
+            reason="backup_dir_unreadable",
+            max_backup_age_hours=safe_max_age,
+        )
+
+    backups: list[tuple[float, Path, os.stat_result]] = []
+    unreadable_candidates = 0
+    for path in entries:
+        try:
+            if not _supported(path):
+                continue
+            stat = path.stat()
+        except OSError:
+            unreadable_candidates += 1
+            continue
+        backups.append((float(stat.st_mtime), path, stat))
+    backups.sort(key=lambda item: item[0], reverse=True)
+
+    if not backups:
+        return _empty_status(
+            backup_dir=backup_dir,
+            target_configured=target_configured,
+            reason="backup_unreadable" if unreadable_candidates else "backup_missing",
+            max_backup_age_hours=safe_max_age,
+        )
+
+    _mtime, latest, stat = backups[0]
     latest_mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
-    latest_age_seconds, latest_fresh = _freshness(mtime_utc=latest_mtime, max_age_hours=float(max_backup_age_hours))
+    latest_age_seconds, latest_fresh = _freshness(
+        mtime_utc=latest_mtime,
+        max_age_hours=safe_max_age,
+    )
 
     if not latest_fresh:
         status = "RED"
-        reason = f"backup_stale_gt_{float(max_backup_age_hours):g}h"
+        reason = f"backup_stale_gt_{safe_max_age:g}h"
     elif target_configured:
         status = "GREEN"
         reason = "restore_target_configured"
@@ -100,18 +190,26 @@ def disaster_recovery_status(
         status = "YELLOW"
         reason = "backup_exists_restore_target_missing"
 
+    latest_hash: str | None = None
+    if include_hash:
+        try:
+            latest_hash = _hash(latest)
+        except OSError:
+            status = "RED"
+            reason = "backup_hash_failed"
+
     return DisasterRecoveryStatus(
         backup_dir=str(backup_dir),
         latest_backup=str(latest),
         latest_backup_size_bytes=int(stat.st_size),
         latest_backup_mtime_utc=latest_mtime.isoformat(),
-        latest_backup_sha256=_hash(latest) if include_hash else None,
+        latest_backup_sha256=latest_hash,
         backup_count=len(backups),
         restore_target_configured=target_configured,
         status=status,
         reason=reason,
         latest_backup_age_seconds=latest_age_seconds,
-        max_backup_age_hours=float(max_backup_age_hours),
+        max_backup_age_hours=safe_max_age,
         latest_backup_fresh=bool(latest_fresh),
     )
 
