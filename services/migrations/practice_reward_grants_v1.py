@@ -5,6 +5,7 @@ import sqlite3
 from typing import Any
 
 from services.migrations._helpers import mark_migration, migration_applied
+from services.schema_core import _add_col, _cols
 
 NAME = "practice_reward_grants_v1"
 
@@ -25,16 +26,31 @@ def _value(row: Any, key: str, index: int, default: Any = None) -> Any:
         return default
 
 
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    existing = _cols(conn, "bonus_grants")
+    additions = {
+        "reward_key": "reward_key TEXT",
+        "tokens_granted": "tokens_granted INTEGER",
+        "provider": "provider TEXT NOT NULL DEFAULT ''",
+        "provider_payment_id": "provider_payment_id TEXT NOT NULL DEFAULT ''",
+        "ledger_id": "ledger_id INTEGER",
+    }
+    for name, ddl in additions.items():
+        if name not in existing:
+            _add_col(conn, "bonus_grants", ddl)
+
+
 def _backfill_legacy_bonus_grants(conn: sqlite3.Connection) -> int:
     rows = conn.execute(
         """
-        SELECT id, user_id, days, source, related_user_id
+        SELECT id, user_id, days, source, related_user_id, reward_key, ledger_id
         FROM bonus_grants
         WHERE COALESCE(days,0) > 0
         ORDER BY id ASC
         """.strip()
     ).fetchall()
     inserted_count = 0
+    seen_referrals: set[int] = set()
     for row in rows:
         bonus_id = int(_value(row, "id", 0, 0) or 0)
         user_id = int(_value(row, "user_id", 1, 0) or 0)
@@ -42,27 +58,31 @@ def _backfill_legacy_bonus_grants(conn: sqlite3.Connection) -> int:
         source = str(_value(row, "source", 3, "") or "").strip().lower()
         related_raw = _value(row, "related_user_id", 4)
         related_user_id = int(related_raw) if related_raw is not None else None
+        existing_key = str(_value(row, "reward_key", 5, "") or "").strip()
+        existing_ledger = int(_value(row, "ledger_id", 6, 0) or 0)
         if bonus_id <= 0 or user_id <= 0 or tokens <= 0:
             continue
 
         reward_type = "gift" if source == "gift" else "referral"
-        if reward_type == "referral" and related_user_id is not None:
+        if existing_key:
+            reward_key = existing_key
+        elif reward_type == "referral" and related_user_id is not None and related_user_id not in seen_referrals:
             reward_key = f"referral:{related_user_id}"
+            seen_referrals.add(related_user_id)
         else:
             reward_key = f"legacy_bonus:{bonus_id}"
         ledger_key = f"reward:{reward_key}"
 
-        claimed = conn.execute(
+        conn.execute(
             """
-            INSERT INTO practice_reward_grants(
-                reward_key, user_id, reward_type, tokens_granted, related_user_id,
-                provider, provider_payment_id, ledger_id
-            ) VALUES(?,?,?,?,?,'legacy_bonus','',NULL)
-            ON CONFLICT(reward_key) DO NOTHING
+            UPDATE bonus_grants
+            SET source=?, reward_key=?, tokens_granted=COALESCE(tokens_granted, days),
+                provider=CASE WHEN provider='' THEN 'legacy_bonus' ELSE provider END
+            WHERE id=?
             """.strip(),
-            (reward_key, user_id, reward_type, tokens, related_user_id),
+            (reward_type, reward_key, bonus_id),
         )
-        if int(getattr(claimed, "rowcount", 0) or 0) <= 0:
+        if existing_ledger > 0:
             continue
 
         conn.execute(
@@ -121,8 +141,8 @@ def _backfill_legacy_bonus_grants(conn: sqlite3.Connection) -> int:
             (ledger_key, user_id, f"reward:{reward_type}", tokens, tokens),
         )
         conn.execute(
-            "UPDATE practice_reward_grants SET ledger_id=? WHERE reward_key=?",
-            (ledger_id, reward_key),
+            "UPDATE bonus_grants SET ledger_id=? WHERE id=?",
+            (ledger_id, bonus_id),
         )
         inserted_count += 1
     return inserted_count
@@ -135,29 +155,20 @@ def apply(conn: sqlite3.Connection) -> None:
         return
 
     log.info("Migration start: %s", NAME)
+    _ensure_columns(conn)
+    backfilled = _backfill_legacy_bonus_grants(conn)
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS practice_reward_grants(
-            reward_key TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            reward_type TEXT NOT NULL,
-            tokens_granted INTEGER NOT NULL,
-            related_user_id INTEGER,
-            provider TEXT NOT NULL DEFAULT '',
-            provider_payment_id TEXT NOT NULL DEFAULT '',
-            ledger_id INTEGER,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_bonus_grants_reward_key
+        ON bonus_grants(reward_key)
+        WHERE reward_key IS NOT NULL AND reward_key <> ''
         """.strip()
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_practice_reward_user_type "
-        "ON practice_reward_grants(user_id, reward_type, created_at)"
+        """
+        CREATE INDEX IF NOT EXISTS idx_bonus_grants_user_source
+        ON bonus_grants(user_id, source, granted_at_utc)
+        """.strip()
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_practice_reward_related "
-        "ON practice_reward_grants(reward_type, related_user_id)"
-    )
-    backfilled = _backfill_legacy_bonus_grants(conn)
     mark_migration(conn, NAME)
     log.info("Migration applied: %s backfilled=%s", NAME, backfilled)
