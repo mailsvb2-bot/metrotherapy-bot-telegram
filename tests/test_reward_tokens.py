@@ -80,13 +80,8 @@ def _reward_db() -> sqlite3.Connection:
 def _install_reward_db(monkeypatch: pytest.MonkeyPatch, conn: sqlite3.Connection) -> None:
     @contextmanager
     def db_context() -> Iterator[sqlite3.Connection]:
-        try:
-            yield conn
-        except (sqlite3.Error, RuntimeError, ValueError, TypeError):
-            conn.rollback()
-            raise
-        else:
-            conn.commit()
+        yield conn
+        conn.commit()
 
     @contextmanager
     def tx_context(value: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
