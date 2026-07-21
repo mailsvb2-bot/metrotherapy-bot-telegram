@@ -103,6 +103,8 @@ def series(user_id: int, *, day: str | None = None, limit: int = 200) -> list[di
             rating = r[0] if not hasattr(r, "keys") else r["rating"]
             created = r[1] if not hasattr(r, "keys") else r["created_at_utc"]
             out.append({"rating": int(rating), "created": str(created)})
-        except (TypeError, ValueError, KeyError, IndexError):
+        except (TypeError, ValueError, KeyError):
+            continue
+        except IndexError:
             continue
     return out
