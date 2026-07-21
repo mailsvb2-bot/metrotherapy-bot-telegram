@@ -40,7 +40,8 @@ def add_grant(user_id: int, days: int, *, source: str, related_user_id: int | No
     """Record a legacy bonus projection.
 
     Canonical production rewards are granted through services.reward_tokens,
-    which writes the practice wallet, ledger, lot and this projection atomically.
+    which writes the wallet, immutable ledger, lot and governed bonus row in one
+    transaction.
     """
     days = int(days)
     if days <= 0:
@@ -63,9 +64,9 @@ def _canonical_reward_stats(user_id: int) -> BonusStats | None:
         with db() as conn:
             earned_row = conn.execute(
                 """
-                SELECT COALESCE(SUM(tokens_granted),0) AS earned
-                FROM practice_reward_grants
-                WHERE user_id=?
+                SELECT COALESCE(SUM(COALESCE(tokens_granted, days)),0) AS earned
+                FROM bonus_grants
+                WHERE user_id=? AND reward_key IS NOT NULL AND reward_key<>''
                 """.strip(),
                 (int(user_id),),
             ).fetchone()
@@ -81,8 +82,7 @@ def _canonical_reward_stats(user_id: int) -> BonusStats | None:
             ).fetchone()
     except sqlite3.Error as exc:
         # Older hermetic fixtures and pre-migration local DBs intentionally fall
-        # back to the legacy projection below. Production readiness requires the
-        # reward table, so a real deployed schema cannot silently stay here.
+        # back to the legacy projection below.
         logging.getLogger(__name__).debug("Canonical reward stats unavailable: %s", exc)
         return None
 
@@ -96,7 +96,6 @@ def _canonical_reward_stats(user_id: int) -> BonusStats | None:
 
 
 def _legacy_stats(user_id: int) -> BonusStats:
-    now_utc = utc_now().replace(microsecond=0)
     today_local = today_tz()
     earned = 0
     used = 0
@@ -124,8 +123,6 @@ def _legacy_stats(user_id: int) -> BonusStats:
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
         except (TypeError, ValueError):
-            # Corrupted financial-like history must not become a fresh unconsumed
-            # reward. Exclude it and surface the data problem in logs.
             logging.getLogger(__name__).warning(
                 "Invalid bonus timestamp excluded user_id=%s value=%r",
                 int(user_id),
@@ -137,8 +134,7 @@ def _legacy_stats(user_id: int) -> BonusStats:
             local_date = timestamp.astimezone(tzinfo()).date()
         except (ValueError, ZoneInfoNotFoundError):
             local_date = timestamp.date()
-        delta_days = max(0, (today_local - local_date).days)
-        used += min(amount, delta_days)
+        used += min(amount, max(0, (today_local - local_date).days))
 
     used = min(earned, used)
     return BonusStats(earned_days=earned, used_days=used, remaining_days=max(0, earned - used))
