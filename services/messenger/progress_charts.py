@@ -157,7 +157,7 @@ def _atomic_save_figure(figure: Any, out_path: Path) -> bool:
 
 
 def build_vk_mood_progress_chart_path(user_id: int) -> Path | None:
-    """Build VK/MAX-compatible mood progress chart from canonical mood_sessions."""
+    """Build VK/MAX-compatible mood progress chart from newest sessions."""
     with get_db_ro() as conn:
         rows = conn.execute(
             """
@@ -165,13 +165,15 @@ def build_vk_mood_progress_chart_path(user_id: int) -> Path | None:
             FROM mood_sessions
             WHERE user_id=?
               AND (pre_score IS NOT NULL OR post_score IS NOT NULL)
-            ORDER BY id ASC
+            ORDER BY id DESC
             LIMIT 80
             """,
             (int(user_id),),
         ).fetchall()
 
-    records = [dict(row) for row in rows]
+    # Select the newest bounded window in SQL, then restore chronological order
+    # for labels and plots. This keeps cache keys moving after the 80th session.
+    records = [dict(row) for row in reversed(rows)]
     if not records:
         return None
 

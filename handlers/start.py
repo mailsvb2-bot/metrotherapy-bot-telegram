@@ -1,19 +1,19 @@
 import asyncio
+import hashlib
 import logging
 import sqlite3
 
-from aiogram import Router, F
+from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, User
-
-from services.acquisition_attribution import start_attribution_meta
-from services.gift_claims import claim_gift_token, is_gift_token, normalize_gift_token
-from services.messenger.entrypoints import register_user_entry
-from services.events import log_event
+from aiogram.filters import Command, CommandStart
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 
 from handlers.menu import send_main_menu
 from keyboards.inline import kb_demo_kind, kb_main
+from services.acquisition_attribution import start_attribution_meta
+from services.events import log_event
+from services.gift_claims import claim_gift_token, is_gift_token, normalize_gift_token
+from services.messenger.entrypoints import register_user_entry
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -27,8 +27,11 @@ HELP_TEXT = (
 
 PRIVACY_TEXT = (
     "🔒 Конфиденциальность\n\n"
-    "Бот сохраняет технический прогресс прохождения практик и события воронки, "
-    "чтобы корректно выдавать доступ, напоминания и аналитику.\n\n"
+    "Бот хранит данные, необходимые для работы сервиса: прогресс практик, оценки состояния, "
+    "ответы о телесных ощущениях, настройки и события доставки. Платёжные и возвратные записи "
+    "сохраняются отдельно для исполнения покупок и обязательного учёта.\n\n"
+    "Получить копию данных: /mydata\n"
+    "Удалить поведенческую историю: /deletemydata\n\n"
     "Не отправляйте в бот экстренные медицинские данные. При остром состоянии обращайтесь к специалисту."
 )
 
@@ -49,6 +52,27 @@ def _user_id(message: Message) -> int | None:
     return user.id if user is not None else None
 
 
+def _payload_log_meta(payload: str | None) -> dict[str, object]:
+    """Describe a start payload without exposing bearer tokens or raw campaign text."""
+    raw = str(payload or "").strip()
+    normalized = normalize_gift_token(raw)
+    if is_gift_token(normalized):
+        kind = "paid_gift"
+    elif raw.startswith("gift_"):
+        kind = "legacy_gift"
+    elif raw.startswith("ad_"):
+        kind = "ad_link"
+    elif raw:
+        kind = "attribution"
+    else:
+        kind = "empty"
+    return {
+        "payload_kind": kind,
+        "payload_len": len(raw),
+        "payload_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16] if raw else "",
+    }
+
+
 def _log_safe(user_id: int | None, event: str, payload: dict | None = None) -> None:
     if user_id is None:
         return
@@ -63,6 +87,7 @@ def _register_user_entry_safe(message: Message, payload: str) -> None:
     if user is None:
         return
     user_id = user.id
+    safe_extra = {"user_id": user_id, **_payload_log_meta(payload)}
     try:
         register_user_entry(
             user_id,
@@ -74,15 +99,9 @@ def _register_user_entry_safe(message: Message, payload: str) -> None:
             start_payload=payload,
         )
     except ValueError:
-        log.exception(
-            "Bad start payload",
-            extra={"payload": payload, "user_id": user_id},
-        )
+        log.exception("Bad start payload", extra=safe_extra)
     except (sqlite3.Error, RuntimeError, OSError, TypeError, AttributeError):
-        log.exception(
-            "Failed to register start entry",
-            extra={"payload": payload, "user_id": user_id},
-        )
+        log.exception("Failed to register start entry", extra=safe_extra)
 
 
 def _claim_gift_safe(message: Message, token: str) -> str:
@@ -138,24 +157,19 @@ async def start_cmd(message: Message):
     if payload.startswith("gift_"):
         await asyncio.to_thread(_register_user_entry_safe, message, payload)
         code = payload.replace("gift_", "").strip()
+        safe_extra = {"user_id": _user_id(message), **_payload_log_meta(payload)}
         try:
             from handlers.gift_flow import send_gift_intro
 
             await send_gift_intro(message, code)
         except ImportError:
-            log.exception("gift_flow import failed")
+            log.exception("gift_flow import failed", extra=safe_extra)
             await message.answer("🎁 Вам подарили «Метротерапию». Откройте ссылку ещё раз.")
         except (sqlite3.Error, TelegramAPIError):
-            log.exception(
-                "gift intro failed",
-                extra={"code": code, "user_id": _user_id(message)},
-            )
+            log.exception("gift intro failed", extra=safe_extra)
             await message.answer("🎁 Вам подарили «Метротерапию». Откройте ссылку ещё раз.")
         except (ValueError, TypeError, AttributeError):
-            log.exception(
-                "gift intro failed (unexpected)",
-                extra={"code": code, "user_id": _user_id(message)},
-            )
+            log.exception("gift intro failed (unexpected)", extra=safe_extra)
             await message.answer("🎁 Вам подарили «Метротерапию». Откройте ссылку ещё раз.")
         await _open_main_menu_fail_open(message)
         return

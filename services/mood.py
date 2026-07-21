@@ -45,8 +45,6 @@ def _write_changed_count(conn, cursor=None, *, table: str = "", id_column: str =
     return 0
 
 
-
-
 @dataclass
 class MoodSession:
     id: int
@@ -149,9 +147,11 @@ def get_session(session_id: int) -> MoodSession | None:
 
 
 def series(user_id: int, *, kind: str | None = None, limit: int = 120) -> list[dict[str, Any]]:
-    """Возвращает историю оценок для графиков.
+    """Return the newest bounded mood history in chronological order.
 
-    Элементы: {"day": "YYYY-MM-DD", "pre": int|None, "post": int|None, "created": str}
+    Элементы: {"day": "YYYY-MM-DD", "pre": int|None, "post": int|None, "created": str}.
+    The database selects newest rows first so ``LIMIT`` never freezes progress on
+    the oldest records; the in-memory reversal preserves chart chronology.
     """
     try:
         limit = int(limit)
@@ -164,14 +164,14 @@ def series(user_id: int, *, kind: str | None = None, limit: int = 120) -> list[d
         q = (
             "SELECT day, pre_score, post_score, created_at_utc "
             "FROM mood_sessions WHERE user_id=? AND kind=? "
-            "ORDER BY id ASC LIMIT ?"
+            "ORDER BY id DESC LIMIT ?"
         )
         params: list[Any] = [int(user_id), (kind or "").strip(), int(limit)]
     else:
         q = (
             "SELECT day, pre_score, post_score, created_at_utc "
             "FROM mood_sessions WHERE user_id=? "
-            "ORDER BY id ASC LIMIT ?"
+            "ORDER BY id DESC LIMIT ?"
         )
         params = [int(user_id), int(limit)]
 
@@ -183,7 +183,7 @@ def series(user_id: int, *, kind: str | None = None, limit: int = 120) -> list[d
         return []
 
     out: list[dict[str, Any]] = []
-    for r in rows:
+    for r in reversed(rows):
         out.append(
             {
                 "day": str(r["day"]),

@@ -1,9 +1,10 @@
 from __future__ import annotations
 """Backward-compatible public database package.
 
-All runtime helpers are implemented once in :mod:`services.db.core` and
-re-exported here. The package remains callable for legacy
-``from services import db`` call sites.
+Write-capable runtime helpers are implemented in :mod:`services.db.core`.
+The public read-only context is deliberately provided by
+:mod:`services.db.read_only`, which enables and verifies database-level
+read-only mode before yielding a connection wrapper.
 """
 
 from services.db.core import (
@@ -13,13 +14,13 @@ from services.db.core import (
     execute,
     get_connection,
     get_db,
-    get_db_ro,
     mark_delivery_once,
     tx,
     unmark_delivery,
     was_delivered,
     write,
 )
+from services.db.read_only import get_db_ro
 
 from services.db import schema
 

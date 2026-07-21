@@ -18,6 +18,7 @@ _RUNTIME_HARDENING_FILES = (
     "runtime/messenger_vk_sender.py",
     "services/audio_asset_integrity.py",
     "services/auto_audio.py",
+    "services/db/read_only.py",
     "services/messenger/media_assets.py",
     "services/messenger/observability.py",
     "services/messenger/provider_transport.py",

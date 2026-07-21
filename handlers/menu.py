@@ -1,31 +1,25 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 import sqlite3
-from typing import Any
-
-
-from aiogram import Router
-from aiogram.types import CallbackQuery, Message
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
-from aiogram.fsm.context import FSMContext
-
-from keyboards.inline import (
-    kb_main,
-    kb_back_main,
-    kb_demo_kind,
-)
-
-from config.settings import settings
-from services.db import db
-from services.jobs import add_job, cancel_jobs
-from services.personalization import get_preface, set_funnel_stage
-from services.events import log_event
-
 from datetime import datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
+from aiogram import Router
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+
+from config.settings import settings
 from core.callback_utils import safe_answer_callback
+from keyboards.inline import kb_back_main, kb_demo_kind, kb_main
+from services.db import db
+from services.events import log_event
+from services.jobs import add_job, cancel_jobs
+from services.personalization import get_preface, set_funnel_stage
+
 router = Router()
 
 
@@ -51,8 +45,6 @@ def _log_funnel_safe(user_id: int, event: str, payload: dict | None = None) -> N
         logging.getLogger(__name__).debug("funnel event skipped", exc_info=True)
 
 
-
-
 def _tz() -> ZoneInfo:
     return ZoneInfo(getattr(settings, "TIMEZONE", "Europe/Moscow"))
 
@@ -76,33 +68,24 @@ def _load_work_time_row(user_id: int) -> Any:
 
 
 async def safe_edit(message: Message, text: str, reply_markup=None, parse_mode=None):
-    """
-    Убирает лаги/ошибки Telegram 'message is not modified'
-    """
+    """Edit text when possible and fall back to a new message for media posts."""
     try:
-        # Нельзя edit_text у сообщений без текста (например, voice/audio/photo без caption).
-        # В таких кейсах просто отправляем новое сообщение.
         if not (getattr(message, "text", None) or getattr(message, "caption", None)):
             await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
             return
 
         await message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-    except TelegramBadRequest as e:
-        if "message is not modified" in str(e):
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc):
             return
-        # TelegramBadRequest: there is no text in the message to edit
-        if "no text in the message to edit" in str(e):
+        if "no text in the message to edit" in str(exc):
             await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
             return
         raise
 
 
 def _is_admin(uid: int) -> bool:
-    """Кнопка "Панель" видна ТОЛЬКО админам.
-
-    Установка E/безопасность UX: обычные пользователи не должны видеть админ-кнопки.
-    Установка A: не расширяем доступ через роли без явного ТЗ.
-    """
+    """Кнопка «Панель» видна только администраторам."""
     try:
         return int(uid) in set(settings.admin_id_list)
     except (TypeError, ValueError):
@@ -119,7 +102,12 @@ async def send_main_menu(target: CallbackQuery | Message):
             return
         user_id = message_user_id
 
-    _log_funnel_safe(user_id, "funnel_main_menu_opened", {"source": type(target).__name__})
+    await asyncio.to_thread(
+        _log_funnel_safe,
+        user_id,
+        "funnel_main_menu_opened",
+        {"source": type(target).__name__},
+    )
     preface = await asyncio.to_thread(get_preface, user_id, "menu")
     text = (
         f"{preface}"
@@ -128,7 +116,6 @@ async def send_main_menu(target: CallbackQuery | Message):
     )
 
     if isinstance(target, CallbackQuery):
-        # Сразу подтверждаем нажатие, чтобы Telegram не показывал «ожидание»
         try:
             await target.answer()
         except (TelegramAPIError, TelegramBadRequest):
@@ -159,7 +146,6 @@ async def cb_menu_main(cb: CallbackQuery, state: FSMContext | None = None):
     await send_main_menu(cb)
 
 
-# Совместимость: в проекте встречается callback "menu:main"
 @router.callback_query(lambda c: c.data == "menu:main")
 async def cb_menu_main_v2(cb: CallbackQuery, state: FSMContext | None = None):
     await safe_answer_callback(cb)
@@ -179,7 +165,12 @@ async def cb_demo_menu(cb: CallbackQuery):
         return
 
     user_id = _callback_user_id(cb)
-    _log_funnel_safe(user_id, "funnel_demo_clicked", {"source": "main_menu"})
+    await asyncio.to_thread(
+        _log_funnel_safe,
+        user_id,
+        "funnel_demo_clicked",
+        {"source": "main_menu"},
+    )
     await asyncio.to_thread(set_funnel_stage, user_id, "d0")
     preface = await asyncio.to_thread(get_preface, user_id, "demo")
     text = (
@@ -207,11 +198,7 @@ async def cb_back_main(cb: CallbackQuery, state: FSMContext | None = None):
 
 @router.callback_query(lambda c: c.data == "remind:continue_tomorrow")
 async def cb_remind_continue_tomorrow(cb: CallbackQuery):
-    """Напоминание «продолжить завтра утром» для пользователей без подписки.
-
-    UX не меняем: это дополнительная кнопка на экране «Полный доступ».
-    Детерминированность: перед постановкой задачи удаляем предыдущие remind_*.
-    """
+    """Schedule one deterministic next-morning reminder for a free user."""
     await safe_answer_callback(cb)
     message = _callback_message(cb)
     if message is None:
@@ -220,7 +207,6 @@ async def cb_remind_continue_tomorrow(cb: CallbackQuery):
     user_id = _callback_user_id(cb)
     tz = _tz()
 
-    # базовое время: work_time (если пользователь уже настраивал), иначе MORNING_TIME из настроек
     row = await asyncio.to_thread(_load_work_time_row, user_id)
     hhmm = (row["work_time"] if row and row["work_time"] else "") or getattr(settings, "MORNING_TIME", "08:30")
     parsed = _parse_hhmm(str(hhmm)) or _parse_hhmm(getattr(settings, "MORNING_TIME", "08:30"))
@@ -230,9 +216,14 @@ async def cb_remind_continue_tomorrow(cb: CallbackQuery):
     run_local = (now_local + timedelta(days=1)).replace(hour=h, minute=m, second=0, microsecond=0)
     run_utc = run_local.astimezone(ZoneInfo("UTC")).replace(microsecond=0).isoformat()
 
-    # убираем старые напоминания этого типа
     await asyncio.to_thread(cancel_jobs, user_id, prefix="remind_")
-    await asyncio.to_thread(add_job, user_id, "remind_continue", run_utc, {"src": "full_access", "hhmm": f"{h:02d}:{m:02d}"})
+    await asyncio.to_thread(
+        add_job,
+        user_id,
+        "remind_continue",
+        run_utc,
+        {"src": "full_access", "hhmm": f"{h:02d}:{m:02d}"},
+    )
 
     tz_name = getattr(settings, "TIMEZONE", "Europe/Moscow")
     await message.answer(

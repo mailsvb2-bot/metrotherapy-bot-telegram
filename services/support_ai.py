@@ -11,18 +11,24 @@ from __future__ import annotations
 Задача: ощущение персональной реакции системы + выбор следующего шага.
 """
 
+import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from config.settings import settings
 from services.mood import series
 from services.subscription import has_access
 from services.support_store import (
-    fetch_recent_body_areas,
-    count_same_prefix_streak,
+    BodyAreaObservation,
+    fetch_recent_body_area_observations,
     log_reaction,
 )
-from services.support_templates import render_pre, render_no_support
+from services.support_templates import render_no_support, render_pre
+
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -44,8 +50,8 @@ def _avg(values: list[float]) -> float | None:
 def _variance(values: list[float]) -> float | None:
     if len(values) < 2:
         return None
-    m = sum(values) / len(values)
-    return sum((x - m) ** 2 for x in values) / (len(values) - 1)
+    mean = sum(values) / len(values)
+    return sum((value - mean) ** 2 for value in values) / (len(values) - 1)
 
 
 def _parse_day(value: object) -> date | None:
@@ -55,17 +61,75 @@ def _parse_day(value: object) -> date | None:
         return None
 
 
+def _configured_timezone() -> ZoneInfo | timezone:
+    timezone_name = str(getattr(settings, "TIMEZONE", "Europe/Moscow") or "Europe/Moscow")
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        log.error("Configured timezone is unavailable: %s; using UTC", timezone_name)
+        return timezone.utc
+
+
+def _observation_local_day(
+    observation: BodyAreaObservation,
+    local_tz: ZoneInfo | timezone,
+) -> date | None:
+    raw = observation.created_at_utc.strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        timestamp = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(local_tz).date()
+
+
+def _same_area_consecutive_days(
+    observations: list[BodyAreaObservation],
+) -> tuple[str | None, int]:
+    """Count actual adjacent local calendar days, not repeated clicks.
+
+    Observations are newest-first. Multiple answers on one day collapse to the
+    newest answer for that day, then the streak must cover adjacent dates.
+    """
+    if not observations:
+        return None, 0
+
+    newest_area = observations[0].area or None
+    local_tz = _configured_timezone()
+    area_by_day: dict[date, str] = {}
+    for observation in observations:
+        local_day = _observation_local_day(observation, local_tz)
+        area = observation.area.strip()
+        if local_day is None or not area or local_day in area_by_day:
+            continue
+        area_by_day[local_day] = area
+
+    if not area_by_day:
+        return newest_area, 1 if newest_area else 0
+
+    latest_day = max(area_by_day)
+    target_area = area_by_day[latest_day]
+    count = 0
+    cursor = latest_day
+    while area_by_day.get(cursor) == target_area:
+        count += 1
+        cursor -= timedelta(days=1)
+    return target_area, count
+
+
 def _skip_count_last_days(rows: list[dict[str, Any]], *, days: int = 5) -> int:
     """Count unfinished scored sessions in the latest calendar-day window.
 
-    The previous implementation returned only 0/1 and inspected the last fourteen
-    rows, despite exposing the field as ``skip_count_5d``. Use the newest valid
-    session day as the deterministic anchor so tests, delayed jobs and imported
-    history do not depend on the server clock.
+    Use the newest valid session day as a deterministic anchor so tests, delayed
+    jobs and imported history do not depend on the server clock.
     """
-
     parsed = [(row, _parse_day(row.get("day"))) for row in rows]
-    valid_days = [day for _, day in parsed if day is not None]
+    valid_days = [row_day for _, row_day in parsed if row_day is not None]
     if not valid_days:
         fallback = rows[-max(1, int(days)) :]
         return sum(1 for row in fallback if row.get("pre") is not None and row.get("post") is None)
@@ -92,23 +156,33 @@ def decide_support_pre(
 
     kind: work/home/morning/evening/both (нормализация внутри has_access)
     """
-
     kind_norm = (kind or "").strip().lower() or "both"
 
     if require_subscription and not has_access(int(user_id), kind_norm):
-        msg = render_no_support(kind_label=("дорога на работу" if kind_norm in ("work", "morning") else "дорога домой" if kind_norm in ("home", "evening") else ""))
+        msg = render_no_support(
+            kind_label=(
+                "дорога на работу"
+                if kind_norm in ("work", "morning")
+                else "дорога домой"
+                if kind_norm in ("home", "evening")
+                else ""
+            )
+        )
         return SupportDecision(mode="no_support", message=msg)
 
-    # 1) Тело: берём последние ответы и ищем «повтор зоны»
-    areas = fetch_recent_body_areas(int(user_id), limit=8)
-    area = areas[0] if areas else None
-    same_area = count_same_prefix_streak(areas) if areas else 0
+    # 1) Тело: повтор должен означать реальные соседние календарные дни.
+    observations = fetch_recent_body_area_observations(int(user_id), limit=30)
+    area, same_area_days = _same_area_consecutive_days(observations)
 
-    # 2) Самочувствие: динамика по последним сессиям
-    rows = series(int(user_id), kind=(kind_norm if kind_norm not in ("both", "") else None), limit=40)
+    # 2) Самочувствие: динамика по последним, а не первым сессиям.
+    rows = series(
+        int(user_id),
+        kind=(kind_norm if kind_norm not in ("both", "") else None),
+        limit=40,
+    )
     deltas: list[float] = []
-    for r in rows[-14:]:
-        pre, post = r.get("pre"), r.get("post")
+    for row in rows[-14:]:
+        pre, post = row.get("pre"), row.get("post")
         if pre is None or post is None:
             continue
         deltas.append(float(int(post) - int(pre)))
@@ -120,7 +194,7 @@ def decide_support_pre(
     # 3) Режимы
     if skip_count_5d >= 1:
         mode = "reentry"
-    elif same_area >= 3:
+    elif same_area_days >= 3:
         mode = "accumulation"
     elif var_delta is not None and var_delta >= 3.0:
         mode = "destabilization"
@@ -132,18 +206,26 @@ def decide_support_pre(
     msg = render_pre(
         mode=mode,
         area=area,
-        same_area_days=int(same_area),
+        same_area_days=int(same_area_days),
         avg_delta_7d=avg_delta,
         skip_count_5d=int(skip_count_5d),
     )
 
     # best-effort logging
-    log_reaction(user_id=int(user_id), mode=mode, area=area, note=f"avg={avg_delta}; same_area={same_area}; skips_5d={skip_count_5d}")
+    log_reaction(
+        user_id=int(user_id),
+        mode=mode,
+        area=area,
+        note=(
+            f"avg={avg_delta}; same_area_days={same_area_days}; "
+            f"skips_5d={skip_count_5d}"
+        ),
+    )
     return SupportDecision(
         mode=mode,
         message=msg,
         area=area,
-        same_area_days=int(same_area),
+        same_area_days=int(same_area_days),
         avg_delta_7d=avg_delta,
         skip_count_5d=int(skip_count_5d),
     )
