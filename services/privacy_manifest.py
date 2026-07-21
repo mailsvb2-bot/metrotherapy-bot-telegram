@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 Disposition = Literal["erase", "retain", "anonymize"]
-MANIFEST_VERSION = "2026-07-17.v3"
+MANIFEST_VERSION = "2026-07-21.v4"
 
 OWNERSHIP_COLUMN_CANDIDATES = frozenset(
     {
@@ -103,7 +103,6 @@ _BEHAVIORAL: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("decision_rewards", ("user_id",), "per-user decision reward analytics"),
     ("funnel_events", ("user_id",), "marketing funnel behavior"),
     ("daily_audio_log", ("user_id",), "daily audio delivery behavior"),
-    ("bonus_grants", ("user_id", "related_user_id"), "referral behavior and bonus history"),
     ("gift_bonus_log", ("user_id",), "gift marketing bonus history"),
     ("referrals", ("referred_id", "referrer_id"), "referral relationship graph"),
     ("practice_token_audit", ("user_id",), "behavioral access audit"),
@@ -149,6 +148,12 @@ _RETAINED: tuple[tuple[str, tuple[str, ...], str, bool], ...] = (
         False,
     ),
     ("gift_claims", ("buyer_user_id", "recipient_user_id"), "paid gift ownership and refund fact", True),
+    (
+        "bonus_grants",
+        ("user_id", "related_user_id"),
+        "reward entitlement, idempotency and accounting provenance",
+        True,
+    ),
     ("practice_wallets", ("user_id",), "current purchased balance", True),
     ("practice_ledger", ("user_id",), "immutable token accounting ledger", True),
     ("payment_token_grants", ("user_id",), "payment-to-entitlement provenance", True),
@@ -259,10 +264,7 @@ def table_columns(conn: Any, table: str) -> set[str]:
         rows = conn.execute(f"PRAGMA table_info({table})").fetchall()  # nosec B608
     except sqlite3.Error:
         return set()
-    return {
-        str(row["name"] if hasattr(row, "keys") else row[1])
-        for row in rows
-    }
+    return {str(row["name"] if hasattr(row, "keys") else row[1]) for row in rows}
 
 
 def discovered_user_owned_tables(conn: Any) -> dict[str, tuple[str, ...]]:
@@ -324,9 +326,7 @@ def validate_privacy_manifest(conn: Any, *, strict: bool = True) -> PrivacyManif
         if report.invalid_policies:
             parts.append(f"invalid={';'.join(report.invalid_policies)}")
         if report.missing_required_tables:
-            parts.append(
-                f"missing_required={','.join(report.missing_required_tables)}"
-            )
+            parts.append(f"missing_required={','.join(report.missing_required_tables)}")
         raise RuntimeError("privacy_manifest_invalid:" + "|".join(parts))
     return report
 
