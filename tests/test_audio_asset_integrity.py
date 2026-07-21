@@ -26,7 +26,7 @@ def _asset_tree(root: Path, *, suffix: str = "") -> Path:
 def _publish(root: Path, source: Path) -> integrity.AudioAssetInfo:
     digest, _count = integrity.asset_tree_sha256(source)
     target = root / "audio-releases" / digest
-    target.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
     source.rename(target)
     return integrity.seal_asset_dir(target)
 
@@ -75,6 +75,45 @@ def test_release_pointer_pins_exact_asset_version(tmp_path: Path) -> None:
     assert first.asset_sha256 != second.asset_sha256
 
 
+def test_release_pointer_fails_closed_for_missing_relative_and_non_linked_assets(
+    tmp_path: Path,
+) -> None:
+    release = tmp_path / "release"
+    release.mkdir()
+    with pytest.raises(ValueError, match="pointer is missing"):
+        integrity.validate_release_assets(release, require_versioned=True)
+    assert integrity.validate_release_assets(release, require_versioned=False) is None
+
+    pointer = release / ".audio-assets.json"
+    pointer.write_text(
+        json.dumps({"asset_dir": "relative", "asset_sha256": "a" * 64, "file_count": 1}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="absolute path"):
+        integrity.validate_release_assets(release, require_versioned=True)
+
+    info = _publish(tmp_path, _asset_tree(tmp_path, suffix="-plain"))
+    pointer.unlink()
+    integrity.write_release_pointer(release, info.asset_dir)
+    (release / "audio").mkdir()
+    with pytest.raises(ValueError, match="must be a symlink"):
+        integrity.validate_release_assets(release, require_versioned=True)
+
+
+def test_asset_manifest_rejects_invalid_metadata_and_expected_digest(tmp_path: Path) -> None:
+    info = _publish(tmp_path, _asset_tree(tmp_path))
+    manifest = Path(info.asset_dir) / ".asset-manifest.json"
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+
+    with pytest.raises(ValueError, match="does not match"):
+        integrity.validate_asset_dir(info.asset_dir, expected_sha256="f" * 64)
+
+    payload["file_count"] = "bad"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="file_count is invalid"):
+        integrity.validate_asset_dir(info.asset_dir)
+
+
 def test_deployment_proof_contains_current_and_previous_asset_evidence(tmp_path: Path) -> None:
     first = _publish(tmp_path, _asset_tree(tmp_path, suffix="-previous"))
     second_source = _asset_tree(tmp_path, suffix="-current")
@@ -112,5 +151,8 @@ def test_referenced_asset_dirs_only_returns_release_pointers(tmp_path: Path) -> 
     (release / "audio").symlink_to(info.asset_dir)
     integrity.write_release_pointer(release, info.asset_dir)
     (releases / ("b" * 40)).mkdir()
+    (releases / ("c" * 40)).mkdir()
+    (releases / ("c" * 40) / ".audio-assets.json").write_text("not json", encoding="utf-8")
 
     assert integrity.referenced_asset_dirs(releases) == (str(Path(info.asset_dir).resolve()),)
+    assert integrity.referenced_asset_dirs(tmp_path / "missing") == ()
