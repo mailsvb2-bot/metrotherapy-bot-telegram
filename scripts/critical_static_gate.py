@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _RUNTIME_HARDENING_FILES = (
     "core/middlewares.py",
     "core/runtime_env.py",
+    "core/runtime_paths.py",
     "core/telegram_bot.py",
     "runtime/messenger_ingress.py",
     "runtime/messenger_max_sender.py",
@@ -19,7 +20,18 @@ _RUNTIME_HARDENING_FILES = (
     "services/messenger/media_assets.py",
     "services/messenger/observability.py",
     "services/messenger/provider_transport.py",
+    "services/prewarm.py",
     "services/scheduler.py",
+    "services/validators/audio.py",
+)
+
+_REWARD_HARDENING_FILES = (
+    "services/bonuses.py",
+    "services/gift_claims.py",
+    "services/migrations/practice_reward_grants_v1.py",
+    "services/practice_tokens.py",
+    "services/referrals.py",
+    "services/reward_tokens.py",
 )
 
 TYPE_CONTRACT_FILES = (
@@ -69,6 +81,7 @@ TYPE_CONTRACT_FILES = (
     "services/sales_desk.py",
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
+    *_REWARD_HARDENING_FILES,
     *_RUNTIME_HARDENING_FILES,
 )
 
@@ -112,6 +125,7 @@ SECURITY_SCAN_PATHS = (
     "services/sales_desk_db.py",
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
+    *_REWARD_HARDENING_FILES,
     *_RUNTIME_HARDENING_FILES,
 )
 
