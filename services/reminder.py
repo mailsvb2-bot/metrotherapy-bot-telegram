@@ -46,8 +46,11 @@ async def _funnel_reminder_once(bot) -> None:
             elapsed = now - _parse(demo_ts)
             reminded = step_done(user_id, "reminded_1")
             deadline_done = step_done(user_id, "deadline_1")
-        except (sqlite3.Error, KeyError, TypeError, ValueError):
-            logging.getLogger(__name__).exception("Reminder state read failed", extra={"row": repr(row)})
+        except sqlite3.Error:
+            logging.getLogger(__name__).exception("Reminder state database read failed", extra={"row": repr(row)})
+            continue
+        except (KeyError, TypeError, ValueError):
+            logging.getLogger(__name__).exception("Reminder state data is invalid", extra={"row": repr(row)})
             continue
 
         if elapsed >= timedelta(hours=1) and not reminded:
