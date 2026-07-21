@@ -6,6 +6,9 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,6 +91,57 @@ def test_mood_schedule_rollback_uses_narrow_exception_boundary() -> None:
         if names.intersection({"Exception", "BaseException"}):
             broad.append(node.lineno)
     assert broad == []
+
+
+def test_mood_schedule_releases_marker_on_normalization_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from handlers.mood_flow import body
+
+    unmarked: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(body, "mark_delivery_once", lambda *_args: True)
+    monkeypatch.setattr(
+        body,
+        "add_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("invalid schedule")),
+    )
+    monkeypatch.setattr(body, "unmark_delivery", lambda *args: unmarked.append(args))
+
+    with pytest.raises(ValueError, match="invalid schedule"):
+        body._persist_post_schedule_sync(
+            session_id="17",
+            user_id=84,
+            kind="home",
+            run_at_iso="invalid",
+            run_at_epoch=2,
+        )
+
+    assert unmarked == [(84, "home", "post_prompt_schedule", body.for_session("17"))]
+
+
+def test_mood_schedule_duplicate_marker_skips_enqueue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from handlers.mood_flow import body
+
+    enqueued: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    monkeypatch.setattr(body, "mark_delivery_once", lambda *_args: False)
+    monkeypatch.setattr(
+        body,
+        "add_job",
+        lambda *args, **kwargs: enqueued.append((args, kwargs)),
+    )
+
+    created = body._persist_post_schedule_sync(
+        session_id="18",
+        user_id=85,
+        kind="work",
+        run_at_iso="2026-07-22T12:00:00+00:00",
+        run_at_epoch=3,
+    )
+
+    assert created is False
+    assert enqueued == []
 
 
 def test_failed_switch_is_rescued_to_recorded_previous_release(tmp_path: Path) -> None:
