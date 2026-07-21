@@ -39,6 +39,17 @@ async def handler_result(_event: TelegramObject, _data: dict[str, Any]) -> str:
     return "ok"
 
 
+class Clock:
+    def __init__(self, *values: float) -> None:
+        self.values = list(values)
+        self.last = self.values[-1] if self.values else 0.0
+
+    def monotonic(self) -> float:
+        if self.values:
+            self.last = self.values.pop(0)
+        return self.last
+
+
 def test_slow_helpers_and_event_details(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mw.SlowHandlerLogMiddleware._clean("  a\nb  ") == "a b"
     assert mw.SlowHandlerLogMiddleware._clean("x" * 100, limit=10) == "x" * 9 + "…"
@@ -48,15 +59,12 @@ def test_slow_helpers_and_event_details(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert "sample" in mw.SlowHandlerLogMiddleware._handler_label({"handler": SimpleNamespace(callback=sample)})
     assert mw.SlowHandlerLogMiddleware._handler_label({}) == "-"
-
     monkeypatch.setattr(mw, "classify_messenger_action", lambda value: f"action:{value}")
-    cb = callback("pay")
-    details = mw.SlowHandlerLogMiddleware._event_details(cb)
+
+    details = mw.SlowHandlerLogMiddleware._event_details(callback("pay"))
     assert details["uid"] == 7
     assert details["payload"] == "callback_action=action:pay"
-
-    command = message("/start secret")
-    assert "message_action=action:/start secret" in mw.SlowHandlerLogMiddleware._event_details(command)["payload"]
+    assert "message_action=action:/start secret" in mw.SlowHandlerLogMiddleware._event_details(message("/start secret"))["payload"]
     assert mw.SlowHandlerLogMiddleware._event_details(message("plain"))["payload"] == "message_text_len=5"
 
     for field_name, expected in (
@@ -70,45 +78,36 @@ def test_slow_helpers_and_event_details(monkeypatch: pytest.MonkeyPatch) -> None
         assert mw.SlowHandlerLogMiddleware._event_details(msg)["payload"] == expected
 
     assert mw.SlowHandlerLogMiddleware._event_details(message(None))["payload"] == "message_other"
-    broken = SimpleNamespace(from_user=SimpleNamespace(id="bad"))
-    assert mw.SlowHandlerLogMiddleware._event_details(broken)["uid"] is None
+    assert mw.SlowHandlerLogMiddleware._event_details(SimpleNamespace(from_user=SimpleNamespace(id="bad")))["uid"] is None
 
 
 @pytest.mark.asyncio
-async def test_slow_middleware_warning_error_and_finally(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_slow_middleware_warning_error_and_fast(monkeypatch: pytest.MonkeyPatch) -> None:
     middleware = mw.SlowHandlerLogMiddleware(threshold_ms=1000)
     warnings: list[str] = []
     errors: list[str] = []
-    middleware._log = SimpleNamespace(
-        warning=lambda value: warnings.append(value),
-        error=lambda value: errors.append(value),
-    )
+    middleware._log = SimpleNamespace(warning=warnings.append, error=errors.append)
 
-    times = iter((10.0, 11.5))
-    monkeypatch.setattr(mw.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(mw, "time", Clock(10.0, 11.5))
     assert await middleware(handler_result, message("x"), {}) == "ok"
-    assert warnings and "duration_ms=1500" in warnings[-1]
+    assert "duration_ms=1500" in warnings[-1]
 
-    times = iter((20.0, 24.1))
-    monkeypatch.setattr(mw.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(mw, "time", Clock(20.0, 24.1))
 
     async def failing(_event: TelegramObject, _data: dict[str, Any]) -> None:
         raise ValueError("boom")
 
     with pytest.raises(ValueError):
         await middleware(failing, message("x"), {})
-    assert errors and "duration_ms=4100" in errors[-1]
+    assert "duration_ms=4100" in errors[-1]
 
-    fast = mw.SlowHandlerLogMiddleware(threshold_ms=1000)
-    fast._log = middleware._log
-    times = iter((30.0, 30.1))
-    monkeypatch.setattr(mw.time, "monotonic", lambda: next(times))
-    await fast(handler_result, message("x"), {})
+    monkeypatch.setattr(mw, "time", Clock(30.0, 30.1))
+    await mw.SlowHandlerLogMiddleware(threshold_ms=1000)(handler_result, message("x"), {})
     assert len(warnings) == 1
 
 
 @pytest.mark.asyncio
-async def test_quick_ack_retries_after_failure_and_deduplicates() -> None:
+async def test_quick_ack_retries_and_deduplicates() -> None:
     cb = callback("menu")
     calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
@@ -129,15 +128,13 @@ async def test_quick_ack_retries_after_failure_and_deduplicates() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dismiss_stale_picker_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_dismiss_stale_picker_and_fsm(monkeypatch: pytest.MonkeyPatch) -> None:
     cleared: list[int] = []
-    monkeypatch.setattr(mw, "clear_pending", lambda uid: cleared.append(uid))
+    monkeypatch.setattr(mw, "clear_pending", cleared.append)
     monkeypatch.setattr(mw, "peek_pending", lambda _uid: SimpleNamespace(kind="share"))
 
     for data in ("share:pick", "gift:pick_target", "admin:add_admin"):
         await mw.QuickAckCallbackMiddleware._dismiss_stale_picker(callback(data), {})
-    assert cleared == []
-
     await mw.QuickAckCallbackMiddleware._dismiss_stale_picker(callback("other", uid=None), {})
     assert cleared == []
 
@@ -159,15 +156,24 @@ async def test_dismiss_stale_picker_paths(monkeypatch: pytest.MonkeyPatch) -> No
     assert state_calls == ["get", "clear"]
     assert cleared[-1] == 7
 
-    class BrokenState:
+    class BrokenGet:
         async def get_state(self) -> str:
             raise RuntimeError("broken")
 
-    await mw.QuickAckCallbackMiddleware._dismiss_stale_picker(callback("other"), {"state": BrokenState()})
+    await mw.QuickAckCallbackMiddleware._dismiss_stale_picker(callback("other"), {"state": BrokenGet()})
+
+    class BrokenClear:
+        async def get_state(self) -> str:
+            return "AdminManageState:waiting_admin_user"
+
+        async def clear(self) -> None:
+            raise RuntimeError("broken")
+
+    await mw.QuickAckCallbackMiddleware._dismiss_stale_picker(callback("other"), {"state": BrokenClear()})
 
 
 @pytest.mark.asyncio
-async def test_quick_ack_call_for_callback_and_message(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_quick_ack_call_callback_and_message(monkeypatch: pytest.MonkeyPatch) -> None:
     middleware = mw.QuickAckCallbackMiddleware()
     cb = callback("menu")
     answers: list[dict[str, Any]] = []
@@ -189,56 +195,40 @@ async def test_quick_ack_call_for_callback_and_message(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_time_input_trace_with_marks_no_marks_and_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_time_input_trace_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     middleware = mw.TimeInputTraceMiddleware()
     info: list[tuple[Any, ...]] = []
-    warning: list[tuple[Any, ...]] = []
-    middleware._log = SimpleNamespace(
-        info=lambda *args: info.append(args),
-        warning=lambda *args: warning.append(args),
-    )
-
+    warnings: list[tuple[Any, ...]] = []
+    middleware._log = SimpleNamespace(info=lambda *args: info.append(args), warning=lambda *args: warnings.append(args))
     from services import time_trace
 
-    monkeypatch.setattr(time_trace, "begin", lambda uid, text: None)
-    monkeypatch.setattr(time_trace, "end", lambda: SimpleNamespace(uid=7, marks=["handler.a", "handler.b"]))
+    monkeypatch.setattr(time_trace, "begin", lambda *_args: None)
+    monkeypatch.setattr(time_trace, "end", lambda: SimpleNamespace(uid=7, marks=["a", "b"]))
     assert await middleware(handler_result, message("08:30"), {}) == "ok"
-    assert "handler.a > handler.b" in info[-1][-1]
+    assert info[-1][-1] == "a > b"
 
     monkeypatch.setattr(time_trace, "end", lambda: SimpleNamespace(uid=7, marks=[]))
     await middleware(handler_result, message("8:30"), {})
-    assert warning
+    assert warnings
 
     monkeypatch.setattr(time_trace, "end", lambda: None)
-    await middleware(handler_result, message("09:00"), {})
-    await middleware(handler_result, message("99:99"), {})
-    await middleware(handler_result, message("hello"), {})
-    await middleware(handler_result, message("08:30", uid=None), {})
-
-
-@pytest.mark.asyncio
-async def test_time_trace_handler_exception_still_ends(monkeypatch: pytest.MonkeyPatch) -> None:
-    middleware = mw.TimeInputTraceMiddleware()
-    from services import time_trace
+    for event in (message("09:00"), message("99:99"), message("hello"), message("08:30", uid=None)):
+        await middleware(handler_result, event, {})
 
     ended: list[str] = []
-    monkeypatch.setattr(time_trace, "begin", lambda *_args: None)
     monkeypatch.setattr(time_trace, "end", lambda: ended.append("yes") or None)
 
     async def failing(_event: TelegramObject, _data: dict[str, Any]) -> None:
         raise ValueError("handler failed")
 
-    # The middleware intentionally catches routing/trace failures and invokes the
-    # handler again through its normal fallback path.
     with pytest.raises(ValueError):
         await middleware(failing, message("08:30"), {})
     assert ended == ["yes"]
 
 
-def test_spawn_bg_no_manager_success_and_failure() -> None:
+def test_spawn_bg_paths() -> None:
     mw._spawn_bg(None, lambda: None)
     mw._spawn_bg({}, lambda: None)
-
     coroutines: list[Any] = []
 
     class Manager:
@@ -263,7 +253,6 @@ def test_rate_limit_interval_and_keys() -> None:
     assert mw.SoftRateLimitMiddleware._interval(float("nan")) == 0.05
     assert mw.SoftRateLimitMiddleware._interval(-1) == 0.05
     assert mw.SoftRateLimitMiddleware._interval(100) == 60.0
-
     limiter = mw.SoftRateLimitMiddleware(1, 2)
     assert limiter._limit_key(7, callback()) == ((7, "callback"), 1.0)
     assert limiter._limit_key(7, message()) == ((7, "message"), 2.0)
@@ -273,8 +262,7 @@ def test_rate_limit_interval_and_keys() -> None:
 @pytest.mark.asyncio
 async def test_rate_limit_message_callback_cleanup_and_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     limiter = mw.SoftRateLimitMiddleware(callback_interval_sec=1, message_interval_sec=1)
-    times = iter((100.0, 100.2, 101.5, 102.0, 102.1))
-    monkeypatch.setattr(mw.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(mw, "time", Clock(100.0, 100.2, 101.5, 102.0, 102.1))
 
     msg = message("hello")
     msg_answers: list[str] = []
@@ -301,15 +289,21 @@ async def test_rate_limit_message_callback_cleanup_and_errors(monkeypatch: pytes
 
     limiter._last_cleanup_ts = 0
     limiter._last_ts = {(i, "message"): 1.0 for i in range(2101)}
-    monkeypatch.setattr(mw.time, "monotonic", lambda: 10000.0)
-    assert await limiter(handler_result, message("x", uid=None), {}) == "ok"
-
-    error_msg = message("x")
+    monkeypatch.setattr(mw, "time", Clock(10000.0))
+    assert await limiter(handler_result, message("x", uid=5000), {}) == "ok"
+    assert limiter._last_cleanup_ts == 10000.0
 
     async def error_answer(*_args: Any, **_kwargs: Any) -> None:
         raise TelegramBadRequest(method=None, message="failed")
 
+    error_msg = message("x")
     object.__setattr__(error_msg, "answer", error_answer)
     limiter._last_ts[(7, "message")] = 10000.0
-    monkeypatch.setattr(mw.time, "monotonic", lambda: 10000.1)
+    monkeypatch.setattr(mw, "time", Clock(10000.1))
     assert await limiter(handler_result, error_msg, {}) is None
+
+    error_cb = callback("x")
+    object.__setattr__(error_cb, "answer", error_answer)
+    limiter._last_ts[(7, "callback")] = 10000.1
+    monkeypatch.setattr(mw, "time", Clock(10000.2))
+    assert await limiter(handler_result, error_cb, {}) is None
