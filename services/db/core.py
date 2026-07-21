@@ -9,6 +9,9 @@ Keeping the guard in this importable facade makes it deterministic across normal
 imports and ``importlib.reload`` without rewriting working database behavior.
 """
 
+import sys as _sys
+import types as _types
+
 from services.db import core_legacy as _legacy
 from services.db.sql_compat_guard import (
     replace_qmark_placeholders,
@@ -55,3 +58,23 @@ for _name, _value in vars(_legacy).items():
 
 # Ensure the facade's guarded translator remains the visible canonical function.
 globals()["translate_sql_for_postgres"] = translate_sql_for_postgres
+
+
+class _CoreFacadeModule(_types.ModuleType):
+    """Mirror runtime monkeypatches into the unchanged implementation module."""
+
+    def __getattr__(self, name: str):
+        return getattr(_legacy, name)
+
+    def __setattr__(self, name: str, value) -> None:
+        if not name.startswith("__") and hasattr(_legacy, name):
+            setattr(_legacy, name, value)
+        super().__setattr__(name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if not name.startswith("__") and hasattr(_legacy, name):
+            delattr(_legacy, name)
+        super().__delattr__(name)
+
+
+_sys.modules[__name__].__class__ = _CoreFacadeModule
