@@ -30,7 +30,7 @@ from services.practice_tokens_wallet import (
     get_package,
     get_wallet_in_conn,
     grant_tokens,
-    grant_tokens_for_payment,
+    grant_tokens_for_payment as _grant_tokens_for_payment,
     insert_ledger,
     set_delivery_mode,
     token_access_authoritative,
@@ -44,6 +44,43 @@ _wallet_from_row = wallet_from_row
 _ensure_wallet = ensure_wallet
 _get_wallet_in_conn = get_wallet_in_conn
 _insert_ledger = insert_ledger
+
+
+def grant_tokens_for_payment(
+    *,
+    provider: str,
+    provider_payment_id: str,
+    user_id: int,
+    package_id: str,
+    source: str = "webhook",
+) -> tuple[bool, PracticeWallet, int | None]:
+    """Grant a paid package and close its referral side effect idempotently.
+
+    The wallet grant remains the primary operation. Referral rewards use their own
+    unique reward key, so replaying a YooKassa webhook or Telegram successful
+    payment can safely repair an incomplete referral side effect without granting
+    the purchased package or the reward twice.
+    """
+
+    result = _grant_tokens_for_payment(
+        provider=provider,
+        provider_payment_id=provider_payment_id,
+        user_id=int(user_id),
+        package_id=package_id,
+        source=source,
+    )
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider in {"yookassa", "telegram_stars"}:
+        from services.reward_tokens import grant_referral_reward_for_payment
+
+        package = get_package(package_id)
+        grant_referral_reward_for_payment(
+            referred_user_id=int(user_id),
+            package_tokens=int(package.tokens),
+            provider=normalized_provider,
+            provider_payment_id=str(provider_payment_id or ""),
+        )
+    return result
 
 
 def payment_url(
