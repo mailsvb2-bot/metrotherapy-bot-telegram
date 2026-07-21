@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
+import sqlite3
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +26,7 @@ from services.messenger.package_payment_ui import package_payment_text
 from services.messenger.progress_charts import build_vk_mood_progress_chart_path
 from services.messenger.text_ui import MessengerReply
 from services.mood_text_flow import complete_pre_score_and_send, complete_post_score_and_send_next
+from services.privacy_controls import write_user_data_export_gzip
 from services.weather import get_weather_text_async, set_city
 
 log = logging.getLogger(__name__)
@@ -256,6 +260,67 @@ def _reply_requests_replay(reply: MessengerReply) -> tuple[bool, int | None]:
     return requested, anchor
 
 
+def _privacy_export_paths(user_id: int) -> tuple[Path, Path]:
+    root = Path(tempfile.mkdtemp(prefix="metrotherapy_privacy_export_"))
+    return root, root / f"metrotherapy-user-data-{int(user_id)}.json.gz"
+
+
+def _remove_privacy_export_root(root: Path) -> None:
+    shutil.rmtree(root, ignore_errors=True)
+
+
+async def _send_privacy_export(
+    *,
+    platform: str,
+    sender: Any,
+    external_user_id: str,
+    canonical_user_id: int,
+) -> None:
+    root, export_path = await asyncio.to_thread(_privacy_export_paths, canonical_user_id)
+    try:
+        try:
+            result = await asyncio.to_thread(
+                write_user_data_export_gzip,
+                canonical_user_id,
+                export_path,
+            )
+        except (sqlite3.Error, RuntimeError, OSError):
+            log.exception("%s privacy export generation failed", platform.upper())
+            await sender.send_text(
+                external_user_id,
+                "⚠️ Не удалось подготовить экспорт данных. Повторите позже или обратитесь в поддержку.",
+                **_vk_kwargs(platform, {}, canonical_user_id),
+            )
+            return
+        except (TypeError, ValueError):
+            log.exception("%s privacy export data rejected", platform.upper())
+            await sender.send_text(
+                external_user_id,
+                "⚠️ Не удалось подготовить экспорт данных. Повторите позже или обратитесь в поддержку.",
+                **_vk_kwargs(platform, {}, canonical_user_id),
+            )
+            return
+
+        send_document = getattr(sender, "send_document_file", None)
+        if not callable(send_document):
+            raise UnsupportedMessengerDelivery(
+                f"No document sender for privacy export on platform={platform}"
+            )
+        caption = (
+            "🔐 Сжатый JSON-экспорт данных, связанных с Вашим аккаунтом. "
+            f"Записей: {result.total_rows}. "
+            "Файл может содержать историю использования и платежные записи — храните его безопасно."
+        )
+        await send_document(
+            external_user_id,
+            result.path,
+            caption=caption,
+            **_vk_kwargs(platform, {}, canonical_user_id),
+        )
+    finally:
+        await asyncio.to_thread(_remove_privacy_export_root, root)
+
+
 async def send_reply_bundle(
     platform: str,
     external_user_id: str,
@@ -299,6 +364,15 @@ async def send_reply_bundle(
                     if attachment is not None:
                         kwargs["attachments"] = [attachment]
             await sender.send_text(external_user_id, text, **_vk_kwargs(platform, kwargs, canonical_user_id, text=text))
+            continue
+
+        if reply.kind == "privacy_export":
+            await _send_privacy_export(
+                platform=platform,
+                sender=sender,
+                external_user_id=external_user_id,
+                canonical_user_id=canonical_user_id,
+            )
             continue
 
         if reply.kind == "next_audio":
