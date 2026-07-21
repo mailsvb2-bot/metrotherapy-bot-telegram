@@ -1,45 +1,77 @@
 from __future__ import annotations
+
 import logging
 import sqlite3
+from dataclasses import dataclass
 
-"""Storage helpers for Support-AI (SQLite).
+"""Storage helpers for Support-AI.
 
-Установка: изменения минимальные и точечные, без ломания текущего UX.
+The runtime supports SQLite for local tests and PostgreSQL in production through
+``services.db`` compatibility APIs.
 """
 
-from datetime import datetime, timedelta, timezone
-
 from core.time_utils import utcnow_iso
-
 from services.db import db
 
 
+@dataclass(frozen=True)
+class BodyAreaObservation:
+    area: str
+    created_at_utc: str
 
 
-def fetch_recent_body_areas(user_id: int, *, limit: int = 10) -> list[str]:
-    """Последние ответы пользователя на вопрос про тело."""
+def fetch_recent_body_area_observations(
+    user_id: int,
+    *,
+    limit: int = 30,
+) -> list[BodyAreaObservation]:
+    """Return newest body answers with timestamps for calendar-day reasoning."""
+    bounded_limit = max(1, min(int(limit), 365))
     with db() as conn:
         rows = conn.execute(
             """
-            SELECT area
+            SELECT area, created_at_utc
             FROM body_feedback
             WHERE user_id=?
             ORDER BY id DESC
             LIMIT ?
             """,
-            (int(user_id), int(limit)),
+            (int(user_id), bounded_limit),
         ).fetchall()
-    return [str(r[0]) if not isinstance(r, dict) else str(r["area"]) for r in rows]
+
+    observations: list[BodyAreaObservation] = []
+    for row in rows:
+        if hasattr(row, "keys"):
+            area = row["area"]
+            created_at = row["created_at_utc"]
+        else:
+            area = row[0]
+            created_at = row[1]
+        observations.append(
+            BodyAreaObservation(
+                area=str(area or "").strip(),
+                created_at_utc=str(created_at or "").strip(),
+            )
+        )
+    return observations
+
+
+def fetch_recent_body_areas(user_id: int, *, limit: int = 10) -> list[str]:
+    """Backward-compatible newest body-area list without timestamps."""
+    return [
+        observation.area
+        for observation in fetch_recent_body_area_observations(user_id, limit=limit)
+    ]
 
 
 def count_same_prefix_streak(values: list[str]) -> int:
-    """Считает подряд идущие одинаковые значения в начале списка (values уже в порядке newest->oldest)."""
+    """Count equal newest-first values; kept for compatibility callers."""
     if not values:
         return 0
     first = values[0]
     n = 0
-    for v in values:
-        if v == first:
+    for value in values:
+        if value == first:
             n += 1
         else:
             break
