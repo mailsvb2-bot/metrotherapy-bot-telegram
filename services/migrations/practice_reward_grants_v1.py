@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
+from core.time_utils import utc_now
 from services.migrations._helpers import mark_migration, migration_applied
 from services.schema_core import _add_col, _cols
 
@@ -26,6 +28,22 @@ def _value(row: Any, key: str, index: int, default: Any = None) -> Any:
         return default
 
 
+def _remaining_tokens(tokens: int, granted_at: Any) -> int:
+    """Translate the legacy calendar-day bonus into its remaining entitlement."""
+    try:
+        granted = datetime.fromisoformat(str(granted_at))
+        if granted.tzinfo is None:
+            granted = granted.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        # Corrupted accounting history must not become a fresh balance.
+        return 0
+    elapsed_days = max(
+        0,
+        (utc_now().astimezone(timezone.utc).date() - granted.astimezone(timezone.utc).date()).days,
+    )
+    return max(0, int(tokens) - elapsed_days)
+
+
 def _ensure_columns(conn: sqlite3.Connection) -> None:
     existing = _cols(conn, "bonus_grants")
     additions = {
@@ -45,7 +63,8 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
 def _backfill_legacy_bonus_grants(conn: sqlite3.Connection) -> int:
     rows = conn.execute(
         """
-        SELECT id, user_id, days, source, related_user_id, reward_key, ledger_id
+        SELECT id, user_id, days, source, related_user_id, granted_at_utc,
+               reward_key, ledger_id
         FROM bonus_grants
         WHERE COALESCE(days,0) > 0
         ORDER BY id ASC
@@ -56,36 +75,46 @@ def _backfill_legacy_bonus_grants(conn: sqlite3.Connection) -> int:
     for row in rows:
         bonus_id = int(_value(row, "id", 0, 0) or 0)
         user_id = int(_value(row, "user_id", 1, 0) or 0)
-        tokens = int(_value(row, "days", 2, 0) or 0)
+        original_tokens = int(_value(row, "days", 2, 0) or 0)
         source = str(_value(row, "source", 3, "") or "").strip().lower()
         related_raw = _value(row, "related_user_id", 4)
         related_user_id = int(related_raw) if related_raw is not None else None
-        existing_key = str(_value(row, "reward_key", 5, "") or "").strip()
-        existing_ledger = int(_value(row, "ledger_id", 6, 0) or 0)
-        if bonus_id <= 0 or user_id <= 0 or tokens <= 0:
+        granted_at = _value(row, "granted_at_utc", 5)
+        existing_key = str(_value(row, "reward_key", 6, "") or "").strip()
+        existing_ledger = int(_value(row, "ledger_id", 7, 0) or 0)
+        if bonus_id <= 0 or user_id <= 0 or original_tokens <= 0:
             continue
 
         reward_type = "gift" if source == "gift" else "referral"
         if existing_key:
             reward_key = existing_key
-        elif reward_type == "referral" and related_user_id is not None and related_user_id not in seen_referrals:
+        elif (
+            reward_type == "referral"
+            and related_user_id is not None
+            and related_user_id not in seen_referrals
+        ):
             reward_key = f"referral:{related_user_id}"
             seen_referrals.add(related_user_id)
         else:
             reward_key = f"legacy_bonus:{bonus_id}"
         ledger_key = f"reward:{reward_key}"
+        remaining_tokens = _remaining_tokens(original_tokens, granted_at)
+        status = "active" if remaining_tokens > 0 else "expired"
 
         conn.execute(
             """
             UPDATE bonus_grants
             SET source=?, reward_key=?, tokens_granted=COALESCE(tokens_granted, days),
                 provider=CASE WHEN provider='' THEN 'legacy_bonus' ELSE provider END,
-                reward_status=COALESCE(NULLIF(reward_status,''),'active')
+                reward_status=CASE
+                    WHEN ledger_id IS NOT NULL THEN COALESCE(NULLIF(reward_status,''),'active')
+                    ELSE ?
+                END
             WHERE id=?
             """.strip(),
-            (reward_type, reward_key, bonus_id),
+            (reward_type, reward_key, status, bonus_id),
         )
-        if existing_ledger > 0:
+        if existing_ledger > 0 or remaining_tokens <= 0:
             continue
 
         conn.execute(
@@ -102,7 +131,7 @@ def _backfill_legacy_bonus_grants(conn: sqlite3.Connection) -> int:
             SET available_tokens=COALESCE(available_tokens,0)+?, updated_at=CURRENT_TIMESTAMP
             WHERE user_id=?
             """.strip(),
-            (tokens, user_id),
+            (remaining_tokens, user_id),
         )
         wallet = conn.execute(
             "SELECT available_tokens FROM practice_wallets WHERE user_id=?",
@@ -118,7 +147,7 @@ def _backfill_legacy_bonus_grants(conn: sqlite3.Connection) -> int:
             """.strip(),
             (
                 user_id,
-                tokens,
+                remaining_tokens,
                 balance_after,
                 f"{reward_type}_reward_backfill",
                 source or reward_type,
@@ -141,7 +170,13 @@ def _backfill_legacy_bonus_grants(conn: sqlite3.Connection) -> int:
             ) VALUES(?,?,'legacy_bonus','',?,?,?,0)
             ON CONFLICT(lot_key) DO NOTHING
             """.strip(),
-            (ledger_key, user_id, f"reward:{reward_type}", tokens, tokens),
+            (
+                ledger_key,
+                user_id,
+                f"reward:{reward_type}",
+                remaining_tokens,
+                remaining_tokens,
+            ),
         )
         conn.execute("UPDATE bonus_grants SET ledger_id=? WHERE id=?", (ledger_id, bonus_id))
         inserted_count += 1
