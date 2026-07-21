@@ -257,6 +257,21 @@ def _prod_payment_base_url() -> str:
     ).rstrip("/")
 
 
+def _external_checkout_enabled(*, max_enabled: bool, vk_enabled: bool) -> bool:
+    """Return whether production needs the external YooKassa checkout surface.
+
+    Telegram digital packages are Stars-only. Preserve the historical default
+    for existing deployments, but allow an explicit PAYMENT_HTTP_ENABLED=0 to
+    run a Telegram-only production instance without unrelated YooKassa secrets.
+    VK or MAX still imply external checkout because those channels use the
+    public package-payment URL.
+    """
+
+    payment_flag = _optional_feature_flag('PAYMENT_HTTP_ENABLED')
+    payment_enabled = True if payment_flag is None else bool(payment_flag)
+    return bool(payment_enabled or max_enabled or vk_enabled)
+
+
 def _fail_fast_prod_config() -> None:
     """Fail fast in prod if critical env vars are missing or inconsistent.
 
@@ -273,19 +288,25 @@ def _fail_fast_prod_config() -> None:
     if not (os.getenv('ADMIN_IDS') or os.getenv('ADMIN_ID') or '').strip():
         missing.append('ADMIN_IDS')
 
-    # Canonical production payment path: public YooKassa/package checkout.
-    if not _first_env('YOOKASSA_SHOP_ID'):
-        missing.append('YOOKASSA_SHOP_ID')
-    if not _first_env('YOOKASSA_SECRET_KEY'):
-        missing.append('YOOKASSA_SECRET_KEY')
-    if not _first_env('PAYMENT_CHECKOUT_SIGNING_KEY', 'CHECKOUT_SIGNING_KEY'):
-        missing.append('PAYMENT_CHECKOUT_SIGNING_KEY')
+    legacy_messenger = bool(settings.MESSENGER_WEBHOOK_ENABLED)
+    max_flag = _optional_feature_flag('MAX_WEBHOOK_ENABLED')
+    vk_flag = _optional_feature_flag('VK_WEBHOOK_ENABLED')
+    max_enabled = max_flag if max_flag is not None else bool(legacy_messenger and settings.MAX_BOT_TOKEN)
+    vk_enabled = vk_flag if vk_flag is not None else bool(legacy_messenger and settings.VK_GROUP_TOKEN)
 
-    public_payment_base = _prod_payment_base_url()
-    if not public_payment_base:
-        missing.append('PAYMENT_PUBLIC_BASE_URL')
-    elif not public_payment_base.startswith('https://'):
-        raise SystemExit('Payment public base URL must start with https:// in prod')
+    if _external_checkout_enabled(max_enabled=max_enabled, vk_enabled=vk_enabled):
+        if not _first_env('YOOKASSA_SHOP_ID'):
+            missing.append('YOOKASSA_SHOP_ID')
+        if not _first_env('YOOKASSA_SECRET_KEY'):
+            missing.append('YOOKASSA_SECRET_KEY')
+        if not _first_env('PAYMENT_CHECKOUT_SIGNING_KEY', 'CHECKOUT_SIGNING_KEY'):
+            missing.append('PAYMENT_CHECKOUT_SIGNING_KEY')
+
+        public_payment_base = _prod_payment_base_url()
+        if not public_payment_base:
+            missing.append('PAYMENT_PUBLIC_BASE_URL')
+        elif not public_payment_base.startswith('https://'):
+            raise SystemExit('Payment public base URL must start with https:// in prod')
 
     dangerous_payment_overrides = [
         'ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD',
@@ -311,12 +332,6 @@ def _fail_fast_prod_config() -> None:
             raise SystemExit('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL must start with https:// in prod webhook mode')
         if not (settings.TELEGRAM_WEBHOOK_PREFIX or '').strip().startswith('/'):
             raise SystemExit('TELEGRAM_WEBHOOK_PREFIX must start with / in prod webhook mode')
-
-    legacy_messenger = bool(settings.MESSENGER_WEBHOOK_ENABLED)
-    max_flag = _optional_feature_flag('MAX_WEBHOOK_ENABLED')
-    vk_flag = _optional_feature_flag('VK_WEBHOOK_ENABLED')
-    max_enabled = max_flag if max_flag is not None else bool(legacy_messenger and settings.MAX_BOT_TOKEN)
-    vk_enabled = vk_flag if vk_flag is not None else bool(legacy_messenger and settings.VK_GROUP_TOKEN)
 
     if max_enabled:
         if not (settings.MESSENGER_PUBLIC_BASE_URL or '').strip():
