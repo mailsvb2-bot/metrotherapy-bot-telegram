@@ -343,12 +343,12 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
 
 
 async def _health(request: web.Request) -> web.Response:
-    payload, status = build_health_payload()
+    payload, status = await asyncio.to_thread(build_health_payload)
     return web.json_response(payload, status=status)
 
 
 async def _ready(request: web.Request) -> web.Response:
-    payload, status = build_readiness_payload()
+    payload, status = await asyncio.to_thread(build_readiness_payload)
     return web.json_response(payload, status=status)
 
 

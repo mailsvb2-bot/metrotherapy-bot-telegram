@@ -222,7 +222,8 @@ async def cmd_refund_stars(message: Message) -> None:
     if completed is None:
         return
 
-    log_event(
+    await asyncio.to_thread(
+        log_event,
         completed.payment_user_id,
         "telegram_stars_refunded",
         {"charge_id": charge_id, "package_id": completed.package_id, "by": admin_id},
@@ -285,7 +286,8 @@ async def _show_payment_methods(cb: CallbackQuery, *, as_gift: bool) -> None:
             reply_markup=kb_back("gift:menu" if as_gift else "sub:menu"),
         )
         return
-    log_event(
+    await asyncio.to_thread(
+        log_event,
         user_id,
         "payment_method_choice_opened",
         {"package_id": package_id, "gift": bool(as_gift), "surface": "telegram"},
