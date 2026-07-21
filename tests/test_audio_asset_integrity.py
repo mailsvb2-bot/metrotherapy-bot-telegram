@@ -108,6 +108,9 @@ def test_asset_manifest_rejects_invalid_metadata_and_expected_digest(tmp_path: P
     with pytest.raises(ValueError, match="does not match"):
         integrity.validate_asset_dir(info.asset_dir, expected_sha256="f" * 64)
 
+    # Model a privileged tamper attempt: publication intentionally leaves the
+    # manifest read-only, so the test must first remove that protection.
+    manifest.chmod(0o640)
     payload["file_count"] = "bad"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="file_count is invalid"):
