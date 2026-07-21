@@ -11,8 +11,6 @@ successful PostgreSQL query.
 
 import re
 import sqlite3
-from types import ModuleType
-from typing import Any, Callable, Sequence
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -161,52 +159,8 @@ def validate_sqlite_compat_statement(sql: str) -> None:
     )
 
 
-def install_sql_compat_guards(core_module: ModuleType) -> None:
-    """Install the guards once on the canonical DB compatibility module.
-
-    Existing services import :mod:`services.db.core` directly, so the package
-    keeps that public surface while replacing the unsafe helper implementations
-    and adding validation at both cursor execution entry points.
-    """
-
-    if bool(getattr(core_module, "_SQL_COMPAT_GUARDS_INSTALLED", False)):
-        return
-
-    setattr(core_module, "_replace_qmark_placeholders", replace_qmark_placeholders)
-    setattr(
-        core_module,
-        "_translate_sqlite_master_tables_query",
-        translate_sqlite_master_tables_query,
-    )
-
-    cursor_type = core_module.PostgresCompatCursor
-    original_execute: Callable[..., Any] = cursor_type.execute
-    original_executemany: Callable[..., Any] = cursor_type.executemany
-
-    def guarded_execute(
-        self: Any,
-        sql: str,
-        params: Sequence[Any] = (),
-    ) -> Any:
-        validate_sqlite_compat_statement(sql)
-        return original_execute(self, sql, params)
-
-    def guarded_executemany(
-        self: Any,
-        sql: str,
-        seq_of_params: Any,
-    ) -> Any:
-        validate_sqlite_compat_statement(sql)
-        return original_executemany(self, sql, seq_of_params)
-
-    cursor_type.execute = guarded_execute
-    cursor_type.executemany = guarded_executemany
-    setattr(core_module, "_SQL_COMPAT_GUARDS_INSTALLED", True)
-
-
 __all__ = [
     "count_qmark_placeholders",
-    "install_sql_compat_guards",
     "replace_qmark_placeholders",
     "rewrite_qmark_placeholders",
     "translate_sqlite_master_tables_query",
