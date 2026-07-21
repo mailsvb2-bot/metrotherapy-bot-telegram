@@ -335,35 +335,45 @@ def _migration_db() -> sqlite3.Connection:
             granted_at_utc TEXT NOT NULL
         );
         INSERT INTO bonus_grants(user_id, days, source, related_user_id, granted_at_utc)
-        VALUES(11,7,'referral',22,'2026-07-01T00:00:00+00:00'),
-              (11,5,'gift',NULL,'2026-07-02T00:00:00+00:00');
+        VALUES(11,7,'referral',22,'2026-07-20T00:00:00+00:00'),
+              (11,5,'gift',NULL,'2026-07-19T00:00:00+00:00');
         """
     )
     return conn
 
 
-def test_reward_migration_backfills_legacy_bonus_rows_once() -> None:
+def test_reward_migration_backfills_only_remaining_legacy_bonus_rows_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        practice_reward_grants_v1,
+        "utc_now",
+        lambda: datetime(2026, 7, 21, 12, tzinfo=UTC),
+    )
     conn = _migration_db()
     try:
         practice_reward_grants_v1.apply(conn)
         conn.commit()
         assert conn.execute(
             "SELECT available_tokens FROM practice_wallets WHERE user_id=11"
-        ).fetchone()[0] == 12
+        ).fetchone()[0] == 9
         rows = conn.execute(
-            "SELECT reward_key,tokens_granted,ledger_id FROM bonus_grants ORDER BY id"
+            "SELECT reward_key,tokens_granted,ledger_id,reward_status FROM bonus_grants ORDER BY id"
         ).fetchall()
         assert rows[0][0] == "referral:22"
         assert rows[0][1] == 7
         assert int(rows[0][2]) > 0
+        assert rows[0][3] == "active"
         assert rows[1][0].startswith("legacy_bonus:")
         assert rows[1][1] == 5
-        assert conn.execute("SELECT COUNT(*) FROM practice_ledger").fetchone()[0] == 2
-        assert conn.execute("SELECT COUNT(*) FROM practice_token_lots").fetchone()[0] == 2
+        assert int(rows[1][2]) > 0
+        assert rows[1][3] == "active"
+        assert conn.execute("SELECT SUM(amount) FROM practice_ledger").fetchone()[0] == 9
+        assert conn.execute("SELECT SUM(available_tokens) FROM practice_token_lots").fetchone()[0] == 9
         practice_reward_grants_v1.apply(conn)
         conn.commit()
         assert conn.execute(
             "SELECT available_tokens FROM practice_wallets WHERE user_id=11"
-        ).fetchone()[0] == 12
+        ).fetchone()[0] == 9
     finally:
         conn.close()
