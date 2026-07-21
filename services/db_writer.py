@@ -26,8 +26,10 @@ def _is_write_sql(sql: str) -> bool:
     first = re.match(r"^([A-Za-z_]+)", s)
     kw = first.group(1).upper() if first else ""
     if kw == "WITH":
-        m = re.search(r"\b(INSERT|UPDATE|DELETE|REPLACE|SELECT)\b", s, flags=re.IGNORECASE)
-        kw = m.group(1).upper() if m else "WITH"
+        # A CTE can start with SELECT and still perform the actual mutation later,
+        # or contain a data-modifying CTE followed by SELECT. Any mutation keyword
+        # therefore requires commit ownership by the writer.
+        return bool(re.search(r"\b(?:INSERT|UPDATE|DELETE|REPLACE)\b", s, flags=re.IGNORECASE))
     return kw in {
         "INSERT",
         "UPDATE",
