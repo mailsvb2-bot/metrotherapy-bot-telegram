@@ -183,6 +183,8 @@ def validate_schema_decomposition(strict: bool = True) -> None:
         "services/schema_tables.py",
         "services/validator.py",
         "services/db/core.py",
+        # Exact unchanged implementation behind the reload-safe core facade.
+        "services/db/core_legacy.py",
     }
     allow_sql_prefixes = ("services/db/schema/",)
     ddl_re = re.compile(
