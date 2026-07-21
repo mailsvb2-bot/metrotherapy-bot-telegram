@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import sqlite3
 from typing import Any
 
@@ -7,7 +8,6 @@ import pytest
 
 from services.db import core
 from services.db.sql_compat_guard import (
-    install_sql_compat_guards,
     rewrite_qmark_placeholders,
     validate_sqlite_compat_statement,
 )
@@ -43,7 +43,7 @@ class RawConnection:
         return None
 
 
-def _compat_cursor() -> tuple[core.PostgresCompatCursor, RawCursor]:
+def _compat_cursor() -> tuple[Any, RawCursor]:
     raw = RawCursor()
     connection = core.PostgresCompatConnection(RawConnection(raw))
     return core.PostgresCompatCursor(raw, connection), raw
@@ -120,15 +120,18 @@ def test_executemany_rejects_pragma_before_driver() -> None:
     assert raw.executemany_calls == []
 
 
-def test_guard_validation_and_installation_are_idempotent() -> None:
+def test_guard_validation_and_core_reload_are_stable() -> None:
     validate_sqlite_compat_statement("SELECT 1")
     validate_sqlite_compat_statement("PRAGMA table_info(valid_table)")
 
     with pytest.raises(sqlite3.OperationalError):
         validate_sqlite_compat_statement("PRAGMA table_info(invalid-name)")
 
-    execute_before = core.PostgresCompatCursor.execute
-    executemany_before = core.PostgresCompatCursor.executemany
-    install_sql_compat_guards(core)
-    assert core.PostgresCompatCursor.execute is execute_before
-    assert core.PostgresCompatCursor.executemany is executemany_before
+    reloaded = importlib.reload(core)
+    sql = "SELECT ? -- ignored ?\n/* ignored ? */"
+    assert reloaded.translate_sql_for_postgres(sql) == "SELECT %s -- ignored ?\n/* ignored ? */"
+
+    cursor, raw = _compat_cursor()
+    with pytest.raises(sqlite3.OperationalError, match="unsupported SQLite PRAGMA"):
+        cursor.execute("PRAGMA cache_size")
+    assert raw.execute_calls == []
