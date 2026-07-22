@@ -263,7 +263,8 @@ async def test_successful_payment_outcomes(monkeypatch: pytest.MonkeyPatch) -> N
     )
     duplicate = FakeMessage(successful_payment=payment)
     await payments._successful_payment(duplicate)
-    assert duplicate.answers == []
+    assert "уже обработан" in duplicate.answers[-1][0]
+    assert "Повторного начисления не было" in duplicate.answers[-1][0]
 
     gifts: list[str] = []
 
