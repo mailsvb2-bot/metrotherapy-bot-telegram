@@ -5,3 +5,4 @@ This release resolves mutable data, logs, caches, and temporary files outside th
 Capability marker for deploy-time guard selection and read-only production topology probes.
 
 Read-only probe generation: 900862a5.
+Terminal probe generation: 2.
