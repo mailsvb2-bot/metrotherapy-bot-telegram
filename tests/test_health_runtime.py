@@ -31,6 +31,7 @@ async def test_health_handler_reports_ok(tmp_path, monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
+    monkeypatch.delenv('HEALTHCHECK_DIAGNOSTICS_TOKEN', raising=False)
     monkeypatch.setattr(health_server, 'get_connection', lambda: DummyConn())
     monkeypatch.setattr(health_server, 'DB_PATH', tmp_path / 'data.db')
     monkeypatch.setattr(health_server, 'ROOT', tmp_path)
@@ -43,11 +44,11 @@ async def test_health_handler_reports_ok(tmp_path, monkeypatch):
     assert response.text
     assert 'metrotherapy' in response.text
     assert 'probe' in response.text
-    assert 'precise_scheduler_queue_size' in response.text
-    assert 'telegram_transport' in response.text
-    assert 'telegram_webhook_enabled' in response.text
-    assert 'messenger_webhook_enabled' in response.text
-    assert 'webhook_runtime_enabled' in response.text
+    assert 'precise_scheduler_queue_size' not in response.text
+    assert 'telegram_transport' not in response.text
+    assert 'telegram_webhook_enabled' not in response.text
+    assert 'messenger_webhook_enabled' not in response.text
+    assert 'webhook_runtime_enabled' not in response.text
 
 
 @pytest.mark.asyncio
@@ -55,6 +56,7 @@ async def test_health_handler_reports_db_failure(tmp_path, monkeypatch):
     def _boom():
         raise RuntimeError('broken')
 
+    monkeypatch.delenv('HEALTHCHECK_DIAGNOSTICS_TOKEN', raising=False)
     monkeypatch.setattr(health_server, 'get_connection', _boom)
     monkeypatch.setattr(health_server, 'DB_PATH', tmp_path / 'data.db')
     monkeypatch.setattr(health_server, 'ROOT', tmp_path)
@@ -62,7 +64,9 @@ async def test_health_handler_reports_db_failure(tmp_path, monkeypatch):
 
     response = await health_server._ready(None)  # type: ignore[arg-type]
     assert response.status == 500
-    assert 'db:broken' in response.text
+    assert '"ok": false' in response.text
+    assert '"probe": "readiness"' in response.text
+    assert 'db:broken' not in response.text
 
 
 def test_build_health_payload_reports_schema_missing(monkeypatch, tmp_path):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 from dataclasses import dataclass
@@ -28,6 +29,40 @@ from services.scheduler import scheduler_health_snapshot
 from services.validators.audio import audio_readiness
 
 log = logging.getLogger(__name__)
+
+
+_DIAGNOSTICS_HEADER = 'X-Metrotherapy-Diagnostics-Token'
+_DIAGNOSTICS_ENV = 'HEALTHCHECK_DIAGNOSTICS_TOKEN'
+
+
+def _diagnostics_token() -> str:
+    return str(os.getenv(_DIAGNOSTICS_ENV) or '').strip()
+
+
+def _provided_diagnostics_token(request: web.Request) -> str:
+    headers = getattr(request, 'headers', {}) or {}
+    explicit = str(headers.get(_DIAGNOSTICS_HEADER) or '').strip()
+    if explicit:
+        return explicit
+    authorization = str(headers.get('Authorization') or '').strip()
+    scheme, separator, value = authorization.partition(' ')
+    if separator and scheme.casefold() == 'bearer':
+        return value.strip()
+    return ''
+
+
+def _diagnostics_authorized(request: web.Request) -> bool:
+    expected = _diagnostics_token()
+    provided = _provided_diagnostics_token(request)
+    return bool(expected and provided and hmac.compare_digest(provided, expected))
+
+
+def _public_probe_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        'ok': bool(payload.get('ok')),
+        'service': str(payload.get('service') or 'metrotherapy'),
+        'probe': str(payload.get('probe') or 'health'),
+    }
 
 
 @dataclass
@@ -344,12 +379,14 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
 
 async def _health(request: web.Request) -> web.Response:
     payload, status = await asyncio.to_thread(build_health_payload)
-    return web.json_response(payload, status=status)
+    response_payload = payload if _diagnostics_authorized(request) else _public_probe_payload(payload)
+    return web.json_response(response_payload, status=status)
 
 
 async def _ready(request: web.Request) -> web.Response:
     payload, status = await asyncio.to_thread(build_readiness_payload)
-    return web.json_response(payload, status=status)
+    response_payload = payload if _diagnostics_authorized(request) else _public_probe_payload(payload)
+    return web.json_response(response_payload, status=status)
 
 
 async def _growth_click_redirect(request: web.Request) -> web.Response:
