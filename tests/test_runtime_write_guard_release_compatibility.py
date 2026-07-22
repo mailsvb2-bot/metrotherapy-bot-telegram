@@ -11,7 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / "scripts" / "install_runtime_write_guard.sh"
 DEPLOY = ROOT / "deploy.sh"
-CONTRACT_MARKER = ".metrotherapy-runtime-state-v1"
+CONTRACT_MARKER = Path("runtime") / "RUNTIME_STATE_CONTRACT_V1"
 
 
 def _run_guard(
@@ -47,7 +47,9 @@ def test_guard_selects_compatibility_for_legacy_and_enforce_for_capable_release(
     capable = runtime / "releases" / ("b" * 40)
     legacy.mkdir(parents=True)
     capable.mkdir(parents=True)
-    (capable / CONTRACT_MARKER).write_text("v1\n", encoding="utf-8")
+    capable_marker = capable / CONTRACT_MARKER
+    capable_marker.parent.mkdir(parents=True)
+    capable_marker.write_text("v1\n", encoding="utf-8")
 
     dropin = tmp_path / "systemd" / "zzz-runtime-write-guard.conf"
     systemctl_log = tmp_path / "systemctl.log"
