@@ -36,7 +36,7 @@ def _message_user_full_name(message: Message) -> str:
 
 
 _LEGACY_GIFT_PAYMENT_DISABLED = (
-    "Этот старый способ оплаты подарка отключён. Откройте подарки заново и выберите актуальный пакет."
+    "Этот старый способ оплаты подарка отключён. Откройте подарки заново и выберите актуальный пакет практик."
 )
 
 
@@ -59,8 +59,9 @@ async def gift_menu(cb: CallbackQuery) -> None:
     log_event(uid, "gift_menu", {"mode": "universal_link"})
 
     await message.edit_text(
-        "🎁 Подарить подписку\n\n"
-        "Сначала выберите тариф и оплатите подарок. После оплаты проект даст ссылки для отправки подарка в Telegram, ВКонтакте или MAX.\n\n"
+        "🎁 Подарить пакет практик\n\n"
+        "Сначала выберите пакет практик и оплатите подарок. После оплаты проект даст ссылки для отправки подарка "
+        "в Telegram, ВКонтакте или MAX.\n\n"
         "Получатель откроет подарок в выбранном мессенджере и войдёт в тот же маршрут Метротерапии.",
         reply_markup=kb_gift_tariffs(user_id=uid, back_cb="menu:main"),
     )
@@ -77,14 +78,14 @@ async def gift_pick_target(cb: CallbackQuery) -> None:
     if kb_r is None:
         await message.answer(
             "⚠️ Ваш клиент Telegram не поддерживает выбор пользователя кнопкой.\n"
-            "Выберите тариф и после оплаты отправьте универсальную ссылку подарка в нужный мессенджер.",
+            "Выберите пакет практик и после оплаты отправьте универсальную ссылку подарка в нужный мессенджер.",
             reply_markup=kb_gift_tariffs(user_id=uid, back_cb="menu:main"),
         )
         return
     set_pending(uid, "gift_target", {"from_name": (cb.from_user.full_name or "").strip()})
     await message.answer(
         "Выберите получателя в Telegram.\n"
-        "После выбора откроется список тарифов.",
+        "После выбора откроется список пакетов практик.",
         reply_markup=kb_r,
     )
 
@@ -157,7 +158,7 @@ async def gift_users_shared(message: Message, state: FSMContext) -> None:
     log_event(uid, "gift_target_picked", {"to_id": to_id})
 
     await message.answer(
-        "Теперь выберите тариф для подарка:",
+        "Теперь выберите пакет практик для подарка:",
         reply_markup=kb_gift_tariffs(user_id=uid, back_cb="gift:menu"),
     )
 
@@ -199,14 +200,14 @@ async def deliver_gift_message(message: Message, code: str) -> None:
     if sent_ok:
         log_event(user_id, "gift_delivered_ok", {"code": code, "to_id": int(tgt.to_id) if tgt else None})
         await message.answer(
-            "✅ Оплата прошла. Подарок оплачен и отправлен получателю в Telegram.\n\n"
+            "✅ Оплата прошла. Пакет практик оплачен и отправлен получателю в Telegram.\n\n"
             "Также можно отправить универсальную ссылку в другой мессенджер:",
             reply_markup=_gift_share_keyboard(code, txt),
         )
     else:
         log_event(user_id, "gift_delivery_platform_choice", {"code": code, "to_id": int(tgt.to_id) if tgt else None})
         await message.answer(
-            "✅ Оплата прошла. Подарок готов.\n\n"
+            "✅ Оплата прошла. Подарочный пакет практик готов.\n\n"
             "Куда отправить подарок? Выберите мессенджер — получатель откроет ссылку именно там:",
             reply_markup=_gift_share_keyboard(code, txt),
         )
