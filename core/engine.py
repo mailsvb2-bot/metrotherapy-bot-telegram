@@ -194,14 +194,14 @@ class Engine:
             rows.append([InlineKeyboardButton(text="✅ Прослушал(а)", callback_data=f"demo:ack:{kind}:{int(message_id)}")])
         if allow_other:
             rows.append([InlineKeyboardButton(text=f"🎧 Послушать ресурсный транс {other_label}", callback_data=f"demo:other:{other}" )])
-        rows.append([InlineKeyboardButton(text="💳 Подписка", callback_data="sub:menu")])
+        rows.append([InlineKeyboardButton(text="💳 Пакеты практик", callback_data="sub:menu")])
         rows.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:main")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def _kb_funnel(self, user_id: int) -> InlineKeyboardMarkup:
         # Пробный доступ отключён по ТЗ. Оставляем детерминированные кнопки.
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Подписка", callback_data="sub:menu")],
+            [InlineKeyboardButton(text="💳 Пакеты практик", callback_data="sub:menu")],
             [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
         ])
 
@@ -403,8 +403,9 @@ class Engine:
         text = (
             "🕊 Напоминание\n\n"
             "Совсем скоро я пришлю Вам ресурсный демо-транс. "
-            "Пожалуйста, по возможности наденьте наушники — так эффект ощущается глубже.\n\n"
-            "Если за рулём — просто включите и слушайте безопасно."
+            "Выберите спокойное место и, по возможности, наденьте наушники — так эффект ощущается глубже.\n\n"
+            "Не включайте практику за рулём или при управлении механизмами. "
+            "Дождитесь безопасной остановки или слушайте как пассажир."
         )
         await bot.send_message(user_id, text)
         await asyncio.to_thread(log_event, user_id, "demo_reminder_sent", {"kind": kind})
@@ -415,11 +416,11 @@ class Engine:
         sent, admin_demo_bypass = await asyncio.to_thread(_demo_send_state_sync, int(user_id))
         other = "home" if kind == "work" else "work"
 
-        # Лимит бесплатных демо: максимум 2 (work + home). Дальше предлагаем подписку.
+        # Лимит бесплатных демо: максимум 2 (work + home). Дальше предлагаем пакет практик.
         if not admin_demo_bypass and "work" in sent and "home" in sent:
             await bot.send_message(
                 user_id,
-                "✅ Вы уже получили оба ресурсных демо-транса.\n\nЕсли Вы хотите продолжить — пожалуйста, оформите подписку.",
+                "✅ Вы уже получили оба ресурсных демо-транса.\n\nЕсли хотите продолжить — выберите пакет практик.",
                 reply_markup=self._kb_after_demo(kind, allow_other=False),
             )
             await asyncio.to_thread(log_event, user_id, "demo_send_skipped", {"reason": "both_sent", "kind": kind})
@@ -430,7 +431,7 @@ class Engine:
             await bot.send_message(
                 user_id,
                 "✅ Этот демо-транс уже был отправлен Вам ранее.\n\n"
-                "Вы можете послушать второй ресурсный демо-транс или оформить подписку.",
+                "Вы можете послушать второй ресурсный демо-транс или выбрать пакет практик.",
                 reply_markup=self._kb_after_demo(other, allow_other=(other not in sent)),
             )
             await asyncio.to_thread(log_event, user_id, "demo_send_skipped", {"reason": "kind_already_sent", "kind": kind})
@@ -460,8 +461,8 @@ class Engine:
     def _kb_offer(self, user_id: int) -> InlineKeyboardMarkup:
         # Пробный доступ отключён по ТЗ. Оставляем только детерминированные кнопки.
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Подписка", callback_data="sub:menu")],
-            [InlineKeyboardButton(text="🎁 Подарить подписку другу", callback_data="gift:menu")],
+            [InlineKeyboardButton(text="💳 Пакеты практик", callback_data="sub:menu")],
+            [InlineKeyboardButton(text="🎁 Подарить пакет практик", callback_data="gift:menu")],
             [InlineKeyboardButton(text="📣 Посоветовать Метротерапию", callback_data="share:menu")],
             [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu:main")],
         ])
@@ -491,7 +492,7 @@ class Engine:
                 "🕊 Хотите продолжить завтра утром?\n\n"
                 "Вчера я отправил(а) Вам демо-транс. Если Вы ещё не успели — ничего страшного. "
                 "Когда будет удобно, включите его в спокойном темпе.\n\n"
-                "Если Вы уже послушали и хотите продолжить регулярно — можно выбрать подписку."
+                "Если Вы уже послушали и хотите продолжить регулярно — выберите пакет практик."
             )
         else:
             # kind уже есть в payload: work/home
@@ -607,7 +608,7 @@ class Engine:
 
         text = (
             "☀️ Доброе утро.\n\n"
-            "Если Вы хотите продолжить — можно выбрать подписку и открыть полный доступ. "
+            "Если Вы хотите продолжить — выберите пакет практик и откройте полный маршрут. "
             "Тогда бот будет присылать утренние и/или вечерние сессии по расписанию."
         )
         await bot.send_message(user_id, text, reply_markup=self._kb_offer(user_id))
@@ -688,7 +689,7 @@ class Engine:
             "🧭 Вы уже попробовали демо — и это только небольшой фрагмент.\n\n"
             "Полный цикл даёт заметно более глубокий эффект: регулярность, постепенное накопление ресурса, "
             "и чёткая структура под Ваш ритм дня.\n\n"
-            "Если хотите — откройте подписку и выберите удобный тариф."
+            "Если хотите продолжить — выберите подходящий пакет практик."
         )
         await bot.send_message(user_id, text, reply_markup=self._kb_funnel(user_id))
         await asyncio.to_thread(log_event, user_id, "funnel2_sent", {"scenario": SC_DEMO_NOPAY_24H})
