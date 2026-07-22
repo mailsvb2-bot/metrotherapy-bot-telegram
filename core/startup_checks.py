@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from core.paths import resolve_data_dir, resolve_logs_dir
+
+
 class StartupCheckError(RuntimeError):
     pass
 
@@ -25,6 +28,10 @@ def _env_any(*names: str) -> str:
         if value:
             return value
     return ""
+
+
+def _is_prod() -> bool:
+    return (os.getenv("APP_ENV", "dev") or "dev").strip().lower() in {"prod", "production"}
 
 
 def _resolved_db_engine() -> str:
@@ -78,42 +85,50 @@ def _prod_ingress_checks() -> None:
             )
 
 
-def run_startup_checks(project_root: Path) -> None:
-    """Fail-fast проверки целостности проекта.
+def _assert_outside_release(path: Path, release_root: Path, *, label: str) -> None:
+    try:
+        path.relative_to(release_root)
+    except ValueError:
+        return
+    raise StartupCheckError(f"{label} must be outside immutable production release: {path}")
 
-    Цель: не стартовать «тихо криво», если нет критичных файлов/папок.
-    Runtime-папки создаём сами: отсутствие data/logs/audio подкаталогов не должно
-    превращать публичный вход `/start` в недоступный бот после чистого деплоя.
+
+def run_startup_checks(project_root: Path) -> None:
+    """Fail fast when production topology or required project files are invalid.
+
+    Development keeps its historical project-local data/log/audio directories.
+    Production releases are content-addressed and read-only: all mutable data and
+    logs must live under the external writable-state root, while audio is a sealed
+    versioned asset pointer prepared by the immutable release builder.
     """
     root = project_root.resolve()
+    production = _is_prod()
 
-    data_dir = root / "data"
-    logs_dir = root / "logs"
-    # Keep runtime directories present for both engines: SQLite needs the DB path,
-    # Postgres still benefits from a stable runtime state/logs surface.
+    data_dir = resolve_data_dir(root)
+    logs_dir = resolve_logs_dir(root)
+    if production:
+        _assert_outside_release(data_dir, root, label="METRO_DATA_DIR")
+        _assert_outside_release(logs_dir, root, label="METRO_LOGS_DIR")
     data_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Audio folders are runtime content mount points. Create them on clean deploys;
-    # actual missing tracks must be handled by the audio flow, not by blocking /start.
     audio_dir = root / "audio"
     demo_dir = audio_dir / "demo"
     full_dir = audio_dir / "full"
-    demo_dir.mkdir(parents=True, exist_ok=True)
-    full_dir.mkdir(parents=True, exist_ok=True)
+    if not production:
+        demo_dir.mkdir(parents=True, exist_ok=True)
+        full_dir.mkdir(parents=True, exist_ok=True)
 
-    # Critical modules introduced for stability
     critical_files = [
         root / "services" / "idempotency_keys.py",
         root / "core" / "task_manager.py",
         root / "services" / "db_writer.py",
     ]
-    for p in critical_files:
-        if not p.exists():
-            raise StartupCheckError(f"Missing required file: {p}")
+    for path in critical_files:
+        if not path.exists():
+            raise StartupCheckError(f"Missing required file: {path}")
 
     _prod_ingress_checks()
 
-    # Token sanity (do not print token). Support TELEGRAM_BOT_TOKEN for server snippets.
     if not _env_any("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"):
         raise StartupCheckError("BOT_TOKEN is empty. Set BOT_TOKEN or TELEGRAM_BOT_TOKEN (see deploy/metrotherapy.env.example)")
