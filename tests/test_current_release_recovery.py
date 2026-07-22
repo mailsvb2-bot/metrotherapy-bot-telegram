@@ -30,9 +30,14 @@ def test_recovery_script_is_fail_closed_and_does_not_restart_the_live_service() 
     script = RECOVERY_SCRIPT.read_text(encoding="utf-8")
 
     assert "CURRENT_RELEASE_RECOVERY_READY" in script
+    assert "CURRENT_RELEASE_ROLLBACK_REBUILT" in script
     assert "CONTAMINATED_RELEASE_REMOVED" in script
     assert 'git -C "$SOURCE_DIR" cat-file -e "$sha^{commit}"' in script
-    assert 'atomic_point_current_to "$recovery_dir"' in script
+    assert "build_clean_recovery_release" in script
+    assert "switch_to_recovery_target" in script
+    assert 'validate_release "$recovery_dir"' in script
+    assert 'atomic_point_current_to "$recovery_path"' in script
+    assert 'atomic_point_current_to "$failed_path" || true' in script
     assert 'inspect "$CURRENT_LINK" --required' in script
     assert "systemctl stop" not in script
     assert "systemctl restart" not in script

@@ -17,6 +17,8 @@ RELEASE_BUILDER="${RELEASE_BUILDER:-$SOURCE_DIR/scripts/build_immutable_release.
 TIMEOUT_BIN="${TIMEOUT_BIN:-/usr/bin/timeout}"
 RELEASE_BUILD_TIMEOUT_SECONDS="${RELEASE_BUILD_TIMEOUT_SECONDS:-1200}"
 ZERO_SHA="0000000000000000000000000000000000000000"
+BUILT_GENERATION_DIR=""
+BUILT_RECOVERY_DIR=""
 
 is_valid_sha() {
   case "${1:-}" in
@@ -73,9 +75,63 @@ record_contaminated_path() {
   printf '%s\n' "$state_file"
 }
 
+build_clean_recovery_release() {
+  local sha="$1"
+  local reason="$2"
+  local generation_dir recovery_dir
+
+  git -C "$SOURCE_DIR" cat-file -e "$sha^{commit}" 2>/dev/null || {
+    echo "CURRENT_RELEASE_RECOVERY_FAILED recovery commit is unavailable: $sha" >&2
+    return 1
+  }
+
+  mkdir -p "$RECOVERY_RELEASES_ROOT" "$DEPLOY_STATE_DIR"
+  generation_dir="$RECOVERY_RELEASES_ROOT/generation-$(date +%s)-$$"
+  recovery_dir="$generation_dir/$sha"
+  mkdir -p "$generation_dir"
+
+  echo "=== rebuild clean rollback release reason=$reason sha=$sha target=$recovery_dir ==="
+  if ! "$TIMEOUT_BIN" --signal=TERM --kill-after=30s "$RELEASE_BUILD_TIMEOUT_SECONDS" \
+    env SOURCE_DIR="$SOURCE_DIR" RUNTIME_ROOT="$RUNTIME_ROOT" RELEASES_DIR="$generation_dir" \
+      SYSTEM_PYTHON="$SYSTEM_PYTHON" SHARED_AUDIO_DIR="${SHARED_AUDIO_DIR:-$SOURCE_DIR/audio}" \
+      bash "$RELEASE_BUILDER" "$sha"; then
+    rm -rf --one-file-system "$generation_dir"
+    echo "CURRENT_RELEASE_RECOVERY_FAILED clean rollback build failed: $sha" >&2
+    return 1
+  fi
+
+  if ! validate_release "$recovery_dir"; then
+    rm -rf --one-file-system "$generation_dir"
+    echo "CURRENT_RELEASE_RECOVERY_FAILED clean rollback release did not validate: $recovery_dir" >&2
+    return 1
+  fi
+
+  BUILT_GENERATION_DIR="$generation_dir"
+  BUILT_RECOVERY_DIR="$recovery_dir"
+}
+
+switch_to_recovery_target() {
+  local failed_sha="$1"
+  local failed_path="$2"
+  local recovery_path="$3"
+  local success_marker="$4"
+  local state_file
+
+  state_file="$(record_contaminated_path "$failed_sha" "$failed_path")"
+  atomic_point_current_to "$recovery_path"
+  if ! "$SYSTEM_PYTHON" "$RELEASE_MANAGER" inspect "$CURRENT_LINK" --required >/dev/null 2>&1; then
+    atomic_point_current_to "$failed_path" || true
+    rm -f "$state_file"
+    rm -rf --one-file-system "$(dirname "$recovery_path")"
+    echo "CURRENT_RELEASE_RECOVERY_FAILED repaired current link did not validate" >&2
+    return 1
+  fi
+
+  echo "$success_marker failed_current=$failed_sha target=$recovery_path"
+}
+
 repair_current() {
   local current_path sha recorded_sha="" previous_path=""
-  local generation_dir recovery_dir state_file
 
   if [ ! -L "$CURRENT_LINK" ]; then
     echo "CURRENT_RELEASE_RECOVERY_SKIPPED reason=current_link_missing"
@@ -119,8 +175,19 @@ repair_current() {
       echo "CURRENT_RELEASE_ROLLBACK_RESCUED failed_current=$sha deployed=$recorded_sha target=$previous_path"
       return 0
     fi
-    echo "CURRENT_RELEASE_RECOVERY_FAILED deployed marker mismatch current=$sha recorded=$recorded_sha" >&2
-    return 23
+
+    if ! build_clean_recovery_release "$recorded_sha" "recorded-deployed-sha"; then
+      echo "CURRENT_RELEASE_RECOVERY_FAILED unable to reconstruct deployed rollback target current=$sha recorded=$recorded_sha" >&2
+      return 23
+    fi
+    if ! switch_to_recovery_target \
+      "$sha" \
+      "$current_path" \
+      "$BUILT_RECOVERY_DIR" \
+      "CURRENT_RELEASE_ROLLBACK_REBUILT deployed=$recorded_sha"; then
+      return 27
+    fi
+    return 0
   fi
 
   if validate_release "$current_path"; then
@@ -128,33 +195,16 @@ repair_current() {
     return 0
   fi
 
-  mkdir -p "$RECOVERY_RELEASES_ROOT" "$DEPLOY_STATE_DIR"
-  generation_dir="$RECOVERY_RELEASES_ROOT/generation-$(date +%s)-$$"
-  recovery_dir="$generation_dir/$sha"
-  mkdir -p "$generation_dir"
-
-  echo "=== rebuild clean rollback release sha=$sha source=$current_path target=$recovery_dir ==="
-  "$TIMEOUT_BIN" --signal=TERM --kill-after=30s "$RELEASE_BUILD_TIMEOUT_SECONDS" \
-    env SOURCE_DIR="$SOURCE_DIR" RUNTIME_ROOT="$RUNTIME_ROOT" RELEASES_DIR="$generation_dir" \
-      SYSTEM_PYTHON="$SYSTEM_PYTHON" SHARED_AUDIO_DIR="${SHARED_AUDIO_DIR:-$SOURCE_DIR/audio}" \
-      bash "$RELEASE_BUILDER" "$sha"
-  validate_release "$recovery_dir" || {
-    echo "CURRENT_RELEASE_RECOVERY_FAILED clean rollback release did not validate: $recovery_dir" >&2
-    rm -rf --one-file-system "$generation_dir"
+  if ! build_clean_recovery_release "$sha" "contaminated-current"; then
     return 24
-  }
-
-  state_file="$(record_contaminated_path "$sha" "$current_path")"
-  atomic_point_current_to "$recovery_dir"
-  if ! "$SYSTEM_PYTHON" "$RELEASE_MANAGER" inspect "$CURRENT_LINK" --required >/dev/null 2>&1; then
-    atomic_point_current_to "$current_path" || true
-    rm -f "$state_file"
-    rm -rf --one-file-system "$generation_dir"
-    echo "CURRENT_RELEASE_RECOVERY_FAILED repaired current link did not validate" >&2
+  fi
+  if ! switch_to_recovery_target \
+    "$sha" \
+    "$current_path" \
+    "$BUILT_RECOVERY_DIR" \
+    "CURRENT_RELEASE_RECOVERY_READY sha=$sha original=$current_path"; then
     return 25
   fi
-
-  echo "CURRENT_RELEASE_RECOVERY_READY sha=$sha original=$current_path recovery=$recovery_dir"
 }
 
 cleanup_state_records() {
