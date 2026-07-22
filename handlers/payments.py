@@ -540,6 +540,14 @@ async def _successful_payment(message: Message):
         return
 
     if result.duplicate:
+        if result.gift_token:
+            code = result.gift_token.removeprefix("gift_")
+            await deliver_gift_message(message, code)
+            return
+        await message.answer(
+            "✅ Этот платёж Telegram Stars уже обработан. Повторного начисления не было.",
+            reply_markup=kb_after_paid(),
+        )
         return
     if result.gift_token:
         code = result.gift_token.removeprefix("gift_")
