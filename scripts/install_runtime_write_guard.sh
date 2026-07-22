@@ -8,7 +8,7 @@ RUNTIME_ROOT="${METRO_RUNTIME_ROOT:-/var/lib/metrotherapy/runtime}"
 STATE_ROOT="${METRO_WRITABLE_ROOT:-$(dirname "$RUNTIME_ROOT")/state}"
 DROPIN="${METRO_RUNTIME_WRITE_GUARD_OVERRIDE:-/etc/systemd/system/$SERVICE_NAME.d/zzz-runtime-write-guard.conf}"
 SYSTEMCTL="${SYSTEMCTL:-/usr/bin/systemctl}"
-CONTRACT_MARKER="${METRO_RUNTIME_STATE_CONTRACT_MARKER:-.metrotherapy-runtime-state-v1}"
+CONTRACT_MARKER="${METRO_RUNTIME_STATE_CONTRACT_MARKER:-runtime/RUNTIME_STATE_CONTRACT_V1}"
 
 for required in "$RUNTIME_ROOT" "$STATE_ROOT" "$(dirname "$DROPIN")"; do
   [ -n "$required" ] || {
