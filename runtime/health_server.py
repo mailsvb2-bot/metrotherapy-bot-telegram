@@ -380,21 +380,13 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
 async def _health(request: web.Request) -> web.Response:
     payload, status = await asyncio.to_thread(build_health_payload)
     response_payload = payload if _diagnostics_authorized(request) else _public_probe_payload(payload)
-    return web.json_response(
-        response_payload,
-        status=status,
-        headers={'Cache-Control': 'no-store'},
-    )
+    return web.json_response(response_payload, status=status)
 
 
 async def _ready(request: web.Request) -> web.Response:
     payload, status = await asyncio.to_thread(build_readiness_payload)
     response_payload = payload if _diagnostics_authorized(request) else _public_probe_payload(payload)
-    return web.json_response(
-        response_payload,
-        status=status,
-        headers={'Cache-Control': 'no-store'},
-    )
+    return web.json_response(response_payload, status=status)
 
 
 async def _growth_click_redirect(request: web.Request) -> web.Response:
