@@ -250,14 +250,13 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
             gift_token=gift_token or None,
             checkout_intent=intent or None,
         )
-    except (YooKassaCheckoutError, ValueError, TypeError, OSError) as exc:
+    except (YooKassaCheckoutError, ValueError, TypeError, OSError):
         log.exception("YooKassa web payment endpoint failed")
         return web.Response(
             status=500,
             text=(
-                "Не удалось создать платёж YooKassa. "
-                "Проверьте платёжные настройки, package_id и доступ сервера к api.yookassa.ru. "
-                f"Ошибка: {type(exc).__name__}"
+                "Не удалось создать платёж YooKassa. Попробуйте ещё раз позже или обратитесь в поддержку. "
+                "Код ошибки: PAYMENT_CREATE_FAILED"
             ),
             content_type="text/plain",
         )
