@@ -8,6 +8,7 @@ RECOVERY_SCRIPT="$SOURCE_DIR/scripts/repair_contaminated_current_release.sh"
 CANDIDATE_PREPARER="$SOURCE_DIR/scripts/prepare_immutable_candidate.sh"
 WRITE_GUARD_SCRIPT="$SOURCE_DIR/scripts/install_runtime_write_guard.sh"
 RUNTIME_ROOT="${METRO_RUNTIME_ROOT:-/var/lib/metrotherapy/runtime}"
+CURRENT_LINK="${METRO_CURRENT_RELEASE_LINK:-$RUNTIME_ROOT/current}"
 STATE_ROOT="${METRO_WRITABLE_ROOT:-$(dirname "$RUNTIME_ROOT")/state}"
 SERVICE_NAME="${SERVICE_NAME:-metrotherapy.service}"
 
@@ -41,6 +42,24 @@ export MPLCONFIGDIR="$STATE_ROOT/matplotlib"
 export TMPDIR="$STATE_ROOT/tmp"
 export GIT_TERMINAL_PROMPT=0
 
+restore_runtime_after_failure() {
+  local recovered_release=""
+  if ! bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"; then
+    echo "IMMUTABLE_DEPLOY_RECOVERY_FAILED current release repair failed" >&2
+    return 1
+  fi
+  recovered_release="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+  [ -n "$recovered_release" ] && [ -d "$recovered_release" ] || {
+    echo "IMMUTABLE_DEPLOY_RECOVERY_FAILED current release is unresolved after repair" >&2
+    return 1
+  }
+  if ! bash "$WRITE_GUARD_SCRIPT" for-release "$recovered_release"; then
+    echo "IMMUTABLE_DEPLOY_RECOVERY_FAILED compatible runtime guard selection failed" >&2
+    return 1
+  fi
+  /usr/bin/systemctl restart "$SERVICE_NAME"
+}
+
 bash "$SOURCE_DIR/scripts/check_remote_main_topology.sh" "$SOURCE_DIR"
 
 git -C "$SOURCE_DIR" checkout main
@@ -59,6 +78,7 @@ if [ "$BEFORE_SHA" != "$AFTER_SHA" ]; then
     DEPLOY_BOOTSTRAPPED_SHA="$AFTER_SHA" \
     METROTHERAPY_ENV_FILE="$ENV_FILE" \
     METRO_RUNTIME_ROOT="$RUNTIME_ROOT" \
+    METRO_CURRENT_RELEASE_LINK="$CURRENT_LINK" \
     METRO_WRITABLE_ROOT="$STATE_ROOT" \
     bash "$SOURCE_DIR/deploy.sh" "$@"
 fi
@@ -68,15 +88,13 @@ if [ -n "$BOOTSTRAPPED_SHA" ] && [ "$BOOTSTRAPPED_SHA" != "$AFTER_SHA" ]; then
   exit 4
 fi
 
-bash "$WRITE_GUARD_SCRIPT"
+bash "$WRITE_GUARD_SCRIPT" enforce
 bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"
 bash "$CANDIDATE_PREPARER" "$SOURCE_DIR"
 if bash "$SOURCE_DIR/scripts/immutable_deploy.sh" "$@"; then
   bash "$RECOVERY_SCRIPT" cleanup "$SOURCE_DIR"
 else
   code="$?"
-  if bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"; then
-    /usr/bin/systemctl restart "$SERVICE_NAME" || true
-  fi
+  restore_runtime_after_failure || true
   exit "$code"
 fi
