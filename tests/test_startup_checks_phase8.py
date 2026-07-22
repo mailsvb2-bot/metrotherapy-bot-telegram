@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from core import startup_checks
+from core import paths, startup_checks
 
 
 ENV_KEYS = {
@@ -21,6 +21,10 @@ ENV_KEYS = {
     "ALLOW_INSECURE_TELEGRAM_WEBHOOK",
     "METRO_DB_ENGINE",
     "DATABASE_URL",
+    "METRO_RUNTIME_ROOT",
+    "METRO_WRITABLE_ROOT",
+    "METRO_DATA_DIR",
+    "METRO_LOGS_DIR",
     "MESSENGER_WEBHOOK_HOST",
     "MESSENGER_WEBHOOK_PORT",
     "WEBHOOK_HOST",
@@ -167,6 +171,44 @@ def test_run_startup_checks_clean_deploy(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     for relative in ("data", "logs", "audio/demo", "audio/full"):
         assert (tmp_path / relative).is_dir()
+
+
+def test_production_startup_uses_external_writable_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    valid_prod(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "secret")
+    release = tmp_path / "release"
+    state = tmp_path / "state"
+    make_project(release)
+    monkeypatch.setenv("METRO_WRITABLE_ROOT", str(state))
+
+    assert paths.resolve_data_dir(release) == state / "data"
+    assert paths.resolve_logs_dir(release) == state / "logs"
+
+    startup_checks.run_startup_checks(release)
+
+    assert (state / "data").is_dir()
+    assert (state / "logs").is_dir()
+    assert not (release / "data").exists()
+    assert not (release / "logs").exists()
+    assert not (release / "audio").exists()
+
+
+def test_production_startup_rejects_writable_paths_inside_release(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    valid_prod(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "secret")
+    release = tmp_path / "release"
+    make_project(release)
+    monkeypatch.setenv("METRO_DATA_DIR", str(release / "data"))
+    monkeypatch.setenv("METRO_LOGS_DIR", str(tmp_path / "state" / "logs"))
+
+    with pytest.raises(startup_checks.StartupCheckError, match="METRO_DATA_DIR must be outside"):
+        startup_checks.run_startup_checks(release)
 
 
 def test_run_startup_checks_accepts_telegram_token_alias(
