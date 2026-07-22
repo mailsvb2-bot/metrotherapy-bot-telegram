@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 import pytest
 
-from handlers import start
+from handlers import payments, start
 from runtime import payment_http
 
 
@@ -21,6 +21,22 @@ class _FakeStartMessage:
             username="user",
             full_name="User Name",
             first_name="User",
+        )
+        self.answers: list[tuple[str, dict[str, Any]]] = []
+
+    async def answer(self, text: str, **kwargs: Any) -> None:
+        self.answers.append((text, kwargs))
+
+
+class _FakeStarsMessage:
+    def __init__(self) -> None:
+        self.from_user = SimpleNamespace(id=7)
+        self.successful_payment = SimpleNamespace(
+            currency="XTR",
+            invoice_payload="payload",
+            total_amount=50,
+            telegram_payment_charge_id="charge",
+            provider_payment_charge_id="provider",
         )
         self.answers: list[tuple[str, dict[str, Any]]] = []
 
@@ -69,6 +85,56 @@ async def test_legacy_gift_parser_removes_only_the_leading_prefix(
 
     assert received_codes == ["ABgift_CD"]
     assert opened == [message]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_stars_payment_gets_clear_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(payments.asyncio, "to_thread", _direct_to_thread)
+    monkeypatch.setattr(
+        payments,
+        "record_successful_stars_payment",
+        lambda **_kwargs: SimpleNamespace(duplicate=True, gift_token="", wallet_balance=None),
+    )
+    monkeypatch.setattr(payments, "kb_after_paid", lambda: "after-paid")
+
+    message = _FakeStarsMessage()
+    await payments._successful_payment(message)
+
+    assert len(message.answers) == 1
+    text, kwargs = message.answers[0]
+    assert "уже обработан" in text
+    assert "Повторного начисления не было" in text
+    assert kwargs["reply_markup"] == "after-paid"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_stars_gift_redelivers_existing_gift_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(payments.asyncio, "to_thread", _direct_to_thread)
+    monkeypatch.setattr(
+        payments,
+        "record_successful_stars_payment",
+        lambda **_kwargs: SimpleNamespace(
+            duplicate=True,
+            gift_token="gift_existing-code",
+            wallet_balance=None,
+        ),
+    )
+    delivered: list[str] = []
+
+    async def deliver(_message: Any, code: str) -> None:
+        delivered.append(code)
+
+    monkeypatch.setattr(payments, "deliver_gift_message", deliver)
+
+    message = _FakeStarsMessage()
+    await payments._successful_payment(message)
+
+    assert delivered == ["existing-code"]
+    assert message.answers == []
 
 
 @pytest.mark.asyncio
