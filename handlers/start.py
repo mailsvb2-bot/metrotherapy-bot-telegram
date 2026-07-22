@@ -156,7 +156,7 @@ async def start_cmd(message: Message):
     # Legacy short gift/referral payloads still need entry registration before special handling.
     if payload.startswith("gift_"):
         await asyncio.to_thread(_register_user_entry_safe, message, payload)
-        code = payload.replace("gift_", "").strip()
+        code = payload.removeprefix("gift_").strip()
         safe_extra = {"user_id": _user_id(message), **_payload_log_meta(payload)}
         try:
             from handlers.gift_flow import send_gift_intro
