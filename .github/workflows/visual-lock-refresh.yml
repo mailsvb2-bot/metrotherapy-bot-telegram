@@ -1,0 +1,38 @@
+name: Visual Lock Refresh
+
+on:
+  push:
+    branches:
+      - agent/visual-creative-engine
+    paths:
+      - requirements.in
+      - requirements-dev.in
+      - .github/workflows/visual-lock-refresh.yml
+
+permissions:
+  contents: read
+
+jobs:
+  refresh-locks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pip-tools
+        run: python -m pip install --disable-pip-version-check pip-tools==7.5.2
+      - name: Regenerate production lock
+        run: python -m piptools compile --generate-hashes --strip-extras --output-file=requirements.txt requirements.in
+      - name: Regenerate development lock
+        run: python -m piptools compile --generate-hashes --strip-extras --output-file=requirements-dev.txt requirements-dev.in
+      - name: Upload regenerated locks
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-lock-refresh
+          path: |
+            requirements.txt
+            requirements-dev.txt
+          if-no-files-found: error
