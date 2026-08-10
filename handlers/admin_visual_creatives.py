@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 from pathlib import Path
 
 from aiogram import Router
@@ -22,11 +23,13 @@ from services.metrotherapy_visual_creatives import (
     poll_metrotherapy_visual,
     visual_wait_seconds,
 )
+from services.visual_creative_gateway import VisualCreativeGatewayError
 
 router = Router()
 log = logging.getLogger(__name__)
 
 _VISUAL_CREATIVE_ROLES = frozenset({"admin", "marketing"})
+_JOB_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 def _uid(message: Message) -> int | None:
@@ -78,7 +81,7 @@ async def _send_job(message: Message, job) -> None:
     if job.status == "succeeded" and job.asset_ready:
         try:
             path = await asyncio.to_thread(materialize_metrotherapy_visual, job)
-        except (OSError, RuntimeError, TypeError, ValueError):
+        except VisualCreativeGatewayError:
             log.exception(
                 "Visual creative materialization failed",
                 extra={"job_id": getattr(job, "id", ""), "kind": getattr(job, "kind", "")},
@@ -124,7 +127,7 @@ async def _generate(message: Message, *, kind: str) -> None:
             country_code=os.getenv("VISUAL_DEPLOYMENT_COUNTRY", ""),
             wait_seconds=visual_wait_seconds(),
         )
-    except (OSError, RuntimeError, TypeError, ValueError):
+    except VisualCreativeGatewayError:
         log.exception("Visual creative submission failed", extra={"staff_user_id": uid, "kind": kind})
         await message.answer("Не удалось запустить генерацию. Проверьте Visual Creative Gateway.")
         return
@@ -150,7 +153,7 @@ async def creative_status(message: Message) -> None:
         return
 
     job_id = _command_payload(message)
-    if not job_id or " " in job_id:
+    if not _JOB_ID_RE.fullmatch(job_id):
         await message.answer("Использование: /creative_status <job_id>")
         return
 
@@ -160,7 +163,7 @@ async def creative_status(message: Message) -> None:
             job_id=job_id,
             scope_id=f"staff:{uid}",
         )
-    except (OSError, RuntimeError, TypeError, ValueError):
+    except VisualCreativeGatewayError:
         log.exception("Visual creative status check failed", extra={"staff_user_id": uid})
         await message.answer("Не удалось проверить статус креатива.")
         return
