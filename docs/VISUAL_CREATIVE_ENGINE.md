@@ -38,6 +38,8 @@ When the capability is enabled, configuration readiness requires:
 
 An explicitly disabled capability does not gate Metrotherapy readiness. An enabled but incomplete/unsafe configuration makes `/readyz` return not-ready, while `/healthz` remains a liveness/diagnostic probe. The readiness check is configuration-only: it deliberately does not make an outbound network request to the external gateway, so a transient creative-provider outage cannot take the therapeutic core out of service.
 
+Production startup applies the same configuration contract through `services/validators/visual_creative.py` from the normal `validate_all()` path. This makes an enabled but broken Visual Creative configuration fail fast before the worker starts serving traffic instead of relying only on a later readiness probe. Disabled Visual Creative remains completely optional and does not block startup.
+
 Do not commit real gateway tokens. The gateway URL parser rejects embedded credentials, query strings, fragments, malformed ports, traversal-style prefixes, control characters, and unsupported schemes. Non-loopback `http://` endpoints fail closed by default; `VISUAL_GATEWAY_ALLOW_INSECURE_HTTP=1` is an explicit escape hatch for controlled development networks but is not considered production-ready. Loopback HTTP remains available for local development.
 
 Outbound gateway requests do not follow HTTP redirects. This prevents the configured bearer credential and request payload from being forwarded to a different origin through a 3xx response. JSON responses must identify themselves as JSON when a `Content-Type` header is present.
@@ -56,4 +58,4 @@ The standalone gateway supplied with the integration archive must therefore be d
 
 The integration must pass the repository's existing CI without lowering or bypassing any gate. In particular, existing regression, coverage/branch-coverage ratchets, Ruff runtime-danger checks, critical mypy/Bandit checks, dependency audit, and PostgreSQL payment/concurrency probes remain authoritative.
 
-Focused tests cover capability enable/disable/legacy activation, configuration readiness, gateway request scoping, exact response scope/kind matching, response/media bounds, streaming cleanup, MIME and JSON content-type validation, fail-closed URL parsing, HTTPS-by-default transport, redirect rejection, IPv6 URL rendering, staff authorization, cross-chat idempotency, readiness integration, router registration, and temporary-file cleanup.
+Focused tests cover capability enable/disable/legacy activation, configuration readiness, production startup fail-fast, gateway request scoping, exact response scope/kind matching, response/media bounds, streaming cleanup, MIME and JSON content-type validation, fail-closed URL parsing, HTTPS-by-default transport, redirect rejection, IPv6 URL rendering, staff authorization, cross-chat idempotency, readiness integration, router registration, and temporary-file cleanup.
