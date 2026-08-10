@@ -110,6 +110,22 @@ async def test_pending_generation_returns_status_command():
 
 
 @pytest.mark.asyncio
+async def test_generation_gateway_failure_is_safe():
+    msg = message("/creative_image night city")
+    with (
+        patch.object(ui, "_can_use_visual_creatives", return_value=True),
+        patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+        patch.object(
+            ui,
+            "create_metrotherapy_visual",
+            side_effect=ui.VisualCreativeGatewayError("visual_gateway_transport_URLError"),
+        ),
+    ):
+        await ui.creative_image(msg)
+    assert "Visual Creative Gateway" in msg.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
 async def test_ready_image_is_materialized_sent_and_cleaned(tmp_path):
     msg = message("/creative_image rain")
     path = tmp_path / "image.png"
@@ -142,11 +158,44 @@ async def test_ready_video_is_materialized_sent_and_cleaned(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_status_requires_one_job_id():
-    msg = message("/creative_status too many args")
-    with patch.object(ui, "_can_use_visual_creatives", return_value=True):
+async def test_materialization_gateway_failure_is_safe():
+    msg = message("/creative_image rain")
+    with (
+        patch.object(ui, "_can_use_visual_creatives", return_value=True),
+        patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+        patch.object(ui, "create_metrotherapy_visual", return_value=job(status="succeeded", ready=True)),
+        patch.object(
+            ui,
+            "materialize_metrotherapy_visual",
+            side_effect=ui.VisualCreativeGatewayError("visual_gateway_materialization_failed"),
+        ),
+    ):
+        await ui.creative_image(msg)
+    assert "безопасно получить" in msg.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_failed_job_reports_provider_error():
+    msg = message("/creative_image rain")
+    with (
+        patch.object(ui, "_can_use_visual_creatives", return_value=True),
+        patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+        patch.object(ui, "create_metrotherapy_visual", return_value=job(status="failed")),
+    ):
+        await ui.creative_image(msg)
+    assert "provider_failed" in msg.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_status_requires_valid_job_id():
+    msg = message("/creative_status ../escape")
+    with (
+        patch.object(ui, "_can_use_visual_creatives", return_value=True),
+        patch.object(ui, "poll_metrotherapy_visual") as poll,
+    ):
         await ui.creative_status(msg)
     assert "Использование" in msg.answer.await_args.args[0]
+    poll.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -155,7 +204,11 @@ async def test_status_poll_failure_is_safe():
     with (
         patch.object(ui, "_can_use_visual_creatives", return_value=True),
         patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
-        patch.object(ui, "poll_metrotherapy_visual", side_effect=RuntimeError("down")),
+        patch.object(
+            ui,
+            "poll_metrotherapy_visual",
+            side_effect=ui.VisualCreativeGatewayError("visual_gateway_transport_URLError"),
+        ),
     ):
         await ui.creative_status(msg)
     assert "Не удалось" in msg.answer.await_args.args[0]
