@@ -52,6 +52,7 @@ def test_command_payload_uid_and_chat_id():
 
 def test_visual_authorization_is_role_and_permission_scoped():
     with (
+        patch.object(ui, "visual_creative_enabled", return_value=True),
         patch.object(ui, "is_superadmin", return_value=False),
         patch.object(ui, "staff_roles", return_value={"support"}),
         patch.object(ui, "can_use_scoped_admin_permission", return_value=True),
@@ -59,6 +60,7 @@ def test_visual_authorization_is_role_and_permission_scoped():
         assert ui._can_use_visual_creatives(101) is False
 
     with (
+        patch.object(ui, "visual_creative_enabled", return_value=True),
         patch.object(ui, "is_superadmin", return_value=False),
         patch.object(ui, "staff_roles", return_value={"marketing"}),
         patch.object(ui, "can_use_scoped_admin_permission", return_value=True),
@@ -67,8 +69,20 @@ def test_visual_authorization_is_role_and_permission_scoped():
 
 
 def test_superadmin_can_use_visual_creatives_without_db_role():
-    with patch.object(ui, "is_superadmin", return_value=True):
+    with (
+        patch.object(ui, "visual_creative_enabled", return_value=True),
+        patch.object(ui, "is_superadmin", return_value=True),
+    ):
         assert ui._can_use_visual_creatives(101) is True
+
+
+def test_disabled_capability_denies_even_superadmin():
+    with (
+        patch.object(ui, "visual_creative_enabled", return_value=False),
+        patch.object(ui, "is_superadmin", return_value=True) as is_superadmin,
+    ):
+        assert ui._can_use_visual_creatives(101) is False
+    is_superadmin.assert_not_called()
 
 
 def test_idempotency_key_is_unique_across_chats():
@@ -99,6 +113,7 @@ async def test_pending_generation_returns_status_command():
     msg = message("/creative_image night city")
     with (
         patch.object(ui, "_can_use_visual_creatives", return_value=True),
+        patch.object(ui, "visual_creative_country_code", return_value="RU"),
         patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
         patch.object(ui, "create_metrotherapy_visual", return_value=job()) as create_visual,
     ):
@@ -106,6 +121,7 @@ async def test_pending_generation_returns_status_command():
     assert "/creative_status gateway-job" in msg.answer.await_args.args[0]
     kwargs = create_visual.call_args.kwargs
     assert kwargs["scope_id"] == "staff:101"
+    assert kwargs["country_code"] == "RU"
     assert kwargs["idempotency_key"].startswith("metro:")
 
 

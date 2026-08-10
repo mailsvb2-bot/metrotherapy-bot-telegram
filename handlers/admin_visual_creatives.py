@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import os
 import re
 from pathlib import Path
 
@@ -22,6 +21,10 @@ from services.metrotherapy_visual_creatives import (
     materialize_metrotherapy_visual,
     poll_metrotherapy_visual,
     visual_wait_seconds,
+)
+from services.visual_creative_capability import (
+    visual_creative_country_code,
+    visual_creative_enabled,
 )
 from services.visual_creative_gateway import VisualCreativeGatewayError
 
@@ -46,8 +49,10 @@ def _command_payload(message: Message) -> str:
 
 
 def _can_use_visual_creatives(user_id: int) -> bool:
-    """Authorize costly marketing generation without widening generic staff access."""
+    """Authorize the enabled marketing capability without widening staff access."""
 
+    if not visual_creative_enabled():
+        return False
     uid = int(user_id)
     if is_superadmin(uid):
         return True
@@ -124,7 +129,7 @@ async def _generate(message: Message, *, kind: str) -> None:
             kind=kind,
             scope_id=f"staff:{uid}",
             idempotency_key=_idempotency_key(message, user_id=uid, kind=kind),
-            country_code=os.getenv("VISUAL_DEPLOYMENT_COUNTRY", ""),
+            country_code=visual_creative_country_code(),
             wait_seconds=visual_wait_seconds(),
         )
     except VisualCreativeGatewayError:

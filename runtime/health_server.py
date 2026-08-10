@@ -27,6 +27,7 @@ from services.growth_click_tracking import build_click_redirect_target, record_c
 from services.messenger.preflight import check_all_preflights
 from services.scheduler import scheduler_health_snapshot
 from services.validators.audio import audio_readiness
+from services.visual_creative_capability import visual_creative_configuration_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -297,7 +298,9 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
     messenger_webhook_enabled = _messenger_webhook_configured()
     telegram_webhook_enabled = telegram_transport_value == 'webhook'
     webhook_runtime_enabled = _webhook_configured()
+    app_env = (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower()
     _, _, messenger_preflight_fields = _messenger_preflight_readiness()
+    visual_creative_fields = visual_creative_configuration_snapshot(app_env=app_env)
     details: dict[str, Any] = {
         'ok': True,
         'service': 'metrotherapy',
@@ -308,10 +311,11 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
         'telegram_webhook_enabled': telegram_webhook_enabled,
         'messenger_webhook_enabled': messenger_webhook_enabled,
         'webhook_runtime_enabled': webhook_runtime_enabled,
-        'app_env': (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower(),
+        'app_env': app_env,
         **_ingress_health_fields(),
         **_storage_health_fields(),
         **messenger_preflight_fields,
+        **visual_creative_fields,
         **ai_policy_snapshot(),
         **scheduler,
     }
@@ -330,6 +334,9 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
     scheduler_ok, scheduler_errors, scheduler_flags = _scheduler_readiness(scheduler)
     ingress_ok, ingress_errors, ingress_fields = _messenger_preflight_readiness()
     audio_ok, audio_error = _audio_ready(app_env)
+    visual_creative_fields = visual_creative_configuration_snapshot(app_env=app_env)
+    visual_creative_ok = bool(visual_creative_fields.get('visual_creative_ready'))
+    visual_creative_errors = list(visual_creative_fields.get('visual_creative_configuration_errors') or [])
     webhook_ok = True
     if app_env in {'prod', 'production'} and (http_ingress_enabled() or telegram_webhook_enabled):
         webhook_ok = webhook_runtime_enabled
@@ -342,9 +349,18 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         errors.append(audio_error)
     errors.extend(scheduler_errors)
     errors.extend(ingress_errors)
+    errors.extend(f'visual_creative:{error}' for error in visual_creative_errors)
     if not webhook_ok:
         errors.append('webhook:not_ready')
-    ready = bool(db_ok and schema_ok and scheduler_ok and ingress_ok and audio_ok and webhook_ok)
+    ready = bool(
+        db_ok
+        and schema_ok
+        and scheduler_ok
+        and ingress_ok
+        and audio_ok
+        and visual_creative_ok
+        and webhook_ok
+    )
     details: dict[str, Any] = {
         'ok': ready,
         'service': 'metrotherapy',
@@ -355,6 +371,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         'scheduler_ready': scheduler_ok,
         'messenger_ready': ingress_ok,
         'ingress_ready': ingress_ok,
+        'visual_creative_ready': visual_creative_ok,
         'webhook_ready': webhook_ok,
         'required_tables': required_readiness_tables(),
         'db_engine': CONFIG.engine,
@@ -368,6 +385,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         **scheduler_flags,
         **_storage_health_fields(),
         **ingress_fields,
+        **visual_creative_fields,
         **ai_policy_snapshot(),
         **scheduler,
     }
