@@ -10,6 +10,7 @@ GROWTH_APPLY_REVIEW_PERMISSION = "admin:growth:apply:review"
 SALES_DESK_PERMISSION = "admin:sales"
 SALES_WRITE_PERMISSION = "admin:sales:write"
 SALES_MESSAGE_PERMISSION = "admin:sales:message"
+VISUAL_CREATIVE_PERMISSION = "admin:visual:creative"
 
 SUPPORT_ROLE = "support"
 MARKETING_ROLE = "marketing"
@@ -33,6 +34,7 @@ _MARKETING_PERMISSIONS = {
     SALES_DESK_PERMISSION,
     SALES_WRITE_PERMISSION,
     SALES_MESSAGE_PERMISSION,
+    VISUAL_CREATIVE_PERMISSION,
     "admin:adlinks",
     "admin:funnel",
     "admin:money:today",
@@ -238,6 +240,7 @@ PERMS: list[PermItem] = [
     PermItem(SALES_DESK_PERMISSION, "🧑‍💼 Sales Desk (просмотр)"),
     PermItem(SALES_WRITE_PERMISSION, "✍️ Sales Desk (изменение)"),
     PermItem(SALES_MESSAGE_PERMISSION, "✉️ Sales Desk (сообщения)"),
+    PermItem(VISUAL_CREATIVE_PERMISSION, "🎨 Visual Creative Engine"),
     PermItem("admin:funnel", "📉 Воронка"),
     PermItem("admin:money:today", "💰 Деньги и клиенты"),
     PermItem("admin:conversion", "💰 Конверсия"),

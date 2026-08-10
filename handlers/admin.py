@@ -6,10 +6,12 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from handlers.admin_visual_creatives import router as visual_creatives_router
 from services.admin import is_platform_admin, is_staff
 from services.db import db
 
 router = Router()
+router.include_router(visual_creatives_router)
 
 
 def _message_user_id(message: Message) -> int | None:
