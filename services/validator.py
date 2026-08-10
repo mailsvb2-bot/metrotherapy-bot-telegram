@@ -32,6 +32,7 @@ from services.validators.release import (
 )
 from services.validators.architecture import validate_architecture_contracts
 from services.validators.prod import validate_prod_guardrails
+from services.validators.visual_creative import validate_prod_visual_creative_contract
 from services.validators.payment_contracts import validate_payment_contracts
 from services.validators.privacy import validate_privacy_schema
 
@@ -42,6 +43,7 @@ def validate_all(strict: bool = True) -> None:
     guardrails_strict = os.getenv("VALIDATOR_GUARDRAILS_STRICT", "0").strip().lower() in {"1", "true", "yes", "on"}
 
     validate_prod_guardrails(strict=True)
+    validate_prod_visual_creative_contract(strict=True)
     validate_demo_audio(strict=strict)
     validate_full_audio(strict=strict)
     validate_db_schema(strict=strict)
