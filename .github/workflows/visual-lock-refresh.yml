@@ -8,6 +8,11 @@ on:
       - requirements.in
       - requirements-dev.in
       - .github/workflows/visual-lock-refresh.yml
+  pull_request:
+    paths:
+      - requirements.in
+      - requirements-dev.in
+      - .github/workflows/visual-lock-refresh.yml
 
 permissions:
   contents: read
