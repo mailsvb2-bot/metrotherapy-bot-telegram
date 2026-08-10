@@ -68,7 +68,11 @@ def _base_url() -> str:
         or parsed.fragment
     ):
         raise VisualCreativeGatewayError("visual_gateway_not_configured")
-    port = f":{parsed.port}" if parsed.port else ""
+    try:
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise VisualCreativeGatewayError("visual_gateway_not_configured") from exc
+    port = f":{parsed_port}" if parsed_port else ""
     prefix = parsed.path.rstrip("/")
     return f"{parsed.scheme}://{parsed.hostname}{port}{prefix}"
 
