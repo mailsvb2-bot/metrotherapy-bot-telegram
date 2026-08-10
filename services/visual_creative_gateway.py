@@ -108,7 +108,14 @@ def _read_limited(response: Any, limit: int) -> bytes:
     return b"".join(chunks)
 
 
-def _request(method: str, path: str, *, payload: dict[str, Any] | None = None, max_bytes: int, timeout_seconds: int | None = None) -> tuple[dict[str, str], bytes]:
+def _request(
+    method: str,
+    path: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    max_bytes: int,
+    timeout_seconds: int | None = None,
+) -> tuple[dict[str, str], bytes]:
     body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         _base_url() + path,
@@ -129,11 +136,23 @@ def _request(method: str, path: str, *, payload: dict[str, Any] | None = None, m
         except OSError:
             pass
         raise VisualCreativeGatewayError(f"visual_gateway_http_{int(exc.code)}") from None
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-        raise VisualCreativeGatewayError(f"visual_gateway_transport_{type(exc).__name__}") from None
+    except urllib.error.URLError as exc:
+        raise VisualCreativeGatewayError("visual_gateway_transport_URLError") from exc
+    except TimeoutError as exc:
+        raise VisualCreativeGatewayError("visual_gateway_transport_TimeoutError") from exc
+    except OSError as exc:
+        raise VisualCreativeGatewayError("visual_gateway_transport_OSError") from exc
+    except ValueError as exc:
+        raise VisualCreativeGatewayError("visual_gateway_transport_ValueError") from exc
 
 
-def _json(method: str, path: str, *, payload: dict[str, Any] | None = None, timeout_seconds: int | None = None) -> dict[str, Any]:
+def _json(
+    method: str,
+    path: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
     _, raw = _request(
         method,
         path,
@@ -175,7 +194,13 @@ def _job(value: dict[str, Any]) -> VisualCreativeJob:
     )
 
 
-def submit_visual(brief: VisualCreativeBrief, *, scope_id: str, idempotency_key: str, wait_seconds: int = 0) -> VisualCreativeJob:
+def submit_visual(
+    brief: VisualCreativeBrief,
+    *,
+    scope_id: str,
+    idempotency_key: str,
+    wait_seconds: int = 0,
+) -> VisualCreativeJob:
     kind = str(brief.kind or "").strip().lower()
     prompt = str(brief.prompt or "").strip()
     if kind not in {"image", "video"} or not prompt:
@@ -226,6 +251,15 @@ def wait_visual(job: VisualCreativeJob, *, wait_seconds: int = 20, poll_interval
     return current
 
 
+def _remove_partial_file(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def download_visual(job: VisualCreativeJob, *, output_dir: str | None = None) -> Path:
     if job.status != "succeeded" or not job.asset_ready:
         raise VisualCreativeGatewayError("visual_content_not_ready")
@@ -233,7 +267,12 @@ def download_visual(job: VisualCreativeJob, *, output_dir: str | None = None) ->
     if not re.fullmatch(r"[A-Za-z0-9_.:@/-]{1,160}", job.scope_id):
         raise VisualCreativeGatewayError("visual_gateway_invalid_scope")
     query = urllib.parse.urlencode({"scope_id": job.scope_id})
-    max_media = _env_int("VISUAL_GATEWAY_MAX_MEDIA_BYTES", 256 * 1024 * 1024, minimum=1024 * 1024, maximum=1024 * 1024 * 1024)
+    max_media = _env_int(
+        "VISUAL_GATEWAY_MAX_MEDIA_BYTES",
+        256 * 1024 * 1024,
+        minimum=1024 * 1024,
+        maximum=1024 * 1024 * 1024,
+    )
     headers, raw = _request("GET", f"/v1/creative/generations/{token}/content?{query}", max_bytes=max_media)
     mime = str(headers.get("content-type") or job.mime_type or "").split(";", 1)[0].strip().lower()
     expected = "video/" if job.kind == "video" else "image/"
@@ -243,13 +282,22 @@ def download_visual(job: VisualCreativeJob, *, output_dir: str | None = None) ->
     if suffix == ".jpe":
         suffix = ".jpg"
     suffix = suffix or (".mp4" if job.kind == "video" else ".jpg")
-    root = Path(output_dir or os.getenv("VISUAL_CREATIVE_OUTPUT_DIR", "data/visual_creatives")).expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / f"{job.kind}-{job.id}{suffix}"
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_bytes(raw)
-    os.replace(tmp, target)
-    return target
+
+    tmp: Path | None = None
+    try:
+        root = Path(output_dir or os.getenv("VISUAL_CREATIVE_OUTPUT_DIR", "data/visual_creatives")).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        target = root / f"{job.kind}-{job.id}{suffix}"
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_bytes(raw)
+        os.replace(tmp, target)
+        return target
+    except OSError as exc:
+        _remove_partial_file(tmp)
+        raise VisualCreativeGatewayError("visual_gateway_materialization_failed") from exc
+    except RuntimeError as exc:
+        _remove_partial_file(tmp)
+        raise VisualCreativeGatewayError("visual_gateway_materialization_failed") from exc
 
 
 def gateway_snapshot() -> dict[str, Any]:
