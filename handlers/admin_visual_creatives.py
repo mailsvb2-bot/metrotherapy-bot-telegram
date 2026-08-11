@@ -16,6 +16,10 @@ from services.admin import (
     staff_roles,
 )
 from services.admin_permissions import VISUAL_CREATIVE_PERMISSION
+from services.metrotherapy_creative_studio import (
+    build_metrotherapy_studio_variants,
+    submit_metrotherapy_studio_variant,
+)
 from services.metrotherapy_visual_creatives import (
     create_metrotherapy_visual,
     materialize_metrotherapy_visual,
@@ -25,14 +29,23 @@ from services.metrotherapy_visual_creatives import (
 from services.visual_creative_capability import (
     visual_creative_country_code,
     visual_creative_enabled,
+    visual_creative_studio_enabled,
 )
-from services.visual_creative_gateway import VisualCreativeGatewayError
+from services.visual_creative_gateway import (
+    VisualCreativeGatewayError,
+    download_render_asset,
+)
 
 router = Router()
 log = logging.getLogger(__name__)
 
 _VISUAL_CREATIVE_ROLES = frozenset({"admin", "marketing"})
 _JOB_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_STUDIO_LABELS = {
+    "night_city": "Ночной город и отражения",
+    "nature_breath": "Природа, воздух и пространство",
+    "warm_human": "Тёплая человеческая сцена",
+}
 
 
 def _uid(message: Message) -> int | None:
@@ -59,6 +72,29 @@ def _can_use_visual_creatives(user_id: int) -> bool:
     if not (staff_roles(uid) & _VISUAL_CREATIVE_ROLES):
         return False
     return can_use_scoped_admin_permission(uid, VISUAL_CREATIVE_PERMISSION)
+
+
+def _can_use_creative_studio(user_id: int) -> bool:
+    return bool(visual_creative_studio_enabled() and _can_use_visual_creatives(user_id))
+
+
+def _parse_pack_payload(raw: str) -> tuple[str, int, str]:
+    parts = str(raw or "").strip().split(maxsplit=2)
+    if len(parts) != 3:
+        raise ValueError("creative_pack_payload_required")
+    kind = parts[0].strip().lower()
+    if kind not in {"image", "video"}:
+        raise ValueError("creative_pack_kind_invalid")
+    try:
+        index = int(parts[1])
+    except ValueError as exc:
+        raise ValueError("creative_pack_variant_invalid") from exc
+    if index not in {1, 2, 3}:
+        raise ValueError("creative_pack_variant_invalid")
+    concept = " ".join(parts[2].split())
+    if not concept:
+        raise ValueError("creative_pack_concept_required")
+    return kind, index, concept
 
 
 def _idempotency_key(message: Message, *, user_id: int, kind: str) -> str:
@@ -109,6 +145,39 @@ async def _send_job(message: Message, job) -> None:
         return
 
     await message.answer(f"Не удалось создать креатив: {job.error_code or 'provider_failed'}")
+
+
+async def _send_render_pack(message: Message, pack, *, variant_id: str) -> None:
+    preferred = ("story", "feed", "square", "landscape")
+    ready = {
+        str(asset.format_id): asset
+        for asset in tuple(getattr(pack, "assets", ()) or ())
+        if bool(getattr(asset, "asset_ready", False))
+    }
+    selected = next((name for name in preferred if name in ready), None)
+    if selected is None:
+        await message.answer("Render pack создан, но готового preview-файла нет.")
+        return
+
+    try:
+        path = await asyncio.to_thread(download_render_asset, pack, selected)
+    except VisualCreativeGatewayError:
+        log.exception(
+            "Creative studio render materialization failed",
+            extra={"pack_id": getattr(pack, "id", ""), "variant_id": variant_id},
+        )
+        await message.answer("Вариант создан, но preview-файл безопасно получить не удалось.")
+        return
+
+    try:
+        caption = f"Creative Studio · {selected} · {variant_id}"
+        asset = ready[selected]
+        if str(getattr(asset, "kind", "")) == "video":
+            await message.answer_video(FSInputFile(path), caption=caption)
+        else:
+            await message.answer_photo(FSInputFile(path), caption=caption)
+    finally:
+        await asyncio.to_thread(_remove_local_materialization, path)
 
 
 async def _generate(message: Message, *, kind: str) -> None:
@@ -174,3 +243,102 @@ async def creative_status(message: Message) -> None:
         return
 
     await _send_job(message, job)
+
+
+@router.message(Command("creative_concepts"))
+async def creative_concepts(message: Message) -> None:
+    uid = _uid(message)
+    if uid is None or not _can_use_creative_studio(uid):
+        await message.answer("Недоступно.")
+        return
+
+    concept = _command_payload(message)
+    if not concept:
+        await message.answer("Использование: /creative_concepts <идея рекламного материала>")
+        return
+
+    try:
+        variants = build_metrotherapy_studio_variants(
+            concept,
+            kind="image",
+            country_code=visual_creative_country_code(),
+        )
+    except ValueError:
+        await message.answer("Не удалось безопасно подготовить концепции.")
+        return
+
+    lines = ["Creative Studio подготовил 3 направления без платной AI-генерации:"]
+    for index, variant in enumerate(variants, start=1):
+        label = _STUDIO_LABELS.get(str(variant.angle_id), str(variant.angle_id))
+        lines.append(f"{index}. {label}")
+    lines.extend(
+        [
+            "",
+            "Запустить выбранный вариант:",
+            "/creative_pack image 1 <та же идея>",
+            "или /creative_pack video 1 <та же идея>",
+            "",
+            "AI вызывается только после выбора варианта.",
+        ]
+    )
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("creative_pack"))
+async def creative_pack(message: Message) -> None:
+    uid = _uid(message)
+    if uid is None or not _can_use_creative_studio(uid):
+        await message.answer("Недоступно.")
+        return
+
+    try:
+        kind, index, concept = _parse_pack_payload(_command_payload(message))
+        variants = build_metrotherapy_studio_variants(
+            concept,
+            kind=kind,
+            country_code=visual_creative_country_code(),
+        )
+        variant = variants[index - 1]
+        job, pack = await asyncio.to_thread(
+            submit_metrotherapy_studio_variant,
+            variant,
+            staff_user_id=uid,
+            wait_seconds=visual_wait_seconds(),
+        )
+    except (IndexError, TypeError, ValueError):
+        await message.answer(
+            "Использование: /creative_pack image|video 1|2|3 <идея>. "
+            "Опасные лечебные/принуждающие обещания блокируются до AI-вызова."
+        )
+        return
+    except VisualCreativeGatewayError:
+        log.exception("Creative studio submission failed", extra={"staff_user_id": uid})
+        await message.answer("Не удалось запустить Creative Studio. Проверьте Visual Creative Gateway.")
+        return
+
+    if pack is not None:
+        pack_status = str(getattr(pack, "status", ""))
+        if pack_status == "succeeded":
+            await _send_render_pack(message, pack, variant_id=variant.variant_id)
+            return
+        if pack_status == "running":
+            await message.answer(
+                "Исходный визуал готов, render pack ещё формируется. "
+                "Повторите ту же команду позже — idempotency не создаст второй render pack."
+            )
+            return
+        if pack_status == "failed":
+            error_code = str(getattr(pack, "error_code", "") or "render_failed")
+            await message.answer(f"Исходный визуал готов, но render pack не создан: {error_code}")
+            return
+
+    if job.status in {"queued", "running"}:
+        await message.answer(
+            "Выбранный вариант ещё генерируется. Повторите ту же команду позже — "
+            "idempotency не создаст вторую платную генерацию."
+        )
+        return
+    if job.status == "succeeded":
+        await message.answer("Исходный визуал готов, но render pack пока не сформирован.")
+        return
+    await message.answer(f"Не удалось создать вариант: {job.error_code or 'provider_failed'}")
