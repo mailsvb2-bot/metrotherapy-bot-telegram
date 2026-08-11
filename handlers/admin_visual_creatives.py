@@ -31,10 +31,8 @@ from services.visual_creative_capability import (
     visual_creative_enabled,
     visual_creative_studio_enabled,
 )
-from services.visual_creative_gateway import (
-    VisualCreativeGatewayError,
-    download_render_asset,
-)
+from services.visual_creative_gateway import VisualCreativeGatewayError
+from services.visual_creative_render_gateway import download_render_asset
 
 router = Router()
 log = logging.getLogger(__name__)
