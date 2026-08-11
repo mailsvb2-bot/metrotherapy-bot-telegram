@@ -10,6 +10,7 @@ def _clear(monkeypatch) -> None:
     for name in (
         "APP_ENV",
         "VISUAL_CREATIVE_ENABLED",
+        "VISUAL_CREATIVE_STUDIO_ENABLED",
         "VISUAL_GATEWAY_URL",
         "VISUAL_GATEWAY_TOKEN",
         "VISUAL_GATEWAY_ALLOW_INSECURE_HTTP",
@@ -76,6 +77,25 @@ def test_invalid_enabled_flag_fails_closed_in_production(monkeypatch):
     monkeypatch.setenv("VISUAL_CREATIVE_ENABLED", "sometimes")
 
     with pytest.raises(ValidationError, match="invalid_enabled_flag"):
+        validate_prod_visual_creative_contract()
+
+
+def test_studio_requires_base_capability_in_production(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("VISUAL_CREATIVE_ENABLED", "0")
+    monkeypatch.setenv("VISUAL_CREATIVE_STUDIO_ENABLED", "1")
+
+    with pytest.raises(ValidationError, match="studio_requires_visual_creative"):
+        validate_prod_visual_creative_contract()
+
+
+def test_invalid_studio_flag_fails_closed_in_production(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("VISUAL_CREATIVE_STUDIO_ENABLED", "sometimes")
+
+    with pytest.raises(ValidationError, match="invalid_studio_enabled_flag"):
         validate_prod_visual_creative_contract()
 
 
