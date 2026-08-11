@@ -7,6 +7,7 @@ def _clear(monkeypatch) -> None:
     for name in (
         "APP_ENV",
         "VISUAL_CREATIVE_ENABLED",
+        "VISUAL_CREATIVE_STUDIO_ENABLED",
         "VISUAL_GATEWAY_URL",
         "VISUAL_GATEWAY_TOKEN",
         "VISUAL_GATEWAY_ALLOW_INSECURE_HTTP",
