@@ -10,11 +10,10 @@ from services.metrotherapy_creative_experiments import stable_marketing_experime
 from services.visual_creative_gateway import (
     VisualCreativeBrief,
     VisualCreativeJob,
-    VisualRenderPack,
     poll_visual,
-    render_visual_pack,
     submit_visual,
 )
+from services.visual_creative_render_gateway import VisualRenderPack, render_visual_pack
 
 _COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 _ANGLES = (
