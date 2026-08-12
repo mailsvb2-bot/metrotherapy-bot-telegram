@@ -149,6 +149,7 @@ def diagnose_growth_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     demo_sent = safe_int(funnel.get("demo_sent_users"))
     demo_ack = safe_int(funnel.get("demo_ack_users"))
     tariff_open = safe_int(funnel.get("tariff_open_users"))
+    checkout_started = safe_int(funnel.get("payment_started_users"))
     paid = _paid_users_from_snapshot(funnel=funnel, payments=payments)
     revenue_minor = safe_int(payments.get("revenue_minor"))
 
@@ -174,13 +175,35 @@ def diagnose_growth_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
             risk="medium",
         ))
 
-    if tariff_open >= 5 and paid == 0:
+    # Separate offer friction from actual payment friction. A tariff view is not
+    # a checkout attempt; payment_started is emitted only after a real provider
+    # invoice/confirmation surface has been created.
+    if tariff_open >= 5 and checkout_started == 0:
         recs.append(recommendation(
             priority="red",
-            kind="tariff_to_payment_drop",
-            title="Тарифы открывают, но не платят",
-            evidence=[f"tariff_open: {tariff_open}", f"paid_users: {paid}"],
-            action="Проверить цену, доверие, платёжный UX и текст перед оплатой. Не винить рекламу до проверки оплаты.",
+            kind="tariff_to_checkout_drop",
+            title="Тарифы открывают, но оплату не начинают",
+            evidence=[
+                f"tariff_open: {tariff_open}",
+                f"checkout_started: {checkout_started}",
+                f"tariff→checkout: {pct(checkout_started, tariff_open) or 0}%",
+            ],
+            action="Проверить упаковку тарифов, ценность пакетов, доверие и CTA до платёжного экрана. Платёжный провайдер пока не считать виноватым.",
+            confidence=confidence,
+            risk="medium",
+        ))
+
+    if checkout_started >= 3 and paid == 0:
+        recs.append(recommendation(
+            priority="red",
+            kind="checkout_to_payment_drop",
+            title="Оплату начинают, но не завершают",
+            evidence=[
+                f"checkout_started: {checkout_started}",
+                f"paid_users: {paid}",
+                f"checkout→payment: {pct(paid, checkout_started) or 0}%",
+            ],
+            action="Проверить конкретный платёжный UX: Stars/top-up возврат, YooKassa redirect, ошибки pre-checkout и доверие на финальном подтверждении. Не менять рекламу до проверки checkout.",
             confidence=confidence,
             risk="medium",
         ))
@@ -364,7 +387,8 @@ def format_growth_autopilot_report(snapshot: dict[str, Any]) -> str:
         f"— демо отправлено: {safe_int(funnel.get('demo_sent_users'))} ({fmt_pct(funnel.get('start_to_demo_pct'))} от /start)",
         f"— демо подтверждено: {safe_int(funnel.get('demo_ack_users'))} ({fmt_pct(funnel.get('demo_to_ack_pct'))} от demo)",
         f"— тарифы открыли: {safe_int(funnel.get('tariff_open_users'))} ({fmt_pct(funnel.get('ack_to_tariff_pct'))} от ack)",
-        f"— оплатили пользователей: {paid_users} ({fmt_pct(funnel.get('start_to_paid_pct'))} от /start)",
+        f"— checkout начали: {safe_int(funnel.get('payment_started_users'))} ({fmt_pct(pct(safe_int(funnel.get('payment_started_users')), safe_int(funnel.get('tariff_open_users'))))} от тарифов)",
+        f"— оплатили пользователей: {paid_users} ({fmt_pct(pct(paid_users, safe_int(funnel.get('payment_started_users'))))} от checkout; {fmt_pct(funnel.get('start_to_paid_pct'))} от /start)",
         "",
         "💰 Деньги / реклама",
         f"— успешных платежей: {payment_rows}",
