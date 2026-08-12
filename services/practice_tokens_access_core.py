@@ -45,10 +45,15 @@ def _low_balance_warning(user_id: int, wallet_after: PracticeWallet) -> str:
     """Return a sparse, delivery-aware refill hint after a successful reserve.
 
     This is advisory only: wallet enforcement and reservation semantics stay
-    authoritative.  We warn at two deterministic boundaries instead of on every
-    practice: roughly two days of the user's current delivery cadence, and the
-    final token.  A preference-read failure must never block paid audio access.
+    authoritative. A warning requires a wallet snapshot that still reflects the
+    active reservation created for this delivery. We warn at two deterministic
+    boundaries instead of on every practice: roughly two days of the user's
+    current delivery cadence, and the final token. A preference-read failure
+    must never block paid audio access.
     """
+
+    if int(wallet_after.reserved_tokens) <= 0:
+        return ""
 
     remaining = max(0, int(wallet_after.available_tokens))
     if remaining == 0:
@@ -64,7 +69,7 @@ def _low_balance_warning(user_id: int, wallet_after: PracticeWallet) -> str:
     except (sqlite3.Error, RuntimeError, TypeError, ValueError):
         per_day = 1
 
-    # A paused user may still request an individual practice manually.  Use the
+    # A paused user may still request an individual practice manually. Use the
     # conservative single-daily boundary instead of suppressing the signal.
     effective_per_day = max(1, per_day)
     threshold = max(2, effective_per_day * _LOW_BALANCE_WARNING_DAYS)
