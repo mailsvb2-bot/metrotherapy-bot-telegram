@@ -4,7 +4,7 @@ set -Eeuo pipefail
 APP_DIR="${APP_DIR:-/root/metrotherapy}"
 INNER_WORKER="${DEPLOY_INNER_WORKER:-$APP_DIR/scripts/run_deploy_worker.sh}"
 LIVE_PROOF_RUNNER="${LIVE_PROOF_RUNNER:-$APP_DIR/scripts/production_live_proofs.py}"
-YOOKASSA_REFUND_DRILL="${YOOKASSA_REFUND_DRILL:-$APP_DIR/scripts/yookassa_refund_drill.py}"
+YOOKASSA_REFUND_DRILL="${YOOKASSA_REFUND_DRILL:-$APP_DIR/scripts/yookassa_refund_drill_guard.py}"
 CURRENT_RELEASE_LINK="${METRO_CURRENT_RELEASE_LINK:-/var/lib/metrotherapy/runtime/current}"
 YOOKASSA_REFUND_PYTHON="${YOOKASSA_REFUND_PYTHON:-$CURRENT_RELEASE_LINK/.venv/bin/python}"
 LOG_FILE="${LOG_FILE:-/var/log/metrotherapy_deploy.log}"
