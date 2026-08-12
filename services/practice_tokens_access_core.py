@@ -5,6 +5,7 @@ import uuid
 from typing import Any
 
 from services.db import db, tx
+from services.practice_token_contract import daily_practice_cost
 from services.practice_token_lots import (
     consume_lot_reservation,
     release_lot_reservation,
@@ -19,10 +20,66 @@ from services.practice_tokens_wallet import (
     enforcement_mode,
     ensure_schema,
     ensure_wallet,
+    get_delivery_mode,
     get_wallet_in_conn,
     insert_ledger,
     token_economy_enabled,
 )
+
+_LOW_BALANCE_WARNING_DAYS = 2
+
+
+def _practice_word(count: int) -> str:
+    value = abs(int(count)) % 100
+    tail = value % 10
+    if 11 <= value <= 14:
+        return "практик"
+    if tail == 1:
+        return "практика"
+    if 2 <= tail <= 4:
+        return "практики"
+    return "практик"
+
+
+def _low_balance_warning(user_id: int, wallet_after: PracticeWallet) -> str:
+    """Return a sparse, delivery-aware refill hint after a successful reserve.
+
+    This is advisory only: wallet enforcement and reservation semantics stay
+    authoritative.  We warn at two deterministic boundaries instead of on every
+    practice: roughly two days of the user's current delivery cadence, and the
+    final token.  A preference-read failure must never block paid audio access.
+    """
+
+    remaining = max(0, int(wallet_after.available_tokens))
+    if remaining == 0:
+        return (
+            "💡 Эта практика использовала последний доступный токен. "
+            "Чтобы следующий аудиотранс не прервался, пакет можно пополнить заранее "
+            "в «💳 Пакеты практик»."
+        )
+
+    try:
+        mode = get_delivery_mode(int(user_id))
+        per_day = max(0, int(daily_practice_cost(mode)))
+    except (sqlite3.Error, RuntimeError, TypeError, ValueError):
+        per_day = 1
+
+    # A paused user may still request an individual practice manually.  Use the
+    # conservative single-daily boundary instead of suppressing the signal.
+    effective_per_day = max(1, per_day)
+    threshold = max(2, effective_per_day * _LOW_BALANCE_WARNING_DAYS)
+    if remaining != threshold:
+        return ""
+
+    cadence = (
+        "примерно на два дня Вашего текущего режима"
+        if per_day > 0
+        else "небольшой запас для ручного продолжения"
+    )
+    return (
+        f"💡 После этой практики на балансе останется {remaining} {_practice_word(remaining)} — {cadence}. "
+        "Если хотите продолжить без паузы, пакет можно пополнить заранее в «💳 Пакеты практик»."
+    )
 
 
 def _delivered_reservation_ids(user_id: int) -> list[str]:
@@ -358,7 +415,7 @@ def check_and_reserve_for_audio(
             message=EMPTY_BALANCE_MESSAGE,
         )
 
-    ok, _wallet_after, reservation_id = reserve_practice(
+    ok, wallet_after, reservation_id = reserve_practice(
         uid,
         session_id=session_id,
         audio_anchor=audio_anchor,
@@ -377,7 +434,13 @@ def check_and_reserve_for_audio(
             "reserve_failed",
             message=RESERVE_FAILED_MESSAGE,
         )
-    return PracticeAccessDecision(True, mode, "reserved", reservation_id=reservation_id)
+    return PracticeAccessDecision(
+        True,
+        mode,
+        "reserved",
+        reservation_id=reservation_id,
+        warning=_low_balance_warning(uid, wallet_after),
+    )
 
 
 def finalize_audio_access(decision: PracticeAccessDecision, *, delivered: bool) -> bool:
