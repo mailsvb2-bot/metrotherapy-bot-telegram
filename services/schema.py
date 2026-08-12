@@ -11,6 +11,7 @@ Rationale:
 """
 
 from services.db.runtime import is_postgres_enabled
+from services.funnel_analytics_indexes import ensure_funnel_analytics_indexes
 from services.reward_engine_indexes import ensure_reward_engine_indexes
 from services.schema_core import ensure_prod_tables, init_db as _init_db
 
@@ -21,6 +22,7 @@ def init_db() -> None:
     _init_db()
     if is_postgres_enabled():
         ensure_reward_engine_indexes()
+        ensure_funnel_analytics_indexes()
 
 
 __all__ = ["init_db", "ensure_prod_tables"]
