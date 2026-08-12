@@ -4,6 +4,7 @@ set -Eeuo pipefail
 APP_DIR="${APP_DIR:-/root/metrotherapy}"
 INNER_WORKER="${DEPLOY_INNER_WORKER:-$APP_DIR/scripts/run_deploy_worker.sh}"
 LIVE_PROOF_RUNNER="${LIVE_PROOF_RUNNER:-$APP_DIR/scripts/production_live_proofs.py}"
+YOOKASSA_REFUND_DRILL="${YOOKASSA_REFUND_DRILL:-$APP_DIR/scripts/yookassa_refund_drill.py}"
 LOG_FILE="${LOG_FILE:-/var/log/metrotherapy_deploy.log}"
 TRIGGER_SHA="${DEPLOY_TRIGGER_SHA:-}"
 TRIGGER_MESSAGE=""
@@ -131,6 +132,16 @@ case "$TRIGGER_MESSAGE" in
       exit 41
     fi
     /usr/bin/python3 "$LIVE_PROOF_RUNNER" >> "$LOG_FILE" 2>&1
+    ;;
+esac
+
+case "$TRIGGER_MESSAGE" in
+  *"[yookassa-refund-live-proof-request]"*)
+    if [ ! -f "$YOOKASSA_REFUND_DRILL" ]; then
+      printf 'ERROR: YooKassa refund drill runner is missing: %s\n' "$YOOKASSA_REFUND_DRILL" >> "$LOG_FILE"
+      exit 42
+    fi
+    /usr/bin/python3 "$YOOKASSA_REFUND_DRILL" >> "$LOG_FILE" 2>&1
     ;;
 esac
 
