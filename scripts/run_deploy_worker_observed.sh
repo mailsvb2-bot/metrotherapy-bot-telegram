@@ -116,6 +116,84 @@ publish_deploy_failure_result() {
   return 0
 }
 
+publish_post_deploy_failure_result() {
+  local audit="$1"
+  local audit_code="$2"
+  local parent_sha=""
+  local tree_sha=""
+  local result_sha=""
+  local latest_message=""
+  local message=""
+  local attempt=""
+
+  case "$audit" in
+    live_proof|yookassa_refund) ;;
+    *) audit="unknown" ;;
+  esac
+  case "$audit_code" in
+    ''|*[!0-9]*) audit_code="1" ;;
+  esac
+
+  # A specialized runner may already have published richer redacted evidence and
+  # then intentionally exited non-zero for fail-closed semantics. Never overwrite
+  # or duplicate that evidence with the generic fallback.
+  git -C "$APP_DIR" fetch origin main >/dev/null 2>&1 || true
+  latest_message="$(git -C "$APP_DIR" show -s --format=%B origin/main 2>/dev/null || true)"
+  case "$latest_message" in
+    *"[ops-live-proof-result]"*"trigger=${TRIGGER_SHA:0:12}"*) return 0 ;;
+  esac
+
+  message="[ops-live-proof-result] trigger=${TRIGGER_SHA:0:12} status=error audit=$audit code=$audit_code"
+  for attempt in 1 2 3; do
+    git -C "$APP_DIR" fetch origin main >/dev/null 2>&1 || true
+    parent_sha="$(git -C "$APP_DIR" rev-parse origin/main 2>/dev/null || true)"
+    tree_sha="$(git -C "$APP_DIR" rev-parse "$parent_sha^{tree}" 2>/dev/null || true)"
+    if [ -z "$parent_sha" ] || [ -z "$tree_sha" ]; then
+      sleep "$attempt"
+      continue
+    fi
+    result_sha="$(
+      printf '%s\n' "$message" |
+        git -C "$APP_DIR" \
+          -c user.name="Metrotherapy Post Deploy Audit" \
+          -c user.email="post-deploy-audit@metrotherapy.local" \
+          commit-tree "$tree_sha" -p "$parent_sha" -F - 2>/dev/null || true
+    )"
+    if [ -n "$result_sha" ] && git -C "$APP_DIR" push origin "$result_sha:refs/heads/main" >/dev/null 2>&1; then
+      printf '=== %s ===\n' "$message" >> "$LOG_FILE"
+      return 0
+    fi
+    sleep "$attempt"
+  done
+
+  printf 'ERROR: unable to publish secret-safe post-deploy audit failure trigger=%s audit=%s code=%s\n' \
+    "$TRIGGER_SHA" "$audit" "$audit_code" >> "$LOG_FILE"
+  return 0
+}
+
+run_post_deploy_audit() {
+  local audit="$1"
+  local runner="$2"
+  local missing_code="$3"
+  local audit_code="0"
+
+  if [ ! -f "$runner" ]; then
+    printf 'ERROR: post-deploy audit runner is missing audit=%s\n' "$audit" >> "$LOG_FILE"
+    publish_post_deploy_failure_result "$audit" "$missing_code"
+    return "$missing_code"
+  fi
+
+  set +e
+  /usr/bin/python3 "$runner" >> "$LOG_FILE" 2>&1
+  audit_code="$?"
+  set -e
+  if [ "$audit_code" -ne 0 ]; then
+    publish_post_deploy_failure_result "$audit" "$audit_code"
+    return "$audit_code"
+  fi
+  return 0
+}
+
 set +e
 /usr/bin/bash "$INNER_WORKER"
 INNER_CODE="$?"
@@ -127,21 +205,13 @@ fi
 
 case "$TRIGGER_MESSAGE" in
   *"[vk-confirmation-sync-request]"*|*"[rollback-live-proof-request]"*)
-    if [ ! -f "$LIVE_PROOF_RUNNER" ]; then
-      printf 'ERROR: production live proof runner is missing: %s\n' "$LIVE_PROOF_RUNNER" >> "$LOG_FILE"
-      exit 41
-    fi
-    /usr/bin/python3 "$LIVE_PROOF_RUNNER" >> "$LOG_FILE" 2>&1
+    run_post_deploy_audit "live_proof" "$LIVE_PROOF_RUNNER" 41
     ;;
 esac
 
 case "$TRIGGER_MESSAGE" in
   *"[yookassa-refund-live-proof-request]"*)
-    if [ ! -f "$YOOKASSA_REFUND_DRILL" ]; then
-      printf 'ERROR: YooKassa refund drill runner is missing: %s\n' "$YOOKASSA_REFUND_DRILL" >> "$LOG_FILE"
-      exit 42
-    fi
-    /usr/bin/python3 "$YOOKASSA_REFUND_DRILL" >> "$LOG_FILE" 2>&1
+    run_post_deploy_audit "yookassa_refund" "$YOOKASSA_REFUND_DRILL" 42
     ;;
 esac
 
