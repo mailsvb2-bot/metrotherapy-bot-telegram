@@ -4,6 +4,7 @@ from services.growth_autopilot_core import (
     find_growth_action_card,
     format_growth_action_card,
     format_growth_action_inbox,
+    format_growth_autopilot_report,
     parse_ad_spend_to_minor,
 )
 
@@ -22,6 +23,7 @@ def test_growth_autopilot_recommendations_are_read_only_and_guarded():
             "demo_sent_users": 97,
             "demo_ack_users": 61,
             "tariff_open_users": 10,
+            "payment_started_users": 0,
             "paid_users": 0,
         },
         "payments": {"payments": 0, "revenue_minor": 0},
@@ -33,9 +35,66 @@ def test_growth_autopilot_recommendations_are_read_only_and_guarded():
     recs = diagnose_growth_snapshot(snapshot)
 
     assert any(r["kind"] == "creative_offer_mismatch" for r in recs)
+    assert any(r["kind"] == "tariff_to_checkout_drop" for r in recs)
     assert any(r["kind"] == "data_quality" for r in recs)
     assert all(r["autopilot_can_apply_now"] is False for r in recs)
     assert all(r["apply_mode"] == "manual_review_required" for r in recs)
+
+
+def test_growth_autopilot_separates_checkout_friction_from_offer_friction():
+    snapshot = {
+        "funnel": {
+            "start_users": 100,
+            "demo_sent_users": 80,
+            "demo_ack_users": 40,
+            "tariff_open_users": 12,
+            "payment_started_users": 5,
+            "paid_users": 0,
+        },
+        "payments": {"payments": 0, "revenue_minor": 0},
+        "ad_links": {"links": 4, "with_spend": 4, "without_spend": 0},
+        "access_alerts": {"count": 0},
+        "data_quality": {"confidence": "high"},
+    }
+
+    recs = diagnose_growth_snapshot(snapshot)
+    kinds = {r["kind"] for r in recs}
+
+    assert "checkout_to_payment_drop" in kinds
+    assert "tariff_to_checkout_drop" not in kinds
+    checkout = next(r for r in recs if r["kind"] == "checkout_to_payment_drop")
+    assert any("checkout_started: 5" in item for item in checkout["evidence"])
+    assert "платёжный UX" in checkout["recommended_action"]
+
+
+def test_growth_autopilot_report_surfaces_checkout_conversion():
+    snapshot = {
+        "period": "week",
+        "autopilot_mode": "read_only_plan_only",
+        "funnel": {
+            "ad_clicks": 100,
+            "start_users": 50,
+            "demo_sent_users": 30,
+            "demo_ack_users": 20,
+            "tariff_open_users": 10,
+            "payment_started_users": 4,
+            "paid_users": 2,
+            "click_to_start_pct": 50.0,
+            "start_to_demo_pct": 60.0,
+            "demo_to_ack_pct": 66.7,
+            "ack_to_tariff_pct": 50.0,
+            "start_to_paid_pct": 4.0,
+        },
+        "payments": {"payments": 2, "paid_users": 2, "revenue_minor": 839800},
+        "ad_links": {"links": 2, "without_spend": 0, "spend_minor_low_confidence": 100000},
+        "data_quality": {"confidence": "high", "gaps": []},
+        "recommendations": [],
+    }
+
+    text = format_growth_autopilot_report(snapshot)
+
+    assert "checkout начали: 4 (40.0% от тарифов)" in text
+    assert "оплатили пользователей: 2 (50.0% от checkout" in text
 
 
 def test_growth_autopilot_prioritizes_payment_access_guard():
@@ -45,6 +104,7 @@ def test_growth_autopilot_prioritizes_payment_access_guard():
             "demo_sent_users": 30,
             "demo_ack_users": 20,
             "tariff_open_users": 12,
+            "payment_started_users": 7,
             "paid_users": 5,
         },
         "payments": {"payments": 5, "revenue_minor": 500000},
