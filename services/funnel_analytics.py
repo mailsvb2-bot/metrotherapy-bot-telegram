@@ -180,9 +180,12 @@ def _strict_money_counts(
     """Count a real ordered demo cohort without rescanning the full events table.
 
     Each later milestone must occur after the previous milestone for the same user.
-    Paid state comes from payment_token_grants, not from analytics events. The
-    production partial index is usable because every events access explicitly
-    carries the complete commercial-event predicate.
+    Demo-listen evidence comes from both commercial telemetry and the canonical
+    audio timeline: older live ``mood:done`` / cross-messenger confirmations
+    already wrote ``manual_confirmed`` there even when they did not emit a
+    ``demo_ack`` analytics event. Paid state comes from payment_token_grants, not
+    from analytics events. The production partial index is usable because every
+    events access explicitly carries the complete commercial-event predicate.
     """
 
     demo_names = _sql_literals(COMMERCIAL_STEP_EVENT_NAMES["demo"])
@@ -207,7 +210,7 @@ def _strict_money_counts(
     checkout_upper = ""
     ordered_params: list[Any] = list(demo_params)
     if end_utc:
-        listened_upper = " AND e.created_at < ?"
+        listened_upper = " AND le.listened_at < ?"
         offer_upper = " AND e.created_at < ?"
         checkout_upper = " AND e.created_at < ?"
         ordered_params.extend([end_utc, end_utc, end_utc])
@@ -227,14 +230,23 @@ def _strict_money_counts(
             WHERE {' AND '.join(demo_where)}
             GROUP BY user_id
         ),
+        listen_evidence AS (
+            SELECT user_id, created_at AS listened_at
+            FROM events
+            WHERE name IN ({COMMERCIAL_FUNNEL_EVENT_PREDICATE_SQL})
+              AND name IN ({listened_names})
+            UNION ALL
+            SELECT user_id, created_at AS listened_at
+            FROM user_audio_timeline
+            WHERE sequence_key='demo'
+              AND event_type='manual_confirmed'
+        ),
         listened AS (
-            SELECT d.user_id, d.demo_at, MIN(e.created_at) AS listened_at
+            SELECT d.user_id, d.demo_at, MIN(le.listened_at) AS listened_at
             FROM demos AS d
-            LEFT JOIN events AS e
-              ON e.user_id = d.user_id
-             AND e.name IN ({COMMERCIAL_FUNNEL_EVENT_PREDICATE_SQL})
-             AND e.name IN ({listened_names})
-             AND e.created_at >= d.demo_at
+            LEFT JOIN listen_evidence AS le
+              ON le.user_id = d.user_id
+             AND le.listened_at >= d.demo_at
              {listened_upper}
             GROUP BY d.user_id, d.demo_at
         ),
