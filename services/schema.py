@@ -10,6 +10,17 @@ Rationale:
   - services/migrations/* (one-time migrations)
 """
 
-from services.schema_core import init_db, ensure_prod_tables
+from services.db.runtime import is_postgres_enabled
+from services.reward_engine_indexes import ensure_reward_engine_indexes
+from services.schema_core import ensure_prod_tables, init_db as _init_db
+
+
+def init_db() -> None:
+    """Initialize the schema and establish production-only online access paths."""
+
+    _init_db()
+    if is_postgres_enabled():
+        ensure_reward_engine_indexes()
+
 
 __all__ = ["init_db", "ensure_prod_tables"]
