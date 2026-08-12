@@ -4,6 +4,7 @@ set -Eeuo pipefail
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${METROTHERAPY_ENV_FILE:-/etc/metrotherapy/metrotherapy.env}"
 BOOTSTRAPPED_SHA="${DEPLOY_BOOTSTRAPPED_SHA:-}"
+BOOTSTRAP_PID="${DEPLOY_BOOTSTRAP_PID:-}"
 RECOVERY_SCRIPT="$SOURCE_DIR/scripts/repair_contaminated_current_release.sh"
 CANDIDATE_PREPARER="$SOURCE_DIR/scripts/prepare_immutable_candidate.sh"
 WRITE_GUARD_SCRIPT="$SOURCE_DIR/scripts/install_runtime_write_guard.sh"
@@ -17,6 +18,14 @@ LOCK_FILE="${LOCK_FILE:-$SOURCE_DIR/data/deploy/metrotherapy_deploy.lock}"
 FLOCK_BIN="${FLOCK_BIN:-/usr/bin/flock}"
 LOCK_WAIT_SECONDS="${DEPLOY_LOCK_WAIT_SECONDS:-900}"
 DEPLOY_LOCK_HELD="${DEPLOY_LOCK_HELD:-0}"
+
+# DEPLOY_BOOTSTRAPPED_SHA is an internal one-exec sentinel, not operator
+# configuration. Accept it only when it is bound to this exact process. `exec`
+# preserves the PID, while stale service/worker environment values necessarily
+# carry a different (or missing) PID and are ignored on the first invocation.
+if [ "$BOOTSTRAP_PID" != "$$" ]; then
+  BOOTSTRAPPED_SHA=""
+fi
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "IMMUTABLE_DEPLOY_FAILED production env file is missing: $ENV_FILE" >&2
@@ -132,6 +141,7 @@ if [ "$BEFORE_SHA" != "$AFTER_SHA" ]; then
   echo "=== deploy wrapper updated old=$BEFORE_SHA new=$AFTER_SHA; re-exec updated wrapper ==="
   exec env \
     DEPLOY_BOOTSTRAPPED_SHA="$AFTER_SHA" \
+    DEPLOY_BOOTSTRAP_PID="$$" \
     DEPLOY_LOCK_HELD=1 \
     METROTHERAPY_ENV_FILE="$ENV_FILE" \
     METRO_RUNTIME_ROOT="$RUNTIME_ROOT" \
