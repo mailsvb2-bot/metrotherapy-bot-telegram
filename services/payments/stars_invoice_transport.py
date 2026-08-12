@@ -4,6 +4,7 @@ from typing import Any
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message
 
+from services.checkout_telemetry import record_payment_started
 from services.events import log_event
 from services.gift_claims import create_gift_checkout_token
 from services.payments.stars_links import stars_amount_label, stars_topup_url
@@ -196,13 +197,23 @@ async def send_stars_invoice(
         as_gift=as_gift,
         transport=transport,
     )
-    # Preserve the provider-specific event for existing diagnostics while also
-    # emitting the canonical commercial event consumed by Sales Desk.  The
-    # canonical event is recorded only after Telegram actually created/sent the
-    # invoice surface, so "checkout" means a real payment attempt rather than a
-    # tariff-page view.
+    # Preserve provider-specific diagnostics while emitting one canonical
+    # commercial event only after the payable invoice surface really exists.
     log_event(int(user.id), "telegram_stars_invoice_created", meta)
-    log_event(int(user.id), "payment_started", meta)
+    record_payment_started(
+        int(user.id),
+        provider="telegram_stars",
+        source="telegram",
+        package_id=package.package_id,
+        amount=order.amount_xtr,
+        currency="XTR",
+        gift=bool(as_gift),
+        transport=transport,
+        extra={
+            "stars_purchase_recovery": True,
+            "stars_purchase_help": "pre_invoice_topup_choice",
+        },
+    )
     return gift_token
 
 
