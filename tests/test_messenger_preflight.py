@@ -37,6 +37,8 @@ def test_payment_preflight_can_be_enabled_independently(monkeypatch):
     monkeypatch.setenv("YOOKASSA_SECRET_KEY", "secret")
     monkeypatch.setenv("PAYMENT_CHECKOUT_SIGNING_KEY", "signing")
     monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://pay.example.test")
+    monkeypatch.setenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "1")
+    monkeypatch.setenv("PAYMENT_CHECKOUT_INTENT_REQUIRED", "1")
     monkeypatch.setenv("MAX_WEBHOOK_ENABLED", "0")
     monkeypatch.setenv("VK_WEBHOOK_ENABLED", "0")
 

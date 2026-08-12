@@ -187,8 +187,8 @@ def validate_prod_monetization_contract(*, strict: bool = True) -> None:
         errors.append(str(exc))
 
     for name in ("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "PAYMENT_CHECKOUT_INTENT_REQUIRED"):
-        if _explicitly_disabled(name):
-            errors.append(f"{name} must not be disabled in prod")
+        if not _truthy(name):
+            errors.append(f"{name} must be enabled in prod")
 
     for name in (
         "ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD",

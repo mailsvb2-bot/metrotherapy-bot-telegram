@@ -66,11 +66,6 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "webhook"}
 
 
-def _explicitly_disabled(name: str) -> bool:
-    raw = os.getenv(name)
-    return raw is not None and str(raw).strip().lower() in {"0", "false", "no", "off"}
-
-
 def _positive_int_env(name: str, default: int, *, minimum: int = 1, maximum: int = 1_000_000) -> int:
     raw = (os.getenv(name) or str(default)).strip()
     try:
@@ -130,7 +125,7 @@ def check_payment_preflight() -> MessengerPreflightStatus:
     if _deployed_env():
         _https_warning("PAYMENT_PUBLIC_BASE_URL", public_base, warnings)
         for name in ("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "PAYMENT_CHECKOUT_INTENT_REQUIRED"):
-            if _explicitly_disabled(name):
+            if not _truthy(_env_or_setting(name, "")):
                 missing.append(f"{name}(must_be_enabled)")
         for name in (
             "ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD",

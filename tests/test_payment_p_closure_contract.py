@@ -15,8 +15,8 @@ def _set_valid_prod_monetization_env(monkeypatch) -> None:
     monkeypatch.setenv("TOKEN_ECONOMY_ENABLED", "1")
     monkeypatch.setenv("TOKEN_ENFORCEMENT_MODE", "hard")
     monkeypatch.setenv("YOOKASSA_RECEIPT_EMAIL", "billing@example.com")
-    monkeypatch.delenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", raising=False)
-    monkeypatch.delenv("PAYMENT_CHECKOUT_INTENT_REQUIRED", raising=False)
+    monkeypatch.setenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "1")
+    monkeypatch.setenv("PAYMENT_CHECKOUT_INTENT_REQUIRED", "1")
     monkeypatch.delenv("ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD", raising=False)
     monkeypatch.delenv("ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD", raising=False)
 
