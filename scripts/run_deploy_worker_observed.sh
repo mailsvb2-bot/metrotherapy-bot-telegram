@@ -62,7 +62,7 @@ read_cached_yookassa_result() {
     "[ops-live-proof-result] trigger=${TRIGGER_SHA:0:12} status=ok "*) ;;
     *) return 1 ;;
   esac
-  if ! printf '%s' "$line" | grep -Eq '^[A-Za-z0-9_.:=,/\[\] -]+$'; then
+  if ! printf '%s' "$line" | grep -Eq '^[][A-Za-z0-9_.:=,/ -]+$'; then
     return 1
   fi
   printf '%s\n' "$line"
