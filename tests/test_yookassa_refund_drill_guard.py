@@ -41,12 +41,13 @@ def test_guard_imports_from_arbitrary_working_directory(tmp_path: Path) -> None:
 
 def test_guard_reduces_unexpected_exception_to_stage_and_class() -> None:
     module = _load_guard()
+    impl = module._load_impl()
 
     def fail() -> None:
         raise ValueError("secret provider payload must not escape")
 
-    guarded = module._guard("full", fail)
-    with pytest.raises(module.impl.RefundDrillError, match="^unexpected_full_ValueError$"):
+    guarded = module._guard(impl, "full", fail)
+    with pytest.raises(impl.RefundDrillError, match="^unexpected_full_ValueError$"):
         guarded()
 
 
@@ -68,21 +69,60 @@ def test_guard_records_only_exact_safe_result(tmp_path: Path, monkeypatch) -> No
     assert not status_file.exists()
 
 
-def test_blocked_result_survives_internal_publisher_failure(tmp_path: Path, monkeypatch) -> None:
+def test_import_failure_records_only_stage_and_exception_class(tmp_path: Path, monkeypatch) -> None:
     module = _load_guard()
     status_file = tmp_path / "guard.status"
-    trigger = "a" * 40
-    module.impl.TRIGGER_SHA = trigger
     monkeypatch.setenv("YOOKASSA_GUARD_STATUS_FILE", str(status_file))
+    monkeypatch.setenv("DEPLOY_TRIGGER_SHA", "a" * 40)
+
+    def fail_import():
+        raise ValueError("secret provider payload must not escape")
+
+    monkeypatch.setattr(module, "_load_impl", fail_import)
+
+    assert module.main() == 2
+    saved = status_file.read_text(encoding="utf-8").strip()
+    assert saved == (
+        "[ops-live-proof-result] trigger=aaaaaaaaaaaa status=blocked "
+        "yookassa_refund=blocked reason=unexpected_import_ValueError"
+    )
+    assert "secret provider payload" not in saved
+
+
+def test_system_exit_during_import_is_reduced_without_process_exit(tmp_path: Path, monkeypatch) -> None:
+    module = _load_guard()
+    status_file = tmp_path / "guard.status"
+    monkeypatch.setenv("YOOKASSA_GUARD_STATUS_FILE", str(status_file))
+    monkeypatch.setenv("DEPLOY_TRIGGER_SHA", "b" * 40)
+
+    def fail_import():
+        raise SystemExit(7)
+
+    monkeypatch.setattr(module, "_load_impl", fail_import)
+
+    assert module.main() == 2
+    saved = status_file.read_text(encoding="utf-8").strip()
+    assert saved.endswith("reason=unexpected_import_SystemExit")
+    assert "7" not in saved
+
+
+def test_blocked_result_survives_internal_publisher_failure(tmp_path: Path, monkeypatch) -> None:
+    module = _load_guard()
+    impl = module._load_impl()
+    status_file = tmp_path / "guard.status"
+    trigger = "a" * 40
+    impl.TRIGGER_SHA = trigger
+    monkeypatch.setenv("YOOKASSA_GUARD_STATUS_FILE", str(status_file))
+    monkeypatch.setattr(module, "_load_impl", lambda: impl)
     monkeypatch.setattr(
-        module.impl,
+        impl,
         "run_drill",
-        lambda: (_ for _ in ()).throw(module.impl.RefundDrillError("provider_test_shop_required")),
+        lambda: (_ for _ in ()).throw(impl.RefundDrillError("provider_test_shop_required")),
     )
     monkeypatch.setattr(
-        module.impl,
+        impl,
         "_publish_result",
-        lambda _message: (_ for _ in ()).throw(module.impl.RefundDrillError("result_publish_race")),
+        lambda _message: (_ for _ in ()).throw(impl.RefundDrillError("result_publish_race")),
     )
 
     assert module.main() == 2
@@ -96,18 +136,20 @@ def test_blocked_result_survives_internal_publisher_failure(tmp_path: Path, monk
 
 def test_success_result_survives_internal_publisher_failure(tmp_path: Path, monkeypatch) -> None:
     module = _load_guard()
+    impl = module._load_impl()
     status_file = tmp_path / "guard.status"
-    module.impl.TRIGGER_SHA = "b" * 40
+    impl.TRIGGER_SHA = "b" * 40
     expected = (
         "[ops-live-proof-result] trigger=bbbbbbbbbbbb status=ok yookassa_refund=ok "
         "provider_test=true provider_get_refund=ok"
     )
     monkeypatch.setenv("YOOKASSA_GUARD_STATUS_FILE", str(status_file))
-    monkeypatch.setattr(module.impl, "run_drill", lambda: expected)
+    monkeypatch.setattr(module, "_load_impl", lambda: impl)
+    monkeypatch.setattr(impl, "run_drill", lambda: expected)
     monkeypatch.setattr(
-        module.impl,
+        impl,
         "_publish_result",
-        lambda _message: (_ for _ in ()).throw(module.impl.RefundDrillError("result_publish_race")),
+        lambda _message: (_ for _ in ()).throw(impl.RefundDrillError("result_publish_race")),
     )
 
     assert module.main() == 3
