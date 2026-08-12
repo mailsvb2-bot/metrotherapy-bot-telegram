@@ -15,9 +15,9 @@ import re
 import stat
 import sys
 import tempfile
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 MANAGED_VALUES = {
     "YOOKASSA_PROVIDER_VERIFICATION_REQUIRED": "1",
@@ -33,8 +33,7 @@ class MigrationError(RuntimeError):
     """Raised when the authoritative env cannot be migrated safely."""
 
 
-@dataclass(frozen=True)
-class MigrationResult:
+class MigrationResult(NamedTuple):
     changed: bool
     backup_path: Path | None
 
