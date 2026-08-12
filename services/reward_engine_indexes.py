@@ -114,8 +114,10 @@ def ensure_online_indexes(
     specs: tuple[OnlineIndexSpec, ...],
     *,
     component: str,
+    connect_timeout_env: str,
     statement_timeout_env: str,
     lock_timeout_env: str,
+    connect_timeout_default: int = 5,
     statement_timeout_default: int = 480,
     lock_timeout_default: int = 10,
 ) -> dict[str, Any]:
@@ -136,8 +138,8 @@ def ensure_online_indexes(
         raise RuntimeError(f"psycopg is required for {component} PostgreSQL indexes") from exc
 
     connect_timeout = _bounded_int(
-        "POSTGRES_CONNECT_TIMEOUT_SEC",
-        5,
+        connect_timeout_env,
+        connect_timeout_default,
         minimum=1,
         maximum=60,
     )
@@ -199,6 +201,7 @@ def ensure_reward_engine_indexes() -> dict[str, Any]:
     return ensure_online_indexes(
         ONLINE_INDEX_SPECS,
         component="RewardEngine",
+        connect_timeout_env="REWARD_INDEX_CONNECT_TIMEOUT_SEC",
         statement_timeout_env="REWARD_INDEX_STATEMENT_TIMEOUT_SEC",
         lock_timeout_env="REWARD_INDEX_LOCK_TIMEOUT_SEC",
     )
