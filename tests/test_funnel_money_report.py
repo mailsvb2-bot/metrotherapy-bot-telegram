@@ -143,6 +143,17 @@ def test_conversion_report_uses_ordered_aliases_and_authoritative_paid_users() -
 
 def test_strict_money_chain_counts_repeat_purchase_after_new_checkout() -> None:
     user_id = -941101
+    windows = {
+        "bounded": ("2099-08-10T10:00:00+00:00", "2099-08-10T11:00:00+00:00"),
+        "start_only": ("2099-08-10T10:00:00+00:00", None),
+        "end_only": (None, "2099-08-10T11:00:00+00:00"),
+        "all": (None, None),
+    }
+    baseline = {
+        name: funnel_analytics._strict_money_counts(start, end)
+        for name, (start, end) in windows.items()
+    }
+
     with db() as conn:
         conn.executemany(
             "INSERT INTO events(user_id, name, meta, created_at) VALUES(?,?,?,?)",
@@ -169,24 +180,11 @@ def test_strict_money_chain_counts_repeat_purchase_after_new_checkout() -> None:
         )
         conn.commit()
 
-    bounded = funnel_analytics._strict_money_counts(
-        "2099-08-10T10:00:00+00:00",
-        "2099-08-10T11:00:00+00:00",
-    )
-    assert bounded == {
-        "demo": 1,
-        "listened": 1,
-        "offer": 1,
-        "checkout": 1,
-        "paid": 1,
-        "paid_total": 1,
-    }
-
-    # Open-ended windows exercise the exact production report contracts used by
-    # ad-hoc admin analysis and must preserve the same ordered result.
-    assert funnel_analytics._strict_money_counts("2099-08-10T10:00:00+00:00", None)["paid"] == 1
-    assert funnel_analytics._strict_money_counts(None, "2099-08-10T11:00:00+00:00")["paid"] == 1
-    assert funnel_analytics._strict_money_counts(None, None)["paid"] == 1
+    for name, (start, end) in windows.items():
+        current = funnel_analytics._strict_money_counts(start, end)
+        before = baseline[name]
+        for key in ("demo", "listened", "offer", "checkout", "paid", "paid_total"):
+            assert current[key] == before[key] + 1
 
 
 def test_conversion_breakdown_uses_aliases_kind_and_daypart() -> None:
@@ -236,6 +234,17 @@ def test_conversion_breakdown_uses_aliases_kind_and_daypart() -> None:
 
 
 def test_paid_user_count_respects_period_boundaries() -> None:
+    windows = {
+        "bounded": ("2099-08-10T00:00:00+00:00", "2099-09-01T00:00:00+00:00", 1),
+        "start_only": ("2099-08-10T00:00:00+00:00", None, 2),
+        "end_only": (None, "2099-09-01T00:00:00+00:00", 2),
+        "all": (None, None, 3),
+    }
+    baseline = {
+        name: funnel_analytics._paid_user_count(start, end)
+        for name, (start, end, _delta) in windows.items()
+    }
+
     with db() as conn:
         conn.executemany(
             """
@@ -252,13 +261,8 @@ def test_paid_user_count_respects_period_boundaries() -> None:
         )
         conn.commit()
 
-    assert funnel_analytics._paid_user_count(
-        "2099-08-10T00:00:00+00:00",
-        "2099-09-01T00:00:00+00:00",
-    ) == 1
-    assert funnel_analytics._paid_user_count("2099-08-10T00:00:00+00:00", None) == 2
-    assert funnel_analytics._paid_user_count(None, "2099-09-01T00:00:00+00:00") == 2
-    assert funnel_analytics._paid_user_count(None, None) == 3
+    for name, (start, end, delta) in windows.items():
+        assert funnel_analytics._paid_user_count(start, end) == baseline[name] + delta
 
 
 def test_commercial_counts_use_one_grouped_events_query(
