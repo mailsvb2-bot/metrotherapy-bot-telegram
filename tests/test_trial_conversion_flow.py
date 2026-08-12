@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import sqlite3
 from collections import Counter
 from datetime import timedelta
+from types import SimpleNamespace
+
+import pytest
 
 from core.ai.decision_core import DecisionCore
 from core.time_utils import utc_now
 from services.db import db
 from services.jobs import add_job
 from services.mood import create_session, set_post, set_pre
+import services.trial_conversion_flow as conversion
 from services.trial_conversion_flow import plan_trial_conversion_after_outcome
 
 
@@ -160,4 +165,83 @@ def test_incomplete_demo_outcome_never_schedules_sales() -> None:
     plan = plan_trial_conversion_after_outcome(user_id, sid, platform="vk")
 
     assert plan is None
+    assert _pending_sales_jobs(user_id) == []
+
+
+def test_trial_conversion_score_format_and_owner_guard() -> None:
+    assert conversion._fmt_score(None) == "—"
+    assert conversion._fmt_score(0) == "0"
+    assert conversion._fmt_score(3) == "+3"
+
+    owner_id = -996006
+    sid = _completed_session(owner_id, pre=0, post=1)
+    assert plan_trial_conversion_after_outcome(-996106, sid, platform="vk") is None
+    assert _pending_sales_jobs(owner_id) == []
+
+
+def test_trial_conversion_fails_closed_on_unexpected_decision_core_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = -996007
+    sid = _completed_session(user_id, pre=0, post=4)
+
+    monkeypatch.setattr(
+        DecisionCore,
+        "decide",
+        lambda self, _world: SimpleNamespace(payload={"type": "noop"}),
+    )
+
+    plan = plan_trial_conversion_after_outcome(user_id, sid, platform="max")
+
+    assert plan is not None
+    assert plan.action == "safety_pause"
+    assert plan.allow_paid_cta is False
+    assert plan.allow_pressure is False
+    assert "не добавлять коммерческих шагов" in plan.message
+    assert _pending_sales_jobs(user_id) == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [sqlite3.OperationalError("comparison unavailable"), ValueError("bad average")],
+)
+def test_trial_conversion_comparison_failure_does_not_break_saved_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+) -> None:
+    user_id = -996008 if isinstance(error, sqlite3.Error) else -996009
+    sid = _completed_session(user_id, pre=-2, post=1)
+
+    monkeypatch.setattr(
+        conversion,
+        "last_delta",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+
+    plan = plan_trial_conversion_after_outcome(user_id, sid, platform="telegram")
+
+    assert plan is not None
+    assert plan.quality == "positive"
+    assert plan.delta == 3
+    assert plan.allow_paid_cta is True
+    assert len(_pending_sales_jobs(user_id)) == 5
+
+
+def test_trial_conversion_followup_failure_does_not_break_saved_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = -996010
+    sid = _completed_session(user_id, pre=0, post=2)
+
+    monkeypatch.setattr(
+        conversion,
+        "_schedule_followups",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("queue unavailable")),
+    )
+
+    plan = plan_trial_conversion_after_outcome(user_id, sid, platform="vk")
+
+    assert plan is not None
+    assert plan.quality == "positive"
+    assert plan.allow_paid_cta is True
     assert _pending_sales_jobs(user_id) == []
