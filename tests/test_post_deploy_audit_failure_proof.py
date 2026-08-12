@@ -23,6 +23,72 @@ def test_observed_worker_post_deploy_fallback_has_valid_bash_syntax() -> None:
     assert completed.returncode == 0, completed.stderr
 
 
+def test_production_gate_substage_classifier_reports_last_allowlisted_header() -> None:
+    bash = shutil.which("bash")
+    assert bash is not None
+    source = WORKER.read_text(encoding="utf-8")
+    start = source.index("classify_production_gate_substage()")
+    end = source.index("\npublish_deploy_failure_result()", start)
+    function = source[start:end]
+    completed = subprocess.run(
+        [bash, "-c", function + "\nclassify_production_gate_substage"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        input=(
+            "==> prod validator\n"
+            "validator output that must never be published\n"
+            "==> postgres restore drill\n"
+            "sensitive-looking raw failure text\n"
+        ),
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "postgres_restore_drill"
+    assert "sensitive" not in completed.stdout
+
+
+def test_production_gate_substage_classifier_fails_closed_to_unknown() -> None:
+    bash = shutil.which("bash")
+    assert bash is not None
+    source = WORKER.read_text(encoding="utf-8")
+    start = source.index("classify_production_gate_substage()")
+    end = source.index("\npublish_deploy_failure_result()", start)
+    function = source[start:end]
+    completed = subprocess.run(
+        [bash, "-c", function + "\nclassify_production_gate_substage"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        input="unrecognized provider payload or arbitrary log text\n",
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "unknown"
+
+
+def test_production_gate_failure_publishes_only_allowlisted_substage() -> None:
+    source = WORKER.read_text(encoding="utf-8")
+    function = source[
+        source.index("publish_deploy_failure_result()") : source.index("publish_post_deploy_failure_result()")
+    ]
+    message_line = next(
+        line
+        for line in function.splitlines()
+        if "gate_substage=$gate_substage" in line and "[deploy-failure-result]" in line
+    )
+
+    assert 'stage="production_gate_failed"' in function
+    assert 'classify_production_gate_substage' in function
+    assert "gate_substage=$gate_substage" in message_line
+    assert "$segment" not in message_line
+    assert "$matched" not in message_line
+    assert "stderr" not in message_line.lower()
+    assert "traceback" not in message_line.lower()
+
+
 def test_post_deploy_audit_failure_publishes_only_allowlisted_fields() -> None:
     source = WORKER.read_text(encoding="utf-8")
 
@@ -60,13 +126,14 @@ def test_post_deploy_runner_captures_exit_before_fallback() -> None:
     ]
 
     disable_errexit = function.index("set +e")
-    invocation = function.index('/usr/bin/python3 "$runner"')
+    invocation = function.index('"$python_bin" "$runner"')
     capture = function.index('audit_code="$?"')
     restore_errexit = function.index("set -e", capture)
     fallback = function.index('publish_post_deploy_failure_result "$audit" "$audit_code"')
 
     assert disable_errexit < invocation < capture < restore_errexit < fallback
     assert 'return "$audit_code"' in function
+    assert 'python_bin="$YOOKASSA_REFUND_PYTHON"' in function
 
 
 def test_yookassa_audit_runs_only_after_successful_inner_deploy() -> None:
@@ -85,7 +152,7 @@ def test_yookassa_audit_runs_only_after_successful_inner_deploy() -> None:
 
 def test_result_commits_remain_non_recursive_deploy_triggers() -> None:
     source = WORKER.read_text(encoding="utf-8")
-    guard = source[: source.index("publish_deploy_failure_result()")]
+    guard = source[: source.index("classify_production_gate_substage()")]
 
     assert '[ops-live-proof-result]' in guard
     assert '[deploy-failure-result]' in guard
