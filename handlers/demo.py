@@ -125,11 +125,19 @@ async def demo_ack(cb: CallbackQuery):
     ok = record_demo_ack(cb.from_user.id, kind, msg_id, ack_utc)
 
     if ok:
-        # аккуратный апсейл без изменения UX: просто удобные кнопки
+        # Outcome-first conversion: acknowledgement is not enough evidence to sell.
+        # The paid route is shown after the canonical post-score flow evaluates
+        # the user's own result.  This closes the direct handler bypass around
+        # services.trial_funnel_policy / DecisionCore.
         await message.answer(
             "✅ Спасибо! Я отметил, что Вы прослушали демо.\n\n"
-            "Если захотите продолжить — можно открыть подписку, подарить доступ другу или посоветовать бота.",
-            reply_markup=kb_sales_offer(cb.from_user.id),
+            "Теперь сначала оцените своё состояние после практики в сообщении со шкалой. "
+            "По этой оценке я покажу подходящий следующий шаг — без продажи вслепую."
+        )
+        log_event(
+            cb.from_user.id,
+            "trial_outcome_requested_after_ack",
+            {"kind": kind, "message_id": msg_id},
         )
 
         # Микровопрос (не чаще 1 раза/сутки), чтобы аккуратно подстроить сопровождение.
