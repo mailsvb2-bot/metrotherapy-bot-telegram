@@ -73,43 +73,53 @@ def _index_state(cursor: Any, name: str) -> tuple[bool, bool] | None:
     return bool(row[0]), bool(row[1])
 
 
-def _ensure_one_index(connection: Any, spec: OnlineIndexSpec, *, sql_module: Any) -> str:
+def _ensure_one_index(
+    connection: Any,
+    spec: OnlineIndexSpec,
+    *,
+    sql_module: Any,
+    component: str = "RewardEngine",
+) -> str:
     with connection.cursor() as cursor:
         state = _index_state(cursor, spec.name)
         if state == (True, True):
-            log.info("RewardEngine online index already valid: %s", spec.name)
+            log.info("%s online index already valid: %s", component, spec.name)
             return "existing"
 
         if state is not None:
-            log.warning("Dropping incomplete RewardEngine index before retry: %s state=%s", spec.name, state)
+            log.warning(
+                "Dropping incomplete %s index before retry: %s state=%s",
+                component,
+                spec.name,
+                state,
+            )
             cursor.execute(
                 sql_module.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(
                     sql_module.Identifier(spec.name)
                 )
             )
 
-        log.info("Building RewardEngine online index: %s", spec.name)
+        log.info("Building %s online index: %s", component, spec.name)
         cursor.execute(spec.ddl)
         verified = _index_state(cursor, spec.name)
         if verified != (True, True):
-            raise RuntimeError(f"RewardEngine index is not valid after build: {spec.name} state={verified}")
-        log.info("RewardEngine online index ready: %s", spec.name)
+            raise RuntimeError(
+                f"{component} index is not valid after build: {spec.name} state={verified}"
+            )
+        log.info("%s online index ready: %s", component, spec.name)
         return "created"
 
 
-def ensure_reward_engine_indexes() -> dict[str, Any]:
-    """Ensure the large-table RewardEngine access path without blocking live writes.
-
-    Production has millions of rows in ``events``. Running the reward candidate
-    query without a selective index forces a full-table scan once per reward
-    interval and can cross the scheduler's strict five-second owner budget.
-
-    PostgreSQL indexes are therefore built with ``CREATE INDEX CONCURRENTLY`` on
-    a dedicated autocommit connection. The operation is bounded and idempotent;
-    an interrupted/invalid index is removed and rebuilt on the next attempt.
-    SQLite keeps its existing lightweight schema path because local/test databases
-    do not need an online-index build protocol.
-    """
+def ensure_online_indexes(
+    specs: tuple[OnlineIndexSpec, ...],
+    *,
+    component: str,
+    statement_timeout_env: str,
+    lock_timeout_env: str,
+    statement_timeout_default: int = 480,
+    lock_timeout_default: int = 10,
+) -> dict[str, Any]:
+    """Build a bounded set of PostgreSQL indexes without blocking live writes."""
 
     engine = _engine()
     if engine not in _POSTGRES_ENGINES:
@@ -117,13 +127,13 @@ def ensure_reward_engine_indexes() -> dict[str, Any]:
 
     database_url = str(os.getenv("DATABASE_URL") or "").strip()
     if not database_url:
-        raise RuntimeError("DATABASE_URL is required for RewardEngine PostgreSQL indexes")
+        raise RuntimeError(f"DATABASE_URL is required for {component} PostgreSQL indexes")
 
     try:
         import psycopg
         from psycopg import sql
     except ImportError as exc:  # pragma: no cover - production dependency contract
-        raise RuntimeError("psycopg is required for RewardEngine PostgreSQL indexes") from exc
+        raise RuntimeError(f"psycopg is required for {component} PostgreSQL indexes") from exc
 
     connect_timeout = _bounded_int(
         "POSTGRES_CONNECT_TIMEOUT_SEC",
@@ -132,14 +142,14 @@ def ensure_reward_engine_indexes() -> dict[str, Any]:
         maximum=60,
     )
     statement_timeout_sec = _bounded_int(
-        "REWARD_INDEX_STATEMENT_TIMEOUT_SEC",
-        480,
+        statement_timeout_env,
+        statement_timeout_default,
         minimum=30,
         maximum=540,
     )
     lock_timeout_sec = _bounded_int(
-        "REWARD_INDEX_LOCK_TIMEOUT_SEC",
-        10,
+        lock_timeout_env,
+        lock_timeout_default,
         minimum=1,
         maximum=60,
     )
@@ -160,11 +170,43 @@ def ensure_reward_engine_indexes() -> dict[str, Any]:
                 (f"{lock_timeout_sec}s",),
             )
 
-        for spec in ONLINE_INDEX_SPECS:
-            outcome = _ensure_one_index(connection, spec, sql_module=sql)
+        for spec in specs:
+            outcome = _ensure_one_index(
+                connection,
+                spec,
+                sql_module=sql,
+                component=component,
+            )
             outcomes.append({"name": spec.name, "outcome": outcome})
 
     return {"engine": engine, "status": "ready", "indexes": outcomes}
 
 
-__all__ = ["ONLINE_INDEX_SPECS", "OnlineIndexSpec", "ensure_reward_engine_indexes"]
+def ensure_reward_engine_indexes() -> dict[str, Any]:
+    """Ensure the large-table RewardEngine access path without blocking live writes.
+
+    Production has millions of rows in ``events``. Running the reward candidate
+    query without a selective index forces a full-table scan once per reward
+    interval and can cross the scheduler's strict five-second owner budget.
+
+    PostgreSQL indexes are therefore built with ``CREATE INDEX CONCURRENTLY`` on
+    a dedicated autocommit connection. The operation is bounded and idempotent;
+    an interrupted/invalid index is removed and rebuilt on the next attempt.
+    SQLite keeps its existing lightweight schema path because local/test databases
+    do not need an online-index build protocol.
+    """
+
+    return ensure_online_indexes(
+        ONLINE_INDEX_SPECS,
+        component="RewardEngine",
+        statement_timeout_env="REWARD_INDEX_STATEMENT_TIMEOUT_SEC",
+        lock_timeout_env="REWARD_INDEX_LOCK_TIMEOUT_SEC",
+    )
+
+
+__all__ = [
+    "ONLINE_INDEX_SPECS",
+    "OnlineIndexSpec",
+    "ensure_online_indexes",
+    "ensure_reward_engine_indexes",
+]
