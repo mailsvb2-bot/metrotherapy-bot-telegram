@@ -25,9 +25,38 @@ case "$TRIGGER_MESSAGE" in
     ;;
 esac
 
+classify_production_gate_substage() {
+  local substage="unknown"
+  local line=""
+  while IFS= read -r line; do
+    case "$line" in
+      "==> handler DB boundary audit") substage="handler_db_boundary" ;;
+      "==> handler exception boundary audit") substage="handler_exception_boundary" ;;
+      "==> runtime contract") substage="runtime_contract" ;;
+      "==> prod validator") substage="prod_validator" ;;
+      "==> smoke") substage="smoke" ;;
+      "==> storage legacy audit") substage="storage_legacy_audit" ;;
+      "==> disaster recovery status") substage="disaster_recovery_status" ;;
+      "==> scheduler job probe") substage="scheduler_job_probe" ;;
+      "==> auto-audio dry-run probe") substage="auto_audio_dry_run_probe" ;;
+      "==> payment entitlement probe") substage="payment_entitlement_probe" ;;
+      "==> user journey E2E probe") substage="user_journey_e2e_probe" ;;
+      "==> Telegram live smoke") substage="telegram_live_smoke" ;;
+      "==> postgres restore drill") substage="postgres_restore_drill" ;;
+      "==> health") substage="health" ;;
+      "==> ready") substage="ready" ;;
+      "==> postgres job concurrency") substage="postgres_job_concurrency" ;;
+      "==> postgres messenger outbox concurrency") substage="postgres_messenger_outbox_concurrency" ;;
+      "==> auto-audio load dry-run") substage="auto_audio_load_dry_run" ;;
+    esac
+  done
+  printf '%s\n' "$substage"
+}
+
 publish_deploy_failure_result() {
   local inner_code="$1"
   local stage="unknown"
+  local gate_substage="not_applicable"
   local bounded_code="$inner_code"
   local segment=""
   local matched=""
@@ -49,6 +78,7 @@ publish_deploy_failure_result() {
 
   if printf '%s\n' "$segment" | grep -Fq 'IMMUTABLE_DEPLOY_FAILED command=mandatory production backup, restore and readiness gate code='; then
     stage="production_gate_failed"
+    gate_substage="$(printf '%s\n' "$segment" | classify_production_gate_substage)"
     matched="$(printf '%s\n' "$segment" | grep -F 'IMMUTABLE_DEPLOY_FAILED command=mandatory production backup, restore and readiness gate code=' | tail -1)"
   elif printf '%s\n' "$segment" | grep -Fq 'IMMUTABLE_DEPLOY_FAILED command=candidate strict validator and expand migrations code='; then
     stage="candidate_validator_failed"
@@ -89,7 +119,11 @@ publish_deploy_failure_result() {
     ''|*[!0-9]*) inner_code="1" ;;
   esac
 
-  message="[deploy-failure-result] trigger=${TRIGGER_SHA:0:12} status=error stage=$stage code=$bounded_code worker_code=$inner_code"
+  if [ "$stage" = "production_gate_failed" ]; then
+    message="[deploy-failure-result] trigger=${TRIGGER_SHA:0:12} status=error stage=$stage gate_substage=$gate_substage code=$bounded_code worker_code=$inner_code"
+  else
+    message="[deploy-failure-result] trigger=${TRIGGER_SHA:0:12} status=error stage=$stage code=$bounded_code worker_code=$inner_code"
+  fi
 
   for attempt in 1 2 3; do
     git -C "$APP_DIR" fetch origin main >/dev/null 2>&1 || true
