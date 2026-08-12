@@ -4,17 +4,10 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from services.commercial_funnel_contract import PAYMENT_PATH_STEP_NAMES as _STEP_NAMES
 from services.db import db
 
 _PERIOD_DAYS: dict[str, int | None] = {"today": 0, "week": 7, "month": 30, "all": None}
-_STEP_NAMES: dict[str, tuple[str, ...]] = {
-    "start": ("start", "bot_start", "user_start"),
-    "demo": ("funnel_demo_open", "funnel_demo_work", "funnel_demo_home", "demo_sent"),
-    "listened": ("funnel_demo_ack", "audio_listened"),
-    "offer": ("funnel_offer_shown", "view_tariffs", "sub_menu"),
-    "pay_click": ("funnel_offer_pay_clicked", "pay_selected", "payment_started"),
-    "paid": ("funnel_pay_success", "payment_success", "successful_payment"),
-}
 
 
 def _utc_now() -> datetime:
