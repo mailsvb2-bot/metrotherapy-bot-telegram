@@ -96,16 +96,53 @@ class DecisionCore:
                     meta={"mode": "engine", "policy": "engine_job_registry_v1"},
                 )
 
+            user_id = int(world_state.get("user_id") or 0)
+
+            # Canonical trial monetization guard.  Existing selling jobs may have
+            # been queued before a post-demo outcome existed, so the only safe
+            # decision point is immediately before effect execution.  DecisionCore
+            # remains the sole authority; the service below is a pure evidence/
+            # policy adapter and never sends or schedules anything itself.
+            from services.trial_funnel_execution import trial_sales_job_gate
+
+            trial_gate = trial_sales_job_gate(user_id, job_type)
+            if trial_gate.applies and not trial_gate.allow:
+                payload = {
+                    "type": "job_execution_denied",
+                    "reason": trial_gate.reason,
+                    "job_type": job_type,
+                    "user_id": user_id,
+                    "trial_gate": trial_gate.audit_payload(),
+                }
+                return Decision(
+                    decision_id=decision_id,
+                    payload=payload,
+                    token=token,
+                    meta={
+                        "mode": "engine",
+                        "policy": "engine_job_registry_v1+trial_outcome_guard_v1",
+                    },
+                )
+
             payload = {
                 "type": "job_execution_allowed",
                 "job_type": job_type,
-                "user_id": int(world_state.get("user_id") or 0),
+                "user_id": user_id,
             }
+            if trial_gate.applies:
+                payload["trial_gate"] = trial_gate.audit_payload()
             return Decision(
                 decision_id=decision_id,
                 payload=payload,
                 token=token,
-                meta={"mode": "engine", "policy": "engine_job_registry_v1"},
+                meta={
+                    "mode": "engine",
+                    "policy": (
+                        "engine_job_registry_v1+trial_outcome_guard_v1"
+                        if trial_gate.applies
+                        else "engine_job_registry_v1"
+                    ),
+                },
             )
 
         if intent == "admin_ai_prices":
