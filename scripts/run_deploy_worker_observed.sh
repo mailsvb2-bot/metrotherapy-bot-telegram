@@ -10,13 +10,14 @@ TRIGGER_MESSAGE=""
 
 # Live-proof result commits are immutable audit evidence, not deploy requests.
 # Read the trigger-bound message before invoking the inner worker so publishing
-# a result cannot cause a second production rollout.
+# a result cannot cause a second production rollout. The proof publisher strips
+# punctuation from the sanitized result, so accept both marker renderings.
 if [ -n "$TRIGGER_SHA" ]; then
   git -C "$APP_DIR" fetch origin main >/dev/null 2>&1 || true
   TRIGGER_MESSAGE="$(git -C "$APP_DIR" show -s --format=%B "$TRIGGER_SHA" 2>/dev/null || true)"
 fi
 case "$TRIGGER_MESSAGE" in
-  *"[ops-live-proof-result]"*)
+  *"[ops-live-proof-result]"*|*"_ops-live-proof-result_"*)
     printf '=== live-proof result trigger skipped=%s: %s ===\n' "$TRIGGER_SHA" "$(date -Is)" >> "$LOG_FILE"
     exit 0
     ;;
