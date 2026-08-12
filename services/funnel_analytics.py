@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from services.commercial_funnel_contract import COMMERCIAL_STEP_EVENT_NAMES
 from services.db import db
 from services.funnel_analytics_indexes import (
     COMMERCIAL_FUNNEL_EVENT_NAMES,
@@ -30,12 +31,16 @@ DEFAULT_STEPS: list[str] = [
 ]
 
 _MONEY_CHAIN: tuple[tuple[str, str], ...] = (
-    ("demo_sent", "Получили демо"),
-    ("demo_ack", "Подтвердили/прослушали демо"),
-    ("view_tariffs", "Открыли тарифы"),
-    ("payment_started", "Создан checkout"),
+    ("demo", "Получили демо"),
+    ("listened", "Подтвердили/прослушали демо"),
+    ("offer", "Открыли предложение/тарифы"),
+    ("checkout", "Создан checkout"),
     ("paid", "Оплатили пакет"),
 )
+
+
+def _sql_literals(values: tuple[str, ...]) -> str:
+    return ", ".join("'" + value.replace("'", "''") + "'" for value in values)
 
 
 def _event_count_sql(start_utc: str | None, end_utc: str | None) -> tuple[str, str]:
@@ -168,6 +173,126 @@ def _paid_user_count(start_utc: str | None = None, end_utc: str | None = None) -
         return 0
 
 
+def _strict_money_counts(
+    start_utc: str | None,
+    end_utc: str | None,
+) -> dict[str, int]:
+    """Count a real ordered demo cohort without rescanning the full events table.
+
+    Each later milestone must occur after the previous milestone for the same user.
+    Paid state comes from payment_token_grants, not from analytics events.  The
+    production partial index is usable because every events access explicitly
+    carries the complete commercial-event predicate.
+    """
+
+    demo_names = _sql_literals(COMMERCIAL_STEP_EVENT_NAMES["demo"])
+    listened_names = _sql_literals(COMMERCIAL_STEP_EVENT_NAMES["listened"])
+    offer_names = _sql_literals(COMMERCIAL_STEP_EVENT_NAMES["offer"])
+    checkout_names = _sql_literals(COMMERCIAL_STEP_EVENT_NAMES["checkout"])
+
+    demo_where = [
+        f"name IN ({COMMERCIAL_FUNNEL_EVENT_PREDICATE_SQL})",
+        f"name IN ({demo_names})",
+    ]
+    demo_params: list[Any] = []
+    if start_utc:
+        demo_where.append("created_at >= ?")
+        demo_params.append(start_utc)
+    if end_utc:
+        demo_where.append("created_at < ?")
+        demo_params.append(end_utc)
+
+    listened_upper = ""
+    offer_upper = ""
+    checkout_upper = ""
+    ordered_params: list[Any] = list(demo_params)
+    if end_utc:
+        listened_upper = " AND e.created_at < ?"
+        offer_upper = " AND e.created_at < ?"
+        checkout_upper = " AND e.created_at < ?"
+        ordered_params.extend([end_utc, end_utc, end_utc])
+
+    paid_where = ["1=1"]
+    if start_utc:
+        paid_where.append("created_at >= ?")
+        ordered_params.append(start_utc)
+    if end_utc:
+        paid_where.append("created_at < ?")
+        ordered_params.append(end_utc)
+
+    sql = f"""
+        WITH demos AS (
+            SELECT user_id, MIN(created_at) AS demo_at
+            FROM events
+            WHERE {' AND '.join(demo_where)}
+            GROUP BY user_id
+        ),
+        listened AS (
+            SELECT d.user_id, d.demo_at, MIN(e.created_at) AS listened_at
+            FROM demos AS d
+            LEFT JOIN events AS e
+              ON e.user_id = d.user_id
+             AND e.name IN ({COMMERCIAL_FUNNEL_EVENT_PREDICATE_SQL})
+             AND e.name IN ({listened_names})
+             AND e.created_at >= d.demo_at
+             {listened_upper}
+            GROUP BY d.user_id, d.demo_at
+        ),
+        offers AS (
+            SELECT l.user_id, l.demo_at, l.listened_at, MIN(e.created_at) AS offer_at
+            FROM listened AS l
+            LEFT JOIN events AS e
+              ON l.listened_at IS NOT NULL
+             AND e.user_id = l.user_id
+             AND e.name IN ({COMMERCIAL_FUNNEL_EVENT_PREDICATE_SQL})
+             AND e.name IN ({offer_names})
+             AND e.created_at >= l.listened_at
+             {offer_upper}
+            GROUP BY l.user_id, l.demo_at, l.listened_at
+        ),
+        checkouts AS (
+            SELECT o.user_id, o.demo_at, o.listened_at, o.offer_at,
+                   MIN(e.created_at) AS checkout_at
+            FROM offers AS o
+            LEFT JOIN events AS e
+              ON o.offer_at IS NOT NULL
+             AND e.user_id = o.user_id
+             AND e.name IN ({COMMERCIAL_FUNNEL_EVENT_PREDICATE_SQL})
+             AND e.name IN ({checkout_names})
+             AND e.created_at >= o.offer_at
+             {checkout_upper}
+            GROUP BY o.user_id, o.demo_at, o.listened_at, o.offer_at
+        ),
+        paid_steps AS (
+            SELECT user_id, MIN(created_at) AS paid_at
+            FROM payment_token_grants
+            WHERE {' AND '.join(paid_where)}
+            GROUP BY user_id
+        )
+        SELECT
+            COUNT(c.user_id) AS demo_users,
+            COALESCE(SUM(CASE WHEN c.listened_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS listened_users,
+            COALESCE(SUM(CASE WHEN c.offer_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS offer_users,
+            COALESCE(SUM(CASE WHEN c.checkout_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS checkout_users,
+            COALESCE(SUM(CASE WHEN c.checkout_at IS NOT NULL AND p.paid_at >= c.checkout_at THEN 1 ELSE 0 END), 0) AS paid_users,
+            (SELECT COUNT(*) FROM paid_steps) AS paid_total
+        FROM checkouts AS c
+        LEFT JOIN paid_steps AS p ON p.user_id = c.user_id
+    """.strip()
+
+    with db() as conn:
+        row = conn.execute(sql, tuple(ordered_params)).fetchone()
+
+    keys = ("demo", "listened", "offer", "checkout", "paid", "paid_total")
+    out: dict[str, int] = {}
+    for index, key in enumerate(keys):
+        try:
+            out[key] = int(_row_value(row, key if key == "paid_total" else f"{key}_users", index) or 0)
+        except (TypeError, ValueError):
+            out[key] = 0
+    return out
+
+
 def _rate_chain(points: list[tuple[str, int]]) -> list[dict[str, Any]]:
     rates: list[dict[str, Any]] = []
     prev: int | None = None
@@ -200,7 +325,7 @@ def conversion_report(
 
     selected_steps = list(steps or DEFAULT_STEPS)
     counts = _counts(selected_steps, start_utc, end_utc)
-    paid_users = _paid_user_count(start_utc, end_utc)
+    strict = _strict_money_counts(start_utc, end_utc)
 
     legacy_chain = _rate_chain(
         [
@@ -212,11 +337,11 @@ def conversion_report(
     )
     money_chain = _rate_chain(
         [
-            ("demo_sent", int(counts.get("demo_sent", 0))),
-            ("demo_ack", int(counts.get("demo_ack", 0))),
-            ("view_tariffs", int(counts.get("view_tariffs", 0))),
-            ("payment_started", int(counts.get("payment_started", 0))),
-            ("paid", paid_users),
+            ("demo", strict["demo"]),
+            ("listened", strict["listened"]),
+            ("offer", strict["offer"]),
+            ("checkout", strict["checkout"]),
+            ("paid", strict["paid"]),
         ]
     )
 
@@ -224,7 +349,8 @@ def conversion_report(
         "counts": counts,
         "chain": legacy_chain,
         "money_chain": money_chain,
-        "paid_users": paid_users,
+        "paid_users": strict["paid_total"],
+        "strict_paid_users": strict["paid"],
         "start_utc": start_utc,
         "end_utc": end_utc,
     }
@@ -247,6 +373,19 @@ def format_conversion_report(report: dict[str, Any], *, title: str = "за 30 д
                 suffix += f", потеря {int(dropped)}"
         lines.append(f"• {labels.get(step, step)}: {users}{suffix}")
 
+    paid_total = int(report.get("paid_users") or 0)
+    strict_paid = int(report.get("strict_paid_users") or 0)
+    lines.extend(
+        [
+            "",
+            f"Всего плативших за пакеты в периоде: {paid_total}",
+        ]
+    )
+    if paid_total != strict_paid:
+        lines.append(
+            f"Из строгой демо-цепочки дошли до оплаты: {strict_paid}; остальные оплаты пришли другим путём или из более ранней когорты."
+        )
+
     leaks = [
         item
         for item in chain[1:]
@@ -259,18 +398,18 @@ def format_conversion_report(report: dict[str, Any], *, title: str = "за 30 д
             [
                 "",
                 (
-                    "🎯 Самый слабый переход: "
+                    "🎯 Самый слабый последовательный переход: "
                     f"{labels.get(step, step)} — {float(worst.get('from_prev_pct') or 0.0):.1f}%"
                 ),
             ]
         )
     elif chain:
-        lines.extend(["", "🎯 Явной точки потери в доступных данных пока нет."])
+        lines.extend(["", "🎯 Явной точки потери в строгой демо-цепочке пока нет."])
 
     lines.extend(
         [
             "",
-            "Оплата считается по успешным payment_token_grants; события используются только для шагов до оплаты.",
+            "Строгая цепочка учитывает порядок событий одного пользователя; оплата подтверждается только payment_token_grants.",
         ]
     )
     return "\n".join(lines)
@@ -309,6 +448,18 @@ def _commercial_event_rows(
         return list(conn.execute(sql, tuple(params)).fetchall())
 
 
+def _breakdown_step(name: str) -> str | None:
+    if name in COMMERCIAL_STEP_EVENT_NAMES["demo"]:
+        return "demo_sent"
+    if name in COMMERCIAL_STEP_EVENT_NAMES["listened"]:
+        return "demo_ack"
+    if name in COMMERCIAL_STEP_EVENT_NAMES["offer"]:
+        return "view_tariffs"
+    if name in COMMERCIAL_STEP_EVENT_NAMES["paid_event"]:
+        return "sub_paid"
+    return None
+
+
 def conversion_breakdown(
     start_utc: str | None = None,
     end_utc: str | None = None,
@@ -319,12 +470,23 @@ def conversion_breakdown(
 
     tz = ZoneInfo(tz_name)
     steps = ["demo_sent", "demo_ack", "view_tariffs", "sub_paid"]
+    source_events = tuple(
+        dict.fromkeys(
+            COMMERCIAL_STEP_EVENT_NAMES["demo"]
+            + COMMERCIAL_STEP_EVENT_NAMES["listened"]
+            + COMMERCIAL_STEP_EVENT_NAMES["offer"]
+            + COMMERCIAL_STEP_EVENT_NAMES["paid_event"]
+        )
+    )
 
     per_user: dict[int, dict[str, Any]] = {}
-    rows = _commercial_event_rows(steps, start_utc, end_utc)
+    rows = _commercial_event_rows(list(source_events), start_utc, end_utc)
     for row in rows:
         uid = int(_row_value(row, "user_id", 0) or 0)
         name = str(_row_value(row, "name", 1) or "").strip()
+        canonical_step = _breakdown_step(name)
+        if not canonical_step:
+            continue
         meta_raw = _row_value(row, "meta", 2) or "{}"
         ts_raw = str(_row_value(row, "created_at", 3) or "")
         try:
@@ -333,9 +495,9 @@ def conversion_breakdown(
             meta = {}
 
         user = per_user.setdefault(uid, {"seen": set(), "touch": None})
-        user["seen"].add(name)
+        user["seen"].add(canonical_step)
 
-        if name in ("demo_sent", "demo_ack"):
+        if canonical_step in ("demo_sent", "demo_ack"):
             kind = str(meta.get("kind") or "").strip().lower() or "unknown"
             if kind not in ("work", "home"):
                 kind = "unknown"
@@ -345,7 +507,7 @@ def conversion_breakdown(
             except ValueError:
                 dt = None
             if user["touch"] is None or (
-                name == "demo_ack" and user["touch"].get("source") != "demo_ack"
+                canonical_step == "demo_ack" and user["touch"].get("source") != "demo_ack"
             ):
                 hour = None
                 if dt is not None:
@@ -359,7 +521,7 @@ def conversion_breakdown(
                     "kind": kind,
                     "hour": hour,
                     "daypart": _daypart_ru(hour if hour is not None else 12),
-                    "source": name,
+                    "source": canonical_step,
                 }
 
     by_kind: dict[str, dict[str, int]] = {
