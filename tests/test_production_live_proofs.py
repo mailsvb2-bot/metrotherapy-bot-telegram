@@ -57,10 +57,16 @@ def test_observed_worker_runs_proofs_only_after_successful_inner_deploy() -> Non
     source = OBSERVED_WORKER.read_text(encoding="utf-8")
 
     inner_call = source.index('/usr/bin/bash "$INNER_WORKER"')
-    proof_call = source.index('/usr/bin/python3 "$LIVE_PROOF_RUNNER"')
+    inner_failure_guard = source.index('if [ "$INNER_CODE" -ne 0 ]')
+    proof_marker = source.index('[vk-confirmation-sync-request]')
+    proof_call = source.index(
+        'run_post_deploy_audit "live_proof" "$LIVE_PROOF_RUNNER" 41'
+    )
 
-    assert inner_call < proof_call
-    assert "[vk-confirmation-sync-request]" in source
+    assert inner_call < inner_failure_guard < proof_marker < proof_call
+    assert "run_post_deploy_audit()" in source
+    assert '/usr/bin/python3 "$runner"' in source
+    assert 'publish_post_deploy_failure_result "$audit" "$audit_code"' in source
     assert "[rollback-live-proof-request]" in source
     assert "[ops-live-proof-result]" in source
     assert "_ops-live-proof-result_" in source

@@ -134,11 +134,14 @@ def test_worker_runs_refund_drill_only_after_inner_deploy_success() -> None:
     inner = source.index('/usr/bin/bash "$INNER_WORKER"')
     inner_success_guard = source.index('if [ "$INNER_CODE" -ne 0 ]')
     marker = source.index('[yookassa-refund-live-proof-request]')
-    invocation = source.index('/usr/bin/python3 "$YOOKASSA_REFUND_DRILL"')
+    invocation = source.index(
+        'run_post_deploy_audit "yookassa_refund" "$YOOKASSA_REFUND_DRILL" 42'
+    )
     completion = source.index("deploy worker completed trigger=%s")
 
     assert inner < inner_success_guard < marker < invocation < completion
     assert 'YOOKASSA_REFUND_DRILL="${YOOKASSA_REFUND_DRILL:-$APP_DIR/scripts/yookassa_refund_drill.py}"' in source
+    assert '/usr/bin/python3 "$runner"' in source
     assert '[ops-live-proof-result]' in source
 
 
