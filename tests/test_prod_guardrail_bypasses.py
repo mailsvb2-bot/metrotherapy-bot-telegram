@@ -18,6 +18,8 @@ def _prod_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TOKEN_ECONOMY_ENABLED", "1")
     monkeypatch.setenv("TOKEN_ENFORCEMENT_MODE", "hard")
     monkeypatch.setenv("YOOKASSA_RECEIPT_EMAIL", "billing@example.com")
+    monkeypatch.setenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "1")
+    monkeypatch.setenv("PAYMENT_CHECKOUT_INTENT_REQUIRED", "1")
 
 
 def test_prod_guardrails_reject_unguarded_prod_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
