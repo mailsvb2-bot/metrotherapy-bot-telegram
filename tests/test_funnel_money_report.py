@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from handlers.admin_reports import conversion as conversion_handler
 from services import funnel_analytics, funnel_analytics_indexes
 from services.db import db
 
@@ -154,6 +156,47 @@ def test_rate_chain_and_empty_format_are_stable() -> None:
     )
     assert text.startswith("💰 Воронка до оплаты\nпусто")
     assert "payment_token_grants" in text
+
+
+@pytest.mark.asyncio
+async def test_admin_conversion_handler_uses_last_30_days_and_renders_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_report(start_utc: str, end_utc: str) -> dict[str, Any]:
+        captured["start"] = start_utc
+        captured["end"] = end_utc
+        return {"money_chain": []}
+
+    def fake_format(report: dict[str, Any], *, title: str) -> str:
+        captured["report"] = report
+        captured["title"] = title
+        return "rendered funnel"
+
+    async def fake_safe_edit(cb, text: str, *, reply_markup=None):
+        captured["text"] = text
+        captured["reply_markup"] = reply_markup
+
+    monkeypatch.setattr(conversion_handler, "conversion_report", fake_report)
+    monkeypatch.setattr(conversion_handler, "format_conversion_report", fake_format)
+    monkeypatch.setattr(conversion_handler, "safe_edit", fake_safe_edit)
+
+    keyboard = object()
+    result = await conversion_handler.run(
+        object(),
+        object(),
+        SimpleNamespace(staff_kb=keyboard),
+        None,
+    )
+
+    start = datetime.fromisoformat(captured["start"])
+    end = datetime.fromisoformat(captured["end"])
+    assert (end - start).days == 30
+    assert captured["title"] == "за последние 30 дней"
+    assert captured["text"] == "rendered funnel"
+    assert captured["reply_markup"] is keyboard
+    assert result is True
 
 
 def test_iso_period_values_are_plain_strings() -> None:
