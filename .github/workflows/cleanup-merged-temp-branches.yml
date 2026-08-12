@@ -1,0 +1,52 @@
+name: Cleanup merged temporary branches
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: contains(github.event.head_commit.message, '[cleanup-merged-temp-branches]')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 3
+    steps:
+      - name: Delete only merged temporary agent branches
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const refs = [
+              'heads/agent/gate-substage-telemetry',
+              'heads/agent/deploy-bootstrap-sentinel',
+            ];
+            for (const ref of refs) {
+              try {
+                await github.rest.git.deleteRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref,
+                });
+                core.info(`deleted ${ref}`);
+              } catch (error) {
+                if (error.status === 404 || error.status === 422) {
+                  core.info(`already absent ${ref}`);
+                  continue;
+                }
+                throw error;
+              }
+            }
+
+            const { data: branches } = await github.rest.repos.listBranches({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const names = branches.map((item) => item.name).sort();
+            if (names.length !== 1 || names[0] !== 'main') {
+              core.setFailed(`expected remote topology 1/main; got ${names.join(',')}`);
+            } else {
+              core.info('REMOTE_TOPOLOGY_OK count=1 branches=main');
+            }
