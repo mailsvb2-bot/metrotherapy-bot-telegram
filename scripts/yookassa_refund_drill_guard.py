@@ -8,8 +8,14 @@ by stage and exception class without publishing exception messages, payloads,
 credentials, or database contents.
 """
 
+import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts import yookassa_refund_drill as impl
 
