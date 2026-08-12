@@ -7,6 +7,8 @@ BOOTSTRAPPED_SHA="${DEPLOY_BOOTSTRAPPED_SHA:-}"
 RECOVERY_SCRIPT="$SOURCE_DIR/scripts/repair_contaminated_current_release.sh"
 CANDIDATE_PREPARER="$SOURCE_DIR/scripts/prepare_immutable_candidate.sh"
 WRITE_GUARD_SCRIPT="$SOURCE_DIR/scripts/install_runtime_write_guard.sh"
+PAYMENT_GUARD_MIGRATOR="$SOURCE_DIR/scripts/migrate_payment_guard_env.py"
+SYSTEM_PYTHON="${SYSTEM_PYTHON:-/usr/bin/python3}"
 RUNTIME_ROOT="${METRO_RUNTIME_ROOT:-/var/lib/metrotherapy/runtime}"
 CURRENT_LINK="${METRO_CURRENT_RELEASE_LINK:-$RUNTIME_ROOT/current}"
 STATE_ROOT="${METRO_WRITABLE_ROOT:-$(dirname "$RUNTIME_ROOT")/state}"
@@ -31,6 +33,14 @@ fi
 if [ ! -f "$WRITE_GUARD_SCRIPT" ]; then
   echo "IMMUTABLE_DEPLOY_FAILED runtime write guard is missing: $WRITE_GUARD_SCRIPT" >&2
   exit 7
+fi
+if [ ! -f "$PAYMENT_GUARD_MIGRATOR" ]; then
+  echo "IMMUTABLE_DEPLOY_FAILED payment guard env migrator is missing: $PAYMENT_GUARD_MIGRATOR" >&2
+  exit 10
+fi
+if [ ! -x "$SYSTEM_PYTHON" ]; then
+  echo "IMMUTABLE_DEPLOY_FAILED system Python is unavailable: $SYSTEM_PYTHON" >&2
+  exit 11
 fi
 if [ ! -x "$FLOCK_BIN" ]; then
   echo "IMMUTABLE_DEPLOY_FAILED flock is unavailable: $FLOCK_BIN" >&2
@@ -127,6 +137,7 @@ if [ "$BEFORE_SHA" != "$AFTER_SHA" ]; then
     METRO_RUNTIME_ROOT="$RUNTIME_ROOT" \
     METRO_CURRENT_RELEASE_LINK="$CURRENT_LINK" \
     METRO_WRITABLE_ROOT="$STATE_ROOT" \
+    SYSTEM_PYTHON="$SYSTEM_PYTHON" \
     bash "$SOURCE_DIR/deploy.sh" "$@"
 fi
 
@@ -134,6 +145,11 @@ if [ -n "$BOOTSTRAPPED_SHA" ] && [ "$BOOTSTRAPPED_SHA" != "$AFTER_SHA" ]; then
   echo "IMMUTABLE_DEPLOY_FAILED bootstrap SHA mismatch expected=$BOOTSTRAPPED_SHA actual=$AFTER_SHA" >&2
   exit 4
 fi
+
+# Repair mandatory non-secret payment flags before candidate validation. The
+# migrator is atomic, keeps an on-host backup, preserves unrelated env content,
+# and fails closed on ambiguous duplicate assignments.
+"$SYSTEM_PYTHON" "$PAYMENT_GUARD_MIGRATOR" --env-file "$ENV_FILE"
 
 bash "$WRITE_GUARD_SCRIPT" enforce
 bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"
