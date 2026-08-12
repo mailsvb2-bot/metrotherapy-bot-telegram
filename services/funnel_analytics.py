@@ -180,7 +180,7 @@ def _strict_money_counts(
     """Count a real ordered demo cohort without rescanning the full events table.
 
     Each later milestone must occur after the previous milestone for the same user.
-    Paid state comes from payment_token_grants, not from analytics events.  The
+    Paid state comes from payment_token_grants, not from analytics events. The
     production partial index is usable because every events access explicitly
     carries the complete commercial-event predicate.
     """
@@ -264,7 +264,7 @@ def _strict_money_counts(
             GROUP BY o.user_id, o.demo_at, o.listened_at, o.offer_at
         ),
         paid_steps AS (
-            SELECT user_id, MIN(created_at) AS paid_at
+            SELECT user_id, MAX(created_at) AS paid_at
             FROM payment_token_grants
             WHERE {' AND '.join(paid_where)}
             GROUP BY user_id
@@ -375,12 +375,7 @@ def format_conversion_report(report: dict[str, Any], *, title: str = "за 30 д
 
     paid_total = int(report.get("paid_users") or 0)
     strict_paid = int(report.get("strict_paid_users") or 0)
-    lines.extend(
-        [
-            "",
-            f"Всего плативших за пакеты в периоде: {paid_total}",
-        ]
-    )
+    lines.extend(["", f"Всего плативших за пакеты в периоде: {paid_total}"])
     if paid_total != strict_paid:
         lines.append(
             f"Из строгой демо-цепочки дошли до оплаты: {strict_paid}; остальные оплаты пришли другим путём или из более ранней когорты."
