@@ -26,7 +26,18 @@ def test_stars_topup_url_targets_exact_package_amount() -> None:
 @pytest.mark.asyncio
 async def test_runtime_stars_transport_uses_focused_invoice_link(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
-    monkeypatch.setattr(stars_invoice_transport, "log_event", lambda *args, **kwargs: None)
+    provider_events: list[tuple] = []
+    checkout_events: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        stars_invoice_transport,
+        "log_event",
+        lambda *args, **kwargs: provider_events.append(args),
+    )
+    monkeypatch.setattr(
+        stars_invoice_transport,
+        "record_payment_started",
+        lambda *args, **kwargs: checkout_events.append((args, kwargs)),
+    )
     captured_link: dict = {}
     captured_answer: dict = {}
 
@@ -71,12 +82,30 @@ async def test_runtime_stars_transport_uses_focused_invoice_link(monkeypatch) ->
     assert "вернитесь назад" in captured_answer["text"]
     assert "PremiumBot" not in captured_answer["text"]
 
+    assert provider_events[0][1] == "telegram_stars_invoice_created"
+    assert len(checkout_events) == 1
+    args, kwargs = checkout_events[0]
+    assert args == (782001,)
+    assert kwargs["provider"] == "telegram_stars"
+    assert kwargs["source"] == "telegram"
+    assert kwargs["package_id"] == "practice_start_7"
+    assert kwargs["amount"] == 1500
+    assert kwargs["currency"] == "XTR"
+    assert kwargs["gift"] is False
+    assert kwargs["transport"] == "invoice_link"
+
 
 @pytest.mark.asyncio
 async def test_gift_invoice_preserves_gift_back_callback(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_STARS_PRICING_MODE", "explicit")
     gift_token = "gift_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    checkout_events: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(stars_invoice_transport, "log_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        stars_invoice_transport,
+        "record_payment_started",
+        lambda *args, **kwargs: checkout_events.append((args, kwargs)),
+    )
     monkeypatch.setattr(
         stars_invoice_transport,
         "create_gift_checkout_token",
@@ -111,6 +140,7 @@ async def test_gift_invoice_preserves_gift_back_callback(monkeypatch) -> None:
     assert buttons[0].text == "⭐ Оплатить подарок — 1 500 Stars"
     assert buttons[1].callback_data == "pay:gift_methods:practice_start_7"
     assert all("PremiumBot" not in str(button.url or "") for button in buttons)
+    assert checkout_events[0][1]["gift"] is True
 
 
 def test_package_installs_invoice_link_transport() -> None:

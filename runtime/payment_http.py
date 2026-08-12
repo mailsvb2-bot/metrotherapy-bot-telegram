@@ -8,6 +8,7 @@ import os
 
 from aiohttp import web
 
+from services.checkout_telemetry import record_payment_started
 from services.payments.checkout_intent import (
     CheckoutIntentError,
     checkout_intent_required,
@@ -222,6 +223,9 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
     if legacy_error is not None:
         return legacy_error
 
+    package = None
+    amount_minor = 0
+    currency = "RUB"
     if kind in _TOKEN_PAYMENT_KINDS:
         user_error = _user_id_error_response(user_id)
         if user_error is not None:
@@ -231,7 +235,6 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
             return package_error
         package = package_by_id(package_id)
         amount_minor = int(package.price_rub) * 100
-        currency = "RUB"
         intent_error = _checkout_intent_error_response(
             intent=intent,
             user_id=user_id,
@@ -265,6 +268,20 @@ async def pay_yookassa_web(request: web.Request) -> web.Response:
                 "Код ошибки: PAYMENT_CREATE_FAILED"
             ),
             content_type="text/plain",
+        )
+
+    if package is not None and user_id.isdigit() and int(user_id) > 0:
+        await asyncio.to_thread(
+            record_payment_started,
+            int(user_id),
+            provider="yookassa",
+            source=source,
+            package_id=package.package_id,
+            amount=amount_minor,
+            currency="RUB",
+            gift=bool(gift_token),
+            transport="provider_redirect",
+            extra={"amount_minor": amount_minor},
         )
 
     raise web.HTTPFound(location=confirmation_url)

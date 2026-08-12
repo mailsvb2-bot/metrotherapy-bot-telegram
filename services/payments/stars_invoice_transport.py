@@ -4,6 +4,7 @@ from typing import Any
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message
 
+from services.checkout_telemetry import record_payment_started
 from services.events import log_event
 from services.gift_claims import create_gift_checkout_token
 from services.payments.stars_links import stars_amount_label, stars_topup_url
@@ -84,6 +85,29 @@ def _message_bot(message: Message) -> Any | None:
         return None
 
 
+def _checkout_meta(
+    *,
+    package: PracticePackage,
+    amount_xtr: int,
+    as_gift: bool,
+    transport: str,
+) -> dict[str, object]:
+    """Canonical metadata shared by provider and commercial funnel events."""
+
+    return {
+        "provider": "telegram_stars",
+        "source": "telegram",
+        "package_id": package.package_id,
+        "gift": bool(as_gift),
+        "amount": int(amount_xtr),
+        "amount_xtr": int(amount_xtr),
+        "currency": "XTR",
+        "transport": transport,
+        "stars_purchase_recovery": True,
+        "stars_purchase_help": "pre_invoice_topup_choice",
+    }
+
+
 async def send_stars_invoice(
     message: Message,
     *,
@@ -145,6 +169,7 @@ async def send_stars_invoice(
             amount_xtr=order.amount_xtr,
             start_parameter=start_parameter,
         )
+        transport = "unbound_test_fallback"
     else:
         invoice_url = await bot.create_invoice_link(
             title=title,
@@ -164,15 +189,27 @@ async def send_stars_invoice(
                 as_gift=as_gift,
             ),
         )
+        transport = "invoice_link"
 
-    log_event(
+    meta = _checkout_meta(
+        package=package,
+        amount_xtr=order.amount_xtr,
+        as_gift=as_gift,
+        transport=transport,
+    )
+    # Preserve provider-specific diagnostics while emitting one canonical
+    # commercial event only after the payable invoice surface really exists.
+    log_event(int(user.id), "telegram_stars_invoice_created", meta)
+    record_payment_started(
         int(user.id),
-        "telegram_stars_invoice_created",
-        {
-            "package_id": package.package_id,
-            "gift": bool(as_gift),
-            "amount_xtr": order.amount_xtr,
-            "transport": "invoice_link" if bot is not None else "unbound_test_fallback",
+        provider="telegram_stars",
+        source="telegram",
+        package_id=package.package_id,
+        amount=order.amount_xtr,
+        currency="XTR",
+        gift=bool(as_gift),
+        transport=transport,
+        extra={
             "stars_purchase_recovery": True,
             "stars_purchase_help": "pre_invoice_topup_choice",
         },
