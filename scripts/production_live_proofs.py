@@ -2,28 +2,21 @@ from __future__ import annotations
 
 """Explicit, trigger-bound production live proofs.
 
-This operator script is intentionally inert unless the immutable deploy worker
-passes a Git commit carrying one of the allowlisted request markers.  It never
-prints provider credentials or environment values.  The two supported actions
-are:
-
-* repair a stale VK Callback API confirmation code from the official VK API,
-  atomically restart the service, and require the normal provider audit to pass;
-* exercise the immutable ``current``/``previous`` rollback path on the real
-  server, prove both sealed release hashes survive byte-for-byte, and restore
-  the original release before returning success.
+The runner is inert unless the exact deploy trigger commit carries one of the
+allowlisted request markers. It never prints credentials. The supported proofs
+repair a stale VK Callback API confirmation value and exercise a real immutable
+current/previous rollback followed by restoration of the exact original release.
 """
 
 import fcntl
-import hashlib
 import hmac
 import json
 import os
 from pathlib import Path
 import re
 import shlex
+import stat
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.error
@@ -65,12 +58,12 @@ VK_AUDIT = APP_DIR / "scripts" / "vk_provider_audit.py"
 TRIGGER_SHA = (os.getenv("DEPLOY_TRIGGER_SHA") or "").strip().lower()
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-_SAFE_RESULT_RE = re.compile(r"[^A-Za-z0-9_.:=,/-]+")
+_SAFE_RESULT_RE = re.compile(r"[^A-Za-z0-9_.:=,/\[\] -]+")
 VK_API_BASE = "https://api.vk.com/method"
 
 
 class LiveProofError(RuntimeError):
-    pass
+    """Expected operational failure that is safe to publish without secrets."""
 
 
 def _run(
@@ -79,36 +72,60 @@ def _run(
     check: bool = True,
     timeout: int = 120,
     env: dict[str, str] | None = None,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    completed = subprocess.run(
-        args,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=env,
-    )
+    try:
+        completed = subprocess.run(
+            args,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+            input=input_text,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise LiveProofError(f"command_timeout:{Path(args[0]).name}") from exc
+    except OSError as exc:
+        raise LiveProofError(f"command_os_error:{Path(args[0]).name}") from exc
     if check and completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "command failed").strip()
-        raise LiveProofError(f"command_failed:{Path(args[0]).name}:{completed.returncode}:{detail[:180]}")
+        raise LiveProofError(
+            f"command_failed:{Path(args[0]).name}:{completed.returncode}:{detail[:180]}"
+        )
     return completed
+
+
+def _run_bytes(args: list[str], *, timeout: int = 30) -> bytes:
+    try:
+        completed = subprocess.run(
+            args,
+            check=False,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise LiveProofError(f"command_timeout:{Path(args[0]).name}") from exc
+    except OSError as exc:
+        raise LiveProofError(f"command_os_error:{Path(args[0]).name}") from exc
+    if completed.returncode != 0:
+        raise LiveProofError(f"command_failed:{Path(args[0]).name}:{completed.returncode}")
+    return completed.stdout
 
 
 def _trigger_message() -> str:
     if _SHA_RE.fullmatch(TRIGGER_SHA) is None:
         raise LiveProofError("invalid_trigger_sha")
     _run(["/usr/bin/git", "-C", str(APP_DIR), "fetch", "origin", "main"], timeout=180)
-    result = _run(
+    return _run(
         ["/usr/bin/git", "-C", str(APP_DIR), "show", "-s", "--format=%B", TRIGGER_SHA],
         timeout=30,
-    )
-    return result.stdout
+    ).stdout
 
 
 def _safe_fragment(value: object, *, limit: int = 180) -> str:
     text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
-    text = _SAFE_RESULT_RE.sub("_", text)
-    return text[:limit] or "NONE"
+    return (_SAFE_RESULT_RE.sub("_", text)[:limit] or "NONE").strip()
 
 
 def _publish_result(message: str) -> None:
@@ -119,9 +136,10 @@ def _publish_result(message: str) -> None:
             ["/usr/bin/git", "-C", str(APP_DIR), "rev-parse", "origin/main"], timeout=20
         ).stdout.strip()
         tree = _run(
-            ["/usr/bin/git", "-C", str(APP_DIR), "rev-parse", f"{parent}^{{tree}}"], timeout=20
+            ["/usr/bin/git", "-C", str(APP_DIR), "rev-parse", f"{parent}^{{tree}}"],
+            timeout=20,
         ).stdout.strip()
-        commit = subprocess.run(
+        commit = _run(
             [
                 "/usr/bin/git",
                 "-C",
@@ -137,14 +155,9 @@ def _publish_result(message: str) -> None:
                 "-F",
                 "-",
             ],
-            input=safe_message + "\n",
-            check=False,
-            capture_output=True,
-            text=True,
             timeout=20,
+            input_text=safe_message + "\n",
         )
-        if commit.returncode != 0:
-            raise LiveProofError("result_commit_failed")
         result_sha = commit.stdout.strip()
         pushed = _run(
             [
@@ -167,29 +180,26 @@ def _publish_result(message: str) -> None:
 def _load_selected_env(names: tuple[str, ...]) -> dict[str, str]:
     if not ENV_FILE.is_file():
         raise LiveProofError("env_file_missing")
-    # Source the authoritative shell env, but print only the explicitly requested
-    # values through NUL separators. Nothing is written to logs.
-    fmt = "".join(f"%s\\0" for _ in names)
+    fmt = "".join("%s\\0" for _ in names)
     values = " ".join(f'"${{{name}:-}}"' for name in names)
     command = f'set -a; . "$1"; set +a; printf \'{fmt}\' {values}'
-    completed = subprocess.run(
+    raw = _run_bytes(
         ["/usr/bin/bash", "-c", command, "bash", str(ENV_FILE)],
-        check=False,
-        capture_output=True,
         timeout=20,
     )
-    if completed.returncode != 0:
-        raise LiveProofError("env_source_failed")
-    parts = completed.stdout.split(b"\0")
+    parts = raw.split(b"\0")
     if parts and parts[-1] == b"":
         parts.pop()
     if len(parts) != len(names):
         raise LiveProofError("env_source_shape_invalid")
-    return {name: parts[index].decode("utf-8") for index, name in enumerate(names)}
+    try:
+        return {name: parts[index].decode("utf-8") for index, name in enumerate(names)}
+    except UnicodeDecodeError as exc:
+        raise LiveProofError("env_source_encoding_invalid") from exc
 
 
 def replace_env_value(text: str, key: str, value: str) -> str:
-    """Replace all active assignments with one canonical shell-safe assignment."""
+    """Replace duplicate active assignments with one canonical shell-safe value."""
     assignment = f"{key}={shlex.quote(value)}"
     output: list[str] = []
     written = False
@@ -208,11 +218,7 @@ def replace_env_value(text: str, key: str, value: str) -> str:
 
 def _vk_confirmation_code(token: str, group_id: int, api_version: str) -> str:
     body = urllib.parse.urlencode(
-        {
-            "group_id": group_id,
-            "access_token": token,
-            "v": api_version,
-        }
+        {"group_id": group_id, "access_token": token, "v": api_version}
     ).encode("utf-8")
     request = urllib.request.Request(
         f"{VK_API_BASE}/groups.getCallbackConfirmationCode",
@@ -222,9 +228,17 @@ def _vk_confirmation_code(token: str, group_id: int, api_version: str) -> str:
     )
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8", "replace"))
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-        raise LiveProofError(f"vk_confirmation_lookup_failed:{type(exc).__name__}") from exc
+            raw = response.read().decode("utf-8", "replace")
+    except urllib.error.URLError as exc:
+        raise LiveProofError("vk_confirmation_lookup_url_error") from exc
+    except TimeoutError as exc:
+        raise LiveProofError("vk_confirmation_lookup_timeout") from exc
+    except OSError as exc:
+        raise LiveProofError("vk_confirmation_lookup_os_error") from exc
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise LiveProofError("vk_confirmation_lookup_json_invalid") from exc
     if not isinstance(payload, dict) or isinstance(payload.get("error"), dict):
         raise LiveProofError("vk_confirmation_lookup_rejected")
     response_obj = payload.get("response")
@@ -258,6 +272,72 @@ def _restart_release(release_dir: str) -> None:
     _wait_url(PUBLIC_HEALTH_URL)
 
 
+def _read_env_bytes() -> tuple[bytes, os.stat_result]:
+    try:
+        if ENV_FILE.is_symlink():
+            raise LiveProofError("env_file_symlink_unsafe")
+        metadata = ENV_FILE.stat()
+        original = ENV_FILE.read_bytes()
+    except OSError as exc:
+        raise LiveProofError("env_file_read_failed") from exc
+    if metadata.st_mode & stat.S_IWOTH:
+        raise LiveProofError("env_file_permissions_unsafe")
+    return original, metadata
+
+
+def _write_env_bytes(payload: bytes, metadata: os.stat_result) -> None:
+    try:
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{ENV_FILE.name}.live-proof.", dir=ENV_FILE.parent
+        )
+    except OSError as exc:
+        raise LiveProofError("env_temp_create_failed") from exc
+    temp = Path(temp_name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temp, stat.S_IMODE(metadata.st_mode))
+        try:
+            os.chown(temp, metadata.st_uid, metadata.st_gid)
+        except PermissionError:
+            pass
+        os.replace(temp, ENV_FILE)
+    except OSError as exc:
+        raise LiveProofError("env_atomic_write_failed") from exc
+    finally:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _audit_vk(current: dict[str, Any]) -> None:
+    audit = _run(
+        [
+            "/usr/bin/bash",
+            "-c",
+            'set -a; . "$1"; set +a; exec "$2" "$3"',
+            "bash",
+            str(ENV_FILE),
+            str(current["python"]),
+            str(VK_AUDIT),
+        ],
+        check=False,
+        timeout=60,
+        env=os.environ.copy(),
+    )
+    if audit.returncode != 0 or not audit.stdout.startswith("status=ok "):
+        raise LiveProofError("vk_post_repair_audit_failed")
+
+
+def _restore_vk_env(original: bytes, metadata: os.stat_result) -> None:
+    _write_env_bytes(original, metadata)
+    current = _inspect(CURRENT_LINK)
+    _restart_release(str(current["path"]))
+
+
 def _repair_vk_confirmation() -> str:
     names = (
         "VK_GROUP_TOKEN",
@@ -274,71 +354,44 @@ def _repair_vk_confirmation() -> str:
         raise LiveProofError("vk_group_id_invalid") from exc
     if group_id <= 0:
         raise LiveProofError("vk_group_id_invalid")
-    api_version = env["VK_API_VERSION"] or "5.199"
-    provider_code = _vk_confirmation_code(env["VK_GROUP_TOKEN"], group_id, api_version)
-    changed = not hmac.compare_digest(provider_code, env["VK_CONFIRMATION_TOKEN"])
-    original = ENV_FILE.read_bytes()
-    metadata = ENV_FILE.stat()
-    if ENV_FILE.is_symlink() or metadata.st_mode & 0o002:
-        raise LiveProofError("env_file_permissions_unsafe")
 
+    provider_code = _vk_confirmation_code(
+        env["VK_GROUP_TOKEN"], group_id, env["VK_API_VERSION"] or "5.199"
+    )
+    changed = not hmac.compare_digest(provider_code, env["VK_CONFIRMATION_TOKEN"])
+    original, metadata = _read_env_bytes()
     if changed:
-        text = original.decode("utf-8")
-        updated = replace_env_value(text, "VK_CONFIRMATION_TOKEN", provider_code).encode("utf-8")
-        fd, temp_name = tempfile.mkstemp(prefix=f".{ENV_FILE.name}.vk-confirmation.", dir=ENV_FILE.parent)
-        temp = Path(temp_name)
         try:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(updated)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.chmod(temp, metadata.st_mode & 0o777)
-            try:
-                os.chown(temp, metadata.st_uid, metadata.st_gid)
-            except PermissionError:
-                pass
-            os.replace(temp, ENV_FILE)
-        finally:
-            temp.unlink(missing_ok=True)
+            text = original.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise LiveProofError("env_file_encoding_invalid") from exc
+        updated = replace_env_value(text, "VK_CONFIRMATION_TOKEN", provider_code).encode(
+            "utf-8"
+        )
+        _write_env_bytes(updated, metadata)
 
     try:
         current = _inspect(CURRENT_LINK)
-        _restart_release(current["path"])
-        audit_env = os.environ.copy()
-        # Re-source the authoritative env in a shell so the audit sees the new value.
-        audit = subprocess.run(
-            [
-                "/usr/bin/bash",
-                "-c",
-                'set -a; . "$1"; set +a; exec "$2" "$3"',
-                "bash",
-                str(ENV_FILE),
-                current["python"],
-                str(VK_AUDIT),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=audit_env,
-        )
-        if audit.returncode != 0 or not audit.stdout.startswith("status=ok "):
-            raise LiveProofError("vk_post_repair_audit_failed")
-    except Exception:
+        _restart_release(str(current["path"]))
+        _audit_vk(current)
+    except LiveProofError as proof_error:
         if changed:
-            ENV_FILE.write_bytes(original)
-            os.chmod(ENV_FILE, metadata.st_mode & 0o777)
             try:
-                os.chown(ENV_FILE, metadata.st_uid, metadata.st_gid)
-            except PermissionError:
-                pass
-            try:
-                current = _inspect(CURRENT_LINK)
-                _restart_release(current["path"])
-            except Exception:
-                pass
-        raise
+                _restore_vk_env(original, metadata)
+            except LiveProofError as restore_error:
+                raise LiveProofError("vk_env_restore_failed") from restore_error
+        raise proof_error
     return f"vk=ok group={group_id} confirmation=match changed={int(changed)}"
+
+
+def _json_object(text: str, error_code: str) -> dict[str, Any]:
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise LiveProofError(error_code) from exc
+    if not isinstance(value, dict):
+        raise LiveProofError(error_code)
+    return value
 
 
 def _inspect(link: Path) -> dict[str, Any]:
@@ -352,10 +405,7 @@ def _inspect(link: Path) -> dict[str, Any]:
         ],
         timeout=180,
     )
-    value = json.loads(completed.stdout)
-    if not isinstance(value, dict):
-        raise LiveProofError("release_inspect_invalid")
-    return value
+    return _json_object(completed.stdout, "release_inspect_invalid")
 
 
 def _validate_release(path: str) -> dict[str, Any]:
@@ -363,10 +413,7 @@ def _validate_release(path: str) -> dict[str, Any]:
         ["/usr/bin/python3", str(IMMUTABLE_RELEASE), "validate", path],
         timeout=300,
     )
-    value = json.loads(completed.stdout)
-    if not isinstance(value, dict):
-        raise LiveProofError("release_validate_invalid")
-    return value
+    return _json_object(completed.stdout, "release_validate_invalid")
 
 
 def _verify_systemd_current() -> None:
@@ -380,15 +427,20 @@ def _verify_systemd_current() -> None:
     ).stdout.strip()
     if working != str(CURRENT_LINK):
         raise LiveProofError("systemd_working_directory_not_current")
-    if f"{CURRENT_LINK}/.venv/bin/python" not in exec_start or f"{CURRENT_LINK}/main.py" not in exec_start:
+    if (
+        f"{CURRENT_LINK}/.venv/bin/python" not in exec_start
+        or f"{CURRENT_LINK}/main.py" not in exec_start
+    ):
         raise LiveProofError("systemd_execstart_not_current")
 
 
 def _verify_deployment_proof(current: dict[str, Any], previous: dict[str, Any]) -> None:
-    if not DEPLOYMENT_PROOF_FILE.is_file() or not DEPLOYED_SHA_FILE.is_file():
-        raise LiveProofError("deployment_proof_missing")
-    proof = json.loads(DEPLOYMENT_PROOF_FILE.read_text(encoding="utf-8"))
-    deployed_sha = DEPLOYED_SHA_FILE.read_text(encoding="utf-8").strip()
+    try:
+        proof_text = DEPLOYMENT_PROOF_FILE.read_text(encoding="utf-8")
+        deployed_sha = DEPLOYED_SHA_FILE.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise LiveProofError("deployment_proof_missing") from exc
+    proof = _json_object(proof_text, "deployment_proof_invalid")
     if deployed_sha != current["sha"]:
         raise LiveProofError("deployed_sha_mismatch")
     if proof.get("deployed_sha") != current["sha"]:
@@ -403,6 +455,30 @@ def _verify_deployment_proof(current: dict[str, Any], previous: dict[str, Any]) 
         raise LiveProofError("proof_previous_tree_mismatch")
 
 
+def _switch_to(release_dir: str) -> None:
+    _run(
+        [
+            "/usr/bin/python3",
+            str(IMMUTABLE_RELEASE),
+            "switch",
+            "--release-dir",
+            release_dir,
+            "--current-link",
+            str(CURRENT_LINK),
+            "--previous-link",
+            str(PREVIOUS_LINK),
+        ],
+        timeout=180,
+    )
+
+
+def _restore_original_release(before_current: dict[str, Any]) -> None:
+    now = _inspect(CURRENT_LINK)
+    if now.get("sha") != before_current["sha"]:
+        _switch_to(str(before_current["path"]))
+    _restart_release(str(before_current["path"]))
+
+
 def _rollback_live_proof() -> str:
     _verify_systemd_current()
     before_current = _inspect(CURRENT_LINK)
@@ -410,9 +486,10 @@ def _rollback_live_proof() -> str:
     if before_current["sha"] == before_previous["sha"]:
         raise LiveProofError("rollback_targets_not_distinct")
     _verify_deployment_proof(before_current, before_previous)
-    _validate_release(before_current["path"])
-    _validate_release(before_previous["path"])
-    restored = False
+    _validate_release(str(before_current["path"]))
+    _validate_release(str(before_previous["path"]))
+
+    proof_error: LiveProofError | None = None
     try:
         _run(
             [
@@ -429,64 +506,34 @@ def _rollback_live_proof() -> str:
         rolled_current = _inspect(CURRENT_LINK)
         if rolled_current["sha"] != before_previous["sha"]:
             raise LiveProofError("rollback_target_mismatch")
-        _restart_release(rolled_current["path"])
-        _validate_release(before_current["path"])
-        _validate_release(before_previous["path"])
+        _restart_release(str(rolled_current["path"]))
+        _validate_release(str(before_current["path"]))
+        _validate_release(str(before_previous["path"]))
+        _switch_to(str(before_current["path"]))
+        _restart_release(str(before_current["path"]))
+    except LiveProofError as exc:
+        proof_error = exc
 
-        _run(
-            [
-                "/usr/bin/python3",
-                str(IMMUTABLE_RELEASE),
-                "switch",
-                "--release-dir",
-                before_current["path"],
-                "--current-link",
-                str(CURRENT_LINK),
-                "--previous-link",
-                str(PREVIOUS_LINK),
-            ],
-            timeout=180,
-        )
-        _restart_release(before_current["path"])
-        restored = True
-    finally:
-        try:
-            now = _inspect(CURRENT_LINK)
-        except Exception:
-            now = {}
-        if now.get("sha") != before_current["sha"]:
-            try:
-                _run(
-                    [
-                        "/usr/bin/python3",
-                        str(IMMUTABLE_RELEASE),
-                        "switch",
-                        "--release-dir",
-                        before_current["path"],
-                        "--current-link",
-                        str(CURRENT_LINK),
-                        "--previous-link",
-                        str(PREVIOUS_LINK),
-                    ],
-                    timeout=180,
-                )
-                _restart_release(before_current["path"])
-                restored = True
-            except Exception:
-                restored = False
-        if not restored:
-            raise LiveProofError("rollback_restore_failed")
+    try:
+        _restore_original_release(before_current)
+    except LiveProofError as restore_error:
+        raise LiveProofError("rollback_restore_failed") from restore_error
+    if proof_error is not None:
+        raise proof_error
 
     after_current = _inspect(CURRENT_LINK)
     after_previous = _inspect(PREVIOUS_LINK)
-    if after_current["sha"] != before_current["sha"] or after_previous["sha"] != before_previous["sha"]:
+    if (
+        after_current["sha"] != before_current["sha"]
+        or after_previous["sha"] != before_previous["sha"]
+    ):
         raise LiveProofError("rollback_topology_not_restored")
     if after_current["tree_sha256"] != before_current["tree_sha256"]:
         raise LiveProofError("current_tree_changed_during_rollback")
     if after_previous["tree_sha256"] != before_previous["tree_sha256"]:
         raise LiveProofError("previous_tree_changed_during_rollback")
-    _validate_release(after_current["path"])
-    _validate_release(after_previous["path"])
+    _validate_release(str(after_current["path"]))
+    _validate_release(str(after_previous["path"]))
     _verify_systemd_current()
     _verify_deployment_proof(after_current, after_previous)
     return (
@@ -495,44 +542,65 @@ def _rollback_live_proof() -> str:
     )
 
 
-def main() -> int:
-    message = _trigger_message()
+def _execute_requested_proofs(message: str) -> str | None:
     want_vk = "[vk-confirmation-sync-request]" in message
     want_rollback = "[rollback-live-proof-request]" in message
     if not want_vk and not want_rollback:
+        return None
+    details: list[str] = []
+    if want_vk:
+        details.append(_repair_vk_confirmation())
+    if want_rollback:
+        details.append(_rollback_live_proof())
+    return " ".join(details)
+
+
+def main() -> int:
+    try:
+        message = _trigger_message()
+        requested = _execute_requested_proofs(message)
+    except LiveProofError as exc:
+        error = _safe_fragment(f"{type(exc).__name__}:{exc}")
+        result = (
+            f"[ops-live-proof-result] trigger={TRIGGER_SHA[:12]} "
+            f"status=error error={error}"
+        )
+        try:
+            _publish_result(result)
+        except LiveProofError:
+            pass
+        print(result)
+        return 1
+    if requested is None:
         return 0
 
-    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with LOCK_FILE.open("a+b") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        details: list[str] = []
-        try:
-            if want_vk:
-                details.append(_repair_vk_confirmation())
-            if want_rollback:
-                details.append(_rollback_live_proof())
-            result = (
-                f"[ops-live-proof-result] trigger={TRIGGER_SHA[:12]} status=ok "
-                + " ".join(details)
-            )
-            _publish_result(result)
-            print(result)
-            return 0
-        except Exception as exc:
-            error = _safe_fragment(f"{type(exc).__name__}:{exc}")
-            result = (
-                f"[ops-live-proof-result] trigger={TRIGGER_SHA[:12]} "
-                f"status=error error={error}"
-            )
-            try:
-                _publish_result(result)
-            except Exception:
-                pass
-            print(result)
-            return 1
-        finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    result = (
+        f"[ops-live-proof-result] trigger={TRIGGER_SHA[:12]} status=ok {requested}"
+    )
+    try:
+        _publish_result(result)
+    except LiveProofError as exc:
+        print(
+            f"[ops-live-proof-result] trigger={TRIGGER_SHA[:12]} status=error "
+            f"error={_safe_fragment(exc)}"
+        )
+        return 1
+    print(result)
+    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with LOCK_FILE.open("a+b") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                raise SystemExit(main())
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    except OSError as exc:
+        print(
+            f"[ops-live-proof-result] trigger={TRIGGER_SHA[:12]} status=error "
+            f"error={_safe_fragment(f'lock_failed:{type(exc).__name__}')}"
+        )
+        raise SystemExit(2) from exc
