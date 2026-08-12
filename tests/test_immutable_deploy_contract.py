@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
 from scripts.check_deploy_governance import deploy_governance_problems
@@ -32,10 +34,43 @@ def test_deploy_wrapper_has_no_mutable_runtime_logic() -> None:
     assert 'git -C "$SOURCE_DIR" fetch --prune origin main' in wrapper
     assert 'git -C "$SOURCE_DIR" merge --ff-only origin/main' in wrapper
     assert "DEPLOY_BOOTSTRAPPED_SHA" in wrapper
+    assert "DEPLOY_BOOTSTRAP_PID" in wrapper
     assert "re-exec updated wrapper" in wrapper
     assert wrapper.index("merge --ff-only origin/main") < wrapper.index(
         "scripts/immutable_deploy.sh"
     )
+
+
+def test_deploy_bootstrap_sentinel_is_bound_to_current_reexec_pid() -> None:
+    bash = shutil.which("bash")
+    assert bash is not None
+    wrapper = _text("deploy.sh")
+    start = wrapper.index('if [ "$BOOTSTRAP_PID" != "$$" ]; then')
+    end = wrapper.index("\nfi", start) + len("\nfi")
+    guard = wrapper[start:end]
+
+    stale = subprocess.run(
+        [bash, "-c", f'BOOTSTRAPPED_SHA=stale; BOOTSTRAP_PID=1; {guard}; printf "%s" "$BOOTSTRAPPED_SHA"'],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert stale.returncode == 0, stale.stderr
+    assert stale.stdout == ""
+
+    legitimate = subprocess.run(
+        [bash, "-c", f'BOOTSTRAPPED_SHA=expected; BOOTSTRAP_PID=$$; {guard}; printf "%s" "$BOOTSTRAPPED_SHA"'],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert legitimate.returncode == 0, legitimate.stderr
+    assert legitimate.stdout == "expected"
+    assert 'DEPLOY_BOOTSTRAP_PID="$$"' in wrapper
 
 
 def test_immutable_deploy_governance_is_closed() -> None:
@@ -165,6 +200,7 @@ def test_candidate_validator_runs_with_release_guardrails() -> None:
     assert "VALIDATOR_STRICT=1" in candidate
     assert "VALIDATOR_GUARDRAILS_STRICT=1" in candidate
 
+
 def test_immutable_systemd_dropin_wins_over_legacy_override() -> None:
     deploy = _text("scripts/immutable_deploy.sh")
 
@@ -186,4 +222,3 @@ def test_deploy_wrapper_reexecutes_after_fast_forward() -> None:
     reexec = wrapper.index("re-exec updated wrapper", merge)
     immutable = wrapper.index("scripts/immutable_deploy.sh", reexec)
     assert topology < fetch < merge < reexec < immutable
-
