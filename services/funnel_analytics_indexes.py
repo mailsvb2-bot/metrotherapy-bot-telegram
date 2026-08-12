@@ -51,7 +51,6 @@ def ensure_funnel_analytics_indexes() -> dict[str, object]:
     return ensure_online_indexes(
         ONLINE_INDEX_SPECS,
         component="FunnelAnalytics",
-        connect_timeout_env="FUNNEL_INDEX_CONNECT_TIMEOUT_SEC",
         statement_timeout_env="FUNNEL_INDEX_STATEMENT_TIMEOUT_SEC",
         lock_timeout_env="FUNNEL_INDEX_LOCK_TIMEOUT_SEC",
     )
