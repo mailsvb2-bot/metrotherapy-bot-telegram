@@ -5,6 +5,8 @@ APP_DIR="${APP_DIR:-/root/metrotherapy}"
 INNER_WORKER="${DEPLOY_INNER_WORKER:-$APP_DIR/scripts/run_deploy_worker.sh}"
 LIVE_PROOF_RUNNER="${LIVE_PROOF_RUNNER:-$APP_DIR/scripts/production_live_proofs.py}"
 YOOKASSA_REFUND_DRILL="${YOOKASSA_REFUND_DRILL:-$APP_DIR/scripts/yookassa_refund_drill.py}"
+CURRENT_RELEASE_LINK="${METRO_CURRENT_RELEASE_LINK:-/var/lib/metrotherapy/runtime/current}"
+YOOKASSA_REFUND_PYTHON="${YOOKASSA_REFUND_PYTHON:-$CURRENT_RELEASE_LINK/.venv/bin/python}"
 LOG_FILE="${LOG_FILE:-/var/log/metrotherapy_deploy.log}"
 TRIGGER_SHA="${DEPLOY_TRIGGER_SHA:-}"
 TRIGGER_MESSAGE=""
@@ -176,6 +178,7 @@ run_post_deploy_audit() {
   local runner="$2"
   local missing_code="$3"
   local audit_code="0"
+  local python_bin="/usr/bin/python3"
 
   if [ ! -f "$runner" ]; then
     printf 'ERROR: post-deploy audit runner is missing audit=%s\n' "$audit" >> "$LOG_FILE"
@@ -183,8 +186,20 @@ run_post_deploy_audit() {
     return "$missing_code"
   fi
 
+  # The refund drill imports the production DB/payment stack. Execute it with
+  # the exact immutable release environment that just passed the deploy gate;
+  # system Python is intentionally kept for the stdlib-only operator proof.
+  if [ "$audit" = "yookassa_refund" ]; then
+    python_bin="$YOOKASSA_REFUND_PYTHON"
+    if [ ! -x "$python_bin" ]; then
+      printf 'ERROR: deployed refund-drill Python is unavailable\n' >> "$LOG_FILE"
+      publish_post_deploy_failure_result "$audit" 43
+      return 43
+    fi
+  fi
+
   set +e
-  /usr/bin/python3 "$runner" >> "$LOG_FILE" 2>&1
+  "$python_bin" "$runner" >> "$LOG_FILE" 2>&1
   audit_code="$?"
   set -e
   if [ "$audit_code" -ne 0 ]; then
