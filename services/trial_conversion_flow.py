@@ -191,8 +191,18 @@ def plan_trial_conversion_after_outcome(
     quality = _quality(delta)
     latest = {"quality": quality, "delta": delta}
     decision = decide_trial_funnel_action(latest, step="postdemo")
-    comparison = last_delta(int(user_id), str(session.kind or ""))
-    average_delta = comparison.get("avg_delta")
+
+    average_delta: int | None = None
+    try:
+        comparison = last_delta(int(user_id), str(session.kind or ""))
+        raw_average = comparison.get("avg_delta")
+        average_delta = int(raw_average) if raw_average is not None else None
+    except (sqlite3.Error, PsycopgError, RuntimeError, TypeError, ValueError):
+        log.exception(
+            "trial outcome comparison unavailable user_id=%s session_id=%s",
+            int(user_id),
+            int(session_id),
+        )
 
     plan = TrialConversionPlan(
         user_id=int(user_id),
@@ -207,7 +217,7 @@ def plan_trial_conversion_after_outcome(
             pre=pre,
             post=post,
             delta=delta,
-            avg_delta=int(average_delta) if average_delta is not None else None,
+            avg_delta=average_delta,
         ),
     )
 
