@@ -13,14 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 PROBE_SCRIPT = ROOT / "scripts" / "probe_postgres_messenger_outbox.py"
 
 
-def test_probe_platform_is_outside_live_delivery_worker_namespace() -> None:
+def test_probe_platform_is_outside_active_delivery_worker_namespace() -> None:
     assert probe.PROBE_PLATFORM not in {"vk", "max"}
     assert probe.PROBE_PLATFORM not in delivery_pool._ALLOWED_PLATFORMS  # noqa: SLF001
     with pytest.raises(ValueError, match="unsupported delivery platform"):
         delivery_pool.claim_stream_head(platform=probe.PROBE_PLATFORM)
 
 
-def test_probe_requires_live_db_authorization_before_database_access() -> None:
+def test_probe_requires_database_mutation_authorization_before_access() -> None:
     with pytest.raises(ProbeMutationAuthorizationRequired):
         probe.run_probe(allow_live_db_mutation=False)
 
