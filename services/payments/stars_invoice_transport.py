@@ -84,6 +84,29 @@ def _message_bot(message: Message) -> Any | None:
         return None
 
 
+def _checkout_meta(
+    *,
+    package: PracticePackage,
+    amount_xtr: int,
+    as_gift: bool,
+    transport: str,
+) -> dict[str, object]:
+    """Canonical metadata shared by provider and commercial funnel events."""
+
+    return {
+        "provider": "telegram_stars",
+        "source": "telegram",
+        "package_id": package.package_id,
+        "gift": bool(as_gift),
+        "amount": int(amount_xtr),
+        "amount_xtr": int(amount_xtr),
+        "currency": "XTR",
+        "transport": transport,
+        "stars_purchase_recovery": True,
+        "stars_purchase_help": "pre_invoice_topup_choice",
+    }
+
+
 async def send_stars_invoice(
     message: Message,
     *,
@@ -145,6 +168,7 @@ async def send_stars_invoice(
             amount_xtr=order.amount_xtr,
             start_parameter=start_parameter,
         )
+        transport = "unbound_test_fallback"
     else:
         invoice_url = await bot.create_invoice_link(
             title=title,
@@ -164,19 +188,21 @@ async def send_stars_invoice(
                 as_gift=as_gift,
             ),
         )
+        transport = "invoice_link"
 
-    log_event(
-        int(user.id),
-        "telegram_stars_invoice_created",
-        {
-            "package_id": package.package_id,
-            "gift": bool(as_gift),
-            "amount_xtr": order.amount_xtr,
-            "transport": "invoice_link" if bot is not None else "unbound_test_fallback",
-            "stars_purchase_recovery": True,
-            "stars_purchase_help": "pre_invoice_topup_choice",
-        },
+    meta = _checkout_meta(
+        package=package,
+        amount_xtr=order.amount_xtr,
+        as_gift=as_gift,
+        transport=transport,
     )
+    # Preserve the provider-specific event for existing diagnostics while also
+    # emitting the canonical commercial event consumed by Sales Desk.  The
+    # canonical event is recorded only after Telegram actually created/sent the
+    # invoice surface, so "checkout" means a real payment attempt rather than a
+    # tariff-page view.
+    log_event(int(user.id), "telegram_stars_invoice_created", meta)
+    log_event(int(user.id), "payment_started", meta)
     return gift_token
 
 
