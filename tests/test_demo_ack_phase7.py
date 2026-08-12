@@ -58,6 +58,7 @@ def configure_common(
     monkeypatch.setattr(demo, "record_demo_ack", lambda *_args: record_ok)
     monkeypatch.setattr(demo, "kb_sales_offer", lambda uid: ("sales", uid))
     monkeypatch.setattr(demo, "store", SimpleNamespace(is_sub_active=lambda _uid: subscribed))
+    monkeypatch.setattr(demo, "log_event", lambda *_args, **_kwargs: None)
 
 
 @pytest.mark.asyncio
@@ -101,7 +102,8 @@ async def test_demo_ack_active_subscription_and_micro_question(monkeypatch: pyte
     await demo.demo_ack(callback)
 
     assert "Спасибо" in callback.message.answers[0][0]
-    assert callback.message.answers[0][1]["reply_markup"] == ("sales", 7)
+    assert "сначала оцените" in callback.message.answers[0][0]
+    assert "reply_markup" not in callback.message.answers[0][1]
     assert callback.message.answers[1][0] == "Как состояние?"
     assert callback.message.answers[1][1]["reply_markup"] == ("energy", ["лучше", "так же"])
 
@@ -169,7 +171,6 @@ def configure_inactive(
     )
     jobs: list[tuple[Any, ...]] = []
     monkeypatch.setattr(demo, "add_job", lambda *args: jobs.append(args))
-    monkeypatch.setattr(demo, "log_event", lambda *_args, **_kwargs: None)
     return jobs, profiles
 
 
@@ -193,6 +194,7 @@ async def test_demo_ack_schedules_profiled_funnel(
         assert "funnel_nudge" not in job_types
     assert profiles and profiles[0][0][1] == profile
     assert "Спасибо" in callback.message.answers[0][0]
+    assert "reply_markup" not in callback.message.answers[0][1]
 
 
 @pytest.mark.asyncio

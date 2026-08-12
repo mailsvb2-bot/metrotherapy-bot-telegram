@@ -26,10 +26,13 @@ Premium entitlements are granted only after either:
 
 Both providers use the same idempotent token and premium-entitlement services.
 
-Expected package amounts:
+Buyer-facing RUB package amounts are owned by `services.practice_token_contract.DEFAULT_PRACTICE_PACKAGES`.
+The values below document the current defaults and are covered by a contract test so operator documentation cannot silently drift from checkout validation:
 
-- `practice_antistress_60`: `12900.00 RUB`.
-- `practice_personal_month`: `23000.00 RUB`.
+- `practice_antistress_60`: `8290.00 RUB`.
+- `practice_personal_month`: `24870.00 RUB`.
+
+Telegram Stars prices are a separate explicit buyer-facing contract and are resolved through `telegram_stars_price()`; they must not be inferred from the RUB values in this document.
 
 ## Delivery behavior
 
