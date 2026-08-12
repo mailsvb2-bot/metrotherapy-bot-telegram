@@ -1,22 +1,7 @@
 from __future__ import annotations
 
+from services.commercial_funnel_contract import COMMERCIAL_FUNNEL_EVENT_NAMES
 from services.reward_engine_indexes import OnlineIndexSpec, ensure_online_indexes
-
-COMMERCIAL_FUNNEL_EVENT_NAMES: tuple[str, ...] = (
-    "demo_sent",
-    "demo_ack",
-    "funnel_nudge_sent",
-    "funnel_offer_sent",
-    "funnel_deadline_sent",
-    "funnel_lastcall_sent",
-    "view_tariffs",
-    "invoice_created",
-    "payment_started",
-    "invoice_paid",
-    "payment_success",
-    "successful_payment",
-    "sub_paid",
-)
 
 
 def _sql_literal(value: str) -> str:
