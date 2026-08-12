@@ -118,6 +118,19 @@ def test_inner_guard_reduces_unexpected_exception_to_stage_and_class() -> None:
         guarded()
 
 
+def test_inner_guard_reduces_system_exit_to_stage_without_exit_code() -> None:
+    module = _load_inner()
+    impl = module._load_impl()
+
+    def fail() -> None:
+        raise SystemExit(77)
+
+    guarded = module._guard(impl, "environment", fail)
+    with pytest.raises(impl.RefundDrillError, match="^unexpected_environment_SystemExit$") as exc_info:
+        guarded()
+    assert "77" not in str(exc_info.value)
+
+
 def test_inner_guard_classifies_import_failure_without_exception_text(tmp_path: Path, monkeypatch) -> None:
     module = _load_inner()
     status_file = tmp_path / "guard.status"

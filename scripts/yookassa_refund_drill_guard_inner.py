@@ -68,6 +68,8 @@ def _guard(impl: Any, stage: str, func: Callable[..., Any]) -> Callable[..., Any
             return func(*args, **kwargs)
         except impl.RefundDrillError:
             raise
+        except SystemExit as exc:
+            raise impl.RefundDrillError(f"unexpected_{stage}_SystemExit") from exc
         except Exception as exc:  # validator: allow-wide-except
             exc_type = type(exc).__name__
             raise impl.RefundDrillError(f"unexpected_{stage}_{exc_type}") from exc
@@ -85,6 +87,8 @@ def _publish_with_fallback(
     _record_safe_result(message)
     try:
         impl._publish_result(message)
+    except SystemExit:
+        return fallback_code
     except Exception:  # validator: allow-wide-except
         return fallback_code
     return success_code
@@ -119,6 +123,17 @@ def main() -> int:
         message = (
             f"{impl.RESULT_MARKER} trigger={impl.TRIGGER_SHA[:12] or 'NONE'} "
             f"status=blocked yookassa_refund=blocked reason={reason}"
+        )
+        return _publish_with_fallback(
+            impl,
+            message,
+            success_code=2,
+            fallback_code=2,
+        )
+    except SystemExit:
+        message = (
+            f"{impl.RESULT_MARKER} trigger={impl.TRIGGER_SHA[:12] or 'NONE'} "
+            f"status=blocked yookassa_refund=blocked reason=unexpected_entry_SystemExit"
         )
         return _publish_with_fallback(
             impl,
