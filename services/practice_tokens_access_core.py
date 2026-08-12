@@ -66,7 +66,11 @@ def _low_balance_warning(user_id: int, wallet_after: PracticeWallet) -> str:
     try:
         mode = get_delivery_mode(int(user_id))
         per_day = max(0, int(daily_practice_cost(mode)))
-    except (sqlite3.Error, RuntimeError, TypeError, ValueError):
+    except sqlite3.Error:
+        per_day = 1
+    except RuntimeError:
+        per_day = 1
+    except (TypeError, ValueError):
         per_day = 1
 
     # A paused user may still request an individual practice manually. Use the
