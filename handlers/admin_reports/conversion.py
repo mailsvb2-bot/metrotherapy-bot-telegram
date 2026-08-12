@@ -1,21 +1,25 @@
 from __future__ import annotations
-import logging
+
 import asyncio
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 
-from config.settings import settings
-from handlers.admin_inline_common import AdminCtx, fmt_sec, fmt_ts, safe_edit
-
-from services.funnel_analytics import conversion_report
+from handlers.admin_inline_common import AdminCtx, safe_edit
+from services.funnel_analytics import conversion_report, format_conversion_report
 
 
 async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, log) -> bool:
-    # Сводный отчёт по конверсиям
-    now_utc = datetime.now(ZoneInfo("UTC")).replace(microsecond=0)
-    txt = await asyncio.to_thread(conversion_report, now_utc)
-    await safe_edit(cb, txt, reply_markup=ctx.staff_kb)
+    """Render the last 30 days of the commercial funnel as a money-first report."""
+
+    end_utc = datetime.now(timezone.utc).replace(microsecond=0)
+    start_utc = end_utc - timedelta(days=30)
+    report = await asyncio.to_thread(
+        conversion_report,
+        start_utc.isoformat(),
+        end_utc.isoformat(),
+    )
+    text = format_conversion_report(report, title="за последние 30 дней")
+    await safe_edit(cb, text, reply_markup=ctx.staff_kb)
     return True
