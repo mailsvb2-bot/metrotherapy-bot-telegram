@@ -65,7 +65,8 @@ def test_observed_worker_runs_proofs_only_after_successful_inner_deploy() -> Non
 
     assert inner_call < inner_failure_guard < proof_marker < proof_call
     assert "run_post_deploy_audit()" in source
-    assert '/usr/bin/python3 "$runner"' in source
+    assert 'python_bin="/usr/bin/python3"' in source
+    assert '"$python_bin" "$runner"' in source
     assert 'publish_post_deploy_failure_result "$audit" "$audit_code"' in source
     assert "[rollback-live-proof-request]" in source
     assert "[ops-live-proof-result]" in source
