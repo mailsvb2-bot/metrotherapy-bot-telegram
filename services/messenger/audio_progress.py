@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from services.events import log_runtime_event
 from services.messenger import audio_progress_legacy as _legacy
 from services.messenger.audio_progress_legacy import *  # noqa: F403
 
@@ -120,6 +121,24 @@ def confirm_pending_audio_delivery(
         title=pending.title,
         platform=resolved_platform,
     )
+    if str(sequence_key) == "demo":
+        # Canonical cross-messenger commercial evidence. Telegram's mood:done
+        # button and VK/MAX/text confirmations all converge on this facade, so
+        # analytics records the real listen action instead of depending on the
+        # older Telegram-only demo:ack callback path. Runtime telemetry is
+        # best-effort and must never turn a successful audio confirmation into a
+        # user-visible failure.
+        log_runtime_event(
+            int(user_id),
+            event_type="audio_listened",
+            source=resolved_platform,
+            payload={
+                "sequence_key": "demo",
+                "anchor": int(pending.anchor),
+                "title": pending.title,
+                "source": "manual_confirmed",
+            },
+        )
     return pending
 
 
