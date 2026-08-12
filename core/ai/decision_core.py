@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
 import time
 import uuid
-import sqlite3
 from typing import Any, Dict
 
 from core.ai.decision_types import Decision, DecisionToken, WorldState
@@ -39,7 +39,6 @@ class DecisionCore:
 
     def __new__(cls, *args: Any, **kwargs: Any):
         if cls._instance is not None:
-            # Second init is an architectural violation by spec; handled by enforcement module
             raise RuntimeError("ARCH_VIOLATION: DecisionCore initialized twice")
         obj = super().__new__(cls)
         cls._instance = obj
@@ -57,22 +56,29 @@ class DecisionCore:
         return cls._instance
 
     def decide(self, world_state: WorldState) -> Decision:
-        # Minimal baseline policy: if SAFE_MODE -> safe content; otherwise delegate to existing app via intent.
         decision_id = str(uuid.uuid4())
         now = time.time()
         ttl = int(world_state.get("token_ttl_sec") or 60)
-        token = DecisionToken(decision_id=decision_id, issued_at=now, ttl_sec=ttl, signature=self.runtime_signature)
+        token = DecisionToken(
+            decision_id=decision_id,
+            issued_at=now,
+            ttl_sec=ttl,
+            signature=self.runtime_signature,
+        )
 
-        # Observability: log decision creation (best-effort, must not break runtime)
         try:
-            from services.events import log_runtime_event  # runtime layer
-            user_id = int(world_state.get('user_id') or 0)
+            from services.events import log_runtime_event
+
+            user_id = int(world_state.get("user_id") or 0)
             if user_id:
                 log_runtime_event(
                     user_id,
-                    event_type='decision_made',
-                    payload={'intent': world_state.get('intent'), 'meta': world_state.get('meta') or {}},
-                    source=str(world_state.get('source') or 'telegram'),
+                    event_type="decision_made",
+                    payload={
+                        "intent": world_state.get("intent"),
+                        "meta": world_state.get("meta") or {},
+                    },
+                    source=str(world_state.get("source") or "telegram"),
                     correlation_id=token.nonce,
                     decision_id=decision_id,
                 )
@@ -80,15 +86,49 @@ class DecisionCore:
             pass
 
         if SAFE_MODE.active:
-            payload: Dict[str, Any] = {"type": "safe_content", "reason": SAFE_MODE.reason}
-            return Decision(decision_id=decision_id, payload=payload, token=token, meta={"mode": "safe"})
+            payload: Dict[str, Any] = {
+                "type": "safe_content",
+                "reason": SAFE_MODE.reason,
+            }
+            return Decision(
+                decision_id=decision_id,
+                payload=payload,
+                token=token,
+                meta={"mode": "safe"},
+            )
 
-        # Policy stub: payload can be filled by concrete product logic later.
         intent = world_state.get("intent")
+
+        if intent == "trial_outcome_conversion":
+            from services.trial_funnel_policy import decide_trial_funnel_action
+
+            raw_outcome = world_state.get("trial_outcome")
+            outcome = raw_outcome if isinstance(raw_outcome, dict) else None
+            decision = decide_trial_funnel_action(outcome, step="postdemo")
+            payload = {
+                "type": "trial_conversion_decision",
+                "action": decision.action,
+                "reason": decision.reason,
+                "quality": decision.quality,
+                "delta": decision.delta,
+                "allow_paid_cta": bool(decision.allow_paid_cta),
+                "allow_pressure": bool(decision.allow_pressure),
+            }
+            return Decision(
+                decision_id=decision_id,
+                payload=payload,
+                token=token,
+                meta={"mode": "trial", "policy": "trial_outcome_policy_v1"},
+            )
+
         if intent == "engine_job_execute":
             job_type = str(world_state.get("job_type") or "").strip()
             if job_type not in allowed_engine_job_types():
-                payload = {"type": "job_execution_denied", "reason": "unknown_job_type", "job_type": job_type}
+                payload = {
+                    "type": "job_execution_denied",
+                    "reason": "unknown_job_type",
+                    "job_type": job_type,
+                }
                 return Decision(
                     decision_id=decision_id,
                     payload=payload,
@@ -98,11 +138,6 @@ class DecisionCore:
 
             user_id = int(world_state.get("user_id") or 0)
 
-            # Canonical trial monetization guard.  Existing selling jobs may have
-            # been queued before a post-demo outcome existed, so the only safe
-            # decision point is immediately before effect execution.  DecisionCore
-            # remains the sole authority; the service below is a pure evidence/
-            # policy adapter and never sends or schedules anything itself.
             from services.trial_funnel_execution import trial_sales_job_gate
 
             trial_gate = trial_sales_job_gate(user_id, job_type)
@@ -147,7 +182,17 @@ class DecisionCore:
 
         if intent == "admin_ai_prices":
             payload = {"type": "admin_ai_prices"}
-            return Decision(decision_id=decision_id, payload=payload, token=token, meta={"mode": "admin"})
+            return Decision(
+                decision_id=decision_id,
+                payload=payload,
+                token=token,
+                meta={"mode": "admin"},
+            )
 
         payload = {"type": "noop", "intent": intent, "world": world_state}
-        return Decision(decision_id=decision_id, payload=payload, token=token, meta={"mode": "baseline"})
+        return Decision(
+            decision_id=decision_id,
+            payload=payload,
+            token=token,
+            meta={"mode": "baseline"},
+        )

@@ -22,8 +22,13 @@ from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDeli
 from services.messenger.package_payment_ui import package_payment_text
 from services.messenger.progress_charts import build_vk_mood_progress_chart_path
 from services.messenger.text_ui import MessengerReply
-from services.mood_text_flow import complete_pre_score_and_send, complete_post_score_and_send_next
+from services.mood_text_flow import (
+    complete_pre_score_and_send,
+    complete_post_score_and_send_next,
+    find_pending_post_session_id,
+)
 from services.privacy_export_links import issue_privacy_export_url, privacy_export_ttl_minutes
+from services.trial_conversion_flow import plan_trial_conversion_after_outcome
 from services.weather import get_weather_text_async, set_city
 
 log = logging.getLogger(__name__)
@@ -216,21 +221,44 @@ async def _handle_post_score_flow(
     score: int,
 ) -> None:
     try:
+        session_id = await asyncio.to_thread(find_pending_post_session_id, canonical_user_id)
         result = await complete_post_score_and_send_next(
             canonical_user_id,
             platform=platform,
             score=int(score),
             senders=registry,
+            session_id=session_id,
         )
+
+        plan = None
+        if result.ok and result.transport != "post_score_already_saved" and session_id is not None:
+            plan = await asyncio.to_thread(
+                plan_trial_conversion_after_outcome,
+                canonical_user_id,
+                session_id,
+                platform=platform,
+            )
+
+        message = plan.message if plan is not None else result.message
         kwargs: dict[str, Any] = {}
         if platform == "vk":
-            keyboard_json = keyboard_for_reply_kind("state_period")
+            keyboard_kind = "post_actions" if plan is not None and plan.allow_paid_cta else "state_period"
+            keyboard_json = keyboard_for_reply_kind(keyboard_kind)
             if keyboard_json is not None:
                 kwargs["keyboard_json"] = keyboard_json
+        elif platform == "max":
+            attachment = (
+                max_ui.post_actions_attachment()
+                if plan is not None and plan.allow_paid_cta
+                else max_ui.state_period_attachment()
+            )
+            if attachment is not None:
+                kwargs["attachments"] = [attachment]
+
         await sender.send_text(
             external_user_id,
-            result.message,
-            **_vk_kwargs(platform, kwargs, canonical_user_id, text=result.message),
+            message,
+            **_vk_kwargs(platform, kwargs, canonical_user_id, text=message),
         )
         # Do not auto-build/upload progress chart after every post-score.
         # VK photo upload is intentionally available for explicit progress requests,

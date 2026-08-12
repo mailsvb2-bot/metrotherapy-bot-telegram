@@ -58,16 +58,16 @@ def trial_sales_job_gate(user_id: int, job_type: str | None) -> TrialSalesJobGat
     """Return the canonical execution gate for one scheduled trial sales job.
 
     Existing jobs may have been scheduled before the user supplied a post-demo
-    score.  Reading the latest outcome at execution time means old queued jobs
-    are still governed by the newest evidence without rewriting scheduler rows.
+    score. Reading the latest outcome at execution time means queued jobs are
+    always governed by the newest evidence without inventing another state.
 
     Runtime contract:
     - no completed outcome -> no selling follow-up; wait for outcome evidence;
-    - negative outcome -> no selling follow-up;
-    - neutral outcome -> scheduled selling is suppressed because the immediate
-      outcome screen already owns the soft second-demo route;
-    - positive outcome -> regular CTA jobs may execute;
-    - deadline/lastcall pressure jobs stay blocked even after a positive result.
+    - negative outcome -> safety pause, no paid CTA;
+    - neutral outcome -> soft non-pressure CTA may execute;
+    - positive outcome -> regular non-pressure CTA may execute;
+    - deadline/lastcall pressure jobs remain blocked whenever policy disallows
+      pressure.
     """
 
     normalized_job = str(job_type or "").strip()
@@ -107,18 +107,6 @@ def trial_sales_job_gate(user_id: int, job_type: str | None) -> TrialSalesJobGat
             delta=decision.delta,
         )
 
-    if decision.action == "suggest_second_demo_soft":
-        return TrialSalesJobGate(
-            applies=True,
-            allow=False,
-            reason="trial_neutral_soft_path_only",
-            job_type=normalized_job,
-            step=step,
-            action=decision.action,
-            quality=decision.quality,
-            delta=decision.delta,
-        )
-
     if normalized_job in PRESSURE_JOB_TYPES and not decision.allow_pressure:
         return TrialSalesJobGate(
             applies=True,
@@ -146,7 +134,7 @@ def trial_sales_job_gate(user_id: int, job_type: str | None) -> TrialSalesJobGat
     return TrialSalesJobGate(
         applies=True,
         allow=True,
-        reason="trial_positive_offer_allowed",
+        reason="trial_offer_allowed",
         job_type=normalized_job,
         step=step,
         action=decision.action,

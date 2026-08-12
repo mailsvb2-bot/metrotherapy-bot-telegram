@@ -55,7 +55,7 @@ def test_trial_sales_gate_blocks_negative_outcome(monkeypatch):
     assert gate.delta == -3
 
 
-def test_trial_sales_gate_keeps_neutral_user_on_soft_immediate_path(monkeypatch):
+def test_trial_sales_gate_allows_neutral_soft_non_pressure_path(monkeypatch):
     monkeypatch.setattr(
         execution,
         "trial_latest_outcome",
@@ -69,9 +69,16 @@ def test_trial_sales_gate_keeps_neutral_user_on_soft_immediate_path(monkeypatch)
         "funnel2_demo_nopay_24h",
     ):
         gate = execution.trial_sales_job_gate(10, job_type)
-        assert gate.allow is False
-        assert gate.reason == "trial_neutral_soft_path_only"
+        assert gate.allow is True
+        assert gate.reason == "trial_offer_allowed"
         assert gate.action == "suggest_second_demo_soft"
+        assert gate.quality == "neutral"
+        assert gate.delta == 0
+
+    for job_type in ("funnel_deadline", "funnel_lastcall"):
+        gate = execution.trial_sales_job_gate(10, job_type)
+        assert gate.allow is False
+        assert gate.reason == "trial_pressure_step_blocked"
 
 
 def test_trial_sales_gate_allows_regular_offer_after_positive_outcome(monkeypatch):
@@ -84,7 +91,7 @@ def test_trial_sales_gate_allows_regular_offer_after_positive_outcome(monkeypatc
     gate = execution.trial_sales_job_gate(10, "funnel_offer")
 
     assert gate.allow is True
-    assert gate.reason == "trial_positive_offer_allowed"
+    assert gate.reason == "trial_offer_allowed"
     assert gate.action == "continue_offer"
     assert gate.quality == "positive"
     assert gate.delta == 4
@@ -136,5 +143,5 @@ def test_decision_core_allows_positive_regular_offer(monkeypatch):
     )
 
     assert decision.payload["type"] == "job_execution_allowed"
-    assert decision.payload["trial_gate"]["reason"] == "trial_positive_offer_allowed"
+    assert decision.payload["trial_gate"]["reason"] == "trial_offer_allowed"
     assert decision.meta["policy"] == "engine_job_registry_v1+trial_outcome_guard_v1"
