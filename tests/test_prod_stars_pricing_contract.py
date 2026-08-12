@@ -22,6 +22,8 @@ def _base(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("TOKEN_ECONOMY_ENABLED", "1")
     monkeypatch.setenv("TOKEN_ENFORCEMENT_MODE", "hard")
     monkeypatch.setenv("YOOKASSA_RECEIPT_EMAIL", "billing@example.test")
+    monkeypatch.setenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "1")
+    monkeypatch.setenv("PAYMENT_CHECKOUT_INTENT_REQUIRED", "1")
     monkeypatch.setenv("TELEGRAM_STARS_ENABLED", "1")
     monkeypatch.setenv("TELEGRAM_YOOKASSA_ENABLED", "0")
     monkeypatch.setenv("TELEGRAM_STARS_ONLY_MIGRATION_MARKER", str(marker))
