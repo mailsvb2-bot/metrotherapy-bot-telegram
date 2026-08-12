@@ -141,6 +141,126 @@ def test_conversion_report_uses_ordered_aliases_and_authoritative_paid_users() -
     assert "payment_token_grants" in text
 
 
+def test_strict_money_chain_counts_repeat_purchase_after_new_checkout() -> None:
+    user_id = -941101
+    with db() as conn:
+        conn.executemany(
+            "INSERT INTO events(user_id, name, meta, created_at) VALUES(?,?,?,?)",
+            [
+                (user_id, "demo_sent", "{}", "2099-08-10T10:00:00+00:00"),
+                (user_id, "demo_ack", "{}", "2099-08-10T10:02:00+00:00"),
+                (user_id, "view_tariffs", "{}", "2099-08-10T10:03:00+00:00"),
+                (user_id, "payment_started", "{}", "2099-08-10T10:04:00+00:00"),
+            ],
+        )
+        # The first successful grant is before this checkout. The later grant is
+        # the repeat purchase that closes the new checkout and must be counted.
+        conn.executemany(
+            """
+            INSERT INTO payment_token_grants(
+                provider, provider_payment_id, user_id, package_id,
+                tokens_granted, ledger_id, created_at
+            ) VALUES(?,?,?,?,?,?,?)
+            """.strip(),
+            [
+                ("yookassa", "funnel-repeat-before-checkout", user_id, "practice_60", 60, None, "2099-08-10T10:01:00+00:00"),
+                ("yookassa", "funnel-repeat-after-checkout", user_id, "practice_60", 60, None, "2099-08-10T10:05:00+00:00"),
+            ],
+        )
+        conn.commit()
+
+    bounded = funnel_analytics._strict_money_counts(
+        "2099-08-10T10:00:00+00:00",
+        "2099-08-10T11:00:00+00:00",
+    )
+    assert bounded == {
+        "demo": 1,
+        "listened": 1,
+        "offer": 1,
+        "checkout": 1,
+        "paid": 1,
+        "paid_total": 1,
+    }
+
+    # Open-ended windows exercise the exact production report contracts used by
+    # ad-hoc admin analysis and must preserve the same ordered result.
+    assert funnel_analytics._strict_money_counts("2099-08-10T10:00:00+00:00", None)["paid"] == 1
+    assert funnel_analytics._strict_money_counts(None, "2099-08-10T11:00:00+00:00")["paid"] == 1
+    assert funnel_analytics._strict_money_counts(None, None)["paid"] == 1
+
+
+def test_conversion_breakdown_uses_aliases_kind_and_daypart() -> None:
+    with db() as conn:
+        conn.executemany(
+            "INSERT INTO events(user_id, name, meta, created_at) VALUES(?,?,?,?)",
+            [
+                (-941201, "funnel_demo_work", '{"kind":"work"}', "2099-08-20T06:00:00+00:00"),
+                (-941201, "funnel_demo_ack", '{"kind":"work"}', "2099-08-20T06:01:00+00:00"),
+                (-941201, "funnel_offer_shown", "{}", "2099-08-20T06:02:00+00:00"),
+                (-941201, "funnel_pay_success", "{}", "2099-08-20T06:03:00+00:00"),
+                (-941202, "funnel_demo_home", '{"kind":"home"}', "2099-08-20T13:00:00+00:00"),
+                (-941202, "audio_listened", '{"kind":"home"}', "2099-08-20T13:01:00+00:00"),
+                (-941202, "sub_menu", "{}", "2099-08-20T13:02:00+00:00"),
+                (-941202, "sub_paid", "{}", "2099-08-20T13:03:00+00:00"),
+                # Malformed meta must degrade to unknown instead of breaking the report.
+                (-941203, "demo_sent", "{bad-json", "2099-08-20T18:00:00+00:00"),
+                (-941203, "demo_ack", "{}", "2099-08-20T18:01:00+00:00"),
+            ],
+        )
+        conn.commit()
+
+    report = funnel_analytics.conversion_breakdown(
+        "2099-08-20T00:00:00+00:00",
+        "2099-08-21T00:00:00+00:00",
+        tz_name="Europe/Moscow",
+    )
+
+    assert report["by_kind"]["work"] == {
+        "demo_sent": 1,
+        "demo_ack": 1,
+        "view_tariffs": 1,
+        "sub_paid": 1,
+    }
+    assert report["by_kind"]["home"] == {
+        "demo_sent": 1,
+        "demo_ack": 1,
+        "view_tariffs": 1,
+        "sub_paid": 1,
+    }
+    assert report["by_kind"]["unknown"]["demo_sent"] == 1
+    assert report["by_kind"]["unknown"]["demo_ack"] == 1
+    assert report["by_daypart"]["утро"]["sub_paid"] == 1
+    assert report["by_daypart"]["день"]["sub_paid"] == 1
+    assert report["by_daypart"]["вечер"]["demo_ack"] == 1
+    assert funnel_analytics._breakdown_step("not-a-commercial-event") is None
+
+
+def test_paid_user_count_respects_period_boundaries() -> None:
+    with db() as conn:
+        conn.executemany(
+            """
+            INSERT INTO payment_token_grants(
+                provider, provider_payment_id, user_id, package_id,
+                tokens_granted, ledger_id, created_at
+            ) VALUES(?,?,?,?,?,?,?)
+            """.strip(),
+            [
+                ("yookassa", "paid-period-before", -941301, "practice_60", 60, None, "2099-08-01T00:00:00+00:00"),
+                ("yookassa", "paid-period-inside", -941302, "practice_60", 60, None, "2099-08-15T00:00:00+00:00"),
+                ("stars", "paid-period-after", -941303, "practice_60", 60, None, "2099-09-15T00:00:00+00:00"),
+            ],
+        )
+        conn.commit()
+
+    assert funnel_analytics._paid_user_count(
+        "2099-08-10T00:00:00+00:00",
+        "2099-09-01T00:00:00+00:00",
+    ) == 1
+    assert funnel_analytics._paid_user_count("2099-08-10T00:00:00+00:00", None) == 2
+    assert funnel_analytics._paid_user_count(None, "2099-09-01T00:00:00+00:00") == 2
+    assert funnel_analytics._paid_user_count(None, None) == 3
+
+
 def test_commercial_counts_use_one_grouped_events_query(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -178,6 +298,34 @@ def test_commercial_counts_use_one_grouped_events_query(
     assert params[:2] == ("demo_sent", "view_tariffs")
 
 
+def test_commercial_counts_cover_open_periods_without_extra_scans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executed: list[tuple[str, tuple[Any, ...]]] = []
+
+    class FakeConnection:
+        def execute(self, sql: str, params: tuple[Any, ...]):
+            executed.append((sql, params))
+            return self
+
+        def fetchall(self):
+            return []
+
+    @contextmanager
+    def fake_db():
+        yield FakeConnection()
+
+    monkeypatch.setattr(funnel_analytics, "db", fake_db)
+
+    assert funnel_analytics._commercial_counts(["demo_sent"], "2099-08-01T00:00:00+00:00", None) == {"demo_sent": 0}
+    assert funnel_analytics._commercial_counts(["demo_sent"], None, "2099-09-01T00:00:00+00:00") == {"demo_sent": 0}
+    assert funnel_analytics._commercial_counts(["demo_sent"], None, None) == {"demo_sent": 0}
+    assert len(executed) == 3
+    assert "created_at >= ?" in executed[0][0] and "created_at < ?" not in executed[0][0]
+    assert "created_at < ?" in executed[1][0] and "created_at >= ?" not in executed[1][0]
+    assert "created_at >= ?" not in executed[2][0] and "created_at < ?" not in executed[2][0]
+
+
 def test_rate_chain_and_empty_format_are_stable() -> None:
     chain = funnel_analytics._rate_chain([("a", 0), ("b", 0)])
     assert chain[0]["from_prev_pct"] is None
@@ -190,6 +338,19 @@ def test_rate_chain_and_empty_format_are_stable() -> None:
     )
     assert text.startswith("💰 Воронка до оплаты\nпусто")
     assert "payment_token_grants" in text
+
+
+def test_format_conversion_report_handles_lossless_strict_chain() -> None:
+    chain = funnel_analytics._rate_chain(
+        [("demo", 2), ("listened", 2), ("offer", 2), ("checkout", 2), ("paid", 2)]
+    )
+    text = funnel_analytics.format_conversion_report(
+        {"money_chain": chain, "paid_users": 2, "strict_paid_users": 2},
+        title="без потерь",
+    )
+    assert "Всего плативших за пакеты в периоде: 2" in text
+    assert "остальные оплаты пришли другим путём" not in text
+    assert "Явной точки потери в строгой демо-цепочке пока нет" in text
 
 
 @pytest.mark.asyncio
