@@ -15,9 +15,10 @@ from services.demo_analytics import demo_sent_kinds
 from services.demo_policy import next_remaining_demo_kind
 from services.events import log_event
 from services.messenger.outbound import SenderRegistry
-from services.mood import get_session, last_delta
+from services.mood import get_session
 from services.mood_text_flow import complete_post_score_and_send_next, complete_pre_score_and_send
 from services.support_ai import decide_support_pre
+from services.trial_conversion_flow import plan_trial_conversion_after_outcome
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -27,18 +28,11 @@ def _callback_message(cb: CallbackQuery) -> Message | None:
     return cb.message if isinstance(cb.message, Message) else None
 
 
-def _fmt_score(value: object) -> str:
-    if value is None:
-        return "—"
-    parsed = int(value)
-    return f"{parsed:+d}" if parsed != 0 else "0"
-
-
 def _trial_outcome_keyboard(
     user_id: int,
     kind: str,
     *,
-    delta: int | None,
+    allow_paid_cta: bool,
     session_id: int | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
@@ -60,7 +54,7 @@ def _trial_outcome_keyboard(
         log.exception("trial keyboard: bad demo history")
         remaining = None
 
-    if delta is not None and delta < 0:
+    if not allow_paid_cta:
         if remaining:
             rows.append([
                 InlineKeyboardButton(text="🌿 Попробовать позже другой маршрут", callback_data="demo")
@@ -81,47 +75,6 @@ def _trial_outcome_keyboard(
     rows.append([InlineKeyboardButton(text="🎁 Подарить подписку", callback_data="gift:menu")])
     rows.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _trial_outcome_text(
-    *,
-    pre: int | None,
-    post: int | None,
-    delta: int | None,
-    avg_delta: int | None,
-) -> str:
-    base = (
-        "✅ Зафиксировал состояние после демо-практики.\n\n"
-        f"Сегодня: {_fmt_score(pre)} → {_fmt_score(post)} "
-        f"(изменение {_fmt_score(delta)})"
-    )
-    if avg_delta is not None:
-        base += f"\nСредняя динамика за последние дни: {_fmt_score(avg_delta)}"
-
-    if delta is None:
-        return base + (
-            "\n\nЯ сохранил результат. Полный маршрут нужен не для разового "
-            "прослушивания, а чтобы встроить короткие практики в ритм дня."
-        )
-    if delta > 0:
-        return base + (
-            "\n\nЭто хороший сигнал: формат Вам подходит. Одна практика может дать "
-            "сдвиг, но главный эффект Метротерапии — в регулярном ритме: утро, "
-            "вечер или оба маршрута.\n\nМожно открыть полный маршрут и продолжить "
-            "уже не вслепую, а отталкиваясь от Вашего первого результата."
-        )
-    if delta == 0:
-        return base + (
-            "\n\nЯвного сдвига пока нет — это нормально. Иногда человеку лучше подходит "
-            "другой момент дня: утро/дорога или вечер/домой.\n\nМожно попробовать "
-            "второй бесплатный маршрут или посмотреть, что входит в полный маршрут."
-        )
-    return base + (
-        "\n\nЯ вижу, что по Вашей оценке после практики стало тяжелее. Сейчас лучше "
-        "не усиливать нагрузку и не торопиться с продолжением.\n\nСделайте паузу. "
-        "Если состояние острое или небезопасное — обратитесь за живой профессиональной "
-        "помощью. К практике можно вернуться позже, в более мягком темпе."
-    )
 
 
 async def _send_pre_failure(message: Message, exc: BaseException) -> None:
@@ -232,40 +185,23 @@ async def mood_answer(cb: CallbackQuery) -> None:
     if session_after is None:
         await message.answer(result.message)
         return
-    pre_score = session_after.pre_score
-    post_score = session_after.post_score
-    delta = (
-        int(post_score) - int(pre_score)
-        if pre_score is not None and post_score is not None
-        else None
-    )
-    comparison = await asyncio.to_thread(last_delta, user_id, str(session_after.kind or ""))
-    average_delta = comparison.get("avg_delta")
 
     if str(session_after.source or "") == "demo":
-        if delta is not None:
-            outcome = "positive" if delta > 0 else "negative" if delta < 0 else "neutral"
-            log_event(
-                user_id,
-                f"trial_delta_{outcome}",
-                {"kind": session_after.kind, "delta": delta, "session_id": session_id},
-            )
-        log_event(
+        plan = await asyncio.to_thread(
+            plan_trial_conversion_after_outcome,
             user_id,
-            "trial_outcome_recorded",
-            {"kind": session_after.kind, "delta": delta, "session_id": session_id},
+            session_id,
+            platform="telegram",
         )
+        if plan is None:
+            await message.answer(result.message, reply_markup=kb_post_show_chart(session_id))
+            return
         await message.answer(
-            _trial_outcome_text(
-                pre=pre_score,
-                post=post_score,
-                delta=delta,
-                avg_delta=int(average_delta) if average_delta is not None else None,
-            ),
+            plan.message,
             reply_markup=_trial_outcome_keyboard(
                 user_id,
-                str(session_after.kind or ""),
-                delta=delta,
+                plan.kind,
+                allow_paid_cta=plan.allow_paid_cta,
                 session_id=session_id,
             ),
         )
