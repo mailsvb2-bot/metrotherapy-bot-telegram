@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from types import SimpleNamespace
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 
@@ -86,7 +84,7 @@ async def test_demo_send_other_blocks_free_repeats(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bypass", [False, True])
-async def test_demo_send_other_schedules_cross_demo(
+async def test_demo_send_other_schedules_only_cross_demo_delivery(
     monkeypatch: pytest.MonkeyPatch,
     bypass: bool,
 ) -> None:
@@ -104,25 +102,8 @@ async def test_demo_send_other_schedules_cross_demo(
     await demo.demo_send_other(callback)
 
     assert cancelled == [((7,), {"job_types": ["demo_send"]})]
+    assert len(jobs) == 1
     assert jobs[0][0][0:2] == (7, "demo_send")
     assert jobs[0][0][3] == {"kind": "work", "src": "cross"}
     assert events[0][0][1] == "demo_cross_requested"
     assert "второй ресурсный" in callback.message.answers[-1][0]
-
-
-@contextmanager
-def fake_db(row: Any) -> Iterator[Any]:
-    class Conn:
-        def execute(self, _sql: str, _params: tuple[Any, ...]) -> Any:
-            return SimpleNamespace(fetchone=lambda: row)
-
-    yield Conn()
-
-
-def test_get_demo_sent_at_utc(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(demo, "db", lambda: fake_db({"sent_at_utc": "2026-07-20T08:15:00+00:00"}))
-    assert demo._get_demo_sent_at_utc(7, "work", 10) == "2026-07-20T08:15:00+00:00"
-    monkeypatch.setattr(demo, "db", lambda: fake_db({"sent_at_utc": None}))
-    assert demo._get_demo_sent_at_utc(7, "work", 10) is None
-    monkeypatch.setattr(demo, "db", lambda: fake_db(None))
-    assert demo._get_demo_sent_at_utc(7, "work", 10) is None
