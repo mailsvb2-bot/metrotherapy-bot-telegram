@@ -10,7 +10,7 @@ OBSERVED_WORKER = ROOT / "scripts" / "run_deploy_worker_observed.sh"
 
 
 def _load_module():
-    spec = importlib.util.spec_from_file_location("production_live_proofs_contract", SCRIPT)
+    spec = importlib.util.spec_from_file_location("production_proofs_contract", SCRIPT)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -53,7 +53,7 @@ def test_safe_fragment_preserves_audit_marker_and_removes_log_injection() -> Non
     assert "?" not in result
 
 
-def test_observed_worker_runs_live_proofs_only_after_successful_inner_deploy() -> None:
+def test_observed_worker_runs_proofs_only_after_successful_inner_deploy() -> None:
     source = OBSERVED_WORKER.read_text(encoding="utf-8")
 
     inner_call = source.index('/usr/bin/bash "$INNER_WORKER"')
