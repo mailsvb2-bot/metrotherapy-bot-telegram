@@ -7,13 +7,11 @@ LIVE_PROOF_RUNNER="${LIVE_PROOF_RUNNER:-$APP_DIR/scripts/production_live_proofs.
 YOOKASSA_REFUND_DRILL="${YOOKASSA_REFUND_DRILL:-$APP_DIR/scripts/yookassa_refund_drill_guard.py}"
 CURRENT_RELEASE_LINK="${METRO_CURRENT_RELEASE_LINK:-/var/lib/metrotherapy/runtime/current}"
 YOOKASSA_REFUND_PYTHON="${YOOKASSA_REFUND_PYTHON:-$CURRENT_RELEASE_LINK/.venv/bin/python}"
+YOOKASSA_GUARD_STATUS_FILE="${YOOKASSA_GUARD_STATUS_FILE:-/var/lib/metrotherapy/deploy-state/yookassa_refund_guard.status}"
 LOG_FILE="${LOG_FILE:-/var/log/metrotherapy_deploy.log}"
 TRIGGER_SHA="${DEPLOY_TRIGGER_SHA:-}"
 TRIGGER_MESSAGE=""
 
-# Audit-result commits are immutable evidence, not deploy requests. Read the
-# trigger-bound message before invoking the inner worker so a result commit can
-# never recursively start another production rollout.
 if [ -n "$TRIGGER_SHA" ]; then
   git -C "$APP_DIR" fetch origin main >/dev/null 2>&1 || true
   TRIGGER_MESSAGE="$(git -C "$APP_DIR" show -s --format=%B "$TRIGGER_SHA" 2>/dev/null || true)"
@@ -53,6 +51,23 @@ classify_production_gate_substage() {
   printf '%s\n' "$substage"
 }
 
+read_cached_yookassa_result() {
+  local line=""
+  [ -f "$YOOKASSA_GUARD_STATUS_FILE" ] || return 1
+  IFS= read -r line < "$YOOKASSA_GUARD_STATUS_FILE" || return 1
+  [ -n "$line" ] || return 1
+  [ "${#line}" -le 900 ] || return 1
+  case "$line" in
+    "[ops-live-proof-result] trigger=${TRIGGER_SHA:0:12} status=blocked yookassa_refund=blocked reason="*) ;;
+    "[ops-live-proof-result] trigger=${TRIGGER_SHA:0:12} status=ok "*) ;;
+    *) return 1 ;;
+  esac
+  if ! printf '%s' "$line" | grep -Eq '^[A-Za-z0-9_.:=,/\[\] -]+$'; then
+    return 1
+  fi
+  printf '%s\n' "$line"
+}
+
 publish_deploy_failure_result() {
   local inner_code="$1"
   local stage="unknown"
@@ -66,9 +81,6 @@ publish_deploy_failure_result() {
   local message=""
   local attempt=""
 
-  # Inspect only the log segment belonging to this immutable trigger. Raw log
-  # text never leaves the server; only an allowlisted category and numeric code
-  # are committed as evidence.
   if [ -f "$LOG_FILE" ] && [ -n "$TRIGGER_SHA" ]; then
     segment="$(awk -v needle="=== deploy trigger sha: $TRIGGER_SHA ===" '
       $0 == needle { found=1; buf="" }
@@ -112,12 +124,8 @@ publish_deploy_failure_result() {
         ;;
     esac
   fi
-  case "$bounded_code" in
-    ''|*[!0-9]*) bounded_code="$inner_code" ;;
-  esac
-  case "$inner_code" in
-    ''|*[!0-9]*) inner_code="1" ;;
-  esac
+  case "$bounded_code" in ''|*[!0-9]*) bounded_code="$inner_code" ;; esac
+  case "$inner_code" in ''|*[!0-9]*) inner_code="1" ;; esac
 
   if [ "$stage" = "production_gate_failed" ]; then
     message="[deploy-failure-result] trigger=${TRIGGER_SHA:0:12} status=error stage=$stage gate_substage=$gate_substage code=$bounded_code worker_code=$inner_code"
@@ -129,26 +137,15 @@ publish_deploy_failure_result() {
     git -C "$APP_DIR" fetch origin main >/dev/null 2>&1 || true
     parent_sha="$(git -C "$APP_DIR" rev-parse origin/main 2>/dev/null || true)"
     tree_sha="$(git -C "$APP_DIR" rev-parse "$parent_sha^{tree}" 2>/dev/null || true)"
-    if [ -z "$parent_sha" ] || [ -z "$tree_sha" ]; then
-      sleep "$attempt"
-      continue
-    fi
-    result_sha="$(
-      printf '%s\n' "$message" |
-        git -C "$APP_DIR" \
-          -c user.name="Metrotherapy Deploy Failure Audit" \
-          -c user.email="deploy-failure-audit@metrotherapy.local" \
-          commit-tree "$tree_sha" -p "$parent_sha" -F - 2>/dev/null || true
-    )"
+    if [ -z "$parent_sha" ] || [ -z "$tree_sha" ]; then sleep "$attempt"; continue; fi
+    result_sha="$(printf '%s\n' "$message" | git -C "$APP_DIR" -c user.name="Metrotherapy Deploy Failure Audit" -c user.email="deploy-failure-audit@metrotherapy.local" commit-tree "$tree_sha" -p "$parent_sha" -F - 2>/dev/null || true)"
     if [ -n "$result_sha" ] && git -C "$APP_DIR" push origin "$result_sha:refs/heads/main" >/dev/null 2>&1; then
       printf '=== %s ===\n' "$message" >> "$LOG_FILE"
       return 0
     fi
     sleep "$attempt"
   done
-
-  printf 'ERROR: unable to publish secret-safe deploy failure evidence trigger=%s stage=%s code=%s\n' \
-    "$TRIGGER_SHA" "$stage" "$bounded_code" >> "$LOG_FILE"
+  printf 'ERROR: unable to publish secret-safe deploy failure evidence trigger=%s stage=%s code=%s\n' "$TRIGGER_SHA" "$stage" "$bounded_code" >> "$LOG_FILE"
   return 0
 }
 
@@ -160,50 +157,40 @@ publish_post_deploy_failure_result() {
   local result_sha=""
   local latest_message=""
   local message=""
+  local cached_message=""
   local attempt=""
 
-  case "$audit" in
-    live_proof|yookassa_refund) ;;
-    *) audit="unknown" ;;
-  esac
-  case "$audit_code" in
-    ''|*[!0-9]*) audit_code="1" ;;
-  esac
+  case "$audit" in live_proof|yookassa_refund) ;; *) audit="unknown" ;; esac
+  case "$audit_code" in ''|*[!0-9]*) audit_code="1" ;; esac
 
-  # A specialized runner may already have published richer redacted evidence and
-  # then intentionally exited non-zero for fail-closed semantics. Never overwrite
-  # or duplicate that evidence with the generic fallback.
   git -C "$APP_DIR" fetch origin main >/dev/null 2>&1 || true
   latest_message="$(git -C "$APP_DIR" show -s --format=%B origin/main 2>/dev/null || true)"
   case "$latest_message" in
     *"[ops-live-proof-result]"*"trigger=${TRIGGER_SHA:0:12}"*) return 0 ;;
   esac
 
-  message="[ops-live-proof-result] trigger=${TRIGGER_SHA:0:12} status=error audit=$audit code=$audit_code"
+  if [ "$audit" = "yookassa_refund" ]; then
+    cached_message="$(read_cached_yookassa_result 2>/dev/null || true)"
+  fi
+  if [ -n "$cached_message" ]; then
+    message="$cached_message"
+  else
+    message="[ops-live-proof-result] trigger=${TRIGGER_SHA:0:12} status=error audit=$audit code=$audit_code"
+  fi
+
   for attempt in 1 2 3; do
     git -C "$APP_DIR" fetch origin main >/dev/null 2>&1 || true
     parent_sha="$(git -C "$APP_DIR" rev-parse origin/main 2>/dev/null || true)"
     tree_sha="$(git -C "$APP_DIR" rev-parse "$parent_sha^{tree}" 2>/dev/null || true)"
-    if [ -z "$parent_sha" ] || [ -z "$tree_sha" ]; then
-      sleep "$attempt"
-      continue
-    fi
-    result_sha="$(
-      printf '%s\n' "$message" |
-        git -C "$APP_DIR" \
-          -c user.name="Metrotherapy Post Deploy Audit" \
-          -c user.email="post-deploy-audit@metrotherapy.local" \
-          commit-tree "$tree_sha" -p "$parent_sha" -F - 2>/dev/null || true
-    )"
+    if [ -z "$parent_sha" ] || [ -z "$tree_sha" ]; then sleep "$attempt"; continue; fi
+    result_sha="$(printf '%s\n' "$message" | git -C "$APP_DIR" -c user.name="Metrotherapy Post Deploy Audit" -c user.email="post-deploy-audit@metrotherapy.local" commit-tree "$tree_sha" -p "$parent_sha" -F - 2>/dev/null || true)"
     if [ -n "$result_sha" ] && git -C "$APP_DIR" push origin "$result_sha:refs/heads/main" >/dev/null 2>&1; then
       printf '=== %s ===\n' "$message" >> "$LOG_FILE"
       return 0
     fi
     sleep "$attempt"
   done
-
-  printf 'ERROR: unable to publish secret-safe post-deploy audit failure trigger=%s audit=%s code=%s\n' \
-    "$TRIGGER_SHA" "$audit" "$audit_code" >> "$LOG_FILE"
+  printf 'ERROR: unable to publish secret-safe post-deploy audit failure trigger=%s audit=%s code=%s\n' "$TRIGGER_SHA" "$audit" "$audit_code" >> "$LOG_FILE"
   return 0
 }
 
@@ -220,9 +207,6 @@ run_post_deploy_audit() {
     return "$missing_code"
   fi
 
-  # The refund drill imports the production DB/payment stack. Execute it with
-  # the exact immutable release environment that just passed the deploy gate;
-  # system Python is intentionally kept for the stdlib-only operator proof.
   if [ "$audit" = "yookassa_refund" ]; then
     python_bin="$YOOKASSA_REFUND_PYTHON"
     if [ ! -x "$python_bin" ]; then
@@ -230,6 +214,8 @@ run_post_deploy_audit() {
       publish_post_deploy_failure_result "$audit" 43
       return 43
     fi
+    rm -f "$YOOKASSA_GUARD_STATUS_FILE"
+    export YOOKASSA_GUARD_STATUS_FILE
   fi
 
   set +e
@@ -253,15 +239,10 @@ if [ "$INNER_CODE" -ne 0 ]; then
 fi
 
 case "$TRIGGER_MESSAGE" in
-  *"[vk-confirmation-sync-request]"*|*"[rollback-live-proof-request]"*)
-    run_post_deploy_audit "live_proof" "$LIVE_PROOF_RUNNER" 41
-    ;;
+  *"[vk-confirmation-sync-request]"*|*"[rollback-live-proof-request]"*) run_post_deploy_audit "live_proof" "$LIVE_PROOF_RUNNER" 41 ;;
 esac
-
 case "$TRIGGER_MESSAGE" in
-  *"[yookassa-refund-live-proof-request]"*)
-    run_post_deploy_audit "yookassa_refund" "$YOOKASSA_REFUND_DRILL" 42
-    ;;
+  *"[yookassa-refund-live-proof-request]"*) run_post_deploy_audit "yookassa_refund" "$YOOKASSA_REFUND_DRILL" 42 ;;
 esac
 
 printf '=== deploy worker completed trigger=%s: %s ===\n' "$TRIGGER_SHA" "$(date -Is)" >> "$LOG_FILE"
