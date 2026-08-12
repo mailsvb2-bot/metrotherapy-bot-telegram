@@ -202,6 +202,37 @@ def _schedule_followups(plan: TrialConversionPlan, *, platform: str) -> int:
     return created
 
 
+def _log_comparison_failure(user_id: int, session_id: int) -> None:
+    log.exception(
+        "trial outcome comparison unavailable user_id=%s session_id=%s",
+        int(user_id),
+        int(session_id),
+    )
+
+
+def _log_scheduling_failure(
+    user_id: int,
+    session_id: int,
+    plan: TrialConversionPlan,
+    platform: str,
+) -> None:
+    log.exception(
+        "trial conversion follow-up scheduling failed user_id=%s session_id=%s",
+        int(user_id),
+        int(session_id),
+    )
+    log_runtime_event(
+        int(user_id),
+        event_type="trial_conversion_followups_error",
+        source=str(platform or "messenger"),
+        payload={
+            "session_id": int(session_id),
+            "kind": plan.kind,
+            "quality": plan.quality,
+        },
+    )
+
+
 def plan_trial_conversion_after_outcome(
     user_id: int,
     session_id: int,
@@ -243,12 +274,10 @@ def plan_trial_conversion_after_outcome(
         comparison = last_delta(int(user_id), str(session.kind or ""))
         raw_average = comparison.get("avg_delta")
         average_delta = int(raw_average) if raw_average is not None else None
-    except (sqlite3.Error, PsycopgError, RuntimeError, TypeError, ValueError):
-        log.exception(
-            "trial outcome comparison unavailable user_id=%s session_id=%s",
-            int(user_id),
-            int(session_id),
-        )
+    except (sqlite3.Error, PsycopgError):
+        _log_comparison_failure(user_id, session_id)
+    except (RuntimeError, TypeError, ValueError):
+        _log_comparison_failure(user_id, session_id)
 
     plan = TrialConversionPlan(
         user_id=int(user_id),
@@ -294,22 +323,10 @@ def plan_trial_conversion_after_outcome(
 
     try:
         _schedule_followups(plan, platform=platform)
-    except (sqlite3.Error, PsycopgError, RuntimeError, TypeError, ValueError):
-        log.exception(
-            "trial conversion follow-up scheduling failed user_id=%s session_id=%s",
-            int(user_id),
-            int(session_id),
-        )
-        log_runtime_event(
-            int(user_id),
-            event_type="trial_conversion_followups_error",
-            source=str(platform or "messenger"),
-            payload={
-                "session_id": int(session_id),
-                "kind": plan.kind,
-                "quality": plan.quality,
-            },
-        )
+    except (sqlite3.Error, PsycopgError):
+        _log_scheduling_failure(user_id, session_id, plan, platform)
+    except (RuntimeError, TypeError, ValueError):
+        _log_scheduling_failure(user_id, session_id, plan, platform)
 
     return plan
 
