@@ -20,13 +20,13 @@ def _load_module():
 
 def test_replace_env_value_replaces_duplicates_without_touching_comments() -> None:
     module = _load_module()
-    source = "# VK_CONFIRMATION_TOKEN=comment\nA=1\nVK_CONFIRMATION_TOKEN=old\nVK_CONFIRMATION_TOKEN=older\n"
+    source = "# DEMO_KEY=comment\nA=1\nDEMO_KEY=old\nDEMO_KEY=older\n"
 
-    result = module.replace_env_value(source, "VK_CONFIRMATION_TOKEN", "new value")
+    result = module.replace_env_value(source, "DEMO_KEY", "new value")
 
-    assert "# VK_CONFIRMATION_TOKEN=comment" in result
-    assert result.count("VK_CONFIRMATION_TOKEN=") == 2
-    assert "VK_CONFIRMATION_TOKEN='new value'" in result
+    assert "# DEMO_KEY=comment" in result
+    assert result.count("DEMO_KEY=") == 2
+    assert "DEMO_KEY='new value'" in result
     assert "=old" not in result
     assert "=older" not in result
 
@@ -34,16 +34,16 @@ def test_replace_env_value_replaces_duplicates_without_touching_comments() -> No
 def test_replace_env_value_appends_missing_value() -> None:
     module = _load_module()
 
-    result = module.replace_env_value("A=1\n", "VK_CONFIRMATION_TOKEN", "abc")
+    result = module.replace_env_value("A=1\n", "DEMO_KEY", "abc")
 
-    assert result == "A=1\nVK_CONFIRMATION_TOKEN=abc\n"
+    assert result == "A=1\nDEMO_KEY=abc\n"
 
 
 def test_safe_fragment_preserves_audit_marker_and_removes_log_injection() -> None:
     module = _load_module()
 
     result = module._safe_fragment(
-        "[ops-live-proof-result] status=ok\nSECRET? injected\rnext",
+        "[ops-live-proof-result] status=ok\nunsafe? injected\rnext",
         limit=200,
     )
 
