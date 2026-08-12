@@ -8,8 +8,17 @@ from typing import Any
 import pytest
 
 from handlers.admin_reports import conversion as conversion_handler
+from services import admin_payment_path, commercial_funnel_contract
 from services import funnel_analytics, funnel_analytics_indexes
 from services.db import db
+
+
+def test_commercial_funnel_contract_is_shared_with_payment_path() -> None:
+    assert admin_payment_path._STEP_NAMES is commercial_funnel_contract.PAYMENT_PATH_STEP_NAMES
+    assert "demo_sent" in commercial_funnel_contract.COMMERCIAL_STEP_EVENT_NAMES["demo"]
+    assert "funnel_demo_work" in commercial_funnel_contract.COMMERCIAL_STEP_EVENT_NAMES["demo"]
+    assert "demo_ack" in commercial_funnel_contract.COMMERCIAL_STEP_EVENT_NAMES["listened"]
+    assert commercial_funnel_contract.COMMERCIAL_STEP_EVENT_NAMES["checkout"] == ("payment_started",)
 
 
 def test_commercial_funnel_index_is_selective_and_concurrent() -> None:
@@ -21,7 +30,7 @@ def test_commercial_funnel_index_is_selective_and_concurrent() -> None:
     assert "CREATE INDEX CONCURRENTLY" in normalized
     assert "ON events (name, created_at, user_id)" in normalized
     assert "WHERE name IN" in normalized
-    for event_name in ("demo_sent", "view_tariffs", "payment_started", "sub_paid"):
+    for event_name in commercial_funnel_contract.COMMERCIAL_FUNNEL_EVENT_NAMES:
         assert event_name in normalized
 
 
@@ -48,14 +57,28 @@ def test_funnel_index_manager_reuses_shared_online_runner(
 
 def _seed_money_funnel() -> None:
     rows = [
+        # Canonical complete journey.
         (-941001, "demo_sent", "2099-08-01T10:00:00+00:00"),
-        (-941002, "demo_sent", "2099-08-01T10:01:00+00:00"),
-        (-941003, "demo_sent", "2099-08-01T10:02:00+00:00"),
         (-941001, "demo_ack", "2099-08-01T10:03:00+00:00"),
-        (-941002, "demo_ack", "2099-08-01T10:04:00+00:00"),
         (-941001, "view_tariffs", "2099-08-01T10:05:00+00:00"),
-        (-941002, "view_tariffs", "2099-08-01T10:06:00+00:00"),
         (-941001, "payment_started", "2099-08-01T10:07:00+00:00"),
+        # Canonical journey that reaches offer but not checkout.
+        (-941002, "demo_sent", "2099-08-01T10:01:00+00:00"),
+        (-941002, "demo_ack", "2099-08-01T10:04:00+00:00"),
+        (-941002, "view_tariffs", "2099-08-01T10:06:00+00:00"),
+        # Demo only.
+        (-941003, "demo_sent", "2099-08-01T10:02:00+00:00"),
+        # Complete journey through aliases already used by admin payment path.
+        (-941004, "funnel_demo_work", "2099-08-01T11:00:00+00:00"),
+        (-941004, "funnel_demo_ack", "2099-08-01T11:01:00+00:00"),
+        (-941004, "funnel_offer_shown", "2099-08-01T11:02:00+00:00"),
+        (-941004, "payment_started", "2099-08-01T11:03:00+00:00"),
+        # Offer happened before acknowledgement: this must not be promoted into
+        # a false ordered conversion even though a later checkout/payment exists.
+        (-941005, "demo_sent", "2099-08-01T12:00:00+00:00"),
+        (-941005, "view_tariffs", "2099-08-01T12:01:00+00:00"),
+        (-941005, "demo_ack", "2099-08-01T12:02:00+00:00"),
+        (-941005, "payment_started", "2099-08-01T12:03:00+00:00"),
     ]
     with db() as conn:
         conn.executemany(
@@ -72,12 +95,14 @@ def _seed_money_funnel() -> None:
             [
                 ("yookassa", "funnel-paid-1", -941001, "practice_60", 60, None, "2099-08-01T10:08:00+00:00"),
                 ("yookassa", "funnel-paid-1-repeat", -941001, "practice_60", 60, None, "2099-08-02T10:08:00+00:00"),
+                ("stars", "funnel-paid-4", -941004, "practice_60", 60, None, "2099-08-01T11:04:00+00:00"),
+                ("yookassa", "funnel-paid-5", -941005, "practice_60", 60, None, "2099-08-01T12:04:00+00:00"),
             ],
         )
         conn.commit()
 
 
-def test_conversion_report_uses_commercial_steps_and_authoritative_paid_users() -> None:
+def test_conversion_report_uses_ordered_aliases_and_authoritative_paid_users() -> None:
     _seed_money_funnel()
 
     report = funnel_analytics.conversion_report(
@@ -85,25 +110,34 @@ def test_conversion_report_uses_commercial_steps_and_authoritative_paid_users() 
         "2099-09-01T00:00:00+00:00",
     )
 
-    assert report["counts"]["demo_sent"] == 3
-    assert report["counts"]["demo_ack"] == 2
-    assert report["counts"]["view_tariffs"] == 2
-    assert report["counts"]["payment_started"] == 1
-    assert report["paid_users"] == 1
+    # Raw compatibility counts stay event-specific.
+    assert report["counts"]["demo_sent"] == 4
+    assert report["counts"]["demo_ack"] == 3
+    assert report["counts"]["view_tariffs"] == 3
+    assert report["counts"]["payment_started"] == 3
 
+    # Strict money chain is alias-aware, ordered, and therefore monotonic.
     chain = report["money_chain"]
-    assert [item["users"] for item in chain] == [3, 2, 2, 1, 1]
-    assert chain[1]["from_prev_pct"] == pytest.approx(66.7)
-    assert chain[2]["from_prev_pct"] == pytest.approx(100.0)
-    assert chain[3]["from_prev_pct"] == pytest.approx(50.0)
+    assert [item["step"] for item in chain] == ["demo", "listened", "offer", "checkout", "paid"]
+    assert [item["users"] for item in chain] == [5, 4, 3, 2, 2]
+    assert chain[1]["from_prev_pct"] == pytest.approx(80.0)
+    assert chain[2]["from_prev_pct"] == pytest.approx(75.0)
+    assert chain[3]["from_prev_pct"] == pytest.approx(66.7)
     assert chain[4]["from_prev_pct"] == pytest.approx(100.0)
+
+    # Three users paid in the period, but one did not traverse the ordered demo
+    # chain. Repeat grants for the same user still count that user once.
+    assert report["paid_users"] == 3
+    assert report["strict_paid_users"] == 2
 
     text = funnel_analytics.format_conversion_report(report, title="контрольный период")
     assert "💰 Воронка до оплаты" in text
     assert "контрольный период" in text
-    assert "Создан checkout: 1" in text
-    assert "Оплатили пакет: 1" in text
-    assert "Самый слабый переход: Создан checkout — 50.0%" in text
+    assert "Создан checkout: 2" in text
+    assert "Оплатили пакет: 2" in text
+    assert "Всего плативших за пакеты в периоде: 3" in text
+    assert "остальные оплаты пришли другим путём" in text
+    assert "Самый слабый последовательный переход: Создан checkout — 66.7%" in text
     assert "payment_token_grants" in text
 
 
@@ -151,7 +185,7 @@ def test_rate_chain_and_empty_format_are_stable() -> None:
     assert chain[1]["dropped_from_prev"] == 0
 
     text = funnel_analytics.format_conversion_report(
-        {"money_chain": []},
+        {"money_chain": [], "paid_users": 0, "strict_paid_users": 0},
         title="пусто",
     )
     assert text.startswith("💰 Воронка до оплаты\nпусто")
