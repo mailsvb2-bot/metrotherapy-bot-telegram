@@ -1,31 +1,29 @@
 from __future__ import annotations
 
-"""Secret-safe stage guard for the production YooKassa refund drill.
+"""Stdlib-only process guard around the YooKassa refund audit.
 
-The production payment stack is imported lazily inside ``main`` so import-time
-failures cannot bypass the redacted audit channel. Expected drill failures are
-reduced to short reason codes; unexpected failures are reduced to stage + class
-only. Exception text, provider payloads, credentials, and database contents are
-never written to the audit status file.
+This outer layer intentionally imports no application/payment modules. It wraps
+execution of the inner refund guard so an import-time or other Python-level
+failure cannot bypass the secret-safe deploy-state evidence channel.
 """
 
-import importlib
 import os
 import re
-import sys
-from collections.abc import Callable
+import runpy
 from pathlib import Path
-from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
+_DEFAULT_INNER_GUARD = ROOT / "scripts" / "yookassa_refund_drill_guard_inner.py"
 _DEFAULT_STATUS_FILE = Path(
     "/var/lib/metrotherapy/deploy-state/yookassa_refund_guard.status"
 )
 _TRIGGER_RE = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_RESULT_RE = re.compile(r"^[A-Za-z0-9_.:=,/\[\] -]+$")
+
+
+def _inner_guard_path() -> Path:
+    raw = (os.getenv("YOOKASSA_REFUND_INNER_GUARD") or "").strip()
+    return Path(raw) if raw else _DEFAULT_INNER_GUARD
 
 
 def _status_file() -> Path:
@@ -38,15 +36,37 @@ def _trigger_fragment() -> str:
     return trigger[:12] if _TRIGGER_RE.fullmatch(trigger) else "NONE"
 
 
-def _record_safe_result(message: str) -> bool:
-    safe = message.strip()
-    if safe != message or len(safe) > 900 or _SAFE_RESULT_RE.fullmatch(safe) is None:
+def _is_safe_result(line: str) -> bool:
+    if not line or len(line) > 900 or _SAFE_RESULT_RE.fullmatch(line) is None:
+        return False
+    trigger = _trigger_fragment()
+    return line.startswith(
+        f"[ops-live-proof-result] trigger={trigger} status=blocked "
+    ) or line.startswith(f"[ops-live-proof-result] trigger={trigger} status=ok ")
+
+
+def _cached_result_exists() -> bool:
+    path = _status_file()
+    try:
+        line = path.read_text(encoding="utf-8").splitlines()[0]
+    except (OSError, IndexError, UnicodeError):
+        return False
+    return _is_safe_result(line)
+
+
+def _record_failure(reason: str) -> bool:
+    reason_safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(reason))[:120] or "unknown"
+    message = (
+        f"[ops-live-proof-result] trigger={_trigger_fragment()} status=blocked "
+        f"yookassa_refund=blocked reason={reason_safe}"
+    )
+    if not _is_safe_result(message):
         return False
     path = _status_file()
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary.write_text(safe + "\n", encoding="utf-8")
+        temporary.write_text(message + "\n", encoding="utf-8")
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
     except OSError:
@@ -58,93 +78,23 @@ def _record_safe_result(message: str) -> bool:
     return True
 
 
-def _load_impl() -> Any:
-    return importlib.import_module("scripts.yookassa_refund_drill")
-
-
-def _guard(impl: Any, stage: str, func: Callable[..., Any]) -> Callable[..., Any]:
-    def guarded(*args: Any, **kwargs: Any) -> Any:
-        try:
-            return func(*args, **kwargs)
-        except impl.RefundDrillError:
-            raise
-        except Exception as exc:  # validator: allow-wide-except
-            exc_type = type(exc).__name__
-            raise impl.RefundDrillError(f"unexpected_{stage}_{exc_type}") from exc
-
-    return guarded
-
-
-def _publish_with_fallback(
-    impl: Any,
-    message: str,
-    *,
-    success_code: int,
-    fallback_code: int,
-) -> int:
-    _record_safe_result(message)
-    try:
-        impl._publish_result(message)
-    except Exception:  # validator: allow-wide-except
-        return fallback_code
-    return success_code
-
-
-def _record_import_failure(exc: BaseException) -> int:
-    reason = f"unexpected_import_{type(exc).__name__}"
-    message = (
-        f"[ops-live-proof-result] trigger={_trigger_fragment()} "
-        f"status=blocked yookassa_refund=blocked reason={reason}"
-    )
-    _record_safe_result(message)
-    return 2
-
-
 def main() -> int:
     try:
-        impl = _load_impl()
-    except (Exception, SystemExit) as exc:  # validator: allow-wide-except
-        return _record_import_failure(exc)
-
-    impl._require_trigger = _guard(impl, "trigger", impl._require_trigger)
-    impl._prepare_environment = _guard(impl, "environment", impl._prepare_environment)
-    impl._run_full_scenario = _guard(impl, "full", impl._run_full_scenario)
-    impl._run_partial_scenario = _guard(impl, "partial", impl._run_partial_scenario)
-    impl._run_reserved_scenario = _guard(impl, "reserved", impl._run_reserved_scenario)
-
-    try:
-        result = impl.run_drill()
-    except impl.RefundDrillError as exc:
-        reason = impl._safe_fragment(str(exc), limit=160)
-        message = (
-            f"{impl.RESULT_MARKER} trigger={impl.TRIGGER_SHA[:12] or 'NONE'} "
-            f"status=blocked yookassa_refund=blocked reason={reason}"
-        )
-        return _publish_with_fallback(
-            impl,
-            message,
-            success_code=2,
-            fallback_code=2,
-        )
-    except Exception as exc:  # validator: allow-wide-except
-        reason = f"unexpected_entry_{type(exc).__name__}"
-        message = (
-            f"{impl.RESULT_MARKER} trigger={impl.TRIGGER_SHA[:12] or 'NONE'} "
-            f"status=blocked yookassa_refund=blocked reason={reason}"
-        )
-        return _publish_with_fallback(
-            impl,
-            message,
-            success_code=2,
-            fallback_code=2,
-        )
-
-    return _publish_with_fallback(
-        impl,
-        result,
-        success_code=0,
-        fallback_code=3,
-    )
+        runpy.run_path(str(_inner_guard_path()), run_name="__main__")
+    except KeyboardInterrupt:
+        raise
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+        if code == 0:
+            return 0
+        if _cached_result_exists():
+            return code if 0 < code < 126 else 2
+        _record_failure("unexpected_guard_exit_SystemExit")
+        return 2
+    except BaseException as exc:  # validator: allow-wide-except
+        _record_failure(f"unexpected_bootstrap_{type(exc).__name__}")
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
