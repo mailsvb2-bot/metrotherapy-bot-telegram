@@ -131,6 +131,39 @@ def test_inner_guard_reduces_system_exit_to_stage_without_exit_code() -> None:
     assert "77" not in str(exc_info.value)
 
 
+def test_operation_guards_reduce_payment_create_system_exit_to_operation() -> None:
+    module = _load_inner()
+    impl = module._load_impl()
+
+    def fail(*, user_id: int, package_id: str):
+        del user_id, package_id
+        raise SystemExit(91)
+
+    impl._create_test_payment = fail
+    module._install_operation_guards(impl)
+
+    with pytest.raises(impl.RefundDrillError, match="^unexpected_payment_create_SystemExit$") as exc_info:
+        impl._create_test_payment(user_id=-9138001, package_id="practice_antistress_60")
+    assert "91" not in str(exc_info.value)
+
+
+def test_operation_guard_wiring_covers_provider_and_db_boundaries() -> None:
+    source = INNER.read_text(encoding="utf-8")
+
+    for stage in (
+        "amount",
+        "payment_create",
+        "payment_webhook",
+        "db_count",
+        "refund_create",
+        "full_refund_assert",
+        "reserve_token",
+        "refund_state",
+    ):
+        assert f'"{stage}"' in source
+    assert "_install_operation_guards(impl)" in source
+
+
 def test_inner_guard_classifies_import_failure_without_exception_text(tmp_path: Path, monkeypatch) -> None:
     module = _load_inner()
     status_file = tmp_path / "guard.status"

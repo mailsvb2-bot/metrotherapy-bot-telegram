@@ -77,6 +77,29 @@ def _guard(impl: Any, stage: str, func: Callable[..., Any]) -> Callable[..., Any
     return guarded
 
 
+def _install_operation_guards(impl: Any) -> None:
+    """Classify failures below scenario level without exposing provider details.
+
+    The scenario guards tell us whether full/partial/reserved failed. These
+    operation guards make a production blocker actionable while keeping the
+    evidence allowlisted to operation + exception class only.
+    """
+
+    for name, stage in (
+        ("_amount_value", "amount"),
+        ("_create_test_payment", "payment_create"),
+        ("_wait_payment_webhook", "payment_webhook"),
+        ("_count", "db_count"),
+        ("_create_refund", "refund_create"),
+        ("_assert_full_refund", "full_refund_assert"),
+        ("_reserve_one_probe_token", "reserve_token"),
+        ("_wait_refund_state", "refund_state"),
+    ):
+        func = getattr(impl, name, None)
+        if callable(func):
+            setattr(impl, name, _guard(impl, stage, func))
+
+
 def _publish_with_fallback(
     impl: Any,
     message: str,
@@ -110,6 +133,7 @@ def main() -> int:
     except (Exception, SystemExit) as exc:  # validator: allow-wide-except
         return _record_import_failure(exc)
 
+    _install_operation_guards(impl)
     impl._require_trigger = _guard(impl, "trigger", impl._require_trigger)
     impl._prepare_environment = _guard(impl, "environment", impl._prepare_environment)
     impl._run_full_scenario = _guard(impl, "full", impl._run_full_scenario)
