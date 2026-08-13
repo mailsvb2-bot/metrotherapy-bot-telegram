@@ -1,32 +1,22 @@
-"""Services public API.
+"""Lazy public API for :mod:`services`.
 
 Canonical rule:
-- ``services.db`` remains the database package, so imports such as
-  ``import services.db.core`` cannot be shadowed by a helper function.
-- legacy ``from services import db`` still returns a callable object: the
-  database package itself delegates calls to ``services.db.core.db``.
+- importing a leaf module such as ``services.practice_token_contract`` must not
+  eagerly initialize the database, schema, stores, or subscription stack;
+- legacy ``from services import db`` remains supported and returns the callable
+  ``services.db`` package;
+- the remaining historical convenience exports are resolved only when actually
+  requested.
 
-This avoids the dangerous package/function name split-brain while preserving
-external compatibility.
+Keeping package import side-effect-light is especially important for production
+operator tools and provider probes that intentionally import one narrow service
+without bootstrapping the whole application runtime.
 """
 
 from __future__ import annotations
 
 import importlib as _importlib
-
-_db_package = _importlib.import_module("services.db")
-
-# Keep the package object on ``services.db``.  The package is callable because
-# services.db.__init__ installs a ModuleType subclass that delegates __call__ to
-# the canonical DB helper.
-db = _db_package
-get_db = _db_package.get_db
-tx = _db_package.tx
-
-from services.schema import init_db
-from services.store import store
-from services.subscription import get_scope, has_access, is_active
-from services.access import get_subscription_scope, grant_subscription, has_active_subscription
+from typing import Any as _Any
 
 __all__ = [
     "db",
@@ -41,3 +31,48 @@ __all__ = [
     "get_subscription_scope",
     "grant_subscription",
 ]
+
+
+_DB_EXPORTS = frozenset({"db", "get_db", "tx"})
+_SUBSCRIPTION_EXPORTS = frozenset({"has_access", "is_active", "get_scope"})
+_ACCESS_EXPORTS = frozenset(
+    {"has_active_subscription", "get_subscription_scope", "grant_subscription"}
+)
+
+
+def _cache(name: str, value: _Any) -> _Any:
+    globals()[name] = value
+    return value
+
+
+def __getattr__(name: str) -> _Any:
+    if name in _DB_EXPORTS:
+        package = _importlib.import_module("services.db")
+        if name == "db":
+            # services.db is deliberately a callable ModuleType for backwards
+            # compatibility; returning the package keeps package/function
+            # identity canonical instead of creating a split-brain alias.
+            return _cache(name, package)
+        return _cache(name, getattr(package, name))
+
+    if name == "init_db":
+        module = _importlib.import_module("services.schema")
+        return _cache(name, module.init_db)
+
+    if name == "store":
+        module = _importlib.import_module("services.store")
+        return _cache(name, module.store)
+
+    if name in _SUBSCRIPTION_EXPORTS:
+        module = _importlib.import_module("services.subscription")
+        return _cache(name, getattr(module, name))
+
+    if name in _ACCESS_EXPORTS:
+        module = _importlib.import_module("services.access")
+        return _cache(name, getattr(module, name))
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
