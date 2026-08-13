@@ -106,7 +106,15 @@ def _provider_http_error_reason(impl: Any, request: Any, exc: Any) -> str:
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8", "replace")
         payload = impl.json.loads(str(raw or "{}"))
-    except (OSError, UnicodeError, ValueError, TypeError, AttributeError):
+    except OSError:
+        payload = {}
+    except UnicodeError:
+        payload = {}
+    except ValueError:
+        payload = {}
+    except TypeError:
+        payload = {}
+    except AttributeError:
         payload = {}
 
     if isinstance(payload, dict):
