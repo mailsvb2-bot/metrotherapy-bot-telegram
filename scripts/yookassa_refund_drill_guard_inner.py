@@ -5,8 +5,9 @@ from __future__ import annotations
 The production payment stack is imported lazily inside ``main`` so import-time
 failures cannot bypass the redacted audit channel. Expected drill failures are
 reduced to short reason codes; unexpected failures are reduced to stage + class
-only. Exception text, provider payloads, credentials, and database contents are
-never written to the audit status file.
+only. Provider HTTP failures may expose only allowlisted provider ``code`` and
+``parameter`` fields; descriptions, provider ids, payloads, credentials, and
+database contents are never written to the audit status file.
 """
 
 import importlib
@@ -26,6 +27,9 @@ _DEFAULT_STATUS_FILE = Path(
 )
 _TRIGGER_RE = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_RESULT_RE = re.compile(r"^[A-Za-z0-9_.:=,/\[\] -]+$")
+_PROVIDER_CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+_PROVIDER_PARAMETER_RE = re.compile(r"^[A-Za-z0-9_.\[\]-]{1,160}$")
+_PROVIDER_RESOURCE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 
 
 def _status_file() -> Path:
@@ -75,6 +79,71 @@ def _guard(impl: Any, stage: str, func: Callable[..., Any]) -> Callable[..., Any
             raise impl.RefundDrillError(f"unexpected_{stage}_{exc_type}") from exc
 
     return guarded
+
+
+def _provider_http_error_reason(impl: Any, request: Any, exc: Any) -> str:
+    """Reduce one provider HTTP error to non-sensitive contract coordinates.
+
+    YooKassa's error body can contain an opaque request id and a human-readable
+    description. Neither is needed for the drill and neither is allowed into the
+    audit channel. Only syntactically allowlisted ``code`` and ``parameter`` are
+    retained, plus the first API resource name and numeric HTTP status.
+    """
+
+    full_url = str(getattr(request, "full_url", request) or "")
+    prefix = f"{str(impl._API_BASE).rstrip('/')}/"
+    resource = "provider"
+    if full_url.startswith(prefix):
+        candidate = full_url[len(prefix):].split("/", 1)[0].strip()
+        if _PROVIDER_RESOURCE_RE.fullmatch(candidate):
+            resource = candidate
+
+    provider_code = "unknown"
+    parameter = "none"
+    payload: Any = {}
+    try:
+        raw = exc.read()
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        payload = impl.json.loads(str(raw or "{}"))
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError):
+        payload = {}
+
+    if isinstance(payload, dict):
+        candidate_code = str(payload.get("code") or "").strip()
+        if _PROVIDER_CODE_RE.fullmatch(candidate_code):
+            provider_code = candidate_code
+        candidate_parameter = str(payload.get("parameter") or "").strip()
+        if _PROVIDER_PARAMETER_RE.fullmatch(candidate_parameter):
+            parameter = candidate_parameter
+
+    try:
+        status = int(getattr(exc, "code", 0) or 0)
+    except (TypeError, ValueError):
+        status = 0
+    return (
+        f"provider_http_{status}:{resource}:"
+        f"code={provider_code}:parameter={parameter}"
+    )
+
+
+def _install_provider_http_diagnostics(impl: Any) -> None:
+    """Intercept only YooKassa API HTTP errors before the drill drops the body."""
+
+    original_urlopen = impl.urllib.request.urlopen
+    prefix = f"{str(impl._API_BASE).rstrip('/')}/"
+
+    def diagnostic_urlopen(request: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return original_urlopen(request, *args, **kwargs)
+        except impl.urllib.error.HTTPError as exc:
+            full_url = str(getattr(request, "full_url", request) or "")
+            if full_url.startswith(prefix):
+                reason = _provider_http_error_reason(impl, request, exc)
+                raise impl.RefundDrillError(reason) from exc
+            raise
+
+    impl.urllib.request.urlopen = diagnostic_urlopen
 
 
 def _install_operation_guards(impl: Any) -> None:
@@ -133,6 +202,7 @@ def main() -> int:
     except (Exception, SystemExit) as exc:  # validator: allow-wide-except
         return _record_import_failure(exc)
 
+    _install_provider_http_diagnostics(impl)
     _install_operation_guards(impl)
     impl._require_trigger = _guard(impl, "trigger", impl._require_trigger)
     impl._prepare_environment = _guard(impl, "environment", impl._prepare_environment)

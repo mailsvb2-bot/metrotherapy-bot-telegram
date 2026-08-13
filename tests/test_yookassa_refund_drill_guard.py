@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
 import os
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -162,6 +165,113 @@ def test_operation_guard_wiring_covers_provider_and_db_boundaries() -> None:
     ):
         assert f'"{stage}"' in source
     assert "_install_operation_guards(impl)" in source
+
+
+def test_provider_http_reason_keeps_only_allowlisted_code_and_parameter() -> None:
+    module = _load_inner()
+    impl = module._load_impl()
+    secret = "secret provider description must never escape"
+    provider_id = "provider-request-secret-id"
+    body = json.dumps(
+        {
+            "type": "error",
+            "id": provider_id,
+            "code": "invalid_request",
+            "description": secret,
+            "parameter": "receipt.items[0].vat_code",
+        }
+    ).encode("utf-8")
+    error = urllib.error.HTTPError(
+        "https://api.yookassa.ru/v3/payments",
+        400,
+        "Bad Request",
+        {},
+        io.BytesIO(body),
+    )
+
+    reason = module._provider_http_error_reason(
+        impl,
+        "https://api.yookassa.ru/v3/payments",
+        error,
+    )
+
+    assert reason == (
+        "provider_http_400:payments:"
+        "code=invalid_request:parameter=receipt.items[0].vat_code"
+    )
+    assert secret not in reason
+    assert provider_id not in reason
+
+
+def test_provider_http_reason_rejects_unsafe_provider_fields() -> None:
+    module = _load_inner()
+    impl = module._load_impl()
+    body = json.dumps(
+        {
+            "code": "invalid request with spaces",
+            "parameter": "receipt;secret=leak",
+            "description": "must not escape",
+        }
+    ).encode("utf-8")
+    error = urllib.error.HTTPError(
+        "https://api.yookassa.ru/v3/payments",
+        400,
+        "Bad Request",
+        {},
+        io.BytesIO(body),
+    )
+
+    reason = module._provider_http_error_reason(
+        impl,
+        "https://api.yookassa.ru/v3/payments",
+        error,
+    )
+
+    assert reason == "provider_http_400:payments:code=unknown:parameter=none"
+    assert "secret" not in reason
+    assert "must not escape" not in reason
+
+
+def test_provider_http_diagnostic_wrapper_converts_only_yookassa_api_errors(monkeypatch) -> None:
+    module = _load_inner()
+    impl = module._load_impl()
+    body = json.dumps(
+        {
+            "code": "invalid_request",
+            "parameter": "payment_method_data.card.number",
+            "description": "sensitive body",
+        }
+    ).encode("utf-8")
+
+    def fail_provider(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://api.yookassa.ru/v3/payments",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(body),
+        )
+
+    monkeypatch.setattr(impl.urllib.request, "urlopen", fail_provider)
+    module._install_provider_http_diagnostics(impl)
+
+    with pytest.raises(
+        impl.RefundDrillError,
+        match=(
+            r"^provider_http_400:payments:code=invalid_request:"
+            r"parameter=payment_method_data\.card\.number$"
+        ),
+    ) as exc_info:
+        impl.urllib.request.urlopen("https://api.yookassa.ru/v3/payments")
+    assert "sensitive body" not in str(exc_info.value)
+
+
+def test_provider_http_diagnostics_are_installed_before_operation_guards() -> None:
+    source = INNER.read_text(encoding="utf-8")
+
+    provider = source.index("_install_provider_http_diagnostics(impl)")
+    operations = source.index("_install_operation_guards(impl)")
+    assert provider < operations
 
 
 def test_inner_guard_classifies_import_failure_without_exception_text(tmp_path: Path, monkeypatch) -> None:
