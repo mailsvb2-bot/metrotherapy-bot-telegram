@@ -160,6 +160,22 @@ def _legacy_amount_description(kind: str) -> tuple[str, str]:
     return amount_value, description
 
 
+def normalize_gift_token(raw: str | None) -> str:
+    """Backward-compatible, monkeypatchable lazy gift-token normalizer."""
+
+    from services.gift_claims import normalize_gift_token as _normalize_gift_token
+
+    return _normalize_gift_token(raw)
+
+
+def is_gift_token(raw: str | None) -> bool:
+    """Backward-compatible, monkeypatchable lazy gift-token validator."""
+
+    from services.gift_claims import is_gift_token as _is_gift_token
+
+    return _is_gift_token(raw)
+
+
 def _normalize_optional_gift_token(gift_token: str | None) -> str:
     """Load gift persistence only when checkout actually carries a gift token.
 
@@ -171,8 +187,6 @@ def _normalize_optional_gift_token(gift_token: str | None) -> str:
     raw = str(gift_token or "").strip()
     if not raw:
         return ""
-    from services.gift_claims import is_gift_token, normalize_gift_token
-
     normalized = normalize_gift_token(raw)
     if normalized and not is_gift_token(normalized):
         raise YooKassaCheckoutError("Invalid gift token")
