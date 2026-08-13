@@ -10,6 +10,7 @@ only. Provider HTTP failures may expose only allowlisted provider ``code`` and
 database contents are never written to the audit status file.
 """
 
+import hashlib
 import importlib
 import os
 import re
@@ -30,6 +31,7 @@ _SAFE_RESULT_RE = re.compile(r"^[A-Za-z0-9_.:=,/\[\] -]+$")
 _PROVIDER_CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 _PROVIDER_PARAMETER_RE = re.compile(r"^[A-Za-z0-9_.\[\]-]{1,160}$")
 _PROVIDER_RESOURCE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+_YOOKASSA_IDEMPOTENCE_KEY_MAX = 64
 
 
 def _status_file() -> Path:
@@ -79,6 +81,36 @@ def _guard(impl: Any, stage: str, func: Callable[..., Any]) -> Callable[..., Any
             raise impl.RefundDrillError(f"unexpected_{stage}_{exc_type}") from exc
 
     return guarded
+
+
+def _normalize_idempotence_key(raw: object) -> str:
+    """Return a YooKassa-safe stable key without weakening idempotency.
+
+    The production refund drill historically used descriptive prefixes plus a
+    UUID and could exceed YooKassa's 64-character header limit. Short keys are
+    preserved exactly. Longer keys are deterministically reduced to a 64-char
+    SHA-256 hex digest, so retries of the same logical operation still carry the
+    same key while satisfying the provider contract.
+    """
+
+    value = str(raw or "").strip()
+    if len(value) <= _YOOKASSA_IDEMPOTENCE_KEY_MAX:
+        return value
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _normalize_provider_request_headers(impl: Any, request: Any) -> None:
+    full_url = str(getattr(request, "full_url", request) or "")
+    prefix = f"{str(impl._API_BASE).rstrip('/')}/"
+    if not full_url.startswith(prefix) or not hasattr(request, "headers"):
+        return
+    headers = getattr(request, "headers", {})
+    raw = headers.get("Idempotence-key") or headers.get("Idempotence-Key")
+    if not raw:
+        return
+    normalized = _normalize_idempotence_key(raw)
+    if normalized != raw:
+        request.add_header("Idempotence-Key", normalized)
 
 
 def _provider_http_error_reason(impl: Any, request: Any, exc: Any) -> str:
@@ -136,12 +168,13 @@ def _provider_http_error_reason(impl: Any, request: Any, exc: Any) -> str:
 
 
 def _install_provider_http_diagnostics(impl: Any) -> None:
-    """Intercept only YooKassa API HTTP errors before the drill drops the body."""
+    """Enforce provider headers and classify YooKassa API HTTP failures safely."""
 
     original_urlopen = impl.urllib.request.urlopen
     prefix = f"{str(impl._API_BASE).rstrip('/')}/"
 
     def diagnostic_urlopen(request: Any, *args: Any, **kwargs: Any) -> Any:
+        _normalize_provider_request_headers(impl, request)
         try:
             return original_urlopen(request, *args, **kwargs)
         except impl.urllib.error.HTTPError as exc:
