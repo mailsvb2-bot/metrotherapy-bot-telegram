@@ -10,7 +10,6 @@ import urllib.error
 import urllib.request
 import uuid
 
-from services.gift_claims import is_gift_token, normalize_gift_token
 from services.practice_token_contract import package_by_id
 from services.payments.receipt_contract import validate_receipt_contract
 
@@ -161,6 +160,25 @@ def _legacy_amount_description(kind: str) -> tuple[str, str]:
     return amount_value, description
 
 
+def _normalize_optional_gift_token(gift_token: str | None) -> str:
+    """Load gift persistence only when checkout actually carries a gift token.
+
+    Standard YooKassa package checkout and provider probes do not need the gift
+    claim/DB stack. Keeping this dependency out of module import prevents an
+    unrelated payment leaf import from bootstrapping persistent state.
+    """
+
+    raw = str(gift_token or "").strip()
+    if not raw:
+        return ""
+    from services.gift_claims import is_gift_token, normalize_gift_token
+
+    normalized = normalize_gift_token(raw)
+    if normalized and not is_gift_token(normalized):
+        raise YooKassaCheckoutError("Invalid gift token")
+    return normalized
+
+
 def create_yookassa_confirmation_url(
     *,
     source: str,
@@ -182,9 +200,7 @@ def create_yookassa_confirmation_url(
     kind = (kind or "subscription").strip().lower()
     intent_id = _checkout_intent_id(checkout_intent) or f"pi_{uuid.uuid4().hex}"
     package = None
-    normalized_gift_token = normalize_gift_token(gift_token)
-    if normalized_gift_token and not is_gift_token(normalized_gift_token):
-        raise YooKassaCheckoutError("Invalid gift token")
+    normalized_gift_token = _normalize_optional_gift_token(gift_token)
 
     canonical_user_id = str(user_id or external_user_id or "").strip()
     messenger_external_user_id = str(external_user_id or canonical_user_id).strip()

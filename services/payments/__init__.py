@@ -1,9 +1,12 @@
-"""Платёжные сценарии (подписка/подарки).
+"""Payment-domain package.
 
-Handlers должны быть тонкими: только маршрутизация, вся логика здесь.
+Importing a payment leaf module must be side-effect free. In particular, a
+YooKassa worker/probe must not bootstrap Telegram Stars handlers, database gift
+flows, or mutate another module's public functions merely because Python first
+loads ``services.payments``.
+
+Telegram adapter wiring is installed explicitly at the handler composition
+boundary (``handlers``), before payment handlers bind their imports.
 """
 
-from services.payments.stars_invoice_transport import install_stars_invoice_link_transport
-
-
-install_stars_invoice_link_transport()
+from __future__ import annotations
