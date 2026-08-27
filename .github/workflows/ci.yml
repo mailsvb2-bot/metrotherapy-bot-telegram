@@ -283,7 +283,7 @@ jobs:
       - name: Postgres messenger outbox concurrency
         run: |
           set -o pipefail
-          python scripts/probe_postgres_messenger_outbox.py \
+          python scripts/probe_postgres_messenger_outbox.py --allow-live-db-mutation \
             2>&1 | tee "$RUNNER_TEMP/postgres-messenger-outbox.log"
 
       - name: Upload Postgres probe logs
