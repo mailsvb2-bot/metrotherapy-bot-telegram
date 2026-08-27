@@ -267,3 +267,46 @@ async def test_auto_audio_integrity_race_becomes_quiet_idempotency(
 
     assert released == [1]
     assert events == []
+
+
+@pytest.mark.asyncio
+async def test_auto_audio_unexpected_integrity_error_remains_observable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pending_checks = iter([False, False])
+    released: list[int] = []
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(auto_audio, "get_index", lambda *_args: 0)
+    monkeypatch.setattr(auto_audio, "pick_for_slot", lambda *_args: SimpleNamespace(anchor=7))
+    monkeypatch.setattr(auto_audio, "_has_pending_auto_session", lambda *_args: next(pending_checks))
+    monkeypatch.setattr(auto_audio, "was_delivered", lambda *_args: False)
+    monkeypatch.setattr(
+        auto_audio,
+        "acquire_delivery_lock",
+        lambda *_args, **_kwargs: SimpleNamespace(acquired=True, stale_reclaimed=False, reason=""),
+    )
+
+    def unexpected_integrity_error(*_args, **_kwargs):
+        raise auto_audio.sqlite3.IntegrityError("unrelated integrity failure")
+
+    async def release(uid: int, _kind: str, _scheduled_at: str) -> None:
+        released.append(uid)
+
+    monkeypatch.setattr(auto_audio, "create_session", unexpected_integrity_error)
+    monkeypatch.setattr(auto_audio, "_unmark_pre_score_lock", release)
+    monkeypatch.setattr(auto_audio, "log_event", lambda _uid, name, meta: events.append((name, dict(meta))))
+
+    await auto_audio._process_due_candidate(
+        object(),
+        _candidate(),
+        now_utc=auto_audio.datetime(2026, 8, 27, 20, 0, tzinfo=auto_audio.timezone.utc),
+        senders=SimpleNamespace(),
+    )
+
+    assert released == [1]
+    assert events == [
+        (
+            "auto_audio_error",
+            {"slot": "morning", "channel": "max", "error_type": "IntegrityError"},
+        )
+    ]
