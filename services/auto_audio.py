@@ -184,6 +184,39 @@ def _safe_error_meta(exc: BaseException) -> dict[str, str]:
     return {"error_type": type(exc).__name__}
 
 
+def _has_pending_auto_session(user_id: int, anchor_id: int) -> bool:
+    """Return whether this user/anchor already has an unfinished auto journey.
+
+    The database intentionally keeps only one unfinished auto/settings session per
+    user and audio anchor. Scheduler ticks are much more frequent than user
+    responses, so an existing pending session is normal steady state, not an
+    error. Treat it as idempotent work already in flight.
+    """
+
+    try:
+        uid = int(user_id)
+        anchor = int(anchor_id)
+    except (TypeError, ValueError):
+        return False
+    try:
+        with db() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM mood_sessions
+                WHERE user_id=?
+                  AND anchor_id=?
+                  AND COALESCE(audio_sent,0)=0
+                  AND source IN ('auto','settings')
+                LIMIT 1
+                """.strip(),
+                (uid, anchor),
+            ).fetchone()
+    except sqlite3.Error:
+        return False
+    return row is not None
+
+
 async def _process_due_candidate(
     bot: Bot,
     item: DueCandidate,
@@ -215,15 +248,13 @@ async def _process_due_candidate(
     anchor = pick_for_slot(slot, idx)
     if not anchor:
         return
+    if await asyncio.to_thread(_has_pending_auto_session, uid, anchor.anchor):
+        return
+
     local_day = now_utc.astimezone(ZoneInfo(tz_name)).date().isoformat()
     scheduled_at = for_pre_score(uid, local_day, slot)
     kind = "work" if slot == "morning" else "home"
     if await asyncio.to_thread(was_delivered, uid, kind, "pre_score", scheduled_at):
-        log_event(
-            uid,
-            "idempotency_skip",
-            {"stage": "pre_score", "slot": slot, "scheduled_at": scheduled_at},
-        )
         return
 
     lock = await asyncio.to_thread(
@@ -297,6 +328,18 @@ async def _process_due_candidate(
             )
     except asyncio.CancelledError:
         raise
+    except sqlite3.IntegrityError as exc:
+        if await asyncio.to_thread(_has_pending_auto_session, uid, anchor.anchor):
+            return
+        log_event(
+            uid,
+            "auto_audio_error",
+            {
+                "slot": slot,
+                "channel": policy.resolved_channel,
+                **_safe_error_meta(exc),
+            },
+        )
     except TELEGRAM_API_ERROR as exc:
         log_event(
             uid,
