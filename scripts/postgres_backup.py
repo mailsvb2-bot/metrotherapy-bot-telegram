@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
 DEFAULT_BACKUP_DIR = Path(os.getenv("METRO_POSTGRES_BACKUP_DIR", "/var/backups/metrotherapy/postgres"))
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SUPPORTED_BACKUP_SUFFIXES = (".dump", ".sql", ".sql.gz")
 
 
 def _required_bin(name: str, *, env_name: str | None = None) -> str:
@@ -127,11 +128,20 @@ def create_backup(*, backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path:
     return out
 
 
+def _is_supported_backup(path: Path) -> bool:
+    name = path.name.lower()
+    return path.is_file() and any(name.endswith(suffix) for suffix in SUPPORTED_BACKUP_SUFFIXES)
+
+
 def prune_backups(*, backup_dir: Path = DEFAULT_BACKUP_DIR, keep: int = 14) -> None:
     backup_dir = backup_dir.expanduser().resolve()
     if keep <= 0 or not backup_dir.exists():
         return
-    files = sorted(backup_dir.glob("*.dump"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(
+        (path for path in backup_dir.iterdir() if _is_supported_backup(path)),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     for item in files[keep:]:
         item.unlink(missing_ok=True)
         print(f"POSTGRES_BACKUP_PRUNED {item}")

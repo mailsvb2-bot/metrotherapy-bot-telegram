@@ -10,7 +10,8 @@ SERVICE = "/etc/systemd/system/metrotherapy-postgres-backup.service"
 TIMER = "/etc/systemd/system/metrotherapy-postgres-backup.timer"
 ROOT = Path(os.getenv("METRO_ROOT", "/root/metrotherapy"))
 PYTHON = ROOT / ".venv/bin/python"
-ENV_FILE = ROOT / ".env"
+ENV_FILE = Path(os.getenv("METROTHERAPY_ENV_FILE", "/etc/metrotherapy/metrotherapy.env"))
+LEGACY_CRON = Path(os.getenv("METRO_POSTGRES_LEGACY_CRON", "/etc/cron.d/metrotherapy_pg_backup"))
 
 
 def _write(path: str, content: str) -> None:
@@ -34,7 +35,7 @@ After=network-online.target postgresql.service
 Type=oneshot
 WorkingDirectory={ROOT}
 EnvironmentFile={ENV_FILE}
-ExecStart={PYTHON} scripts/postgres_backup.py
+ExecStart={PYTHON} scripts/postgres_backup.py --env-file {ENV_FILE}
 ExecStart={PYTHON} scripts/postgres_restore_drill.py --latest
 """
     timer = """[Unit]
@@ -54,7 +55,9 @@ WantedBy=timers.target
     # Reviewed: fixed systemctl maintenance commands for the known timer unit, no shell.
     subprocess.run([systemctl, "daemon-reload"], check=True)  # nosec B603
     subprocess.run([systemctl, "enable", "--now", "metrotherapy-postgres-backup.timer"], check=True)  # nosec B603
-    print("POSTGRES_BACKUP_TIMER_INSTALLED metrotherapy-postgres-backup.timer")
+    subprocess.run([systemctl, "start", "metrotherapy-postgres-backup.service"], check=True)  # nosec B603
+    LEGACY_CRON.unlink(missing_ok=True)
+    print("POSTGRES_BACKUP_TIMER_INSTALLED metrotherapy-postgres-backup.timer legacy_cron=removed")
 
 
 def main() -> int:

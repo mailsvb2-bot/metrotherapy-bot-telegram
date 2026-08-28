@@ -456,6 +456,13 @@ fi
   --readiness-url "$LOCAL_READY_URL" >/dev/null
 record_successful_deployed_sha "$NEW_SHA"
 cleanup_old_releases
+if [ -n "${PYTHONPYCACHEPREFIX:-}" ]; then
+  if ! "$SYSTEM_PYTHON" "$SOURCE_DIR/scripts/prune_release_python_cache.py" \
+    --cache-prefix "$PYTHONPYCACHEPREFIX" \
+    --releases-dir "$RELEASES_DIR"; then
+    echo "WARNING: stale immutable-release Python cache cleanup failed" >&2
+  fi
+fi
 
 trap - ERR TERM INT HUP
 echo "IMMUTABLE_DEPLOY_OK sha=$NEW_SHA release=$CANDIDATE_DIR previous=$OLD_RUNTIME_SHA proof=$DEPLOYMENT_PROOF_FILE"
