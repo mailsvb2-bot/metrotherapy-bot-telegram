@@ -407,7 +407,7 @@ async def _ready(request: web.Request) -> web.Response:
     return web.json_response(response_payload, status=status)
 
 
-async def _growth_click_redirect(request: web.Request) -> web.Response:
+async def growth_click_redirect(request: web.Request) -> web.Response:
     payload = str(request.match_info.get('payload') or '')
     target = build_click_redirect_target(payload)
     request_meta = {
@@ -427,6 +427,10 @@ async def _growth_click_redirect(request: web.Request) -> web.Response:
     return web.HTTPFound(target)
 
 
+# Backward-compatible private alias for existing internal callers/tests.
+_growth_click_redirect = growth_click_redirect
+
+
 async def start_health_runtime() -> HealthRuntime | None:
     enabled = (getattr(settings, 'HEALTHCHECK_ENABLED', True) or False)
     if not enabled:
@@ -434,7 +438,7 @@ async def start_health_runtime() -> HealthRuntime | None:
     host = getattr(settings, 'HEALTHCHECK_HOST', '127.0.0.1')
     port = int(getattr(settings, 'HEALTHCHECK_PORT', 8082))
     app = web.Application()
-    app.router.add_get('/a/{payload}', _growth_click_redirect)
+    app.router.add_get('/a/{payload}', growth_click_redirect)
     app.router.add_get('/health', _health)
     app.router.add_get('/healthz', _health)
     app.router.add_get('/readyz', _ready)

@@ -196,12 +196,14 @@ async def test_vk_webhook_guard_delegation_and_rejection(monkeypatch: pytest.Mon
 async def test_route_registration_and_telegram_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     app = FakeApplication()
     messenger_webhooks._register_health_routes(app)
+    messenger_webhooks._register_growth_routes(app)
     messenger_webhooks._register_payment_routes(app)
     messenger_webhooks._register_max_routes(app)
     messenger_webhooks._register_vk_routes(app)
     messenger_webhooks._register_audio_routes(app)
     paths = [(method, path) for method, path, _handler in app.router.routes]
     assert ("GET", "/") in paths
+    assert ("GET", "/a/{payload}") in paths
     assert ("GET", "/terms") in paths
     assert ("POST", "/pay/yookassa/webhook") in paths
     assert ("POST", "/webhooks/max") in paths
@@ -326,6 +328,8 @@ async def test_start_runtime_disabled_and_max_success(monkeypatch: pytest.Monkey
         "client_max_size": 1234,
         "middlewares": ["middleware"],
     }
+    paths = [(method, path) for method, path, _handler in runtime.runner.app.router.routes]
+    assert ("GET", "/a/{payload}") in paths
 
 
 @pytest.mark.asyncio

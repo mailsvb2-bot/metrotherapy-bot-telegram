@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiohttp import web
 
 from config.settings import settings
+from runtime.health_server import growth_click_redirect
 from runtime.ingress_flags import (
     http_ingress_enabled,
     max_webhook_enabled,
@@ -134,6 +135,10 @@ def _register_health_routes(app: web.Application) -> None:
     app.router.add_get("/healthz", _health)
 
 
+def _register_growth_routes(app: web.Application) -> None:
+    app.router.add_get("/a/{payload}", growth_click_redirect)
+
+
 def _register_payment_routes(app: web.Application) -> None:
     app.router.add_get("/terms", payment_terms_web)
     app.router.add_get("/pay/yookassa", pay_yookassa_web)
@@ -211,6 +216,7 @@ async def start_messenger_webhook_runtime(
         middlewares=[payment_webhook_admission_middleware],
     )
     _register_health_routes(app)
+    _register_growth_routes(app)
 
     if payment_enabled:
         _register_payment_routes(app)
