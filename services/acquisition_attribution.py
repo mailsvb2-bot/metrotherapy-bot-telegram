@@ -30,6 +30,17 @@ _KEY_ALIASES = {
     "cost": "ad_spend",
 }
 
+_DIRECT_PAYLOAD_ATTRIBUTION = {
+    # Public Tilda landing has historically used ?start=site. Keep that stable
+    # entrypoint measurable without requiring a landing-page republish.
+    "site": {
+        "utm_source": "website",
+        "utm_campaign": "landing",
+        "utm_creative": "site",
+    },
+}
+
+
 _TOKEN_PREFIXES = (
     ("utm_source_", "utm_source"),
     ("source_", "utm_source"),
@@ -110,6 +121,11 @@ def _from_tokens(payload: str) -> dict[str, str]:
     return out
 
 
+def _from_direct_payload(payload: str) -> dict[str, str]:
+    mapped = _DIRECT_PAYLOAD_ATTRIBUTION.get(str(payload or "").strip().lower())
+    return dict(mapped) if mapped else {}
+
+
 def _from_short_ad_link(payload: str) -> dict[str, str]:
     if not payload.startswith("ad_"):
         return {}
@@ -151,7 +167,13 @@ def start_attribution_meta(payload: str | None) -> dict[str, str]:
     if not raw:
         return meta
 
-    for source in (_from_short_ad_link(raw), _from_json(raw), _from_query(raw), _from_tokens(raw)):
+    for source in (
+        _from_direct_payload(raw),
+        _from_short_ad_link(raw),
+        _from_json(raw),
+        _from_query(raw),
+        _from_tokens(raw),
+    ):
         meta.update(source)
 
     # Normalize user-facing aliases for admin reports that already look for these fields.

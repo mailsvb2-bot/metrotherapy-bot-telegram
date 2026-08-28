@@ -13,6 +13,10 @@ from services.db import db
 _ALLOWED_SOURCES = {
     "telegram_ads": "Telegram Ads",
     "telegram_post": "Пост в Telegram",
+    "vk_post": "Пост во ВКонтакте",
+    "max_post": "Пост в MAX",
+    "email": "Email",
+    "website": "Сайт",
     "partner": "Партнёр/посев",
 }
 _TELEGRAM_START_MAX_LEN = 64

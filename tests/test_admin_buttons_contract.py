@@ -79,3 +79,10 @@ def test_role_admin_user_card_input_uses_canonical_admin_check():
 
     assert "is_admin(admin_id)" in source
     assert "settings.admin_id_list" not in source
+
+
+def test_ad_links_keyboard_exposes_owned_acquisition_sources():
+    callbacks = set(_callbacks(kb_admin_ad_links()))
+
+    for source in ("telegram_post", "vk_post", "max_post", "email", "website", "partner"):
+        assert f"admin:adlinks:create:{source}" in callbacks

@@ -123,6 +123,10 @@ def kb_admin_ad_links() -> InlineKeyboardMarkup:
     return _kb([
         [InlineKeyboardButton(text="➕ Telegram Ads", callback_data="admin:adlinks:create:telegram_ads")],
         [InlineKeyboardButton(text="➕ Пост в Telegram", callback_data="admin:adlinks:create:telegram_post")],
+        [InlineKeyboardButton(text="➕ Пост во ВКонтакте", callback_data="admin:adlinks:create:vk_post")],
+        [InlineKeyboardButton(text="➕ Пост в MAX", callback_data="admin:adlinks:create:max_post")],
+        [InlineKeyboardButton(text="➕ Email", callback_data="admin:adlinks:create:email")],
+        [InlineKeyboardButton(text="➕ Сайт", callback_data="admin:adlinks:create:website")],
         [InlineKeyboardButton(text="➕ Партнёр/посев", callback_data="admin:adlinks:create:partner")],
         [InlineKeyboardButton(text="⬅️ Админка", callback_data="admin:menu")],
     ])

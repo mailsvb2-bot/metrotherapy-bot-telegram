@@ -14,7 +14,7 @@ from services.admin_ad_links import (
     format_created_ad_link,
 )
 
-_SOURCES = {"telegram_ads", "telegram_post", "partner"}
+_SOURCES = {"telegram_ads", "telegram_post", "vk_post", "max_post", "email", "website", "partner"}
 
 
 async def run(cb: CallbackQuery, state: FSMContext, ctx: AdminCtx, log) -> bool:

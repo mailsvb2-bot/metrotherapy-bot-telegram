@@ -114,3 +114,15 @@ def test_ad_links_report_is_plain_admin_text(tmp_path, monkeypatch):
     assert "Рекламные ссылки" in text
     assert "Партнёр/посев" in text
     assert "https://t.me/" in text
+
+
+def test_acquisition_sources_cover_owned_and_partner_channels():
+    assert set(admin_ad_links._ALLOWED_SOURCES) == {
+        "telegram_ads",
+        "telegram_post",
+        "vk_post",
+        "max_post",
+        "email",
+        "website",
+        "partner",
+    }

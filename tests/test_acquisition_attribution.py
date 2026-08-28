@@ -57,3 +57,12 @@ def test_start_attribution_meta_ignores_unknown_keys():
     assert meta["source"] == "telegram_ads"
     assert "password" not in meta
     assert "token" not in meta
+
+
+def test_start_attribution_meta_maps_public_site_payload():
+    meta = start_attribution_meta("site")
+
+    assert meta["payload"] == "site"
+    assert meta["source"] == "website"
+    assert meta["campaign"] == "landing"
+    assert meta["creative"] == "site"
