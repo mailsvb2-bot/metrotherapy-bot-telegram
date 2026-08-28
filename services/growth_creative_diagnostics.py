@@ -8,6 +8,7 @@ from services.growth_autopilot_core import fmt_pct, money_rub_from_minor, parse_
 _ATTR_KEYS = ("source", "campaign", "creative")
 _EVENT_FIELDS = {
     "ad_click_redirect": "clicks",
+    "messenger_choice": "messenger_choices",
     "funnel_start_command": "starts",
     "demo_sent": "demo_sent",
     "demo_ack": "demo_ack",
@@ -54,6 +55,8 @@ def _empty_bucket(*, source: Any, campaign: Any, creative: Any) -> dict[str, Any
         "links": 0,
         "spend_minor_low_confidence": 0,
         "clicks": 0,
+        "messenger_choices": 0,
+        "messenger_breakdown": {},
         "starts": 0,
         "demo_sent": 0,
         "demo_ack": 0,
@@ -98,6 +101,10 @@ def build_creative_diagnostics(*, ad_links: dict[str, Any], event_rows: list[dic
         key = _creative_key(source, campaign, creative)
         bucket = buckets.setdefault(key, _empty_bucket(source=source, campaign=campaign, creative=creative))
         bucket[field] += 1
+        if event_name == "messenger_choice":
+            messenger = _clean(meta.get("messenger"), fallback="unknown", limit=20)
+            breakdown = bucket["messenger_breakdown"]
+            breakdown[messenger] = safe_int(breakdown.get(messenger)) + 1
 
     items = []
     for bucket in buckets.values():
@@ -135,10 +142,15 @@ def format_creative_diagnostics(summary: dict[str, Any], *, limit: int = 5) -> l
         return lines
     for idx, item in enumerate(items[:limit], 1):
         title = f"{item.get('source')} / {item.get('campaign')} / {item.get('creative')}"
+        breakdown = dict(item.get("messenger_breakdown") or {})
+        choice_text = (
+            f"выбор мессенджера {safe_int(item.get('messenger_choices'))} "
+            f"(TG {safe_int(breakdown.get('telegram'))} / VK {safe_int(breakdown.get('vk'))} / MAX {safe_int(breakdown.get('max'))}), "
+        )
         lines.append(
-            f"{idx}. {title}: клики {safe_int(item.get('clicks'))}, /start {safe_int(item.get('starts'))} "
-            f"({fmt_pct(item.get('click_to_start_pct'))}), demo_ack {safe_int(item.get('demo_ack'))}, "
-            f"оплаты {safe_int(item.get('payments'))}"
+            f"{idx}. {title}: клики {safe_int(item.get('clicks'))}, {choice_text}"
+            f"/start {safe_int(item.get('starts'))} ({fmt_pct(item.get('click_to_start_pct'))}), "
+            f"demo_ack {safe_int(item.get('demo_ack'))}, оплаты {safe_int(item.get('payments'))}"
         )
         cpc = safe_int(item.get("cost_per_click_minor_low_confidence"))
         cpp = safe_int(item.get("cost_per_payment_minor_low_confidence"))

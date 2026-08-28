@@ -23,7 +23,14 @@ from services.ai.policy import ai_policy_snapshot
 from services.db import get_connection
 from services.db.runtime import CONFIG, redacted_db_target
 from services.db.schema.readiness import required_readiness_tables, schema_readiness
-from services.growth_click_tracking import build_click_redirect_target, record_click_redirect
+from services.growth_click_tracking import (
+    build_click_redirect_target,
+    build_platform_redirect_target,
+    record_choice_landing,
+    record_click_redirect,
+    record_messenger_choice,
+    render_messenger_choice_html,
+)
 from services.messenger.preflight import check_all_preflights
 from services.scheduler import scheduler_health_snapshot
 from services.validators.audio import audio_readiness
@@ -407,29 +414,71 @@ async def _ready(request: web.Request) -> web.Response:
     return web.json_response(response_payload, status=status)
 
 
-async def growth_click_redirect(request: web.Request) -> web.Response:
-    payload = str(request.match_info.get('payload') or '')
-    target = build_click_redirect_target(payload)
-    request_meta = {
+def _growth_request_meta(request: web.Request) -> dict[str, str]:
+    return {
         'user_agent': request.headers.get('User-Agent', ''),
         'referer': request.headers.get('Referer', ''),
     }
+
+
+async def _record_growth_best_effort(func: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        await asyncio.to_thread(func, *args, **kwargs)
+    except (RuntimeError, OSError, TypeError, ValueError):
+        log.debug('growth click tracking skipped', exc_info=True)
+
+
+async def growth_click_redirect(request: web.Request) -> web.Response:
+    payload = str(request.match_info.get('payload') or '')
+    target = build_click_redirect_target(payload)
     if str(getattr(request, 'method', 'GET') or 'GET').upper() != 'HEAD':
-        try:
-            await asyncio.to_thread(record_click_redirect, payload, request_meta=request_meta)
-        except RuntimeError:
-            log.debug('growth click tracking skipped', exc_info=True)
-        except OSError:
-            log.debug('growth click tracking skipped', exc_info=True)
-        except TypeError:
-            log.debug('growth click tracking skipped', exc_info=True)
-        except ValueError:
-            log.debug('growth click tracking skipped', exc_info=True)
+        await _record_growth_best_effort(
+            record_click_redirect,
+            payload,
+            request_meta=_growth_request_meta(request),
+        )
     return web.HTTPFound(target)
 
 
-# Backward-compatible private alias for existing internal callers/tests.
+async def growth_choice_landing(request: web.Request) -> web.Response:
+    payload = str(request.match_info.get('payload') or '')
+    if str(getattr(request, 'method', 'GET') or 'GET').upper() != 'HEAD':
+        await _record_growth_best_effort(
+            record_choice_landing,
+            payload,
+            request_meta=_growth_request_meta(request),
+        )
+    return web.Response(
+        text=render_messenger_choice_html(payload),
+        content_type='text/html',
+        headers={
+            'Cache-Control': 'no-store',
+            'Referrer-Policy': 'no-referrer',
+            'X-Content-Type-Options': 'nosniff',
+        },
+    )
+
+
+async def growth_platform_redirect(request: web.Request) -> web.Response:
+    payload = str(request.match_info.get('payload') or '')
+    platform = str(request.match_info.get('platform') or '').strip().lower()
+    target = build_platform_redirect_target(payload, platform)
+    if not target:
+        raise web.HTTPNotFound(text='messenger unavailable')
+    if str(getattr(request, 'method', 'GET') or 'GET').upper() != 'HEAD':
+        await _record_growth_best_effort(
+            record_messenger_choice,
+            payload,
+            platform=platform,
+            request_meta=_growth_request_meta(request),
+        )
+    return web.HTTPFound(target)
+
+
+# Backward-compatible private aliases for existing internal callers/tests.
 _growth_click_redirect = growth_click_redirect
+_growth_choice_landing = growth_choice_landing
+_growth_platform_redirect = growth_platform_redirect
 
 
 async def start_health_runtime() -> HealthRuntime | None:

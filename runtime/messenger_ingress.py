@@ -20,7 +20,8 @@ from runtime.messenger_payloads import (
     vk_event_key,
 )
 from runtime.messenger_senders import MessengerTransportError, VkBotSender
-from services.events import log_event
+from services.acquisition_attribution import start_attribution_meta
+from services.events import log_event, log_runtime_event
 from services.gift_claims import claim_gift_token, is_gift_token, normalize_gift_token
 from services.messenger.delivery_outbox import persist_reply_bundle
 from services.messenger.entrypoints import register_user_entry
@@ -90,6 +91,17 @@ def _vk_secret_ok(payload: dict) -> bool:
     return hmac.compare_digest(provided, expected)
 
 
+def _is_acquisition_start_payload(raw: str) -> bool:
+    lowered = str(raw or "").strip().casefold()
+    if lowered == "site":
+        return True
+    if lowered.startswith("ad_") and lowered[3:].isdigit():
+        return True
+    return lowered.startswith((
+        "src_", "source_", "utm_source_", "src=", "source=", "utm_source=",
+    ))
+
+
 def _entry_start_text(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
@@ -98,9 +110,23 @@ def _entry_start_text(text: str) -> str:
     if lowered.startswith("/start ") or lowered.startswith("start "):
         payload = raw.split(maxsplit=1)[1].strip()
         return f"/start {payload}" if payload else "start"
-    if lowered.startswith(("bridge_", "ref_", "gift_")):
+    if lowered.startswith(("bridge_", "ref_", "gift_")) or _is_acquisition_start_payload(raw):
         return f"/start {raw}"
     return raw
+
+
+def _log_acquisition_start_if_needed(user_id: int, *, platform: str, normalized_text: str) -> None:
+    raw = str(normalized_text or "").strip()
+    if not raw.casefold().startswith("/start "):
+        return
+    payload = raw.split(maxsplit=1)[1].strip()
+    if not _is_acquisition_start_payload(payload):
+        return
+    meta = start_attribution_meta(payload)
+    meta["platform"] = platform
+    log_runtime_event(
+        int(user_id), event_type="funnel_start_command", payload=meta, source=platform
+    )
 
 
 def _claim_replies_if_needed(*, platform: str, extracted: dict) -> tuple[int, list[MessengerReply]] | None:
@@ -278,6 +304,9 @@ def _process_and_persist(
                 first_name=extracted["first_name"],
             )
             action = classify_messenger_action(normalized_text)
+            _log_acquisition_start_if_needed(
+                int(canonical_user_id), platform=platform, normalized_text=normalized_text
+            )
 
         log.info(
             "%s %s processed: canonical_user_id=%s action=%s replies=%s",

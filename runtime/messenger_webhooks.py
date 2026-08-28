@@ -10,7 +10,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiohttp import web
 
 from config.settings import settings
-from runtime.health_server import growth_click_redirect
+from runtime.health_server import growth_choice_landing, growth_click_redirect, growth_platform_redirect
 from runtime.ingress_flags import (
     http_ingress_enabled,
     max_webhook_enabled,
@@ -139,7 +139,8 @@ def _register_growth_routes(app: web.Application) -> None:
     # /pay/ is already proxied by the production TLS vhost to this ingress.
     # Keep /a/ for direct/internal compatibility while using /pay/r publicly.
     app.router.add_get("/a/{payload}", growth_click_redirect)
-    app.router.add_get("/pay/r/{payload}", growth_click_redirect)
+    app.router.add_get("/pay/r/{payload}/{platform}", growth_platform_redirect)
+    app.router.add_get("/pay/r/{payload}", growth_choice_landing)
 
 
 def _register_payment_routes(app: web.Application) -> None:

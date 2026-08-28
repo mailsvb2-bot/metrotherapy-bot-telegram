@@ -62,25 +62,23 @@ If `GROWTH_CLICK_BASE_URL`, `METRO_GROWTH_CLICK_BASE_URL`, the shared `MESSENGER
 https://<public-base>/pay/r/<payload>
 ```
 
-The health/runtime aiohttp server handles:
+The public aiohttp ingress handles:
 
 ```text
 GET /pay/r/{payload}
+GET /pay/r/{payload}/{platform}
 ```
 
-The route records a best-effort `ad_click_redirect` event and then returns a `302` redirect to the Telegram start URL:
-
-```text
-https://t.me/<bot>?start=<payload>
-```
+The first route records a best-effort `ad_click_redirect` event and renders a small messenger chooser. The user can choose Telegram, VK, or MAX. The second route records `messenger_choice` and returns a `302` to the canonical deep link for that platform while preserving the same payload.
 
 Safety rules:
 
-- if event logging fails, the redirect still happens;
+- if event logging fails, the user path still works;
 - no IP address is stored by this feature;
-- only sanitized payload, attribution fields, user agent, and referer are recorded;
+- only sanitized payload, attribution fields, chosen messenger, user agent, and referer are recorded;
+- the chooser sends `Referrer-Policy: no-referrer` and `Cache-Control: no-store`;
 - Telegram polling/webhook behavior is not changed;
-- direct Telegram links remain available as fallback.
+- `/a/{payload}` remains a direct Telegram compatibility redirect.
 
 ## Creative diagnostics
 

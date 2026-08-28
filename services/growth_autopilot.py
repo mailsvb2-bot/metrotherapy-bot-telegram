@@ -33,6 +33,7 @@ _PERIOD_DAYS: dict[str, int | None] = {
 
 _CREATIVE_EVENT_NAMES = (
     "ad_click_redirect",
+    "messenger_choice",
     "funnel_start_command",
     "demo_sent",
     "demo_ack",
