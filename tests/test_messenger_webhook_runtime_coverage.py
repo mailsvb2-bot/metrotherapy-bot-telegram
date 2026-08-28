@@ -204,6 +204,7 @@ async def test_route_registration_and_telegram_contract(monkeypatch: pytest.Monk
     paths = [(method, path) for method, path, _handler in app.router.routes]
     assert ("GET", "/") in paths
     assert ("GET", "/a/{payload}") in paths
+    assert ("GET", "/pay/r/{payload}") in paths
     assert ("GET", "/terms") in paths
     assert ("POST", "/pay/yookassa/webhook") in paths
     assert ("POST", "/webhooks/max") in paths
@@ -330,6 +331,7 @@ async def test_start_runtime_disabled_and_max_success(monkeypatch: pytest.Monkey
     }
     paths = [(method, path) for method, path, _handler in runtime.runner.app.router.routes]
     assert ("GET", "/a/{payload}") in paths
+    assert ("GET", "/pay/r/{payload}") in paths
 
 
 @pytest.mark.asyncio

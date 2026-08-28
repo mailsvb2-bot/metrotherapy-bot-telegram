@@ -59,13 +59,13 @@ admin:growth:autopilot:conversions:<period>
 If `GROWTH_CLICK_BASE_URL`, `METRO_GROWTH_CLICK_BASE_URL`, the shared `MESSENGER_PUBLIC_BASE_URL` / `PAYMENT_PUBLIC_BASE_URL`, or legacy `PUBLIC_BASE_URL` is configured, newly created ad links also show a tracking URL. Explicit Growth values win over shared runtime values:
 
 ```text
-https://<public-base>/a/<payload>
+https://<public-base>/pay/r/<payload>
 ```
 
 The health/runtime aiohttp server handles:
 
 ```text
-GET /a/{payload}
+GET /pay/r/{payload}
 ```
 
 The route records a best-effort `ad_click_redirect` event and then returns a `302` redirect to the Telegram start URL:

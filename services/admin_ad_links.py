@@ -106,7 +106,7 @@ def build_click_tracking_url(payload: str, *, base_url: str | None = None) -> st
         return ""
     if not (base.startswith("https://") or base.startswith("http://")):
         return ""
-    return f"{base}/a/{quote_plus(str(payload or '').strip())}"
+    return f"{base}/pay/r/{quote_plus(str(payload or '').strip())}"
 
 
 def _attach_tracking_url(item: dict[str, Any]) -> dict[str, Any]:
@@ -245,7 +245,7 @@ def format_ad_links_report(report: dict[str, Any]) -> str:
         "Нажмите кнопку ниже, чтобы создать ссылку.",
     ]
     if tracking_enabled:
-        lines += ["", "Click tracking: включён. В рекламу ставьте tracking-ссылку /a/<payload>."]
+        lines += ["", "Click tracking: включён. В рекламу ставьте tracking-ссылку /pay/r/<payload>."]
     else:
         lines += ["", "Click tracking: не настроен. Укажите GROWTH_CLICK_BASE_URL, чтобы считать click→start."]
     if links:

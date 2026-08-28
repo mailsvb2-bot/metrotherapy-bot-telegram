@@ -118,11 +118,10 @@ def test_immutable_deploy_orders_switch_gate_proof_and_marker() -> None:
     switch = deploy.index('if [ "$NEW_SHA" != "$OLD_RUNTIME_SHA" ]', compatibility)
     restart = deploy.index("restart_runtime_and_wait", switch)
     gate = deploy.index('"$CURRENT_LINK/scripts/production_gate.py"', restart)
-    growth_route = deploy.index('"$CURRENT_LINK/scripts/sync_growth_nginx_route.py"', gate)
-    proof = deploy.index('"$SYSTEM_PYTHON" "$RELEASE_MANAGER" write-proof', growth_route)
+    proof = deploy.index('"$SYSTEM_PYTHON" "$RELEASE_MANAGER" write-proof', gate)
     marker = deploy.index('record_successful_deployed_sha "$NEW_SHA"', proof)
 
-    assert expand < compatibility < switch < restart < gate < growth_route < proof < marker
+    assert expand < compatibility < switch < restart < gate < proof < marker
     assert "--require-hashes" not in deploy
     assert "post_deploy_verify.py --skip-pytest" not in deploy
 
@@ -216,14 +215,6 @@ def test_immutable_systemd_dropin_wins_over_legacy_override() -> None:
 
 
 
-def test_growth_nginx_sync_is_fail_closed_after_production_gate() -> None:
-    deploy = _text("scripts/immutable_deploy.sh")
-    gate = deploy.index('"$CURRENT_LINK/scripts/production_gate.py"')
-    sync = deploy.index('"$CURRENT_LINK/scripts/sync_growth_nginx_route.py"', gate)
-    proof = deploy.index('"$SYSTEM_PYTHON" "$RELEASE_MANAGER" write-proof', sync)
-
-    assert gate < sync < proof
-    assert 'run_bounded "$VALIDATOR_TIMEOUT_SECONDS"' in deploy[gate:proof]
 
 def test_deploy_wrapper_reexecutes_after_fast_forward() -> None:
     wrapper = _text("deploy.sh")

@@ -136,7 +136,10 @@ def _register_health_routes(app: web.Application) -> None:
 
 
 def _register_growth_routes(app: web.Application) -> None:
+    # /pay/ is already proxied by the production TLS vhost to this ingress.
+    # Keep /a/ for direct/internal compatibility while using /pay/r publicly.
     app.router.add_get("/a/{payload}", growth_click_redirect)
+    app.router.add_get("/pay/r/{payload}", growth_click_redirect)
 
 
 def _register_payment_routes(app: web.Application) -> None:

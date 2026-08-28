@@ -56,7 +56,7 @@ def test_build_click_tracking_url_requires_public_base(monkeypatch):
 
     assert admin_ad_links.build_click_tracking_url("payload") == ""
     assert admin_ad_links.build_click_tracking_url("payload", base_url="ftp://bad") == ""
-    assert admin_ad_links.build_click_tracking_url("src_a b", base_url="https://metrotherapy.ru") == "https://metrotherapy.ru/a/src_a+b"
+    assert admin_ad_links.build_click_tracking_url("src_a b", base_url="https://metrotherapy.ru") == "https://metrotherapy.ru/pay/r/src_a+b"
 
 
 def test_build_click_tracking_url_reuses_shared_public_base(monkeypatch):
@@ -68,7 +68,7 @@ def test_build_click_tracking_url_reuses_shared_public_base(monkeypatch):
 
     assert (
         admin_ad_links.build_click_tracking_url("src_partner__camp_test")
-        == "https://metrotherapy-bot.metrotherapy.ru/a/src_partner__camp_test"
+        == "https://metrotherapy-bot.metrotherapy.ru/pay/r/src_partner__camp_test"
     )
 
 
@@ -112,7 +112,7 @@ def test_create_ad_link_adds_tracking_url_when_public_base_is_set(tmp_path, monk
 
     item = admin_ad_links.create_ad_link("telegram_ads", campaign="may", creative="reels1")
 
-    assert item["tracking_url"] == "https://metrotherapy.ru/a/ad_1"
+    assert item["tracking_url"] == "https://metrotherapy.ru/pay/r/ad_1"
     text = admin_ad_links.format_created_ad_link(item)
     assert "Tracking-ссылка для рекламы" in text
     assert "Прямая Telegram-ссылка" in text
