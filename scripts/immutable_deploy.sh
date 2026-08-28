@@ -442,6 +442,10 @@ run_bounded "$PRODUCTION_GATE_TIMEOUT_SECONDS" \
     --health-url "$LOCAL_HEALTH_URL" \
     --ready-url "$LOCAL_READY_URL"
 
+run_bounded "$VALIDATOR_TIMEOUT_SECONDS" \
+  "synchronize public growth click nginx route" \
+  "$SYSTEM_PYTHON" "$CURRENT_LINK/scripts/sync_growth_nginx_route.py"
+
 validate_release "$(release_path_from_link "$CURRENT_LINK")"
 if [ -L "$PREVIOUS_LINK" ]; then
   validate_release "$(release_path_from_link "$PREVIOUS_LINK")"

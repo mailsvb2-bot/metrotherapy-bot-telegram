@@ -48,6 +48,8 @@ def _click_tracking_base_url() -> str:
     raw = (
         os.getenv("GROWTH_CLICK_BASE_URL")
         or os.getenv("METRO_GROWTH_CLICK_BASE_URL")
+        or os.getenv("MESSENGER_PUBLIC_BASE_URL")
+        or os.getenv("PAYMENT_PUBLIC_BASE_URL")
         or os.getenv("PUBLIC_BASE_URL")
         or ""
     ).strip()

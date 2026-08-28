@@ -56,7 +56,7 @@ admin:growth:autopilot:conversions:<period>
 
 ## Redirect click tracking
 
-If `GROWTH_CLICK_BASE_URL` or `METRO_GROWTH_CLICK_BASE_URL` or `PUBLIC_BASE_URL` is configured, newly created ad links also show a tracking URL:
+If `GROWTH_CLICK_BASE_URL`, `METRO_GROWTH_CLICK_BASE_URL`, the shared `MESSENGER_PUBLIC_BASE_URL` / `PAYMENT_PUBLIC_BASE_URL`, or legacy `PUBLIC_BASE_URL` is configured, newly created ad links also show a tracking URL. Explicit Growth values win over shared runtime values:
 
 ```text
 https://<public-base>/a/<payload>

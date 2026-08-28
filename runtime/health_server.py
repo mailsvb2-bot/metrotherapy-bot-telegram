@@ -414,16 +414,17 @@ async def growth_click_redirect(request: web.Request) -> web.Response:
         'user_agent': request.headers.get('User-Agent', ''),
         'referer': request.headers.get('Referer', ''),
     }
-    try:
-        await asyncio.to_thread(record_click_redirect, payload, request_meta=request_meta)
-    except RuntimeError:
-        log.debug('growth click tracking skipped', exc_info=True)
-    except OSError:
-        log.debug('growth click tracking skipped', exc_info=True)
-    except TypeError:
-        log.debug('growth click tracking skipped', exc_info=True)
-    except ValueError:
-        log.debug('growth click tracking skipped', exc_info=True)
+    if str(getattr(request, 'method', 'GET') or 'GET').upper() != 'HEAD':
+        try:
+            await asyncio.to_thread(record_click_redirect, payload, request_meta=request_meta)
+        except RuntimeError:
+            log.debug('growth click tracking skipped', exc_info=True)
+        except OSError:
+            log.debug('growth click tracking skipped', exc_info=True)
+        except TypeError:
+            log.debug('growth click tracking skipped', exc_info=True)
+        except ValueError:
+            log.debug('growth click tracking skipped', exc_info=True)
     return web.HTTPFound(target)
 
 

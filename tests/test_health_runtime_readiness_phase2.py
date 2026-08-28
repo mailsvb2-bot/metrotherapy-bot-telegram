@@ -344,6 +344,15 @@ async def test_http_handlers_and_growth_redirect(monkeypatch: pytest.MonkeyPatch
     assert response.location == "https://example/abc"
     assert calls == [("abc", {"user_agent": "ua", "referer": "ref"})]
 
+    head_request = SimpleNamespace(
+        method="HEAD",
+        match_info={"payload": "head-probe"},
+        headers={"User-Agent": "probe", "Referer": ""},
+    )
+    response = await health_server._growth_click_redirect(head_request)
+    assert response.location == "https://example/head-probe"
+    assert calls == [("abc", {"user_agent": "ua", "referer": "ref"})]
+
     monkeypatch.setattr(
         health_server,
         "record_click_redirect",

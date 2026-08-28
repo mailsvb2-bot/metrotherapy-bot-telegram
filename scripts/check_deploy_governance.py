@@ -65,6 +65,7 @@ def deploy_governance_problems(
         "previous release compatibility on expanded schema": "previous-code expanded-schema proof is missing",
         '"$SYSTEM_PYTHON" "$RELEASE_MANAGER" rollback': "atomic symlink rollback is missing",
         '"$CURRENT_LINK/scripts/production_gate.py"': "mandatory production gate is missing",
+        '"$CURRENT_LINK/scripts/sync_growth_nginx_route.py"': "public growth click route sync is missing",
         '"$SYSTEM_PYTHON" "$RELEASE_MANAGER" write-proof': "deployment proof write is missing",
         'record_successful_deployed_sha "$NEW_SHA"': "successful deployed SHA marker is missing",
         "PRODUCTION_GATE_OK": "production gate evidence marker is missing",
@@ -74,12 +75,15 @@ def deploy_governance_problems(
             problems.append(message)
 
     production_gate_pos = immutable.find('"$CURRENT_LINK/scripts/production_gate.py"')
+    growth_route_pos = immutable.find('"$CURRENT_LINK/scripts/sync_growth_nginx_route.py"')
     proof_pos = immutable.find('"$SYSTEM_PYTHON" "$RELEASE_MANAGER" write-proof')
     marker_pos = immutable.find('record_successful_deployed_sha "$NEW_SHA"')
-    if min(production_gate_pos, proof_pos, marker_pos) < 0 or not (
-        production_gate_pos < proof_pos < marker_pos
+    if min(production_gate_pos, growth_route_pos, proof_pos, marker_pos) < 0 or not (
+        production_gate_pos < growth_route_pos < proof_pos < marker_pos
     ):
-        problems.append("deploy order must be production gate, deployment proof, then deployed SHA marker")
+        problems.append(
+            "deploy order must be production gate, growth route sync, deployment proof, then deployed SHA marker"
+        )
 
     rollback_pos = immutable.find('"$SYSTEM_PYTHON" "$RELEASE_MANAGER" rollback')
     restart_in_rollback = immutable.find('systemctl restart "$SERVICE_NAME"', rollback_pos)

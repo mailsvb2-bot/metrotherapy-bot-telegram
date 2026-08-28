@@ -50,11 +50,26 @@ def test_build_start_payload_never_exceeds_telegram_limit():
 def test_build_click_tracking_url_requires_public_base(monkeypatch):
     monkeypatch.delenv("GROWTH_CLICK_BASE_URL", raising=False)
     monkeypatch.delenv("METRO_GROWTH_CLICK_BASE_URL", raising=False)
+    monkeypatch.delenv("MESSENGER_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("PAYMENT_PUBLIC_BASE_URL", raising=False)
     monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
 
     assert admin_ad_links.build_click_tracking_url("payload") == ""
     assert admin_ad_links.build_click_tracking_url("payload", base_url="ftp://bad") == ""
     assert admin_ad_links.build_click_tracking_url("src_a b", base_url="https://metrotherapy.ru") == "https://metrotherapy.ru/a/src_a+b"
+
+
+def test_build_click_tracking_url_reuses_shared_public_base(monkeypatch):
+    monkeypatch.delenv("GROWTH_CLICK_BASE_URL", raising=False)
+    monkeypatch.delenv("METRO_GROWTH_CLICK_BASE_URL", raising=False)
+    monkeypatch.delenv("PAYMENT_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://metrotherapy-bot.metrotherapy.ru/")
+
+    assert (
+        admin_ad_links.build_click_tracking_url("src_partner__camp_test")
+        == "https://metrotherapy-bot.metrotherapy.ru/a/src_partner__camp_test"
+    )
 
 
 def test_create_ad_link_persists_short_tme_payload_and_resolves_metadata(tmp_path, monkeypatch):
